@@ -4,11 +4,10 @@ import {
   method,
   fork,
   forkAgent,
-  getRawSelfAgentId,
+  getSelfAgentId,
   getSelfMetadata,
   getAgentMetadata,
   generateIdempotencyKey,
-  ParsedAgentId,
 } from "@golemcloud/golem-ts-sdk";
 
 for (const snapshots of [false, true]) {
@@ -19,75 +18,54 @@ for (const snapshots of [false, true]) {
     methods: {
       observe: method({ input: {}, returns: z.string() }),
       status: method({ input: {}, returns: z.string() }),
-      forkNamed: method({
-        input: { name: z.string(), cutoff: z.string() },
-        returns: z.void(),
-      }),
+      forkAt: method({ input: { cutoff: z.string() }, returns: z.string() }),
       forkSelf: method({ input: {}, returns: z.string() }),
     },
   });
   spec.implement({
     init: ({ id }) => ({
       configured: id.name,
-      saved: getRawSelfAgentId().value,
+      saved: getSelfAgentId().toString(),
       trace: [] as string[],
       snapshotIdentity: "",
       lastFork: "",
     }),
     methods: {
       observe() {
-        const self = this.getId().value;
+        const self = this.getId().toString();
         // Different durable calls make an incorrect historical identity diverge.
-        if (self.includes('"parent"')) getSelfMetadata();
+        if (self === this.saved) getSelfMetadata();
         else generateIdempotencyKey();
         this.trace.push(self);
         return self;
       },
       status() {
-        const current = this.getId().value;
+        const current = this.getId();
         const metadata = getSelfMetadata();
-        const addressed = getAgentMetadata({
-          ...metadata.agentId,
-          agentId: current,
-        });
+        const addressed = getAgentMetadata(current);
         return JSON.stringify({
           configured: this.configured,
           saved: this.saved,
           trace: this.trace,
           snapshotIdentity: this.snapshotIdentity,
           lastFork: this.lastFork,
-          current,
-          metadata: metadata.agentId.agentId,
-          addressed: addressed?.agentId.agentId,
+          current: current.toString(),
+          metadata: metadata.agentId.toString(),
+          addressed: addressed?.agentId.toString(),
         });
       },
-      forkNamed({ name, cutoff }) {
-        const source = {
-          ...getSelfMetadata().agentId,
-          agentId: this.getId().value,
-        };
-        forkAgent(
-          source,
-          { ...source, agentId: spec.agentId({ name }).value },
-          BigInt(cutoff),
-        );
+      forkAt({ cutoff }) {
+        return forkAgent(this.getId(), BigInt(cutoff)).toString();
       },
       forkSelf() {
-        const before = this.getId();
+        const before = this.getId().toString();
         const result = fork();
-        const after = this.getId().value;
-        const [typeName, constructorValue] = before.parsed();
-        const target = ParsedAgentId.create({
-          typeName,
-          constructorValue,
-          phantomId: result.val.forkedPhantomId,
-        });
+        const after = this.getId().toString();
         this.lastFork = JSON.stringify({
-          before: before.value,
+          before,
           after,
           tag: result.tag,
-          target: target.value,
-          phantom: this.getPhantomId()?.toString(),
+          target: result.val.forkedAgentId.toString(),
         });
         return this.lastFork;
       },
@@ -100,7 +78,7 @@ for (const snapshots of [false, true]) {
             saved: this.saved,
             trace: this.trace,
             lastFork: this.lastFork,
-            snapshotIdentity: this.getId().value,
+            snapshotIdentity: this.getId().toString(),
           }),
         );
       },

@@ -597,7 +597,7 @@ impl InvocationSessionState {
         self.idempotency_key = Some(*key);
         self.resume = true;
         self.resume_cursors = cursors;
-        self.resume_agent_id = resume.agent_id.clone();
+        self.resume_agent_id = resume.agent_id;
         self.resume_environment_id = resume.environment_id;
         self.resume_attachment_id = resume.attachment_id;
         self.resume_attempt_id = resume.attempt_id;
@@ -621,9 +621,7 @@ impl InvocationSessionState {
             .agent_id
             .as_ref()
             .ok_or_else(|| "invocation acceptance has no agent identity".to_string())?;
-        if agent_id.name.is_empty() {
-            return Err("invocation acceptance has an empty agent name".to_string());
-        }
+        validate_agent_id(agent_id, "invocation acceptance agent ID")?;
         if accepted.joined_origin_observer
             && (self.resume
                 || accepted.attachment_id.is_some()
@@ -836,7 +834,7 @@ impl InvocationSessionState {
                     ),
                 }
             }
-            self.accepted_agent_id = Some(agent_id.clone());
+            self.accepted_agent_id = Some(*agent_id);
             self.accepted_revision = accepted.component_revision;
             self.accepted_epoch = Some(accepted.epoch);
             self.phase = SessionPhase::Active;
@@ -946,7 +944,7 @@ impl InvocationSessionState {
             }
         }
         self.idempotency_key = Some(*invocation_key);
-        self.accepted_agent_id = Some(agent_id.clone());
+        self.accepted_agent_id = Some(*agent_id);
         self.accepted_revision = accepted.component_revision;
         self.accepted_epoch = durable_acceptance.then_some(accepted.epoch);
         self.joined_origin_observer = accepted.joined_origin_observer;
@@ -1872,14 +1870,7 @@ fn required_uuid<'a>(
 }
 
 fn validate_agent_id(agent_id: &AgentId, field: &str) -> Result<(), String> {
-    if agent_id.name.is_empty() {
-        return Err(format!("{field} has an empty agent name"));
-    }
-    let component_id = agent_id
-        .component_id
-        .as_ref()
-        .ok_or_else(|| format!("{field} has no component ID"))?;
-    required_uuid(&component_id.value, &format!("{field} component ID"))?;
+    required_uuid(&agent_id.value, field)?;
     Ok(())
 }
 
@@ -2188,7 +2179,6 @@ fn stream_references(value: &SchemaValue) -> Result<Vec<u64>, String> {
 mod tests {
     use super::*;
     use crate::proto::golem::common::EnvironmentId;
-    use crate::proto::golem::component::ComponentId;
     use crate::proto::golem::worker::{
         AttachmentRevoked, InputStreamHighWater, InvocationFailure, InvocationRejected,
         InvocationStart, OutputStreamItem, ResumeAttach, StreamConsumerCancelled, StreamCursor,
@@ -2306,10 +2296,7 @@ mod tests {
 
     fn agent_id() -> AgentId {
         AgentId {
-            component_id: Some(ComponentId {
-                value: Some(uuid(20)),
-            }),
-            name: "agent".to_string(),
+            value: Some(uuid(20)),
         }
     }
 
@@ -3139,9 +3126,9 @@ mod tests {
 
         let mut forwarded = mapping(7, StreamMappingRole::Input);
         let handle = forwarded.handle.as_mut().unwrap();
-        handle.producer.as_mut().unwrap().name = "original-producer".to_string();
+        handle.producer.as_mut().unwrap().value = Some(uuid(21));
         let source = handle.source_invocation.as_mut().unwrap();
-        source.callee.as_mut().unwrap().name = "original-producer".to_string();
+        source.callee.as_mut().unwrap().value = Some(uuid(21));
         source.idempotency_key = Some(uuid(7));
 
         let mut acceptance = accepted();
@@ -3301,7 +3288,7 @@ mod tests {
                 0 => result.idempotency_key = None,
                 1 => result.idempotency_key.as_mut().unwrap().high_bits += 1,
                 2 => result.idempotency_key.as_mut().unwrap().low_bits += 1,
-                3 => result.agent_id.as_mut().unwrap().name = "other-agent".to_string(),
+                3 => result.agent_id.as_mut().unwrap().value = Some(uuid(22)),
                 _ => unreachable!(),
             }
             assert!(state.validate_response(&invalid).is_err());
@@ -3487,7 +3474,7 @@ mod tests {
                 unreachable!()
             };
             match mutate {
-                0 => accepted.agent_id.as_mut().unwrap().name = "other".to_string(),
+                0 => accepted.agent_id.as_mut().unwrap().value = Some(uuid(22)),
                 1 => accepted.environment_id.as_mut().unwrap().value = Some(uuid(30)),
                 2 => accepted.attachment_id = Some(uuid(31)),
                 3 => accepted.attempt_id = Some(uuid(32)),

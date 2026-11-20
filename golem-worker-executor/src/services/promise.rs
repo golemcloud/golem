@@ -31,8 +31,9 @@ use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use futures::future::BoxFuture;
 
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentFingerprint, AgentId, AgentStatus, OwnedAgentId, PromiseId};
+use golem_common::model::{AgentFingerprint, AgentStatus, OwnedAgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 #[cfg(test)]
@@ -167,17 +168,24 @@ pub trait PromiseService: Send + Sync {
     /// poll and complete for a given promise must be called on the same
     async fn create(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
         oplog_idx: OplogIndex,
     ) -> Result<PromiseId, WorkerExecutorError>;
 
-    async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError>;
+    /// Promise IDs carry no environment, so every operation on an existing promise takes the
+    /// environment of the agent that created it.
+    async fn poll(
+        &self,
+        environment_id: EnvironmentId,
+        promise_id: PromiseId,
+    ) -> Result<PromiseHandle, WorkerExecutorError>;
 
     /// Completes a promise with the given payload.
     /// If the promise was not completed before, it returns true. If the promise was completed before, it returns false.
     async fn complete(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError>;
@@ -188,6 +196,7 @@ pub trait PromiseService: Send + Sync {
     /// oplog lifecycle guard, which deletion holds too.
     async fn complete_without_wakeup(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError>;
@@ -225,29 +234,41 @@ impl LazyPromiseService {
 impl PromiseService for LazyPromiseService {
     async fn create(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
         oplog_idx: OplogIndex,
     ) -> Result<PromiseId, WorkerExecutorError> {
         self.implementation()
             .await
-            .create(agent_id, fingerprint, oplog_idx)
+            .create(owned_agent_id, fingerprint, oplog_idx)
             .await
     }
 
-    async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
-        self.implementation().await.poll(promise_id).await
+    async fn poll(
+        &self,
+        environment_id: EnvironmentId,
+        promise_id: PromiseId,
+    ) -> Result<PromiseHandle, WorkerExecutorError> {
+        self.implementation()
+            .await
+            .poll(environment_id, promise_id)
+            .await
     }
 
     async fn complete(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
         crate::metrics::promises::record_promise_data_size(data.len());
         let start = std::time::Instant::now();
 
-        let result = self.implementation().await.complete(promise_id, data).await;
+        let result = self
+            .implementation()
+            .await
+            .complete(environment_id, promise_id, data)
+            .await;
 
         let outcome = match &result {
             Ok(true) => "fulfilled",
@@ -261,6 +282,7 @@ impl PromiseService for LazyPromiseService {
 
     async fn complete_without_wakeup(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
@@ -269,7 +291,7 @@ impl PromiseService for LazyPromiseService {
         let result = self
             .implementation()
             .await
-            .complete_without_wakeup(promise_id, data)
+            .complete_without_wakeup(environment_id, promise_id, data)
             .await;
         let outcome = match &result {
             Ok(true) => "fulfilled",
@@ -286,7 +308,7 @@ impl PromiseService for LazyPromiseService {
 }
 
 struct PromiseRegistry {
-    handles: HashMap<PromiseId, Weak<PromiseHandleInner>>,
+    handles: HashMap<(EnvironmentId, PromiseId), Weak<PromiseHandleInner>>,
 }
 
 impl PromiseRegistry {
@@ -296,7 +318,7 @@ impl PromiseRegistry {
         }
     }
 
-    fn get(&mut self, id: &PromiseId) -> Option<PromiseHandle> {
+    fn get(&mut self, id: &(EnvironmentId, PromiseId)) -> Option<PromiseHandle> {
         if let Some(weak) = self.handles.get(id)
             && let Some(inner) = weak.upgrade()
         {
@@ -305,7 +327,7 @@ impl PromiseRegistry {
         None
     }
 
-    fn get_or_insert(&mut self, id: &PromiseId) -> PromiseHandle {
+    fn get_or_insert(&mut self, id: &(EnvironmentId, PromiseId)) -> PromiseHandle {
         self.get(id).unwrap_or_else(|| {
             let handle = PromiseHandle::new();
             self.handles.insert(id.clone(), handle.downgrade());
@@ -328,6 +350,7 @@ pub trait PromiseWorkerAccess: Send + Sync {
     /// a missing agent or another incarnation is left alone.
     async fn activate_worker_if_needed(
         &self,
+        environment_id: EnvironmentId,
         promise_id: &PromiseId,
     ) -> Result<(), WorkerExecutorError>;
 
@@ -335,7 +358,7 @@ pub trait PromiseWorkerAccess: Send + Sync {
     /// the agent's state runs on this executor (`WorkerService::run_excluding_removal`).
     async fn run_excluding_removal<'a>(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
     ) -> Result<bool, WorkerExecutorError>;
 }
@@ -358,12 +381,16 @@ impl DefaultPromiseService {
         }
     }
 
-    async fn exists(&self, promise_id: &PromiseId) -> Result<bool, WorkerExecutorError> {
+    async fn exists(
+        &self,
+        environment_id: EnvironmentId,
+        promise_id: &PromiseId,
+    ) -> Result<bool, WorkerExecutorError> {
         self.key_value_storage
             .with("promise", "complete")
             .exists(
-                promise_namespace(promise_id),
-                &get_promise_redis_key(promise_id),
+                promise_namespace(environment_id, promise_id),
+                &promise_key(environment_id, promise_id),
             )
             .await
             .map_err(|err| {
@@ -375,14 +402,15 @@ impl DefaultPromiseService {
 
     async fn completed_data(
         &self,
+        environment_id: EnvironmentId,
         promise_id: &PromiseId,
     ) -> Result<Option<Vec<u8>>, WorkerExecutorError> {
         let state = self
             .key_value_storage
             .with_entity("promise", "get-completed", "promise")
             .get(
-                promise_namespace(promise_id),
-                &get_promise_result_redis_key(promise_id),
+                promise_namespace(environment_id, promise_id),
+                &promise_result_key(environment_id, promise_id),
             )
             .await
             .map_err(|err| {
@@ -402,22 +430,23 @@ impl DefaultPromiseService {
 impl PromiseService for DefaultPromiseService {
     async fn create(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
         oplog_idx: OplogIndex,
     ) -> Result<PromiseId, WorkerExecutorError> {
+        let environment_id = owned_agent_id.environment_id;
         let promise_id = PromiseId {
-            agent_id: agent_id.clone(),
+            agent_id: owned_agent_id.agent_id,
             fingerprint,
             oplog_idx,
         };
         debug!("Created promise {promise_id}");
 
-        let key = get_promise_redis_key(&promise_id);
+        let key = promise_key(environment_id, &promise_id);
         self.key_value_storage
             .with_entity("promise", "create", "promise")
             .set_if_not_exists(
-                promise_namespace(&promise_id),
+                promise_namespace(environment_id, &promise_id),
                 &key,
                 &RedisPromiseState::Pending,
             )
@@ -434,15 +463,20 @@ impl PromiseService for DefaultPromiseService {
         Ok(promise_id)
     }
 
-    async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
+    async fn poll(
+        &self,
+        environment_id: EnvironmentId,
+        promise_id: PromiseId,
+    ) -> Result<PromiseHandle, WorkerExecutorError> {
+        let registry_key = (environment_id, promise_id.clone());
         // Fast path: a registered handle whose state is known to reflect storage.
-        if let Some(handle) = self.registry.lock().await.get(&promise_id)
+        if let Some(handle) = self.registry.lock().await.get(&registry_key)
             && handle.is_hydrated()
         {
             return Ok(handle);
         }
 
-        if !self.exists(&promise_id).await? {
+        if !self.exists(environment_id, &promise_id).await? {
             return Err(WorkerExecutorError::PromiseNotFound { promise_id });
         }
 
@@ -459,10 +493,10 @@ impl PromiseService for DefaultPromiseService {
         // already durable when the read failed would never reach its waiter.
         let handle = {
             let mut reg = self.registry.lock().await;
-            reg.get_or_insert(&promise_id)
+            reg.get_or_insert(&registry_key)
         };
 
-        if let Some(data) = self.completed_data(&promise_id).await? {
+        if let Some(data) = self.completed_data(environment_id, &promise_id).await? {
             let _ = handle.complete(data).await;
         }
         handle.mark_hydrated();
@@ -472,6 +506,7 @@ impl PromiseService for DefaultPromiseService {
 
     async fn complete(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
@@ -482,26 +517,27 @@ impl PromiseService for DefaultPromiseService {
         let written = self
             .worker_access
             .run_excluding_removal(
-                &promise_id.agent_id,
-                self.complete_without_wakeup(promise_id.clone(), data),
+                &OwnedAgentId::new(environment_id, &promise_id.agent_id),
+                self.complete_without_wakeup(environment_id, promise_id.clone(), data),
             )
             .await?;
         // Retry activation even for duplicate completions: persistence may have succeeded before
         // an earlier activation failed.
         self.worker_access
-            .activate_worker_if_needed(&promise_id)
+            .activate_worker_if_needed(environment_id, &promise_id)
             .await?;
         Ok(written)
     }
 
     async fn complete_without_wakeup(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
-        let key = get_promise_result_redis_key(&promise_id);
+        let key = promise_result_key(environment_id, &promise_id);
 
-        if !self.exists(&promise_id).await? {
+        if !self.exists(environment_id, &promise_id).await? {
             return Err(WorkerExecutorError::PromiseNotFound { promise_id });
         };
 
@@ -509,7 +545,7 @@ impl PromiseService for DefaultPromiseService {
             .key_value_storage
             .with_entity("promise", "complete", "promise")
             .set_if_not_exists(
-                promise_namespace(&promise_id),
+                promise_namespace(environment_id, &promise_id),
                 &key,
                 &RedisPromiseState::Complete(data.clone()),
             )
@@ -526,11 +562,11 @@ impl PromiseService for DefaultPromiseService {
         } else {
             // A duplicate must wake waiters with the payload stored by the
             // original completion, not its own payload.
-            self.completed_data(&promise_id).await?
+            self.completed_data(environment_id, &promise_id).await?
         };
         let handle = {
             let mut reg = self.registry.lock().await;
-            reg.get(&promise_id)
+            reg.get(&(environment_id, promise_id.clone()))
         };
         if let (Some(handle), Some(data)) = (handle, completed_data) {
             let _ = handle.complete(data).await;
@@ -618,19 +654,10 @@ impl HasWorkerService for StatusDeps {
 impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
     async fn activate_worker_if_needed(
         &self,
+        environment_id: EnvironmentId,
         promise_id: &PromiseId,
     ) -> Result<(), WorkerExecutorError> {
-        let agent_id = promise_id.agent_id.clone();
-
-        let component_metadata = self
-            .component_service
-            .get_metadata(agent_id.component_id, None)
-            .await?;
-
-        let owned_agent_id = OwnedAgentId {
-            environment_id: component_metadata.environment_id,
-            agent_id,
-        };
+        let owned_agent_id = OwnedAgentId::new(environment_id, &promise_id.agent_id);
 
         // Check if worker is active first, otherwise fall back to stored metadata. Only the
         // incarnation that created the promise is activated; a deleted or re-created agent is not.
@@ -706,36 +733,42 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
 
     async fn run_excluding_removal<'a>(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
     ) -> Result<bool, WorkerExecutorError> {
         self.worker_service
-            .run_excluding_removal(agent_id, operation)
+            .run_excluding_removal(&owned_agent_id.agent_id, operation)
             .await
     }
 }
 
 /// The storage namespace of the promises of one agent incarnation.
 pub fn promise_namespace_of(
-    agent_id: &AgentId,
+    owned_agent_id: &OwnedAgentId,
     fingerprint: AgentFingerprint,
 ) -> KeyValueStorageNamespace {
     KeyValueStorageNamespace::Promise {
-        agent_id: agent_id.clone(),
+        owned_agent_id: owned_agent_id.clone(),
         fingerprint,
     }
 }
 
-fn promise_namespace(promise_id: &PromiseId) -> KeyValueStorageNamespace {
-    promise_namespace_of(&promise_id.agent_id, promise_id.fingerprint)
+fn promise_namespace(
+    environment_id: EnvironmentId,
+    promise_id: &PromiseId,
+) -> KeyValueStorageNamespace {
+    promise_namespace_of(
+        &OwnedAgentId::new(environment_id, &promise_id.agent_id),
+        promise_id.fingerprint,
+    )
 }
 
-fn get_promise_redis_key(promise_id: &PromiseId) -> String {
-    promise_id.to_redis_key()
+fn promise_key(environment_id: EnvironmentId, promise_id: &PromiseId) -> String {
+    promise_id.storage_key(environment_id)
 }
 
-fn get_promise_result_redis_key(promise_id: &PromiseId) -> String {
-    format!("{}:completed", promise_id.to_redis_key())
+fn promise_result_key(environment_id: EnvironmentId, promise_id: &PromiseId) -> String {
+    format!("{}:completed", promise_id.storage_key(environment_id))
 }
 
 #[derive(Debug, Eq, PartialEq, BinaryCodec)]
@@ -775,19 +808,24 @@ impl PromiseServiceMock {
 impl PromiseService for PromiseServiceMock {
     async fn create(
         &self,
-        _agent_id: &AgentId,
+        _owned_agent_id: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
         _oplog_idx: OplogIndex,
     ) -> Result<PromiseId, WorkerExecutorError> {
         unimplemented!()
     }
 
-    async fn poll(&self, _promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
+    async fn poll(
+        &self,
+        _environment_id: EnvironmentId,
+        _promise_id: PromiseId,
+    ) -> Result<PromiseHandle, WorkerExecutorError> {
         unimplemented!()
     }
 
     async fn complete(
         &self,
+        _environment_id: EnvironmentId,
         promise_id: PromiseId,
         _data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
@@ -797,10 +835,11 @@ impl PromiseService for PromiseServiceMock {
 
     async fn complete_without_wakeup(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
-        self.complete(promise_id, data).await
+        self.complete(environment_id, promise_id, data).await
     }
 
     async fn cleanup(&self) {}
@@ -814,7 +853,7 @@ mod tests {
         FaultInjectingKeyValueStorage, KeyValueStorageFaults,
     };
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
-    use golem_common::base_model::component::ComponentId;
+    use golem_common::model::AgentId;
     use proptest::prelude::*;
     use std::sync::Arc;
     use test_r::test;
@@ -829,6 +868,7 @@ mod tests {
     impl PromiseWorkerAccess for NoopPromiseWorkerAccess {
         async fn activate_worker_if_needed(
             &self,
+            _environment_id: EnvironmentId,
             _promise_id: &PromiseId,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
@@ -836,19 +876,20 @@ mod tests {
 
         async fn run_excluding_removal<'a>(
             &self,
-            _agent_id: &AgentId,
+            _owned_agent_id: &OwnedAgentId,
             operation: futures::future::BoxFuture<'a, Result<bool, WorkerExecutorError>>,
         ) -> Result<bool, WorkerExecutorError> {
             operation.await
         }
     }
 
+    fn environment_id() -> EnvironmentId {
+        EnvironmentId(Uuid::from_u128(1))
+    }
+
     fn promise_id() -> PromiseId {
         PromiseId {
-            agent_id: AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "promise-test".to_string(),
-            },
+            agent_id: AgentId::from_parts(7, Uuid::new_v4().as_u128() >> 38),
             fingerprint: AgentFingerprint::new(),
             oplog_idx: OplogIndex::from_u64(1),
         }
@@ -863,7 +904,7 @@ mod tests {
         let expected_id = promise_id();
         let id = service
             .create(
-                &expected_id.agent_id,
+                &OwnedAgentId::new(environment_id(), &expected_id.agent_id),
                 expected_id.fingerprint,
                 expected_id.oplog_idx,
             )
@@ -874,18 +915,30 @@ mod tests {
         assert!(service.registry.lock().await.handles.is_empty());
 
         let payload = vec![3, 17, 42];
-        assert!(service.complete(id.clone(), payload.clone()).await.unwrap());
+        assert!(
+            service
+                .complete(environment_id(), id.clone(), payload.clone())
+                .await
+                .unwrap()
+        );
         assert!(service.registry.lock().await.handles.is_empty());
 
-        let handle = service.poll(id.clone()).await.unwrap();
+        let handle = service.poll(environment_id(), id.clone()).await.unwrap();
         assert_eq!(handle.get().await, Some(payload));
-        let second_handle = service.poll(id.clone()).await.unwrap();
+        let second_handle = service.poll(environment_id(), id.clone()).await.unwrap();
         assert!(Arc::ptr_eq(&handle.inner, &second_handle.inner));
 
         let weak = handle.downgrade();
         drop(handle);
         service.cleanup().await;
-        assert!(service.registry.lock().await.get(&id).is_some());
+        assert!(
+            service
+                .registry
+                .lock()
+                .await
+                .get(&(environment_id(), id.clone()))
+                .is_some()
+        );
 
         drop(second_handle);
         assert!(weak.upgrade().is_none());
@@ -896,7 +949,7 @@ mod tests {
     /// A re-created agent keeps its agent ID and starts its oplog again, so its promises reuse
     /// the oplog indexes of the deleted incarnation. Only the fingerprint tells them apart.
     #[test]
-    async fn promises_of_two_incarnations_at_the_same_oplog_index_are_separate() {
+    async fn promises_of_two_incarnations_or_environments_are_separate() {
         let storage = Arc::new(InMemoryKeyValueStorage::new());
         let service =
             DefaultPromiseService::new(storage.clone(), Arc::new(NoopPromiseWorkerAccess));
@@ -905,32 +958,64 @@ mod tests {
             fingerprint: AgentFingerprint::new(),
             ..current.clone()
         };
-        assert_ne!(promise_namespace(&current), promise_namespace(&deleted));
+        assert_ne!(
+            promise_namespace(environment_id(), &current),
+            promise_namespace(environment_id(), &deleted)
+        );
 
         let current = service
-            .create(&current.agent_id, current.fingerprint, current.oplog_idx)
+            .create(
+                &OwnedAgentId::new(environment_id(), &current.agent_id),
+                current.fingerprint,
+                current.oplog_idx,
+            )
             .await
             .unwrap();
 
         assert!(matches!(
-            service.poll(deleted.clone()).await,
+            service.poll(environment_id(), deleted.clone()).await,
+            Err(WorkerExecutorError::PromiseNotFound { .. })
+        ));
+        let other_environment = EnvironmentId(Uuid::from_u128(2));
+        assert!(matches!(
+            service.poll(other_environment, current.clone()).await,
             Err(WorkerExecutorError::PromiseNotFound { .. })
         ));
         assert!(matches!(
-            service.complete(deleted.clone(), vec![1]).await,
+            service
+                .complete(other_environment, current.clone(), vec![1])
+                .await,
+            Err(WorkerExecutorError::PromiseNotFound { .. })
+        ));
+        assert!(matches!(
+            service
+                .complete(environment_id(), deleted.clone(), vec![1])
+                .await,
             Err(WorkerExecutorError::PromiseNotFound { .. })
         ));
         assert!(
             storage
-                .keys("test", "test", promise_namespace(&deleted))
+                .keys(
+                    "test",
+                    "test",
+                    promise_namespace(environment_id(), &deleted)
+                )
                 .await
                 .unwrap()
                 .is_empty()
         );
 
-        let handle = service.poll(current.clone()).await.unwrap();
+        let handle = service
+            .poll(environment_id(), current.clone())
+            .await
+            .unwrap();
         assert!(!handle.is_ready().await);
-        assert!(service.complete(current, vec![2]).await.unwrap());
+        assert!(
+            service
+                .complete(environment_id(), current, vec![2])
+                .await
+                .unwrap()
+        );
         assert_eq!(handle.get().await, Some(vec![2]));
     }
 
@@ -938,9 +1023,11 @@ mod tests {
     async fn local_completion_updates_handle_before_returning() {
         let promise_id = promise_id();
         let mut registry = PromiseRegistry::new();
-        let handle = registry.get_or_insert(&promise_id);
+        let handle = registry.get_or_insert(&(environment_id(), promise_id.clone()));
 
-        let completion_handle = registry.get(&promise_id).unwrap();
+        let completion_handle = registry
+            .get(&(environment_id(), promise_id.clone()))
+            .unwrap();
         let _ = completion_handle.complete(vec![1]).await;
 
         assert_eq!(handle.get().await, Some(vec![1]));
@@ -964,13 +1051,27 @@ mod tests {
         let service_b = DefaultPromiseService::new(storage, Arc::new(NoopPromiseWorkerAccess));
         let id = promise_id();
         let id = service_a
-            .create(&id.agent_id, id.fingerprint, id.oplog_idx)
+            .create(
+                &OwnedAgentId::new(environment_id(), &id.agent_id),
+                id.fingerprint,
+                id.oplog_idx,
+            )
             .await
             .unwrap();
-        let handle = service_b.poll(id.clone()).await.unwrap();
+        let handle = service_b.poll(environment_id(), id.clone()).await.unwrap();
 
-        assert!(service_a.complete(id.clone(), vec![1]).await.unwrap());
-        assert!(!service_b.complete(id, vec![2]).await.unwrap());
+        assert!(
+            service_a
+                .complete(environment_id(), id.clone(), vec![1])
+                .await
+                .unwrap()
+        );
+        assert!(
+            !service_b
+                .complete(environment_id(), id, vec![2])
+                .await
+                .unwrap()
+        );
         assert_eq!(handle.get().await, Some(vec![1]));
     }
 
@@ -980,6 +1081,7 @@ mod tests {
     impl PromiseWorkerAccess for RefusePromiseActivation {
         async fn activate_worker_if_needed(
             &self,
+            _environment_id: EnvironmentId,
             _promise_id: &PromiseId,
         ) -> Result<(), WorkerExecutorError> {
             Err(WorkerExecutorError::runtime("activation refused"))
@@ -987,7 +1089,7 @@ mod tests {
 
         async fn run_excluding_removal<'a>(
             &self,
-            _agent_id: &AgentId,
+            _owned_agent_id: &OwnedAgentId,
             operation: futures::future::BoxFuture<'a, Result<bool, WorkerExecutorError>>,
         ) -> Result<bool, WorkerExecutorError> {
             operation.await
@@ -1002,14 +1104,18 @@ mod tests {
         let service_b = DefaultPromiseService::new(storage, Arc::new(RefusePromiseActivation));
         let id = promise_id();
         let id = service_a
-            .create(&id.agent_id, id.fingerprint, id.oplog_idx)
+            .create(
+                &OwnedAgentId::new(environment_id(), &id.agent_id),
+                id.fingerprint,
+                id.oplog_idx,
+            )
             .await
             .unwrap();
-        let handle_a = service_a.poll(id.clone()).await.unwrap();
-        let handle_b = service_b.poll(id.clone()).await.unwrap();
+        let handle_a = service_a.poll(environment_id(), id.clone()).await.unwrap();
+        let handle_b = service_b.poll(environment_id(), id.clone()).await.unwrap();
         assert!(
             service_a
-                .complete_without_wakeup(id.clone(), vec![1])
+                .complete_without_wakeup(environment_id(), id.clone(), vec![1])
                 .await
                 .unwrap()
         );
@@ -1020,7 +1126,7 @@ mod tests {
         assert!(futures::FutureExt::now_or_never(waiting.as_mut()).is_none());
         assert!(
             !service_b
-                .complete_without_wakeup(id.clone(), vec![2])
+                .complete_without_wakeup(environment_id(), id.clone(), vec![2])
                 .await
                 .unwrap()
         );
@@ -1029,7 +1135,12 @@ mod tests {
             .unwrap();
         assert_eq!(handle_b.get().await, Some(vec![1]));
         // Ordinary completion still propagates activation failures, including on duplicates.
-        assert!(service_b.complete(id, vec![3]).await.is_err());
+        assert!(
+            service_b
+                .complete(environment_id(), id, vec![3])
+                .await
+                .is_err()
+        );
         assert_eq!(handle_b.get().await, Some(vec![1]));
     }
 
@@ -1054,10 +1165,19 @@ mod tests {
 
         let id = promise_id();
         let id = service
-            .create(&id.agent_id, id.fingerprint, id.oplog_idx)
+            .create(
+                &OwnedAgentId::new(environment_id(), &id.agent_id),
+                id.fingerprint,
+                id.oplog_idx,
+            )
             .await
             .unwrap();
-        assert!(completer.complete(id.clone(), vec![1]).await.unwrap());
+        assert!(
+            completer
+                .complete(environment_id(), id.clone(), vec![1])
+                .await
+                .unwrap()
+        );
 
         // The first poll registers the handle, then pauses in its result read, which will fail.
         let gate = faults.gate_next(
@@ -1067,12 +1187,12 @@ mod tests {
         let first = tokio::spawn({
             let service = service.clone();
             let id = id.clone();
-            async move { service.poll(id).await }
+            async move { service.poll(environment_id(), id).await }
         });
         gate.entered().await;
 
         // The second poll finds the registered handle. It must not stop there.
-        let second = service.poll(id.clone()).await.unwrap();
+        let second = service.poll(environment_id(), id.clone()).await.unwrap();
         assert!(
             second.is_ready().await,
             "a poll that found an unhydrated handle returned it without reading storage"
@@ -1082,7 +1202,7 @@ mod tests {
         assert!(first.await.unwrap().is_err());
 
         // And the failure left nothing behind that a later poll would trust.
-        let third = service.poll(id).await.unwrap();
+        let third = service.poll(environment_id(), id).await.unwrap();
         assert_eq!(third.get().await, Some(vec![1]));
     }
 

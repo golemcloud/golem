@@ -157,7 +157,7 @@ fn summary_fields(summary: &InvocationSummary) -> Vec<(String, String)> {
     let mut fields = FieldsBuilder::new();
     fields
         .fmt_field("Invocation ID", &summary.invocation_id, format_main_id)
-        .fmt_field("Agent", &summary.agent_id.agent_id, format_id)
+        .fmt_field("Agent", &summary.agent_id, format_id)
         .fmt_field("Environment ID", &summary.environment_id, format_id)
         .fmt_field("State", &summary.state, ToString::to_string)
         .fmt_field_option("Kind", &summary.kind, ToString::to_string)

@@ -11,8 +11,8 @@ Mark a method read-only by setting `readOnly: true` (or a cache policy object) o
 ## Usage
 
 ```typescript
-import { Effect, Ref, Schema } from "effect"
-import { defineAgent, method, Principal } from "@golemcloud/effect-golem"
+import { Effect, Ref, Schema } from "effect";
+import { defineAgent, method, Principal } from "@golemcloud/effect-golem";
 
 export const CounterAgent = defineAgent({
   name: "CounterAgent",
@@ -38,28 +38,28 @@ export const CounterAgent = defineAgent({
   },
 }).implement({
   init: () => Ref.make(0),
-  methods: count => ({
-    increment: () => Ref.updateAndGet(count, value => value + 1),
+  methods: (count) => ({
+    increment: () => Ref.updateAndGet(count, (value) => value + 1),
     getCount: () => Ref.get(count),
     recent: () => Ref.get(count),
     myCount: () => Ref.get(count),
   }),
-})
+});
 ```
 
 > **Cache policy & per-principal caching.** `readOnly: true` uses the `until-write` policy (cached until the next mutating invocation on the agent). For finer control, pass an object: `readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> } }` (`no-cache` never caches but enforces side-effect-free rules; `{ ttlNanos }` caches for that duration). Declaring a `Principal.PrincipalSchema` input automatically keys the cache per caller principal (`Cache-Control: private`). A read-only handler without that declared input **cannot access the ambient `Principal` service** (see [`golem-add-http-auth-effect`](/next/how-to-guides/effect/golem-add-http-auth-effect)). Reach for a regular (non-read-only) method whenever you need a side effect.
 
 ## What Works in a Read-Only Method
 
-A read-only method must be a **pure function of the agent's already-loaded state and the method inputs**. Operations in the middle column go through Golem's durability layer and **trap** with a typed `ReadOnlyViolation` _before_ they run and before anything is persisted. Operations in the right column are **not** detected — they do not trap, so keeping them out is your responsibility.
+A read-only method must be a **pure function of the agent's already-loaded state and the method inputs**. Operations in the middle column go through Golem's durability layer and **trap** with a typed `ReadOnlyViolation` *before* they run and before anything is persisted. Operations in the right column are **not** detected — they do not trap, so keeping them out is your responsibility.
 
-| Allowed                               | Not allowed — traps with `ReadOnlyViolation`                              | Not allowed — not checked, your responsibility                             |
-| ------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Reading agent state (`Ref.get(ref)`)  | Writing persistent state (storage, databases, promises, agent management) | Mutating in-memory state (`Ref.set`, `Ref.update`, property assignment)    |
-| Computation over inputs               | Outgoing HTTP (`fetch`, `HttpClient`)                                     | Reading the clock / current time (`Date.now()`, `Clock.currentTimeMillis`) |
-| Returning derived / aggregated values | RPC calls to other agents                                                 | Randomness (`Math.random()`, `Random`)                                     |
-|                                       |                                                                           | Reading environment variables (`process.env`, `ConfigProvider`)            |
-|                                       |                                                                           | Remote / blob reads or file writes                                         |
+| Allowed | Not allowed — traps with `ReadOnlyViolation` | Not allowed — not checked, your responsibility |
+|---|---|---|
+| Reading agent state (`Ref.get(ref)`) | Writing persistent state (storage, databases, promises, agent management) | Mutating in-memory state (`Ref.set`, `Ref.update`, property assignment) |
+| Computation over inputs | Outgoing HTTP (`fetch`, `HttpClient`) | Reading the clock / current time (`Date.now()`, `Clock.currentTimeMillis`) |
+| Returning derived / aggregated values | RPC calls to other agents | Randomness (`Math.random()`, `Random`) |
+| | | Reading environment variables (`process.env`, `ConfigProvider`) |
+| | | Remote / blob reads or file writes |
 
 ## Common Pitfalls
 

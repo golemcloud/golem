@@ -17,11 +17,11 @@ use super::{
     AgentCardHolder, AgentId, AgentPermissionMonomorphizationContext, CardHolder, CardId,
     CardManagedBy, CardManagedByRuntimeDerived, CardTransferData, DurableWorkerCtx,
     GolemPermissionsInstallTransfer, HasWorker, HostRequest, HostRequestPermissionCardTransfer,
-    InstallAgentTarget, OplogEntry, OplogIndex, OplogOps, OwnedAgentId, ParsedAgentKey,
-    PendingCardEventRef, PendingSourceCardTransferRetry, PendingSourceTransferProgress,
-    PermissionCardDeriveError, QueuedCardEvent, QueuedCardEventTransfer, RecipientOwnerContext,
-    RecipientPattern, RuntimeCardCreation, SourceTransferProgress, StoredCard, Timestamp, Uuid,
-    WorkerCtx, WorkerExecutorError, anyhow, card_matches_agent_recipient, deserialize,
+    InstallAgentTarget, OplogEntry, OplogIndex, OplogOps, OwnedAgentId, PendingCardEventRef,
+    PendingSourceCardTransferRetry, PendingSourceTransferProgress, PermissionCardDeriveError,
+    QueuedCardEvent, QueuedCardEventTransfer, RecipientOwnerContext, RecipientPattern,
+    RuntimeCardCreation, SourceTransferProgress, StoredCard, Timestamp, Uuid, WorkerCtx,
+    WorkerExecutorError, anyhow, card_matches_agent_recipient, deserialize,
     ensure_install_permission_in_surface, permissions_types, refused_runtime_card_parent,
     serialize, worker_error_to_permission_error,
 };
@@ -78,8 +78,13 @@ pub(super) async fn resolve_install_target_context<Ctx: WorkerCtx>(
             permissions_types::PermissionError::NotPermitted(format!(
                 "install-card target metadata lookup failed: {error}"
             ))
+        })?
+        .ok_or_else(|| {
+            permissions_types::PermissionError::InvalidRecipient(format!(
+                "install target agent {target} does not exist"
+            ))
         })?;
-    let target_revision = target_metadata.as_ref().map(|metadata| {
+    let target_revision = Some(&target_metadata).map(|metadata| {
         metadata
             .last_known_status
             .as_ref()
@@ -95,11 +100,7 @@ pub(super) async fn resolve_install_target_context<Ctx: WorkerCtx>(
         .state
         .component_service
         .get_metadata(
-            target_metadata
-                .as_ref()
-                .map_or(target.component_id, |metadata| {
-                    metadata.initial_worker_metadata.component_id
-                }),
+            target_metadata.initial_worker_metadata.component_id,
             target_revision,
         )
         .await
@@ -108,28 +109,28 @@ pub(super) async fn resolve_install_target_context<Ctx: WorkerCtx>(
                 "install-card target metadata lookup failed: {error}"
             ))
         })?;
-    let agent_type = match &target_metadata {
-        Some(metadata) => metadata
-            .initial_worker_metadata
-            .agent_type_name
-            .clone()
-            .ok_or_else(|| "Owner has no agent type".to_string()),
-        None => ParsedAgentKey::parse_agent_type_name(&target.agent_id),
-    }
-    .map_err(|error| {
-        permissions_types::PermissionError::InvalidRecipient(format!(
-            "invalid install target agent ID: {error}"
-        ))
-    })?;
+    let agent_type = target_metadata
+        .initial_worker_metadata
+        .agent_type_name
+        .clone()
+        .ok_or_else(|| "Owner has no agent type".to_string())
+        .map_err(|error| {
+            permissions_types::PermissionError::InvalidRecipient(format!(
+                "invalid install target agent ID: {error}"
+            ))
+        })?;
 
     Ok(InstallAgentTarget {
-        agent_id: target.clone(),
+        agent_id: target,
         holder: AgentPermissionMonomorphizationContext {
             account: component.account_email,
             application: component.application_name,
             environment: component.environment_name,
             component: component.component_name,
-            agent_name: target.agent_id,
+            agent: golem_common::model::card::owner::AgentOwnerLeaf {
+                agent_id: target,
+                agent_type: Some(agent_type.clone()),
+            },
             owner: RecipientOwnerContext::AgentType(agent_type),
         },
     })
@@ -195,7 +196,7 @@ impl CardTransferData {
                 .map_err(|error| {
                     anyhow!("failed to serialize installed permission-card provenance: {error}")
                 })?,
-            target_agent_id: self.target_agent_id.clone(),
+            target_agent_id: self.target_agent_id,
         })
     }
 
@@ -278,13 +279,16 @@ impl CardTransferData {
 
     pub(super) fn source_holder<Ctx: WorkerCtx>(&self, ctx: &DurableWorkerCtx<Ctx>) -> CardHolder {
         CardHolder::Agent(AgentCardHolder {
-            agent_id: ctx.owned_agent_id.agent_id.clone(),
+            environment_id: ctx.owned_agent_id.environment_id,
+            agent_id: ctx.owned_agent_id.agent_id,
         })
     }
 
-    pub(super) fn target_holder(&self) -> CardHolder {
+    /// Card transfers stay within the source agent's environment.
+    pub(super) fn target_holder<Ctx: WorkerCtx>(&self, ctx: &DurableWorkerCtx<Ctx>) -> CardHolder {
         CardHolder::Agent(AgentCardHolder {
-            agent_id: self.target_agent_id.clone(),
+            environment_id: ctx.owned_agent_id.environment_id,
+            agent_id: self.target_agent_id,
         })
     }
 }
@@ -359,7 +363,7 @@ pub(super) async fn source_transfer_progress<Ctx: WorkerCtx>(
     let source_card_id = transfer.source_card.card_id();
     let installed_card_id = transfer.installed_card.card_id();
     let source_holder = transfer.source_holder(ctx);
-    let target_holder = transfer.target_holder();
+    let target_holder = transfer.target_holder(ctx);
 
     if let Some(card) = &records.derived_card {
         if card.card_id() != installed_card_id
@@ -531,7 +535,8 @@ pub(super) async fn complete_source_card_transfer<Ctx: WorkerCtx>(
     remove_source_membership: bool,
 ) -> Result<(), WorkerExecutorError> {
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: target_agent_id.clone(),
+        environment_id: ctx.owned_agent_id.environment_id,
+        agent_id: *target_agent_id,
     });
 
     ensure_source_card_transfer_started(
@@ -594,7 +599,8 @@ pub(super) async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
                 transfer_id,
                 source_card_id,
                 CardHolder::Agent(AgentCardHolder {
-                    agent_id: ctx.owned_agent_id.agent_id.clone(),
+                    environment_id: ctx.owned_agent_id.environment_id,
+                    agent_id: ctx.owned_agent_id.agent_id,
                 }),
                 target_holder.clone(),
                 0,
@@ -619,7 +625,8 @@ pub(super) async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
             transfer_id,
             source_card_id,
             CardHolder::Agent(AgentCardHolder {
-                agent_id: ctx.owned_agent_id.agent_id.clone(),
+                environment_id: ctx.owned_agent_id.environment_id,
+                agent_id: ctx.owned_agent_id.agent_id,
             }),
             target_holder.clone(),
             ctx.state.wallet_generation,
@@ -714,7 +721,7 @@ pub(super) async fn execute_source_card_transfer<Ctx: WorkerCtx>(
                     transfer.transfer_id,
                     transfer.source_card.card_id(),
                     installed_card.clone(),
-                    transfer.target_holder(),
+                    transfer.target_holder(ctx),
                 )),
             ))
             .await?;
@@ -737,17 +744,19 @@ pub(super) async fn execute_source_card_transfer<Ctx: WorkerCtx>(
 
 fn pending_source_transfer_progress(
     status: &AgentStatusRecord,
-    source_agent_id: &AgentId,
+    source: &OwnedAgentId,
     transfer: &QueuedCardEventTransfer,
     installed_card: &StoredCard,
     target_agent_id: &AgentId,
     index: OplogIndex,
 ) -> Result<PendingSourceTransferProgress, WorkerExecutorError> {
     let source_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: source_agent_id.clone(),
+        environment_id: source.environment_id,
+        agent_id: source.agent_id,
     });
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: target_agent_id.clone(),
+        environment_id: source.environment_id,
+        agent_id: *target_agent_id,
     });
     let Some(records) = source_transfer_records(status, transfer.transfer_id, index)? else {
         return Err(transfer_progress_mismatch(
@@ -846,11 +855,11 @@ impl PendingSourceCardTransferRetry {
     pub(crate) fn is_confirmed(
         &self,
         status: &AgentStatusRecord,
-        source_agent_id: &AgentId,
+        source: &OwnedAgentId,
     ) -> Result<bool, WorkerExecutorError> {
         Ok(pending_source_transfer_progress(
             status,
-            source_agent_id,
+            source,
             &self.transfer,
             &self.installed_card,
             &self.target_agent_id,
@@ -862,7 +871,7 @@ impl PendingSourceCardTransferRetry {
 
 pub(crate) fn prepare_pending_source_card_transfer_retry(
     status: &AgentStatusRecord,
-    source_agent_id: &AgentId,
+    source: &OwnedAgentId,
     pending: &PendingCardEventRef,
     transfer: &QueuedCardEventTransfer,
 ) -> Result<Option<PendingSourceCardTransferRetry>, WorkerExecutorError> {
@@ -882,7 +891,7 @@ pub(crate) fn prepare_pending_source_card_transfer_retry(
     )?;
     let progress = pending_source_transfer_progress(
         status,
-        source_agent_id,
+        source,
         transfer,
         installed_card,
         target_agent_id,
@@ -927,7 +936,7 @@ pub(crate) fn prepare_pending_source_card_transfer_retry(
         transfer_id: transfer.transfer_id,
         source_card_id: transfer.card_id,
         installed_card: installed_card.clone(),
-        target_agent_id: target_agent_id.clone(),
+        target_agent_id: *target_agent_id,
         started: progress.started,
         pending: pending.clone(),
         transfer: transfer.clone(),

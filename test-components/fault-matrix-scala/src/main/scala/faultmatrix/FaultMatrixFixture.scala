@@ -5,7 +5,7 @@ package faultmatrix
 // `run * 100_000 + seq`, for `seq` in 1..=count.
 
 import golem.{BaseAgent, HostApi, UInt, ULong}
-import golem.host.js.{JsAgentId, JsComponentId, JsPromiseId, JsUuid}
+import golem.host.js.{JsAgentId, JsPromiseId, JsUuid}
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
 import golem.schema.AgentStream
 import zio.blocks.schema.Schema
@@ -14,14 +14,8 @@ import java.util.UUID
 import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 
-/** The schema shape of `golem:core/types@2.0.0` component-id. */
-final case class GateComponentId(uuid: UUID)
-object GateComponentId {
-  implicit val schema: Schema[GateComponentId] = Schema.derived
-}
-
 /** The schema shape of `golem:core/types@2.0.0` agent-id. */
-final case class GateAgentId(componentId: GateComponentId, agentId: String)
+final case class GateAgentId(uuid: UUID)
 object GateAgentId {
   implicit val schema: Schema[GateAgentId] = Schema.derived
 }
@@ -30,7 +24,7 @@ object GateAgentId {
 final case class Gate(agentId: GateAgentId, fingerprint: UUID, oplogIdx: ULong) {
   def toHost: HostApi.PromiseId =
     JsPromiseId(
-      JsAgentId(JsComponentId(JsUuid.fromUuid(agentId.componentId.uuid)), agentId.agentId),
+      JsAgentId(JsUuid.fromUuid(agentId.uuid)),
       JsUuid.fromUuid(fingerprint),
       js.BigInt(oplogIdx.value.toString)
     )
@@ -40,7 +34,7 @@ object Gate {
 
   def fromHost(id: HostApi.PromiseId): Gate =
     Gate(
-      GateAgentId(GateComponentId(JsUuid.toUuid(id.agentId.componentId.uuid)), id.agentId.agentId),
+      GateAgentId(JsUuid.toUuid(id.agentId.uuid)),
       JsUuid.toUuid(id.fingerprint),
       ULong(BigInt(id.oplogIdx.toString))
     )
@@ -115,7 +109,7 @@ final class FaultMatrixFixtureImpl(name: String) extends FaultMatrixFixture {
     collect(input, keep.value)
 
   override def pipe(target: String, run: UInt, count: UInt, keep: UInt): Future[Vector[UInt]] = {
-    val client = FaultMatrixFixtureClient.get(target)
+    val client = FaultMatrixFixtureClient.upsert(target)
     val input  = records(run, count.value)(_ => Future.unit)
     if (keep.value >= count.value) client.consume(input) else client.consume_then_drop(input, keep)
   }
@@ -128,7 +122,7 @@ final class FaultMatrixFixtureImpl(name: String) extends FaultMatrixFixture {
     gate: Gate
   ): Future[Vector[UInt]] =
     FaultMatrixFixtureClient
-      .get(target)
+      .upsert(target)
       .produce(run, count, pause_after, gate)
       .flatMap(collect(_, Long.MaxValue))
 }

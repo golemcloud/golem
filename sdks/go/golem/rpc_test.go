@@ -205,6 +205,7 @@ func TestRpcErrorsMapToDistinguishableKinds(t *testing.T) {
 		{"denied", host.MakeRpcErrorDenied("nope"), RemoteDenied},
 		{"not found", host.MakeRpcErrorNotFound("no such agent"), RemoteNotFound},
 		{"internal", host.MakeRpcErrorRemoteInternalError("boom"), RemoteInternalError},
+		{"conflict", host.MakeRpcErrorConflict("the key is current"), RemoteConflict},
 	} {
 		err := rpcErrorToGo("agent-1", "charge", tc.in)
 		var rce *RemoteCallError
@@ -267,8 +268,10 @@ func TestAsyncInvocationMetadataIsAbsentForARejectedCall(t *testing.T) {
 
 var testInvocationUUID = UUID{0x0b, 0x9f, 0x3d, 0x9e, 0x5f, 0x43, 0x4c, 0x3a, 0x9e, 0x7c, 0x0d, 0x6f, 0x1f, 0x2a, 0x3b, 0x4c}
 
+var testAgentID = AgentIDFromUUID(UUID{0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x80, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04})
+
 var testHostInvocationMetadata = host.InvocationMetadata{
-	AgentId: "agent-7",
+	AgentId: agentIDToWit(testAgentID),
 	InvocationId: types.InvocationId{
 		Owner: types.MakeInvocationOwnerTool("ignored"),
 		Id:    uuidToWit(testInvocationUUID),
@@ -276,16 +279,15 @@ var testHostInvocationMetadata = host.InvocationMetadata{
 }
 
 var testInvocationMetadata = InvocationMetadata{
-	AgentID:      "agent-7",
-	InvocationID: InvocationID{AgentID: "agent-7", UUID: testInvocationUUID},
+	AgentID:      testAgentID,
+	InvocationID: InvocationID{AgentID: testAgentID, UUID: testInvocationUUID},
 }
 
-// TestInvocationIDTextFormRoundTrips — the text form is <agent-id>.<uuid>, and
-// parsing splits off the trailing UUID, so an agent ID with ".", "/" and quotes
-// comes back unchanged.
+// TestInvocationIDTextFormRoundTrips — the text form is <agent-id>.<uuid>,
+// two UUIDs, and parses back unchanged.
 func TestInvocationIDTextFormRoundTrips(t *testing.T) {
-	id := InvocationID{AgentID: `shop.v2/cart("a.b", "x/y")`, UUID: testInvocationUUID}
-	const text = `shop.v2/cart("a.b", "x/y").0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c`
+	id := InvocationID{AgentID: testAgentID, UUID: testInvocationUUID}
+	const text = "00000007-0000-8000-8000-000000000004.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c"
 	if got := id.String(); got != text {
 		t.Fatalf("String() = %q, want %q", got, text)
 	}
@@ -298,38 +300,38 @@ func TestInvocationIDTextFormRoundTrips(t *testing.T) {
 	}
 }
 
-// TestParseInvocationIDAcceptsUpperCaseHex — the UUID part may use upper-case
+// TestParseInvocationIDAcceptsUpperCaseHex — both UUIDs may use upper-case
 // hex; the parsed ID prints the canonical lower-case form.
 func TestParseInvocationIDAcceptsUpperCaseHex(t *testing.T) {
-	const text = `shop.v2/cart("a.b").0B9F3D9E-5F43-4C3A-9E7C-0D6F1F2A3B4C`
+	const text = "00000007-0000-8000-8000-000000000004.0B9F3D9E-5F43-4C3A-9E7C-0D6F1F2A3B4C"
 	parsed, err := ParseInvocationID(text)
 	if err != nil {
 		t.Fatalf("ParseInvocationID(%q): %v", text, err)
 	}
-	want := InvocationID{AgentID: `shop.v2/cart("a.b")`, UUID: testInvocationUUID}
+	want := InvocationID{AgentID: testAgentID, UUID: testInvocationUUID}
 	if parsed != want {
 		t.Fatalf("ParseInvocationID(%q) = %+v, want %+v", text, parsed, want)
 	}
-	const canonical = `shop.v2/cart("a.b").0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c`
+	const canonical = "00000007-0000-8000-8000-000000000004.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c"
 	if got := parsed.String(); got != canonical {
 		t.Fatalf("String() = %q, want %q", got, canonical)
 	}
 }
 
-// TestParseInvocationIDRejectsMalformedText — a missing ".", a bad or
-// non-hyphenated UUID and an empty agent ID are errors.
+// TestParseInvocationIDRejectsMalformedText — a missing ".", a readable agent
+// name and a bad or non-hyphenated UUID are errors.
 func TestParseInvocationIDRejectsMalformedText(t *testing.T) {
 	for _, text := range []string{
 		"",
 		"0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c",
 		".0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c",
-		"agent-0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c",
-		"agent.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4",
-		"agent.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4g",
-		"agent.0b9f3d9e+5f43-4c3a-9e7c-0d6f1f2a3b4c",
-		"agent.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c.",
-		"agent.0b9f3d9e5f434c3a9e7c0d6f1f2a3b4c",
-		"agent.abc.0b9f3d9e5f434c3a9e7c0d6f1f2a3b4c",
+		`shop.v2/cart("a.b").0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c`,
+		"00000007-0000-8000-8000-000000000004-0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c",
+		"00000007-0000-8000-8000-000000000004.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4",
+		"00000007-0000-8000-8000-000000000004.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4g",
+		"00000007-0000-8000-8000-00000000000g.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c",
+		"00000007-0000-8000-8000-000000000004.0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c.",
+		"00000007-0000-8000-8000-000000000004.0b9f3d9e5f434c3a9e7c0d6f1f2a3b4c",
 	} {
 		if got, err := ParseInvocationID(text); err == nil {
 			t.Errorf("ParseInvocationID(%q) = %+v, want an error", text, got)

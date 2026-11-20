@@ -627,6 +627,7 @@ async fn upload_component(
         .create(
             env,
             ComponentCreation {
+                package_metadata: None,
                 component_name: name.clone(),
                 config_schema: Default::default(),
                 component_provision_config: Default::default(),
@@ -700,6 +701,7 @@ async fn upload_component(
                 .update(
                     existing.id,
                     ComponentUpdate {
+                        package_metadata: None,
                         current_revision: existing.revision,
                         config_schema: None,
                         component_provision_config: None,

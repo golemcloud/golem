@@ -16,7 +16,7 @@ Single-component applications keep `src/` and `tsconfig.json` at the application
 ## Agent fundamentals
 
 - Define APIs with `defineAgent`, `method`, and Effect `Schema` values.
-- Agent `id` fields define durable agent identity.
+- Agent `id` fields define the agent key: `client.upsert(id)` reaches the keyed agent of those values, and every agent also has an agent ID, a UUID that Golem issues.
 - Implement methods as Effects and compose services with normal Effect operators.
 - Agents are durable by default and invocations are processed sequentially.
 - Declare method inputs with `input`, mark side-effect-free methods with `readOnly`, and use
@@ -33,7 +33,7 @@ Single-component applications keep `src/` and `tsconfig.json` at the application
 - Import the SDK from `@golemcloud/effect-golem` and Effect APIs from `effect`.
 - Use `@golemcloud/effect-golem/sqlite`, `/postgres`, `/mysql`, or `/ignite2` for database access. Native Node database drivers cannot run inside WebAssembly.
 - The build bundles reachable SDK code and generates static exports for discovered capabilities. Effect remains shared in the base WASM. Keep its version aligned with the generated `package.json`.
-- The runtime reports Effect components as TypeScript source, so CLI values and agent IDs use TypeScript syntax.
+- The runtime reports Effect components as TypeScript source, so CLI values and agent keys use TypeScript syntax.
 
 ## Commands
 
@@ -45,3 +45,4 @@ Run `npm install` after creating the project, then use `golem build`, `golem dep
 - App manifest: https://learn.golem.cloud/app-manifest
 - Golem documentation: https://learn.golem.cloud
 <!-- golem-managed:guide:effect:end -->
+

@@ -40,6 +40,11 @@ pub enum WorkerExecutorError {
     CreateIdempotencyKeyConflict {
         agent_id: AgentId,
     },
+    /// The agent at the ID that a key derives has another key. The request did not act on it.
+    AgentKeyCollision {
+        agent_id: AgentId,
+        requested_key: String,
+    },
     AgentNotFound {
         agent_id: AgentId,
     },
@@ -391,6 +396,15 @@ impl Display for WorkerExecutorError {
                     "Create idempotency key conflicts with the stored request for {agent_id}"
                 )
             }
+            Self::AgentKeyCollision {
+                agent_id,
+                requested_key,
+            } => {
+                write!(
+                    f,
+                    "Agent {agent_id} has another key than the requested {requested_key}"
+                )
+            }
             Self::AgentNotFound { agent_id } => {
                 write!(f, "Worker not found: {agent_id}")
             }
@@ -580,6 +594,7 @@ impl Error for WorkerExecutorError {
             Self::InvalidRequest { .. } => "Invalid request",
             Self::AgentAlreadyExists { .. } => "Worker already exists",
             Self::CreateIdempotencyKeyConflict { .. } => "Create idempotency key conflict",
+            Self::AgentKeyCollision { .. } => "Agent key collision",
             Self::AgentNotFound { .. } => "Worker not found",
             Self::AgentCreationFailed { .. } => "Failed to create worker",
             Self::FailedToResumeAgent { .. } => "Failed to resume worker",
@@ -626,6 +641,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::InvalidRequest { .. } => "InvalidRequest",
             Self::AgentAlreadyExists { .. } => "AgentAlreadyExists",
             Self::CreateIdempotencyKeyConflict { .. } => "CreateIdempotencyKeyConflict",
+            Self::AgentKeyCollision { .. } => "AgentKeyCollision",
             Self::AgentNotFound { .. } => "AgentNotFound",
             Self::AgentCreationFailed { .. } => "AgentCreationFailed",
             Self::FailedToResumeAgent { .. } => "FailedToResumeAgent",
@@ -667,6 +683,7 @@ impl ApiErrorDetails for WorkerExecutorError {
         match self {
             Self::AgentAlreadyExists { .. }
             | Self::CreateIdempotencyKeyConflict { .. }
+            | Self::AgentKeyCollision { .. }
             | Self::AgentNotFound { .. }
             | Self::PromiseNotFound { .. }
             | Self::PromiseDropped { .. }
@@ -763,6 +780,7 @@ impl From<WorkerExecutorError> for Status {
             | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
             | WorkerExecutorError::InvocationCancelled
             | WorkerExecutorError::CannotCancelRunningInvocation
+            | WorkerExecutorError::AgentKeyCollision { .. }
             | WorkerExecutorError::AgentAlreadyExists { .. }) => {
                 let code = if matches!(error, WorkerExecutorError::AgentAlreadyExists { .. }) {
                     tonic::Code::AlreadyExists
@@ -834,6 +852,19 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::worker_execution_error::Error::CreateIdempotencyKeyConflict(
                         golem::worker::v1::CreateIdempotencyKeyConflict {
                             agent_id: Some(agent_id.into()),
+                        },
+                    ),
+                ),
+            },
+            WorkerExecutorError::AgentKeyCollision {
+                agent_id,
+                requested_key,
+            } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::AgentKeyCollision(
+                        golem::worker::v1::AgentKeyCollision {
+                            agent_id: Some(agent_id.into()),
+                            requested_key,
                         },
                     ),
                 ),
@@ -1205,6 +1236,12 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 conflict,
             )) => Ok(Self::CreateIdempotencyKeyConflict {
                 agent_id: conflict.agent_id.ok_or("Missing agent_id")?.try_into()?,
+            }),
+            Some(golem::worker::v1::worker_execution_error::Error::AgentKeyCollision(
+                collision,
+            )) => Ok(Self::AgentKeyCollision {
+                agent_id: collision.agent_id.ok_or("Missing agent_id")?.try_into()?,
+                requested_key: collision.requested_key,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::AgentNotFound(
                 worker_not_found,
@@ -1584,10 +1621,11 @@ mod read_only_violation_trap_tests {
                 stderr: "guest stderr".to_string(),
             },
             WorkerExecutorError::CreateIdempotencyKeyConflict {
-                agent_id: AgentId {
-                    component_id: ComponentId(uuid::Uuid::nil()),
-                    agent_id: "Counter(17)".to_string(),
-                },
+                agent_id: golem_common::model::AgentId::from_parts(7, 1),
+            },
+            WorkerExecutorError::AgentKeyCollision {
+                agent_id: golem_common::model::AgentId::from_parts(7, 3),
+                requested_key: "Cart(\"a\")".to_string(),
             },
             WorkerExecutorError::InvocationCancelled,
             WorkerExecutorError::CannotCancelRunningInvocation,
@@ -1599,10 +1637,9 @@ mod read_only_violation_trap_tests {
                 Some(expected)
             );
         }
-        let expected = WorkerExecutorError::worker_already_exists(AgentId {
-            component_id: ComponentId(uuid::Uuid::nil()),
-            agent_id: "Counter(23)".to_string(),
-        });
+        let expected = WorkerExecutorError::worker_already_exists(
+            golem_common::model::AgentId::from_parts(7, 2),
+        );
         let status: Status = expected.clone().into();
         assert_eq!(status.code(), tonic::Code::AlreadyExists);
         assert_eq!(
@@ -1623,10 +1660,7 @@ mod read_only_violation_trap_tests {
             StaleCursorReason::QueryMismatch,
         ] {
             let expected = WorkerExecutorError::StaleCursor {
-                agent_id: AgentId {
-                    component_id: ComponentId(uuid::Uuid::nil()),
-                    agent_id: "Counter(\"a\")".to_string(),
-                },
+                agent_id: AgentId::from_parts(7, 3),
                 next_oplog_index: OplogIndex::from_u64(42),
                 reason,
             };

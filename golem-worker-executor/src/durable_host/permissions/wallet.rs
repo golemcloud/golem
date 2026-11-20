@@ -207,7 +207,7 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                         )),
                         Some(CardManagedByRuntimeDerived {
                             environment_id: owned_agent_id.environment_id,
-                            agent_id: owned_agent_id.agent_id.clone(),
+                            agent_id: owned_agent_id.agent_id,
                             invocation_key,
                             oplog_index: operation_index,
                         }),

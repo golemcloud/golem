@@ -505,7 +505,7 @@ pub fn InvocationContext::anonymous() -> InvocationContext {
 /// now, while the call still holds it, and kept for the producer.
 pub fn InvocationContext::end(
   self : InvocationContext,
-  returned_stream? : Bool = false,
+  returned_stream~ : Bool = false,
 ) -> Unit {
   if returned_stream && self.cached is None && !self.ended {
     self.cached = Some((self.read)())

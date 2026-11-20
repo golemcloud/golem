@@ -16,7 +16,6 @@ use super::*;
 use crate::oplog_export::model::{COVERAGE_LIST_CAP, ReportNode};
 use base64::Engine;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::{
     CreateParams, EndParams, LogParams, StartParams,
@@ -366,10 +365,7 @@ fn entry_type(entry: &PublicOplogEntry) -> String {
 }
 
 fn root_agent() -> AgentId {
-    AgentId {
-        component_id: ComponentId(instance(77)),
-        agent_id: "root-agent(\"ROOT-MARKER\")".to_string(),
-    }
+    AgentId::from_parts(77, 0x7007)
 }
 
 fn full(index: u64, entry: PublicOplogEntry) -> FakeEntry {
@@ -395,6 +391,9 @@ fn create() -> FakeEntry {
         PublicOplogEntry::Create(CreateParams {
             timestamp: Timestamp::from(0),
             agent_id: root_agent(),
+            agent_type_name: Some(golem_common::model::agent::AgentTypeName(
+                "ROOT-MARKER".to_string(),
+            )),
             owner_kind: Default::default(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
             component_revision: ComponentRevision::new(REVISION).unwrap(),
@@ -406,7 +405,6 @@ fn create() -> FakeEntry {
             initial_total_linear_memory_size: 20,
             initial_active_plugins: Default::default(),
             local_agent_config: vec![],
-            original_phantom_id: None,
             instance_id: instance(1),
             never_live: false,
         }),
@@ -992,6 +990,12 @@ async fn two_keys_give_the_same_structure_and_other_tokens() {
             .map(|f| &f.value);
         assert_eq!(agent, Some(&ReportNode::Agent(root)));
         assert!(!sink.text().contains("ROOT-MARKER"));
+        assert!(
+            !sink
+                .text()
+                .contains(&root_agent().0.hyphenated().to_string())
+        );
+        assert!(!sink.text().contains(&root_agent().0.simple().to_string()));
         texts.push(sink.text());
     }
     assert_ne!(texts[0], texts[1]);

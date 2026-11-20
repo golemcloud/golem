@@ -20,7 +20,6 @@ use desert_rust::{
     SerializationContext,
 };
 use im::{OrdMap, Vector};
-use uuid::Uuid;
 
 use super::{AgentMode, OwnedAgentId, PendingInvocationRef};
 use crate::model::account::{AccountEmail, AccountId};
@@ -35,9 +34,9 @@ use crate::model::oplog::{
 use crate::model::regions::{DeletedRegions, OplogRegion};
 use crate::model::{
     AgentAndFilter, AgentConfigVarsFilter, AgentCreatedAtFilter, AgentEnvFilter, AgentFilter,
-    AgentFingerprint, AgentId, AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentOrFilter,
-    AgentResourceDescription, AgentRevisionFilter, AgentStatus, AgentStatusFilter, InvocationId,
-    RetryConfig, RetryPolicyState, Timestamp,
+    AgentFingerprint, AgentId, AgentIdFilter, AgentKeyFilter, AgentModeFilter, AgentNotFilter,
+    AgentOrFilter, AgentResourceDescription, AgentRevisionFilter, AgentStatus, AgentStatusFilter,
+    InvocationId, RetryConfig, RetryPolicyState, Timestamp,
 };
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -45,6 +44,8 @@ pub struct AgentMetadata {
     pub component_id: crate::model::component::ComponentId,
     pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
     pub canonical_key: Option<String>,
+    /// The canonical constructor parameter text of a component agent, without its type name.
+    pub constructor_parameters: Option<String>,
     pub agent_id: AgentId,
     pub owner_kind: crate::model::agent::OwnerKind,
     pub env: Vec<(String, String)>,
@@ -55,7 +56,6 @@ pub struct AgentMetadata {
     pub created_at: Timestamp,
     pub parent: Option<AgentId>,
     pub last_known_status: AgentStatusRecord,
-    pub original_phantom_id: Option<Uuid>,
     pub fingerprint: AgentFingerprint,
     pub agent_mode: AgentMode,
     pub create_request: oplog::CreateRequest,
@@ -66,7 +66,7 @@ impl AgentMetadata {
         OwnedAgentId::new(self.environment_id, &self.agent_id)
     }
 
-    /// Resolves the persisted type and decodes constructor parameters from the current-format ID.
+    /// Resolves the persisted type and decodes the persisted constructor parameters.
     pub fn parse_agent_id(
         &self,
         metadata: &crate::model::component_metadata::ComponentMetadata,
@@ -75,18 +75,26 @@ impl AgentMetadata {
             .agent_type_name
             .as_ref()
             .ok_or_else(|| "Owner has no agent type".to_string())?;
+        let parameters = self
+            .constructor_parameters
+            .as_deref()
+            .ok_or_else(|| "Owner has no constructor parameters".to_string())?;
         let agent_type = metadata
             .find_agent_type_by_name_ref(name)
             .ok_or_else(|| format!("Agent type not found: {name}"))?;
-        super::ParsedAgentKey::parse(&self.agent_id.agent_id, agent_type)
+        super::ParsedAgentKey::parse_parameters(name, parameters, agent_type)
     }
 }
 
 impl AgentFilter {
     pub fn matches(&self, metadata: &AgentMetadata) -> bool {
         match self.clone() {
-            AgentFilter::Name(AgentNameFilter { comparator, value }) => {
-                comparator.matches(&metadata.agent_id.agent_id, &value)
+            AgentFilter::Key(AgentKeyFilter { comparator, value }) => metadata
+                .canonical_key
+                .as_ref()
+                .is_some_and(|key| comparator.matches(key, &value)),
+            AgentFilter::Id(AgentIdFilter { comparator, value }) => {
+                comparator.matches(&metadata.agent_id, &value)
             }
             AgentFilter::Revision(AgentRevisionFilter { comparator, value }) => {
                 let revision: ComponentRevision = metadata.last_known_status.component_revision;

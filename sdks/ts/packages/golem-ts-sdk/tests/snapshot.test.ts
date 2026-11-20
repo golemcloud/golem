@@ -9,15 +9,18 @@ import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorR
 import { schemaValueToWit, v } from '../src/internal/schema-model';
 import type { ResolvedAgent, SnapshotTransport } from '../src/internal/resolvedAgent';
 import type { SnapshotDatabases } from '../src/internal/databaseSnapshot';
+import { selectSelfAgent, SELF_AGENT_ID } from './selfAgentTestSupport';
 import { anonymousContext } from './callerTestSupport';
 
 type Resolved = ResolvedAgent;
+
+const databaseInput = schemaValueToWit(v.record([v.string('database')]));
 
 async function initiate(name: string): Promise<Resolved> {
   // id is `{ name: z.string() }` → a one-field record.
   const idValue = v.record([v.string('c1')]);
   // The self-agent-id embeds a JSON WIT value tree (mirrors the mocked makeAgentId).
-  (globalThis as any).currentAgentId = `${name}(${JSON.stringify(schemaValueToWit(idValue))})`;
+  selectSelfAgent(name);
   const initiator = AgentInitiatorRegistry.lookup(name);
   if (!initiator) throw new Error(`${name} not registered`);
   const res = await initiator.initiate(schemaValueToWit(idValue), anonymousContext);
@@ -27,7 +30,7 @@ async function initiate(name: string): Promise<Resolved> {
 
 async function restore(name: string, data: Uint8Array): Promise<Resolved> {
   const idValue = v.record([v.string('c1')]);
-  (globalThis as any).currentAgentId = `${name}(${JSON.stringify(schemaValueToWit(idValue))})`;
+  selectSelfAgent(name);
   const initiator = AgentInitiatorRegistry.lookup(name);
   if (!initiator) throw new Error(`${name} not registered`);
   const res = await initiator.loadSnapshot(
@@ -184,7 +187,7 @@ defineAgent({
       return new TextEncoder().encode(
         JSON.stringify({
           count: this.count,
-          agentId: this.getId().value,
+          agentId: this.getId().toString(),
         }),
       );
     },
@@ -274,7 +277,7 @@ defineAgent({
 });
 
 describe('snapshot — typed state', () => {
-  it.each(['config', 'getId', 'getPhantomId'])(
+  it.each(['config', 'getId'])(
     'rejects the reserved top-level state field %s during initialization and restoration',
     async (key) => {
       const message = JSON.stringify(`State field "${key}" is reserved by the SDK`).slice(1, -1);
@@ -322,7 +325,7 @@ describe('snapshot — typed state', () => {
     const data = {
       config: 'user config',
       getId: 'id',
-      getPhantomId: 'phantom',
+      getPrincipal: 'user',
     };
     const name = 'NestedReservedState';
     defineAgent({
@@ -333,7 +336,7 @@ describe('snapshot — typed state', () => {
           data: z.object({
             config: z.string(),
             getId: z.string(),
-            getPhantomId: z.string(),
+            getPrincipal: z.string(),
           }),
         }),
       },
@@ -432,11 +435,11 @@ describe('snapshot — custom save/load', () => {
     expect(separationRestoreCount).toBe(1);
     expect(restoredCallerKind).toBe('anonymous');
     expect(restoredId).toEqual({ name: 'c1' });
-    expect((restoredAgentId as { value: string }).value).toContain('SnapSeparatedFactories(');
+    expect(String(restoredAgentId)).toBe(SELF_AGENT_ID);
     expect(Object.getOwnPropertyDescriptor(restoredConfig, 'greeting')?.get).toBeTypeOf('function');
     const saved = jsonOf(simpleSnapshot(await restored.saveSnapshot()).data);
     expect(saved).toMatchObject({ count: 12 });
-    expect(saved.agentId).toContain('SnapSeparatedFactories(');
+    expect(saved.agentId).toBe(SELF_AGENT_ID);
 
     await initiate('SnapSeparatedFactories');
     expect(separationInitCount).toBe(1);
@@ -531,8 +534,7 @@ async function isolate() {
   ]);
   const idValue = v.record([v.string('database')]);
   const select = (name: string) => {
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `${name}(${JSON.stringify(schemaValueToWit(idValue))})`;
+    selectSelfAgent(name);
   };
   const initiateIsolated = async (name: string) => {
     select(name);
@@ -658,10 +660,13 @@ describe('snapshot — multipart databases', () => {
       },
     ]);
 
-    await env.isolatedGuest.loadSnapshot.load({
-      payload: encoded.data,
-      mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
-    });
+    await env.isolatedGuest.loadSnapshot.load(
+      {
+        payload: encoded.data,
+        mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
+      },
+      databaseInput,
+    );
     expect(initializeCalls).toBe(0);
     expect(env.restoreDatabaseSync).toHaveBeenCalledTimes(1);
     expect(env.restoreDatabaseSync.mock.calls[0][1]).toEqual(databaseBytes);
@@ -906,14 +911,21 @@ describe('snapshot — in-memory and file-backed databases', () => {
         name: 'state',
         contentType: 'application/json',
         body: new TextEncoder().encode(
-          JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state: null }),
+          JSON.stringify({
+            version: 1,
+            principal: { tag: 'anonymous' },
+            state: null,
+          }),
         ),
       },
     ]);
-    await env.isolatedGuest.loadSnapshot.load({
-      payload: encoded.data,
-      mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
-    });
+    await env.isolatedGuest.loadSnapshot.load(
+      {
+        payload: encoded.data,
+        mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
+      },
+      databaseInput,
+    );
     await env.isolatedGuest.saveSnapshot.save();
     expect(prepare).not.toHaveBeenCalled();
     expect(env.serializeDatabaseSync).not.toHaveBeenCalled();
@@ -1049,6 +1061,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
             };
           })()
         : { payload: new TextEncoder().encode(envelope), mimeType: 'application/json' },
+      databaseInput,
     );
     expect(env.constructed.at(-1)?.path).toBe(location);
 
@@ -1192,10 +1205,13 @@ describe('snapshot — in-memory and file-backed databases', () => {
       state: { count: 5 },
       fileDatabases: { fileDb: '/data/app.db' },
     };
-    await env.isolatedGuest.loadSnapshot.load({
-      payload: new TextEncoder().encode(JSON.stringify(envelope)),
-      mimeType: 'application/json',
-    });
+    await env.isolatedGuest.loadSnapshot.load(
+      {
+        payload: new TextEncoder().encode(JSON.stringify(envelope)),
+        mimeType: 'application/json',
+      },
+      databaseInput,
+    );
 
     expect(env.existsSync).toHaveBeenCalledWith('/data/app.db');
     expect(env.constructed).toEqual([
@@ -1229,17 +1245,20 @@ describe('snapshot — in-memory and file-backed databases', () => {
     env.existingFiles.delete('/data/app.db');
 
     await expect(
-      env.isolatedGuest.loadSnapshot.load({
-        payload: new TextEncoder().encode(
-          JSON.stringify({
-            version: 1,
-            principal: { tag: 'anonymous' },
-            state: { count: 5 },
-            fileDatabases: { fileDb: '/data/app.db' },
-          }),
-        ),
-        mimeType: 'application/json',
-      }),
+      env.isolatedGuest.loadSnapshot.load(
+        {
+          payload: new TextEncoder().encode(
+            JSON.stringify({
+              version: 1,
+              principal: { tag: 'anonymous' },
+              state: { count: 5 },
+              fileDatabases: { fileDb: '/data/app.db' },
+            }),
+          ),
+          mimeType: 'application/json',
+        },
+        databaseInput,
+      ),
     ).rejects.toContain('snapshot database field \\"fileDb\\": no database file at /data/app.db');
     expect(env.existsSync).toHaveBeenCalledWith('/data/app.db');
     expect(env.constructed).toEqual([]);
@@ -1277,10 +1296,13 @@ describe('snapshot — in-memory and file-backed databases', () => {
       },
       { name: 'db:memDb', contentType: 'application/x-sqlite3', body: memoryBytes },
     ]);
-    await env.isolatedGuest.loadSnapshot.load({
-      payload: encoded.data,
-      mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
-    });
+    await env.isolatedGuest.loadSnapshot.load(
+      {
+        payload: encoded.data,
+        mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
+      },
+      databaseInput,
+    );
 
     expect(env.constructed).toEqual([
       { path: ':memory:', options: env.REOPENED_DATABASE_OPTIONS },
@@ -1328,17 +1350,20 @@ describe('snapshot — in-memory and file-backed databases', () => {
     env.select('CustomLoadFileDatabase');
     env.existingFiles.clear();
 
-    await env.isolatedGuest.loadSnapshot.load({
-      payload: new TextEncoder().encode(
-        JSON.stringify({
-          version: 1,
-          principal: { tag: 'anonymous' },
-          state: { count: 7 },
-          fileDatabases: { fileDb: '/data/app.db' },
-        }),
-      ),
-      mimeType: 'application/json',
-    });
+    await env.isolatedGuest.loadSnapshot.load(
+      {
+        payload: new TextEncoder().encode(
+          JSON.stringify({
+            version: 1,
+            principal: { tag: 'anonymous' },
+            state: { count: 7 },
+            fileDatabases: { fileDb: '/data/app.db' },
+          }),
+        ),
+        mimeType: 'application/json',
+      },
+      databaseInput,
+    );
 
     expect(env.constructed.map((database) => database.path)).toEqual([
       '/data/app.db',
@@ -1381,17 +1406,20 @@ describe('snapshot — in-memory and file-backed databases', () => {
       env.select('WrongDatabaseField');
 
       await expect(
-        env.isolatedGuest.loadSnapshot.load({
-          payload: new TextEncoder().encode(
-            JSON.stringify({
-              version: 1,
-              principal: { tag: 'anonymous' },
-              state: { count: 9 },
-              fileDatabases: { fileDb: '/data/app.db' },
-            }),
-          ),
-          mimeType: 'application/json',
-        }),
+        env.isolatedGuest.loadSnapshot.load(
+          {
+            payload: new TextEncoder().encode(
+              JSON.stringify({
+                version: 1,
+                principal: { tag: 'anonymous' },
+                state: { count: 9 },
+                fileDatabases: { fileDb: '/data/app.db' },
+              }),
+            ),
+            mimeType: 'application/json',
+          },
+          databaseInput,
+        ),
       ).rejects.toContain('snapshot database field \\"fileDb\\" is not a DatabaseSync');
       expect(env.constructed).toEqual([]);
     },
@@ -1420,17 +1448,20 @@ describe('snapshot — in-memory and file-backed databases', () => {
       });
     env.select('LargeFileDatabase');
 
-    await env.isolatedGuest.loadSnapshot.load({
-      payload: new TextEncoder().encode(
-        JSON.stringify({
-          version: 1,
-          principal: { tag: 'anonymous' },
-          state: { count: 8 },
-          fileDatabases: {},
-        }),
-      ),
-      mimeType: 'application/json',
-    });
+    await env.isolatedGuest.loadSnapshot.load(
+      {
+        payload: new TextEncoder().encode(
+          JSON.stringify({
+            version: 1,
+            principal: { tag: 'anonymous' },
+            state: { count: 8 },
+            fileDatabases: {},
+          }),
+        ),
+        mimeType: 'application/json',
+      },
+      databaseInput,
+    );
 
     expect(env.warmed).toEqual([
       '/data/app.db: SELECT count(*) FROM sqlite_master',
@@ -1457,17 +1488,20 @@ describe('snapshot — in-memory and file-backed databases', () => {
     env.select('EmptyFileDatabase');
     env.databaseDefaults.pragmas = { page_count: 0, page_size: 4096, cache_size: -2000 };
 
-    await env.isolatedGuest.loadSnapshot.load({
-      payload: new TextEncoder().encode(
-        JSON.stringify({
-          version: 1,
-          principal: { tag: 'anonymous' },
-          state: { count: 3 },
-          fileDatabases: { fileDb: '/data/app.db' },
-        }),
-      ),
-      mimeType: 'application/json',
-    });
+    await env.isolatedGuest.loadSnapshot.load(
+      {
+        payload: new TextEncoder().encode(
+          JSON.stringify({
+            version: 1,
+            principal: { tag: 'anonymous' },
+            state: { count: 3 },
+            fileDatabases: { fileDb: '/data/app.db' },
+          }),
+        ),
+        mimeType: 'application/json',
+      },
+      databaseInput,
+    );
 
     expect(env.constructed.map(({ path }) => path)).toEqual(['/data/app.db']);
     expect(env.warmed).toEqual(['/data/app.db: SELECT count(*) FROM sqlite_master']);
@@ -1499,17 +1533,20 @@ describe('snapshot — in-memory and file-backed databases', () => {
       });
     env.select('ArrayRowsDatabase');
 
-    await env.isolatedGuest.loadSnapshot.load({
-      payload: new TextEncoder().encode(
-        JSON.stringify({
-          version: 1,
-          principal: { tag: 'anonymous' },
-          state: { count: 8 },
-          fileDatabases: {},
-        }),
-      ),
-      mimeType: 'application/json',
-    });
+    await env.isolatedGuest.loadSnapshot.load(
+      {
+        payload: new TextEncoder().encode(
+          JSON.stringify({
+            version: 1,
+            principal: { tag: 'anonymous' },
+            state: { count: 8 },
+            fileDatabases: {},
+          }),
+        ),
+        mimeType: 'application/json',
+      },
+      databaseInput,
+    );
 
     expect(env.serializeDatabaseSync.mock.calls.map(([db]) => db.path)).toEqual(['/data/app.db']);
   });
@@ -1537,17 +1574,20 @@ describe('snapshot — in-memory and file-backed databases', () => {
     env.select('FailingWarmUp');
 
     await expect(
-      env.isolatedGuest.loadSnapshot.load({
-        payload: new TextEncoder().encode(
-          JSON.stringify({
-            version: 1,
-            principal: { tag: 'anonymous' },
-            state: { count: 8 },
-            fileDatabases: {},
-          }),
-        ),
-        mimeType: 'application/json',
-      }),
+      env.isolatedGuest.loadSnapshot.load(
+        {
+          payload: new TextEncoder().encode(
+            JSON.stringify({
+              version: 1,
+              principal: { tag: 'anonymous' },
+              state: { count: 8 },
+              fileDatabases: {},
+            }),
+          ),
+          mimeType: 'application/json',
+        },
+        databaseInput,
+      ),
     ).rejects.toContain('snapshot database field \\"fileDb\\": database disk image is malformed');
   });
 
@@ -1572,17 +1612,20 @@ describe('snapshot — in-memory and file-backed databases', () => {
       });
     env.select('AliasedDatabase');
 
-    await env.isolatedGuest.loadSnapshot.load({
-      payload: new TextEncoder().encode(
-        JSON.stringify({
-          version: 1,
-          principal: { tag: 'anonymous' },
-          state: { count: 8 },
-          fileDatabases: {},
-        }),
-      ),
-      mimeType: 'application/json',
-    });
+    await env.isolatedGuest.loadSnapshot.load(
+      {
+        payload: new TextEncoder().encode(
+          JSON.stringify({
+            version: 1,
+            principal: { tag: 'anonymous' },
+            state: { count: 8 },
+            fileDatabases: {},
+          }),
+        ),
+        mimeType: 'application/json',
+      },
+      databaseInput,
+    );
 
     expect(env.warmed).toEqual(['/data/app.db: SELECT count(*) FROM sqlite_master']);
     expect(env.serializeDatabaseSync).toHaveBeenCalledTimes(1);
@@ -1610,17 +1653,20 @@ describe('snapshot — in-memory and file-backed databases', () => {
       });
     env.select('ClosedDatabase');
 
-    await env.isolatedGuest.loadSnapshot.load({
-      payload: new TextEncoder().encode(
-        JSON.stringify({
-          version: 1,
-          principal: { tag: 'anonymous' },
-          state: { count: 8 },
-          fileDatabases: {},
-        }),
-      ),
-      mimeType: 'application/json',
-    });
+    await env.isolatedGuest.loadSnapshot.load(
+      {
+        payload: new TextEncoder().encode(
+          JSON.stringify({
+            version: 1,
+            principal: { tag: 'anonymous' },
+            state: { count: 8 },
+            fileDatabases: {},
+          }),
+        ),
+        mimeType: 'application/json',
+      },
+      databaseInput,
+    );
 
     expect(env.warmed).toEqual([]);
     expect(env.serializeDatabaseSync).not.toHaveBeenCalled();

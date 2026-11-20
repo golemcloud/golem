@@ -19,15 +19,21 @@ package golem.bridge.runtime
 import golem.bridge.runtime.json.Json
 
 /**
- * Identity of a resolved agent: the component it belongs to and its agent id
- * string. Mirrors the server's `AgentId`.
+ * The ID of an agent: an opaque UUID that Golem issues. Its text form is the
+ * hyphenated UUID, which is also its JSON form.
  */
-final case class AgentId(componentId: String, agentId: String)
+final case class AgentId(uuid: String) {
+  override def toString: String = uuid
+}
 
 object AgentId {
+  private val UuidPattern = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+
+  /** Parses the text form, a hyphenated UUID. */
+  def parse(value: String): Either[String, AgentId] =
+    if (value.matches(UuidPattern)) Right(AgentId(value.toLowerCase))
+    else Left(s"Invalid agent ID: $value is not a UUID")
+
   def fromJson(json: Json): Either[String, AgentId] =
-    for {
-      componentId <- Json.requireField(json, "componentId").flatMap(Json.asString)
-      agentId     <- Json.requireField(json, "agentId").flatMap(Json.asString)
-    } yield AgentId(componentId, agentId)
+    Json.asString(json).flatMap(parse)
 }

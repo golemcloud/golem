@@ -96,7 +96,7 @@ agent.Handle(Share, func(ctx *golem.Context[state], _ golem.Unit) golem.Secret[s
 })
 
 // in another agent
-key := client.Share.MustCall(client.Agent.Get(client.ID{Name: "keeper"}), golem.Unit{}).MustGet()
+key := client.Share.MustCall(client.Agent.Upsert(client.ID{Name: "keeper"}), golem.Unit{}).MustGet()
 ```
 
 A config secret can be sent again; a secret you received moves when you send it on, and the copy that was sent is unusable afterwards (`golem.ErrSecretMoved`). External clients cannot carry secrets.

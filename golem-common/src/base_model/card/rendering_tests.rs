@@ -14,6 +14,7 @@
 
 use super::owner::*;
 use super::*;
+use crate::base_model::AgentId;
 use crate::model::account::AccountEmail;
 use crate::model::agent::AgentTypeName;
 use crate::model::application::ApplicationName;
@@ -56,7 +57,10 @@ fn agent_type_name() -> BoxedStrategy<AgentTypeName> {
 
 fn agent_leaf() -> BoxedStrategy<AgentOwnerLeafPattern> {
     prop_oneof![
-        agent_type_name().prop_map(|name| AgentOwnerLeafPattern::Agent(name.0)),
+        any::<u128>().prop_map(|h| AgentOwnerLeafPattern::agent(
+            AgentId::from_parts(7, h & crate::base_model::agent_id::H_MASK),
+            None
+        )),
         agent_type_name().prop_map(AgentOwnerLeafPattern::AgentTypeWildcard),
     ]
     .boxed()
@@ -1068,7 +1072,7 @@ proptest! {
 }
 
 /// A permission of the agent class whose owner is the agent `agent` of the component `cart`.
-fn concrete_agent_permission(agent: &str) -> PermissionPattern {
+fn concrete_agent_permission(agent: AgentId) -> PermissionPattern {
     PermissionPattern::Agent(ClassPermissionPattern::<AgentClass> {
         verb: Some(AgentVerb::Invoke),
         owner: AgentOwnerPattern::Agent {
@@ -1076,7 +1080,7 @@ fn concrete_agent_permission(agent: &str) -> PermissionPattern {
             application: ApplicationName("shop".to_string()),
             environment: EnvironmentName("prod".to_string()),
             component: ComponentName("cart".to_string()),
-            agent: AgentOwnerLeafPattern::Agent(agent.to_string()),
+            agent: AgentOwnerLeafPattern::agent(agent, None),
         },
         recipient: RecipientPattern::Any,
         resource: AgentResourcePattern::Any,
@@ -1084,17 +1088,14 @@ fn concrete_agent_permission(agent: &str) -> PermissionPattern {
 }
 
 #[test]
-fn an_agent_name_with_a_slash_a_question_mark_and_a_percent_sign_survives_a_render_and_a_parse() {
-    // The agent name holds `/`, a `..` segment, `?` and the text `%2F`. The render writes `%`, `/`
-    // and `?` as escapes, so the name is one owner segment and holds no slot variable. A `%` that
-    // two hex digits do not follow is a part of the name.
-    let agent = r#"counter("a/../b?c%2F")"#;
+fn a_concrete_agent_owner_is_written_as_its_agent_id() {
+    let agent = AgentId::from_parts(7, 5);
     let concrete = concrete_agent_permission(agent);
     let polymorphic =
         PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern::<AgentClass> {
             verb: Some(AgentVerb::Invoke),
             owner: PolymorphicAgentOwnerPattern::ComponentAgent {
-                agent: AgentOwnerLeafPattern::Agent(agent.to_string()),
+                agent: AgentOwnerLeafPattern::agent(agent, Some(AgentTypeName("Counter".into()))),
             },
             recipient: RecipientPattern::Any,
             resource: AgentResourcePattern::Any,
@@ -1109,15 +1110,16 @@ fn an_agent_name_with_a_slash_a_question_mark_and_a_percent_sign_survives_a_rend
             polymorphic_text.as_str(),
             PolymorphicPermissionPattern::from_str(&polymorphic_text),
             PermissionPattern::from_str(
-                r#"agent(acme/shop/prod/cart/counter("5%")) @ * : invoke : *"#
-            ),
+                r#"agent(acme/shop/prod/cart/counter("5")) @ * : invoke : *"#
+            )
+            .is_err(),
         ),
         (
-            r#"agent(acme/shop/prod/cart/counter("a%2F..%2Fb%3Fc%252F")) @ * : invoke : *"#,
+            "agent(acme/shop/prod/cart/00000007-0000-8000-8000-000000000005) @ * : invoke : *",
             Ok(concrete),
-            r#"agent(?component/counter("a%2F..%2Fb%3Fc%252F")) @ * : invoke : *"#,
+            "agent(?component/00000007-0000-8000-8000-000000000005) @ * : invoke : *",
             Ok(polymorphic),
-            Ok(concrete_agent_permission(r#"counter("5%")"#)),
+            true,
         )
     );
 }

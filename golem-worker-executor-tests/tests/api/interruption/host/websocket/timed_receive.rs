@@ -195,14 +195,17 @@ async fn pending_timed_receive(
         .store()
         .await?;
     let seed_id = executor
-        .start_agent(&component.id, agent_id!("WebsocketTest", "monthly-ws-seed"))
+        .start_agent(
+            &component.id,
+            agent_key!("WebsocketTest", "monthly-ws-seed"),
+        )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -222,25 +225,21 @@ async fn pending_timed_receive(
     let target_updates_start = registry.applied_updates().len();
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("WebsocketTest", "monthly-ws-timed-receive")
+        agent_key!("WebsocketTest", "monthly-ws-timed-receive")
     } else {
-        agent_id!("EphemeralWebsocketTest", "monthly-ws-timed-receive")
+        agent_key!("EphemeralWebsocketTest", "monthly-ws-timed-receive")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                "receive_with_timeout_test",
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        "receive_with_timeout_test",
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -249,6 +248,15 @@ async fn pending_timed_receive(
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            "receive_with_timeout_test",
+        ),
     )
     .await?;
     let mut peer = Peer::start().await?;
@@ -283,7 +291,7 @@ async fn pending_timed_receive(
         let receive_start = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 if entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == TIMED_RECEIVE)) {
                     let start = timed_receive_start(&entries, 0)?;
                     assert_timed_invocation(&entries, &stored_key, 0)?;
@@ -366,7 +374,7 @@ async fn pending_timed_receive(
         let released_slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
             .await.context("retired socket must release WebSocket slot")??;
         drop(released_slot);
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         assert_timed_invocation(&stopped, &stored_key, 0)?;
         ensure!(
             self::timed_receive_start(&stopped, 0)? == receive_start,
@@ -428,7 +436,7 @@ async fn pending_timed_receive(
             target_joined = true;
             ensure!(failed?.is_err());
         }
-        executor.wait_for_status(&id, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
+        executor.wait_for_status(&owned, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         info!(?resource, ?mode, ?errors, suspends, "WebSocket stop retained one unfinished method with mode-specific lifecycle outcome");
         flush_stopped_usage(&limits, &registry, resource).await?;
@@ -469,11 +477,11 @@ async fn pending_timed_receive(
         registry.set_policy(grant);
         applied_refresh(&limits, &registry, context.account_id).await?.await?;
         if durable {
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             let second = peer.handshake().await?;
             ensure!(second.number == 2);
             executor.commit_oplog(&id).await?;
-            let repairing = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let repairing = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(self::timed_receive_start(&repairing, 0)? == receive_start);
             assert_timed_invocation(&repairing, &stored_key, 0)?;
             peer.assert_counts(2, 0)?;
@@ -483,7 +491,7 @@ async fn pending_timed_receive(
             target_joined = true;
             let resumed = resumed?;
             ensure!(resumed.into_typed::<Option<String>>()? == Some("recovered".to_string()));
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(self::timed_receive_start(&recovered, 1)? == receive_start);
             assert_settled_history(&recovered)?;
             assert_timed_invocation(&recovered, &stored_key, 1)?;
@@ -510,7 +518,7 @@ async fn pending_timed_receive(
             let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
             ensure!(noop.into_typed::<String>()? == "ok");
             peer.assert_counts(2, 1)?;
-            let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let replayed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(self::timed_receive_start(&replayed, 1)? == receive_start);
             ensure!(count_agent_invocation_pair_since(&replayed, OplogIndex::INITIAL) == (3, 3));
             assert_settled_history(&replayed)?;
@@ -522,8 +530,8 @@ async fn pending_timed_receive(
             ensure!(retry.is_err(), "failed ephemeral invocation cannot recover after capacity returns");
             peer.assert_counts(1, 0)?;
             // An independent durable Worker proves the failed connection released the only slot.
-            let probe_name = agent_id!("WebsocketTest", "monthly-ws-pool-probe");
-            probe_id = Some(AgentId::from_agent_id(component.id, &probe_name).unwrap());
+            let probe_name = agent_key!("WebsocketTest", "monthly-ws-pool-probe");
+            probe_id = Some(crate::agent::keyed_agent_id(component.environment_id, &probe_name).agent_id);
             let probe_key = IdempotencyKey::fresh();
             let probe = executor.invoke_and_await_agent_with_key(&component, &probe_name, &probe_key, "receive_with_timeout_test", data_value!(peer.url.clone(), 300_000u64));
             let response = async {
@@ -534,14 +542,14 @@ async fn pending_timed_receive(
             };
             let (probe, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(probe, response) }).await??;
             ensure!(probe.into_typed::<Option<String>>()? == Some("probe".to_string()));
-            let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let failed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(self::timed_receive_start(&failed, 0)? == receive_start);
             assert_timed_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!worker.is_loaded().await);
             peer.assert_counts(2, 1)?;
-            executor.wait_for_status(&id, AgentStatus::Failed, Duration::from_secs(10)).await?;
+            executor.wait_for_status(&owned, AgentStatus::Failed, Duration::from_secs(10)).await?;
             info!(?resource, %key, %receive_start, handshakes = 2, frames = 1, "Ephemeral failure stayed terminal after capacity restoration; independent Worker reused WebSocket slot");
         }
         // Keep accepting to detect unintended reconnects after the asserted work has completed.
@@ -637,15 +645,15 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("WebsocketTest", "monthly-ws-timeout-seed"),
+            agent_key!("WebsocketTest", "monthly-ws-timeout-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -654,18 +662,24 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
     .await
     .context("seed idle teardown")?;
     limits.run_batch_for_test().await;
-    let name = agent_id!("WebsocketTest", "monthly-ws-timeout-first");
+    let name = agent_key!("WebsocketTest", "monthly-ws-timeout-first");
     let key = IdempotencyKey::fresh();
-    let id = AgentId::from_agent_id(component.id, &name).unwrap();
-    let worker = Worker::get_or_create_suspended(
+    let id = crate::agent::keyed_agent_id(component.environment_id, &name).agent_id;
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
-        &OwnedAgentId::new(context.default_environment_id, &id),
+        &owned,
         None,
         vec![],
         None,
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        golem_worker_executor::worker::CreateIntent::Invocation {
+            owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
+            idempotency_key: None,
+        },
     )
     .await?;
     let pool = worker.websocket_connection_pool();
@@ -700,7 +714,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         let start = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 let starts = starts_named(&entries, TIMED_RECEIVE);
                 if starts.len() == 1 {
                     ensure!(starts_named(&entries, CONNECT).len() == 1);
@@ -724,7 +738,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         ensure!(returned?.into_typed::<Option<String>>()?.is_none());
         ensure!(raw.try_recv().is_err(), "timeout must precede monthly stop");
         peer.assert_counts(1, 0)?;
-        let complete = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let complete = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let starts = starts_named(&complete, TIMED_RECEIVE);
         ensure!(starts == vec![start]);
         assert_receive_terminal(&complete, start, 1)?;
@@ -765,7 +779,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
             )
             .await?;
         ensure!(cached.into_typed::<Option<String>>()?.is_none());
-        let after = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let after = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(starts_named(&after, TIMED_RECEIVE) == vec![start]);
         assert_timed_invocation(&after, &stored_key, 1)?;
         assert_receive_terminal(&after, start, 1)?;

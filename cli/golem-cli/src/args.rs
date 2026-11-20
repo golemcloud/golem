@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
+use crate::model::agent::AgentListCursor;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use golem_client::model::ScanCursor;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent_secret::AgentSecretPath;
 
@@ -130,8 +130,8 @@ fn push_agent_config_path_segment(keys: &mut Vec<String>, buf: &mut String) -> a
     Ok(())
 }
 
-pub fn parse_cursor(cursor: &str) -> anyhow::Result<ScanCursor> {
-    Ok(ScanCursor::new(cursor.to_string()))
+pub fn parse_cursor(cursor: &str) -> anyhow::Result<AgentListCursor> {
+    AgentListCursor::decode(cursor)
 }
 
 pub fn parse_instant(

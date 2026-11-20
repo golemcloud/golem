@@ -51,7 +51,7 @@ steps:
         that obtains the `Callback` instance with the counter's name, executes the Effect returned
         by `callback.run.trigger({})`, and then increments and returns the counter exactly as
         `increment` does. The callback must use the real typed clients attached by `defineAgent`.
-        Yield both `client.get(...)` and remote method Effects, use named input records (including
+        Yield both `client.upsert(...)` and remote method Effects, use named input records (including
         `{}` for no-parameter methods), and handle or convert typed RPC errors so the declared
         method contracts type-check. Do not use Promise-based TypeScript SDK APIs or merely create
         and discard the lazy trigger Effect; the remote call must be fire-and-forget to avoid the

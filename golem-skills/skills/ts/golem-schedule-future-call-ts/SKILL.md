@@ -20,14 +20,14 @@ takes a `Datetime` as the first argument, followed by the method's input record
 import { Datetime } from '@golemcloud/golem-ts-sdk';
 import { Counter } from './counter-agent.js';
 
-const counter = Counter.client.get({ name: 'my-counter' });
+const counter = Counter.client.upsert({ name: 'my-counter' });
 
 // Schedule increment to run 60 seconds from now.
 const inOneMinute = Datetime.fromDate(new Date(Date.now() + 60_000));
 counter.increment.schedule(inOneMinute);
 
 // Schedule with arguments.
-const reporter = ReportAgent.client.get({ name: 'daily' });
+const reporter = ReportAgent.client.upsert({ name: 'daily' });
 reporter.generateReport.schedule(
     Datetime.parse('2026-01-02T00:00:00Z'),
     { kind: 'summary' },

@@ -166,14 +166,14 @@ Use the typed client on an agent spec for same-component RPC:
 
 ```typescript
 const shareCallbackUrl = Effect.gen(function* () {
-  const receiver = yield* CallbackRegistry.client.get({ accountName });
+  const receiver = yield* CallbackRegistry.client.upsert({ accountName });
   yield* receiver.receiveUrl.trigger({ url: handle.url });
   return yield* handle.await;
 });
 ```
 
 Define `receiveUrl` with `method({ input: { url: Schema.String }, ... })`; remote methods and
-`client.get(...)` are Effects. Use the remote method's `.trigger(...)` form when URL handoff is
+`client.upsert(...)` are Effects. Use the remote method's `.trigger(...)` form when URL handoff is
 fire-and-forget and the creator should enter `handle.await` immediately. A normal
 `yield* receiver.receiveUrl(...)` waits for the remote method to finish before reaching the
 webhook wait; use that form only when acknowledgement is required.

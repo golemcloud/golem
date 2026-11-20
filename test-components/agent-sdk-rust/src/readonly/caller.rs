@@ -59,12 +59,12 @@ impl ReadonlyCaller for ReadonlyCallerImpl {
     }
 
     async fn read_via_rpc(&self, target_id: String) -> u64 {
-        let client = ReadonlyAgentClient::get(target_id);
+        let client = ReadonlyAgentClient::upsert(target_id);
         client.get_count().await
     }
 
     async fn slow_then_read(&self, target_id: String, ms: u64) -> u64 {
-        let mut client = ReadonlyAgentClient::get(target_id);
+        let mut client = ReadonlyAgentClient::upsert(target_id);
         // Fire-and-forget: enqueue `slow_increment` on the target without
         // waiting for it to complete. The next `get_count` call must bypass
         // the target's invocation queue via the read-only cache.
@@ -75,7 +75,7 @@ impl ReadonlyCaller for ReadonlyCallerImpl {
     async fn parallel_reads(&self, target_id: String, n: u32) -> Vec<u64> {
         let futures = (0..n)
             .map(|_| {
-                let client = ReadonlyAgentClient::get(target_id.clone());
+                let client = ReadonlyAgentClient::upsert(target_id.clone());
                 async move { client.get_count().await }
             })
             .collect::<Vec<_>>();
@@ -83,7 +83,7 @@ impl ReadonlyCaller for ReadonlyCallerImpl {
     }
 
     async fn bad_rpc(&self, target_id: String) -> u64 {
-        let client = ReadonlyAgentClient::get(target_id);
+        let client = ReadonlyAgentClient::upsert(target_id);
         // `WriteRemote`: traps before the RPC is dispatched because
         // the caller is in read-only strictness mode.
         client.get_count().await

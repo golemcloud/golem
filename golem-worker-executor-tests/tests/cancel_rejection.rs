@@ -20,6 +20,7 @@
 
 use crate::Tracing;
 use chrono::Utc;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::{
@@ -27,9 +28,9 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentInvocation, AgentInvocationPayload, IdempotencyKey, InvocationId, InvocationOperation,
-    OwnedAgentId, Timestamp,
+    Timestamp,
 };
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::model::{FailureProvenance, LookupResult, TrapType};
@@ -65,12 +66,12 @@ async fn late_rejection_after_cancel(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let server = agent_id!("ScheduledInvocationServer", "late-rejection-after-cancel");
+    let server = agent_key!("ScheduledInvocationServer", "late-rejection-after-cancel");
     let target = executor.start_agent(&component.id, server.clone()).await?;
     let owner = executor
         .start_agent(
             &component.id,
-            agent_id!("ScheduledInvocationClient", "late-rejection-owner"),
+            agent_key!("ScheduledInvocationClient", "late-rejection-owner"),
         )
         .await?;
     let invocation = |key: &InvocationId, value: u64| AgentInvocation::AgentMethod {
@@ -78,10 +79,13 @@ async fn late_rejection_after_cancel(
         method_name: "inc_global_by".to_string(),
         input: data_value!(value).into_parts().1,
         invocation_context: InvocationContextStack::fresh(),
-        caller: callers::agent(owner.clone()),
+        caller: callers::agent(
+            owner.agent_id,
+            AgentTypeName("ScheduledInvocationClient".to_string()),
+        ),
         scope_card: None,
     };
-    let owned = OwnedAgentId::new(component.environment_id, &target);
+    let owned = target.clone();
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let due = Utc::now() + chrono::Duration::hours(1);
 
@@ -90,7 +94,7 @@ async fn late_rejection_after_cancel(
     if cancel_first {
         assert!(
             worker
-                .cancel_scheduled_invocation(key, receipt, &owner)
+                .cancel_scheduled_invocation(key, receipt, &owner.agent_id)
                 .await?
         );
     }
@@ -123,7 +127,7 @@ async fn late_rejection_after_cancel(
             .await?;
         assert!(
             worker
-                .cancel_scheduled_invocation(other, receipt, &owner)
+                .cancel_scheduled_invocation(other, receipt, &owner.agent_id)
                 .await?
         );
     }
@@ -241,12 +245,12 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let server = agent_id!("ScheduledInvocationServer", "listed-after-eviction");
+    let server = agent_key!("ScheduledInvocationServer", "listed-after-eviction");
     let target = executor.start_agent(&component.id, server.clone()).await?;
     let owner = executor
         .start_agent(
             &component.id,
-            agent_id!("ScheduledInvocationClient", "listed-after-eviction-owner"),
+            agent_key!("ScheduledInvocationClient", "listed-after-eviction-owner"),
         )
         .await?;
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
@@ -254,13 +258,16 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
         method_name: "inc_global_by".to_string(),
         input: data_value!(1u64).into_parts().1,
         invocation_context: InvocationContextStack::fresh(),
-        caller: callers::agent(owner.clone()),
+        caller: callers::agent(
+            owner.agent_id,
+            AgentTypeName("ScheduledInvocationClient".to_string()),
+        ),
         scope_card: None,
     };
     executor
         .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
         .await?;
-    let owned = OwnedAgentId::new(component.environment_id, &target);
+    let owned = target.clone();
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let due = Utc::now() + chrono::Duration::hours(1);
 
@@ -270,7 +277,7 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
         let receipt = worker.schedule_invocation(invocation(&key), due).await?;
         assert!(
             worker
-                .cancel_scheduled_invocation(key, receipt, &owner)
+                .cancel_scheduled_invocation(key, receipt, &owner.agent_id)
                 .await?
         );
         cancelled.push(key);
@@ -315,7 +322,7 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
         "newest change first: {before:?}"
     );
 
-    executor.evict_cached_status(&target).await?;
+    executor.evict_cached_status(&target.agent_id).await?;
     assert_eq!(
         worker
             .list_invocation_page(&InvocationFilter::default(), None, MAX_INVOCATION_PAGE_SIZE)
@@ -369,15 +376,18 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let server = agent_id!("ScheduledInvocationServer", "listed-duplicate");
+    let server = agent_key!("ScheduledInvocationServer", "listed-duplicate");
     let target = executor.start_agent(&component.id, server.clone()).await?;
     let owner = executor
         .start_agent(
             &component.id,
-            agent_id!("ScheduledInvocationClient", "listed-duplicate-owner"),
+            agent_key!("ScheduledInvocationClient", "listed-duplicate-owner"),
         )
         .await?;
-    let caller = callers::agent(owner.clone());
+    let caller = callers::agent(
+        owner.agent_id,
+        AgentTypeName("ScheduledInvocationClient".to_string()),
+    );
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
@@ -389,7 +399,7 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
     executor
         .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
         .await?;
-    let owned = OwnedAgentId::new(component.environment_id, &target);
+    let owned = target.clone();
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let due = Utc::now() + chrono::Duration::hours(1);
 
@@ -421,7 +431,7 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
         let receipt = worker.schedule_invocation(invocation(&other), due).await?;
         assert!(
             worker
-                .cancel_scheduled_invocation(other, receipt, &owner)
+                .cancel_scheduled_invocation(other, receipt, &owner.agent_id)
                 .await?
         );
     }
@@ -506,7 +516,7 @@ async fn cancel_decides_before_reading_recent_results(
         .await?;
 
     // A running invocation with a retry marker.
-    let counter = agent_id!("RpcBlockingCounter", "cancel-before-results");
+    let counter = agent_key!("RpcBlockingCounter", "cancel-before-results");
     let counter_id = executor.start_agent(&component.id, counter.clone()).await?;
     let promise = executor
         .invoke_and_await_agent(&component, &counter, "create_promise", data_value!())
@@ -524,10 +534,10 @@ async fn cancel_decides_before_reading_recent_results(
         )
         .await?;
     let running = executor
-        .external_invocation_key(&counter_id, &await_key, "await_promise")
+        .external_invocation_key(&counter_id.agent_id, &await_key, "await_promise")
         .await?;
     let counter_worker = executor
-        .active_agent(&OwnedAgentId::new(component.environment_id, &counter_id))
+        .active_agent(&counter_id.clone())
         .await
         .unwrap()
         .primary();
@@ -573,12 +583,12 @@ async fn cancel_decides_before_reading_recent_results(
     drop(counter_worker);
 
     // A queued invocation with a warm fail-fast error.
-    let server = agent_id!("ScheduledInvocationServer", "cancel-before-results");
+    let server = agent_key!("ScheduledInvocationServer", "cancel-before-results");
     let target = executor.start_agent(&component.id, server.clone()).await?;
     let owner = executor
         .start_agent(
             &component.id,
-            agent_id!("ScheduledInvocationClient", "cancel-before-results-owner"),
+            agent_key!("ScheduledInvocationClient", "cancel-before-results-owner"),
         )
         .await?;
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
@@ -586,11 +596,14 @@ async fn cancel_decides_before_reading_recent_results(
         method_name: "inc_global_by".to_string(),
         input: data_value!(1u64).into_parts().1,
         invocation_context: InvocationContextStack::fresh(),
-        caller: callers::agent(owner.clone()),
+        caller: callers::agent(
+            owner.agent_id,
+            AgentTypeName("ScheduledInvocationClient".to_string()),
+        ),
         scope_card: None,
     };
     let worker = executor
-        .active_agent(&OwnedAgentId::new(component.environment_id, &target))
+        .active_agent(&target.clone())
         .await
         .unwrap()
         .primary();

@@ -16,7 +16,7 @@ pub async fn ExportsRouter::serve(
     return { status: 404, headers: [], body: empty() } //@
   }
   // that user's agent builds the CSV now and streams it:
-  let csv = AnalystAgentClient::get(chat.to_string()) //@
+  let csv = AnalystAgentClient::upsert(chat.to_string()) //@
     .export_csv(id.to_string())
   {
     status: 200,

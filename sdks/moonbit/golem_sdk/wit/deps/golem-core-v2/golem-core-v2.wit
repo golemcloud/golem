@@ -78,12 +78,11 @@ interface types {
         uuid: uuid,
     }
 
-    /// Represents a Golem agent
+    /// Represents a Golem agent: an RFC 9562 version 8 UUID that Golem issues. Its first
+    /// 32 bits are the agent type's type ID. It holds no component and no environment;
+    /// an agent ID names an agent within one environment.
     record agent-id {
-        /// Identifies the component the agent belongs to
-        component-id: component-id,
-        /// String representation of the agent ID (agent type and constructor parameters)
-        agent-id: string,
+        uuid: uuid,
     }
 
     /// The owner whose oplog records an invocation
@@ -94,7 +93,7 @@ interface types {
         tool(string),
     }
 
-    /// Identifies one invocation. With an agent owner, its text form is `<agent>.<uuid>`, where `<agent>` is the owner's `agent-id` string without the component.
+    /// Identifies one invocation. With an agent owner, its text form is `<agent>.<uuid>`, where `<agent>` is the owner's agent ID as a UUID.
     record invocation-id {
         owner: invocation-owner,
         id: uuid,

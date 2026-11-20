@@ -15,25 +15,26 @@
 //! The environment-scoped invocation reads and cancel.
 
 use super::{
-    WorkerResult, WorkerService, WorkerServiceError, authorize_agent_permission, native_tool_result,
+    AgentPermission, ManagedAgent, WorkerResult, WorkerService, WorkerServiceError,
+    native_tool_result,
 };
 use crate::api::invocation::{
     Invocation, InvocationFailure, InvocationKind, InvocationMethodResult, InvocationOutcome,
     InvocationPage, InvocationState, InvocationSummary, InvocationToolResult,
 };
-use crate::service::component::ComponentServiceError;
 use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker::{Cursor, InvocationStart};
 use golem_api_grpc::proto::golem::workerexecutor::v1 as executor;
 use golem_common::SafeDisplay;
-use golem_common::model::agent::{OwnerKind, ParsedAgentKey};
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{AgentInvocationIdPattern, AgentResourcePattern, AgentVerb};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, AgentInvocationResult, IdempotencyKey, OwnedInvocationId};
+use golem_common::model::{
+    AgentId, AgentInvocationResult, IdempotencyKey, OwnedAgentId, OwnedInvocationId,
+    RESERVED_TYPE_TAG,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::component::Component;
 use std::time::SystemTime;
 use tracing::warn;
 
@@ -57,8 +58,8 @@ impl WorkerService {
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Invocation> {
         let agent_id = invocation_id.agent_id();
-        let component = self
-            .component_for_invocation_read(
+        let agent = self
+            .agent_for_invocation_read(
                 environment_id,
                 agent_id,
                 &auth_ctx,
@@ -67,11 +68,11 @@ impl WorkerService {
             )
             .await?;
         let summary = self
-            .invocation_summary(&component, invocation_id, auth_ctx.clone())
+            .invocation_summary(environment_id, invocation_id, auth_ctx.clone())
             .await?;
         let result = match summary.state {
             InvocationState::Completed | InvocationState::Failed => {
-                self.invocation_outcome(&component, invocation_id, &summary, auth_ctx)
+                self.invocation_outcome(&agent, invocation_id, &summary, auth_ctx)
                     .await?
             }
             _ => None,
@@ -86,15 +87,14 @@ impl WorkerService {
         query: InvocationListQuery,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<InvocationPage> {
-        let component = self
-            .component_for_invocation_read(
-                environment_id,
-                agent_id,
-                &auth_ctx,
-                AgentVerb::View,
-                AgentResourcePattern::Any,
-            )
-            .await?;
+        self.agent_for_invocation_read(
+            environment_id,
+            agent_id,
+            &auth_ctx,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )
+        .await?;
         let request = executor::ListInvocationsRequest {
             operation: query.operation,
             states: query
@@ -113,7 +113,7 @@ impl WorkerService {
         };
         let page = self
             .worker_client
-            .list_invocations(agent_id, request, component.environment_id, auth_ctx)
+            .list_invocations(agent_id, request, environment_id, auth_ctx)
             .await?;
         Ok(InvocationPage {
             invocations: page
@@ -135,22 +135,21 @@ impl WorkerService {
         operation: Option<String>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<InvocationSummary>> {
-        let component = self
-            .component_for_invocation_read(
-                environment_id,
-                agent_id,
-                &auth_ctx,
-                AgentVerb::View,
-                AgentResourcePattern::Any,
-            )
-            .await?;
+        self.agent_for_invocation_read(
+            environment_id,
+            agent_id,
+            &auth_ctx,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )
+        .await?;
         let invocations = self
             .worker_client
             .lookup_invocations(
                 agent_id,
                 idempotency_key,
                 operation,
-                component.environment_id,
+                environment_id,
                 auth_ctx,
             )
             .await?;
@@ -174,8 +173,8 @@ impl WorkerService {
         auth_ctx: AuthCtx,
     ) -> WorkerResult<InvocationSummary> {
         let agent_id = invocation_id.agent_id();
-        let component = self
-            .component_for_invocation_read(
+        let agent = self
+            .agent_for_invocation_read(
                 environment_id,
                 agent_id,
                 &auth_ctx,
@@ -187,7 +186,7 @@ impl WorkerService {
             .await?;
         // The executor rejects an unknown ID as an invalid request, so the ID is resolved first.
         let summary = self
-            .invocation_summary(&component, invocation_id, auth_ctx.clone())
+            .invocation_summary(environment_id, invocation_id, auth_ctx.clone())
             .await?;
         if summary.state.is_terminal() {
             return Ok(summary);
@@ -196,77 +195,72 @@ impl WorkerService {
             .cancel_invocation(
                 agent_id,
                 &invocation_id.id(),
-                component.environment_id,
+                environment_id,
                 auth_ctx.clone(),
                 None,
+                Some(agent.metadata.fingerprint),
             )
             .await?;
-        self.invocation_summary(&component, invocation_id, auth_ctx)
+        self.invocation_summary(environment_id, invocation_id, auth_ctx)
             .await
     }
 
-    /// The component of an agent named by an environment-scoped request, after the caller is
-    /// authorized for `verb` on `resource` of it. An agent of another environment, and the owner of a
+    /// The agent named by an environment-scoped request, after the caller is authorized for
+    /// `verb` on `resource` of it. An agent of another environment, and the owner of a
     /// standalone tool invocation, are not found.
-    async fn component_for_invocation_read(
+    async fn agent_for_invocation_read(
         &self,
         environment_id: EnvironmentId,
         agent_id: &AgentId,
         auth_ctx: &AuthCtx,
         verb: AgentVerb,
         resource: AgentResourcePattern,
-    ) -> WorkerResult<Component> {
-        let not_found = || WorkerServiceError::AgentNotFound(agent_id.clone());
-        if OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
-            return Err(not_found());
+    ) -> WorkerResult<ManagedAgent> {
+        if agent_id.type_tag() == RESERVED_TYPE_TAG {
+            return Err(WorkerServiceError::AgentNotFound(*agent_id));
         }
-        let component = match self
-            .component_service
-            .get_current_by_id(agent_id.component_id)
-            .await
-        {
-            Ok(component) => component,
-            Err(ComponentServiceError::ComponentNotFound) => return Err(not_found()),
-            Err(error) => return Err(error.into()),
-        };
-        if component.environment_id != environment_id {
-            return Err(not_found());
-        }
-        authorize_agent_permission(auth_ctx, &component, agent_id, verb, resource)?;
-        Ok(component)
+        self.managed_agent(
+            &OwnedAgentId::new(environment_id, agent_id),
+            None,
+            auth_ctx,
+            &[AgentPermission::Agent(verb, resource)],
+        )
+        .await
     }
 
     async fn invocation_summary(
         &self,
-        component: &Component,
+        environment_id: EnvironmentId,
         invocation_id: &OwnedInvocationId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<InvocationSummary> {
         let agent_id = invocation_id.agent_id();
         let summary = self
             .worker_client
-            .get_invocation(
-                agent_id,
-                &invocation_id.id(),
-                component.environment_id,
-                auth_ctx,
-            )
+            .get_invocation(agent_id, &invocation_id.id(), environment_id, auth_ctx)
             .await?
             .ok_or_else(|| WorkerServiceError::InvocationNotFound(invocation_id.to_string()))?;
-        summary_from_proto(agent_id, component.environment_id, summary)
+        summary_from_proto(agent_id, environment_id, summary)
     }
 
     /// The result of a terminal invocation, read through the existing result lookup.
     async fn invocation_outcome(
         &self,
-        component: &Component,
+        agent: &ManagedAgent,
         invocation_id: &OwnedInvocationId,
         summary: &InvocationSummary,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Option<InvocationOutcome>> {
         let agent_id = invocation_id.agent_id();
         let start = InvocationStart {
-            agent_id: Some(agent_id.clone().into()),
+            target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
+                target: Some(
+                    golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
+                        (*agent_id).into(),
+                    ),
+                ),
+            }),
+            environment_id: Some(agent.agent_id.environment_id.into()),
             idempotency_key: Some(IdempotencyKey::new(invocation_id.uuid().to_string()).into()),
             caller: Some(Caller::anonymous().into()),
             attempt_id: Some(uuid::Uuid::new_v4().into()),
@@ -296,15 +290,24 @@ impl WorkerService {
                     ))
                 });
                 match method_name.and_then(|method_name| {
-                    ParsedAgentKey::parse_agent_type_name(&agent_id.agent_id)
-                        .map_err(WorkerServiceError::Internal)
+                    agent
+                        .metadata
+                        .agent_type_name
+                        .as_ref()
+                        .ok_or_else(|| {
+                            WorkerServiceError::Internal(format!(
+                                "the agent type of invocation {invocation_id} is not known"
+                            ))
+                        })
                         .map(|agent_type_name| (method_name, agent_type_name))
                 }) {
                     Ok((method_name, agent_type_name)) => self
                         .agent_method_output_to_external(
-                            agent_id.component_id,
-                            output.component_revision.unwrap_or(component.revision),
-                            &agent_type_name,
+                            agent.component.id,
+                            output
+                                .component_revision
+                                .unwrap_or(agent.component.revision),
+                            agent_type_name,
                             method_name,
                             value,
                         )
@@ -353,10 +356,8 @@ fn summary_from_proto(
 ) -> WorkerResult<InvocationSummary> {
     let invalid = |what: &str| WorkerServiceError::Internal(format!("invalid invocation {what}"));
     let id = summary.invocation_id.ok_or_else(|| invalid("ID"))?;
-    let invocation_id = OwnedInvocationId::new(
-        agent_id.clone(),
-        golem_common::model::InvocationId(id.into()),
-    );
+    let invocation_id =
+        OwnedInvocationId::new(*agent_id, golem_common::model::InvocationId(id.into()));
     let state = InvocationState::try_from(summary.state).map_err(|_| invalid("state"))?;
     let kind = InvocationKind::try_from(summary.kind).ok();
     let timestamp = |timestamp: prost_types::Timestamp| {
@@ -366,7 +367,7 @@ fn summary_from_proto(
     };
     Ok(InvocationSummary {
         invocation_id: invocation_id.to_string(),
-        agent_id: agent_id.clone(),
+        agent_id: *agent_id,
         environment_id,
         state,
         kind,

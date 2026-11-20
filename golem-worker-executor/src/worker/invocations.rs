@@ -224,9 +224,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let keys: HashMap<InvocationId, String> = operations
             .into_iter()
             .map(|operation| {
-                let key = request_key
-                    .finalize(agent_id.clone(), fingerprint, &operation)
-                    .id();
+                let key = request_key.finalize(agent_id, fingerprint, &operation).id();
                 (key, operation)
             })
             .collect();

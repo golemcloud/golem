@@ -349,7 +349,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             let lowered = lower_invocation(
                 invocation_for_lowering,
                 &self.store.data().component_metadata().metadata,
-                self.parent.parsed_agent_id.as_ref(),
+                &self.parent.owner_context,
             )?;
 
             Ok::<_, WorkerExecutorError>((lowered, local_span_ids, inherited_span_ids))

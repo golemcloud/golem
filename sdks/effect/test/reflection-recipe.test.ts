@@ -13,11 +13,10 @@ const dynamicSearch = Effect.scoped(
     const inputCheck = method.input.validateValue(input)
     if (!inputCheck.success) return yield* Effect.fail(inputCheck.issues)
 
-    const identity = yield* type.agentId({ tenant: "docs" })
-    const dynamic = yield* identity.dynamicClient()
-    const result = yield* dynamic
-      .method(method.name)
-      .invoke(input)
+    const agent = yield* type.client.upsert({ tenant: "docs" })
+    const reflected = yield* agent.method(method.name)
+    const result = yield* reflected
+      .invokeValue(input)
       .pipe(
         Effect.catch((error) =>
           Effect.logError("dynamic search failed", error).pipe(Effect.andThen(Effect.fail(error))),

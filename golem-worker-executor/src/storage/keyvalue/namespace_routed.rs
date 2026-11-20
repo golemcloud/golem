@@ -406,7 +406,6 @@ mod tests {
     use super::*;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::model::AgentId;
-    use golem_common::model::component::ComponentId;
     use test_r::test;
 
     #[test]
@@ -415,21 +414,21 @@ mod tests {
             Arc::new(InMemoryKeyValueStorage::new()),
             Arc::new(InMemoryKeyValueStorage::new()),
         );
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "snapshot-rejection".to_string(),
-        };
+        let agent_id = golem_common::model::OwnedAgentId::new(
+            golem_common::model::environment::EnvironmentId(uuid::Uuid::from_u128(1)),
+            &AgentId::from_parts(7, 1),
+        );
         assert!(Arc::ptr_eq(
             storage.backend_for_namespace(
                 &KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots {
-                    agent_id: agent_id.clone(),
+                    owned_agent_id: agent_id.clone(),
                 }
             ),
             &storage.persistent,
         ));
         assert!(Arc::ptr_eq(
             storage.backend_for_namespace(&KeyValueStorageNamespace::AgentStatus {
-                agent_id: agent_id.into(),
+                owned_agent_id: agent_id,
                 fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
             }),
             &storage.cache,

@@ -38,7 +38,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, AgentTarget, ParsedAgentKey, ResolvedOwnerContext};
+use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::caller::Caller;
@@ -177,6 +177,7 @@ use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
+use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor::worker::{
     InvocationFailureDecision, RetryDecision, Worker, WorkerDeletionHook,
 };
@@ -724,7 +725,7 @@ impl TestWorkerExecutor {
             Worker::get_exact_existing_suspended(services, &owned_agent_id, caller.clone()).await?;
         let invocation_id = golem_common::model::InvocationRequestKey::Internal(idempotency_key)
             .finalize(
-                agent_id.clone(),
+                *agent_id,
                 expected_fingerprint,
                 &golem_common::model::InvocationOperation::tool_operation(
                     &tool_name,
@@ -973,6 +974,51 @@ impl TestWorkerExecutor {
         })
     }
 
+    /// The ID of the keyed agent of `key` in `environment_id`, as the executor issues it. Worker
+    /// executor tests run without a registry, so the type ID is the executor's local one. The
+    /// agent need not exist.
+    pub fn keyed_agent_id(
+        &self,
+        environment_id: EnvironmentId,
+        key: &ParsedAgentKey,
+    ) -> anyhow::Result<OwnedAgentId> {
+        let agent_key = golem_common::model::agent::AgentKey::new(
+            key.agent_type.clone(),
+            key.parameters.clone(),
+        )
+        .map_err(|err| anyhow::anyhow!("Invalid agent key {key}: {err}"))?;
+        let agent_id = AgentId::keyed(
+            environment_id,
+            golem_worker_executor::services::agent_types::local_type_id(
+                environment_id,
+                &key.agent_type,
+            ),
+            &agent_key,
+        );
+        Ok(OwnedAgentId::new(environment_id, &agent_id))
+    }
+
+    /// The ID of the instance that runs the DSL's ephemeral invocation of `operation` with
+    /// `idempotency_key` on an agent type of `environment_id`.
+    pub fn ephemeral_invocation_agent_id(
+        &self,
+        environment_id: EnvironmentId,
+        agent_type: &AgentTypeName,
+        idempotency_key: &IdempotencyKey,
+        operation: &str,
+    ) -> OwnedAgentId {
+        let request_key = golem_common::model::InvocationRequestKey::external(
+            self.auth_ctx().idempotency_scope(),
+            Some(idempotency_key),
+        );
+        let agent_id = AgentId::ephemeral_invocation(
+            environment_id,
+            golem_worker_executor::services::agent_types::local_type_id(environment_id, agent_type),
+            &request_key.owner_key(operation),
+        );
+        OwnedAgentId::new(environment_id, &agent_id)
+    }
+
     /// The invocation ID this executor's DSL caller gets for `key` on `operation` of the current
     /// incarnation of `agent_id`, as the UUID stored in the agent's oplog.
     pub async fn external_invocation_key(
@@ -997,12 +1043,13 @@ impl TestWorkerExecutor {
         request_key: &golem_common::model::InvocationRequestKey,
         operation: &str,
     ) -> anyhow::Result<golem_common::model::InvocationId> {
-        let fingerprint = golem_test_framework::dsl::TestDsl::get_worker_metadata(self, agent_id)
-            .await?
-            .fingerprint;
-        Ok(request_key
-            .finalize(agent_id.clone(), fingerprint, operation)
-            .id())
+        let fingerprint = golem_test_framework::dsl::TestDsl::get_worker_metadata(
+            self,
+            &OwnedAgentId::new(self.context.default_environment_id, agent_id),
+        )
+        .await?
+        .fingerprint;
+        Ok(request_key.finalize(*agent_id, fingerprint, operation).id())
     }
 
     /// Returns the number of entries the agent's opened oplog returned from `Oplog::read_exact`.
@@ -1065,7 +1112,7 @@ impl TestWorkerExecutor {
             .lock()
             .unwrap()
             .insert(
-                agent_id.clone(),
+                *agent_id,
                 (
                     function,
                     start,
@@ -1094,7 +1141,7 @@ impl TestWorkerExecutor {
             .lock()
             .unwrap()
             .insert(
-                agent_id.clone(),
+                *agent_id,
                 OplogReadGate {
                     entered_tx,
                     release_rx,
@@ -1115,7 +1162,7 @@ impl TestWorkerExecutor {
             .entity_settlement_access
             .lock()
             .unwrap()
-            .insert((agent_id.clone(), Some(entity_start)), (false, sender));
+            .insert((*agent_id, Some(entity_start)), (false, sender));
         receiver
     }
 
@@ -1129,7 +1176,7 @@ impl TestWorkerExecutor {
             .entity_settlement_access
             .lock()
             .unwrap()
-            .insert((agent_id.clone(), None), (false, sender));
+            .insert((*agent_id, None), (false, sender));
         receiver
     }
 
@@ -1218,22 +1265,22 @@ impl TestWorkerExecutor {
 
     pub fn fail_next_oplog_download(&self, agent_id: &AgentId) {
         self.additional_test_deps
-            .fail_next_oplog_download(agent_id.clone());
+            .fail_next_oplog_download(*agent_id);
     }
 
     pub fn set_oplog_download_outage(&self, agent_id: &AgentId, active: bool) {
         self.additional_test_deps
-            .set_oplog_download_outage(agent_id.clone(), active);
+            .set_oplog_download_outage(*agent_id, active);
     }
 
     pub fn set_oplog_download_outage_for_payload(&self, agent_id: &AgentId, payload_id: PayloadId) {
         self.additional_test_deps
-            .set_oplog_download_outage_for_payload(agent_id.clone(), payload_id);
+            .set_oplog_download_outage_for_payload(*agent_id, payload_id);
     }
 
     pub fn set_oplog_download_corruption(&self, agent_id: &AgentId, payload_id: PayloadId) {
         self.additional_test_deps
-            .set_oplog_download_corruption(agent_id.clone(), payload_id);
+            .set_oplog_download_corruption(*agent_id, payload_id);
     }
 
     pub fn oplog_download_outage_hits(&self, agent_id: &AgentId) -> Vec<PayloadId> {
@@ -1267,7 +1314,7 @@ impl TestWorkerExecutor {
             "primary context probe already armed"
         );
         probes.insert(
-            agent_id.clone(),
+            *agent_id,
             Box::new(move |ctx| {
                 Box::pin(async move {
                     let result = probe(ctx).await;
@@ -1307,7 +1354,7 @@ impl TestWorkerExecutor {
             !probes.contains_key(agent_id),
             "instance preparation probe already armed"
         );
-        probes.insert(agent_id.clone(), (Box::new(before), Box::new(after)));
+        probes.insert(*agent_id, (Box::new(before), Box::new(after)));
     }
 
     pub fn probe_runtime_disposal(
@@ -1319,7 +1366,7 @@ impl TestWorkerExecutor {
             .runtime_disposal_probes
             .lock()
             .unwrap()
-            .insert(agent_id.clone(), sender);
+            .insert(*agent_id, sender);
         receiver
     }
 
@@ -1414,7 +1461,7 @@ impl TestWorkerExecutor {
             .lock()
             .unwrap()
             .insert(
-                agent_id.clone(),
+                *agent_id,
                 RpcMemoryFailure::new(RpcMemoryBoundary::CreationCompleted),
             );
     }
@@ -1425,7 +1472,7 @@ impl TestWorkerExecutor {
             .lock()
             .unwrap()
             .insert(
-                agent_id.clone(),
+                *agent_id,
                 RpcMemoryFailure::new(RpcMemoryBoundary::InvocationCompleted),
             );
     }
@@ -1436,7 +1483,7 @@ impl TestWorkerExecutor {
             .lock()
             .unwrap()
             .insert(
-                agent_id.clone(),
+                *agent_id,
                 RpcMemoryFailure::new(RpcMemoryBoundary::CompletionDelivered),
             );
     }
@@ -1456,7 +1503,7 @@ impl TestWorkerExecutor {
             .lock()
             .unwrap()
             .insert(
-                (agent_id.clone(), snapshot_index),
+                (*agent_id, snapshot_index),
                 (PayloadId::new(), SnapshotDownloadFailure::Once),
             );
     }
@@ -1469,7 +1516,7 @@ impl TestWorkerExecutor {
             .lock()
             .unwrap()
             .insert(
-                (agent_id.clone(), snapshot_index),
+                (*agent_id, snapshot_index),
                 (PayloadId::new(), SnapshotDownloadFailure::Missing),
             );
     }
@@ -1501,7 +1548,7 @@ impl TestWorkerExecutor {
             .empty_snapshot_payloads
             .lock()
             .unwrap()
-            .insert((agent_id.clone(), snapshot_index));
+            .insert((*agent_id, snapshot_index));
         Ok(())
     }
 
@@ -1512,7 +1559,7 @@ impl TestWorkerExecutor {
         reads_to_skip: usize,
     ) {
         self.additional_test_deps
-            .return_non_snapshot_after_oplog_reads(agent_id.clone(), oplog_index, reads_to_skip);
+            .return_non_snapshot_after_oplog_reads(*agent_id, oplog_index, reads_to_skip);
     }
 
     /// Pauses one `Oplog::read` or `read_exact` starting at the given index before accessing storage.
@@ -1532,7 +1579,7 @@ impl TestWorkerExecutor {
             .lock()
             .unwrap()
             .insert(
-                (agent_id.clone(), oplog_index),
+                (*agent_id, oplog_index),
                 OplogReadGate {
                     entered_tx,
                     release_rx,
@@ -1619,7 +1666,7 @@ impl TestWorkerExecutor {
             .lock()
             .unwrap()
             .insert(
-                (agent_id.clone(), start),
+                (*agent_id, start),
                 RuntimeCardAuditGate {
                     pause: OplogReadGate {
                         entered_tx,
@@ -1650,7 +1697,7 @@ impl TestWorkerExecutor {
             .lock()
             .unwrap()
             .insert(
-                agent_id.clone(),
+                *agent_id,
                 OplogReadGate {
                     entered_tx,
                     release_rx,
@@ -1675,7 +1722,7 @@ impl TestWorkerExecutor {
             .lock()
             .unwrap()
             .insert(
-                agent_id.clone(),
+                *agent_id,
                 OplogReadGate {
                     entered_tx,
                     release_rx,
@@ -1690,7 +1737,7 @@ impl TestWorkerExecutor {
             .append_after_commit
             .lock()
             .unwrap()
-            .insert(agent_id.clone());
+            .insert(*agent_id);
     }
 
     pub async fn commit_oplog(&self, agent_id: &AgentId) -> anyhow::Result<()> {
@@ -2035,7 +2082,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> ConsumeBodyChunkEndGateHandle {
         self.additional_test_deps
-            .gate_first_consume_body_chunk_end(agent_id.clone())
+            .gate_first_consume_body_chunk_end(*agent_id)
             .await
     }
 
@@ -2047,7 +2094,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
         self.additional_test_deps
-            .gate_next_agent_initialization_enqueue(agent_id.clone())
+            .gate_next_agent_initialization_enqueue(*agent_id)
             .await
     }
 
@@ -2058,7 +2105,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
         self.additional_test_deps
-            .gate_next_pending_update_enqueue(agent_id.clone())
+            .gate_next_pending_update_enqueue(*agent_id)
             .await
     }
 
@@ -2071,7 +2118,7 @@ impl TestWorkerExecutor {
     ) -> AgentInitializationEnqueueGateHandle {
         let handle = self
             .additional_test_deps
-            .gate_next_append(agent_id.clone(), |entry| {
+            .gate_next_append(*agent_id, |entry| {
                 matches!(entry, OplogEntry::GrowMemory { .. })
             })
             .await;
@@ -2091,9 +2138,7 @@ impl TestWorkerExecutor {
     ) -> AgentInitializationEnqueueGateHandle {
         let handle = self
             .additional_test_deps
-            .gate_next_append(agent_id.clone(), |entry| {
-                matches!(entry, OplogEntry::End { .. })
-            })
+            .gate_next_append(*agent_id, |entry| matches!(entry, OplogEntry::End { .. }))
             .await;
         handle.gate.after_append.store(after_end, Ordering::SeqCst);
         handle.gate.commit_prefix.store(true, Ordering::SeqCst);
@@ -2106,7 +2151,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
         self.additional_test_deps
-            .gate_next_append(agent_id.clone(), |entry| {
+            .gate_next_append(*agent_id, |entry| {
                 matches!(
                     entry,
                     OplogEntry::CardEventQueued { event, .. }
@@ -2125,7 +2170,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
         self.additional_test_deps
-            .gate_next_append(agent_id.clone(), |entry| {
+            .gate_next_append(*agent_id, |entry| {
                 matches!(entry, OplogEntry::AgentInvocationStarted { .. })
             })
             .await
@@ -2137,10 +2182,26 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
         self.additional_test_deps
-            .gate_next_append(agent_id.clone(), |entry| {
+            .gate_next_append(*agent_id, |entry| {
                 matches!(entry, OplogEntry::AgentInvocationFinished { .. })
             })
             .await
+    }
+
+    /// Holds the explicit commit after a matching entry has been buffered, before storage.
+    /// Unlike an append gate, this lets the writer receive its append index and reach the
+    /// actual acceptance or completion commit barrier. Threshold auto-commits must be disabled.
+    pub async fn gate_before_next_oplog_commit(
+        &self,
+        agent_id: &AgentId,
+        matches: fn(&OplogEntry) -> bool,
+    ) -> AgentInitializationEnqueueGateHandle {
+        let handle = self
+            .additional_test_deps
+            .gate_next_append(agent_id.clone(), matches)
+            .await;
+        handle.gate.before_commit.store(true, Ordering::SeqCst);
+        handle
     }
 
     /// Holds a selected invocation writer at its real terminal append, before storage changes.
@@ -2153,7 +2214,7 @@ impl TestWorkerExecutor {
     ) {
         let mut gate = self
             .additional_test_deps
-                .gate_next_append(agent_id.clone(), |entry| {
+                .gate_next_append(*agent_id, |entry| {
                     match entry {
                         OplogEntry::AgentInvocationFinished { .. }
                         | OplogEntry::Interrupted { .. }
@@ -2197,7 +2258,7 @@ impl TestWorkerExecutor {
     ) -> AgentInitializationEnqueueGateHandle {
         let handle = self
             .additional_test_deps
-            .gate_next_append(agent_id.clone(), matches)
+            .gate_next_append(*agent_id, matches)
             .await;
         handle.gate.after_append.store(true, Ordering::SeqCst);
         handle.gate.commit_prefix.store(true, Ordering::SeqCst);
@@ -2211,7 +2272,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> ConsumeBodyScopeStartGateHandle {
         self.additional_test_deps
-            .gate_next_consume_body_scope_start(agent_id.clone())
+            .gate_next_consume_body_scope_start(*agent_id)
             .await
     }
 
@@ -2223,7 +2284,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> ConsumeBodyScopeEndGateHandle {
         self.additional_test_deps
-            .gate_next_consume_body_scope_end(agent_id.clone())
+            .gate_next_consume_body_scope_end(*agent_id)
             .await
     }
 
@@ -2235,7 +2296,7 @@ impl TestWorkerExecutor {
         checkpoint: RpcCheckpoint,
     ) -> RpcCommitGateHandle {
         self.additional_test_deps
-            .gate_next_rpc_commit(agent_id.clone(), checkpoint)
+            .gate_next_rpc_commit(*agent_id, checkpoint)
             .await
     }
 
@@ -2248,7 +2309,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> ConsumeBodyReplyDeferHandle {
         self.additional_test_deps
-            .defer_first_consume_body_reply(agent_id.clone())
+            .defer_first_consume_body_reply(*agent_id)
             .await
     }
 
@@ -2259,7 +2320,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> EntityReconstructionBodyGateHandle {
         self.additional_test_deps
-            .gate_next_completed_entity_reconstruction(agent_id.clone())
+            .gate_next_completed_entity_reconstruction(*agent_id)
     }
 
     /// Reports destruction of this agent's entity Store contexts, keyed by durable Start.
@@ -2272,7 +2333,7 @@ impl TestWorkerExecutor {
             .entity_store_disposal_probes
             .lock()
             .unwrap()
-            .insert(agent_id.clone(), sender);
+            .insert(*agent_id, sender);
         receiver
     }
 
@@ -2284,7 +2345,7 @@ impl TestWorkerExecutor {
         entity_name: &str,
     ) -> EntityReconstructionBodyGateHandle {
         self.additional_test_deps
-            .gate_next_live_entity_body_completion(agent_id.clone(), entity_name.to_string())
+            .gate_next_live_entity_body_completion(*agent_id, entity_name.to_string())
     }
 
     /// Pauses the next matching incomplete-replay entity body after its guest export returns but
@@ -2295,7 +2356,7 @@ impl TestWorkerExecutor {
         entity_name: &str,
     ) -> EntityReconstructionBodyGateHandle {
         self.additional_test_deps
-            .gate_next_incomplete_entity_reconstruction(agent_id.clone(), entity_name.to_string())
+            .gate_next_incomplete_entity_reconstruction(*agent_id, entity_name.to_string())
     }
 
     /// Pauses the next successful agent invocation after the guest call and its tail work finish,
@@ -2305,7 +2366,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> AgentInvocationSuccessGateHandle {
         self.additional_test_deps
-            .gate_next_agent_invocation_success(agent_id.clone(), None)
+            .gate_next_agent_invocation_success(*agent_id, None)
     }
 
     /// Selects one function so earlier replayed successes do not consume the gate.
@@ -2315,7 +2376,7 @@ impl TestWorkerExecutor {
         function: &str,
     ) -> AgentInvocationSuccessGateHandle {
         self.additional_test_deps
-            .gate_next_agent_invocation_success(agent_id.clone(), Some(function.to_string()))
+            .gate_next_agent_invocation_success(*agent_id, Some(function.to_string()))
     }
 
     /// Pauses the next entity body immediately before invoking its guest export.
@@ -2324,7 +2385,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> EntityReconstructionBodyGateHandle {
         self.additional_test_deps
-            .gate_next_entity_body_start(agent_id.clone())
+            .gate_next_entity_body_start(*agent_id)
     }
 
     /// Commits and pauses the next live monotonic clock call after its real Start, before End.
@@ -2350,7 +2411,7 @@ impl TestWorkerExecutor {
     ) -> anyhow::Result<IndexedExecutionGateHandle> {
         Ok(IndexedExecutionGate::install(
             &self.additional_test_deps.invocation_started_gates,
-            owned_agent_id.agent_id.clone(),
+            owned_agent_id.agent_id,
         ))
     }
 
@@ -2358,7 +2419,7 @@ impl TestWorkerExecutor {
     /// validation, without changing its recorded oplog terminal.
     pub fn diverge_next_completed_entity_reconstruction(&self, agent_id: &AgentId) {
         self.additional_test_deps
-            .diverge_next_completed_entity_reconstruction(agent_id.clone());
+            .diverge_next_completed_entity_reconstruction(*agent_id);
     }
 
     /// Pauses the next historical entity reconstruction immediately after its resolver-owned
@@ -2368,7 +2429,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> IndexedExecutionGateHandle {
         self.additional_test_deps
-            .gate_next_entity_reconstruction_claim(agent_id.clone())
+            .gate_next_entity_reconstruction_claim(*agent_id)
     }
 
     /// Leaves earlier claims alone and pauses reconstruction of the exact recorded entity Start.
@@ -2394,7 +2455,7 @@ impl TestWorkerExecutor {
         stage: ReplayAdmissionStage,
     ) -> ReplayAdmissionGateHandle {
         self.additional_test_deps.gate_next_replay_access_admission(
-            agent_id.clone(),
+            *agent_id,
             function_suffix.to_string(),
             stage,
         )
@@ -2409,7 +2470,7 @@ impl TestWorkerExecutor {
         name_suffix: &str,
     ) -> DirectReplayWaitSignalHandle {
         self.additional_test_deps
-            .signal_next_direct_replay_wait(agent_id.clone(), name_suffix.to_string())
+            .signal_next_direct_replay_wait(*agent_id, name_suffix.to_string())
     }
 
     /// Whether the owner has published live admission after reconstruction settlement.
@@ -2471,16 +2532,23 @@ impl TestWorkerExecutor {
         Ok(worker.memory_requirement().await?)
     }
 
+    /// Lists the running agents of one agent type of the environment.
     pub async fn get_running_workers_metadata(
         &self,
-        component_id: &ComponentId,
+        environment_id: &EnvironmentId,
+        agent_type: &AgentTypeName,
         filter: Option<AgentFilter>,
     ) -> anyhow::Result<Vec<AgentMetadataDto>> {
         let response = self
             .client
             .clone()
             .get_running_workers_metadata(GetRunningWorkersMetadataRequest {
-                component_id: Some((*component_id).into()),
+                type_id: golem_worker_executor::services::agent_types::local_type_id(
+                    *environment_id,
+                    agent_type,
+                )
+                .get(),
+                environment_id: Some((*environment_id).into()),
                 filter: filter.map(|f| f.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
             })
@@ -2959,10 +3027,10 @@ pub async fn take_agent_oplog_over_at_epoch(
             "oplog",
             "test_take_over",
             IndexedStorageNamespace::OpLog {
-                agent_id: owned_agent_id.agent_id(),
+                owned_agent_id: owned_agent_id.clone(),
                 agent_mode: AgentMode::Durable,
             },
-            &owned_agent_id.agent_id.to_redis_key(),
+            &owned_agent_id.storage_key(),
             ShardEpoch(epoch),
         )
         .await?;
@@ -2998,11 +3066,11 @@ pub async fn archived_oplog_chunks(
             "test_read",
             "compressed_entry",
             IndexedStorageNamespace::CompressedOpLog {
-                agent_id: owned_agent_id.agent_id(),
+                owned_agent_id: owned_agent_id.clone(),
                 agent_mode: AgentMode::Durable,
                 level,
             },
-            &owned_agent_id.agent_id.to_redis_key(),
+            &owned_agent_id.storage_key(),
             0,
             i64::MAX as u64,
         )
@@ -3041,11 +3109,11 @@ pub async fn truncate_archived_oplog_chunk(
 
     let storage = sqlite_indexed_storage(deps, context).await?;
     let namespace = IndexedStorageNamespace::CompressedOpLog {
-        agent_id: owned_agent_id.agent_id(),
+        owned_agent_id: owned_agent_id.clone(),
         agent_mode: AgentMode::Durable,
         level,
     };
-    let key = owned_agent_id.agent_id.to_redis_key();
+    let key = owned_agent_id.storage_key();
     let (last_id, _) = chunks.last().expect("the chunks are not empty");
     storage
         .drop_prefix(
@@ -3079,6 +3147,109 @@ pub async fn truncate_archived_oplog_chunk(
     Ok(())
 }
 
+/// Writes the `Create` entry of the durable agent `source`, with the ID of `target`, as the whole
+/// durable oplog of `target`. `target` then exists and owns the key of `source`, as when two keys
+/// derive the same ID. The storage is reached as by [`take_agent_oplog_over_at_epoch`], so no
+/// executor may run on it meanwhile.
+pub async fn copy_create_entry_to(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    source: &OwnedAgentId,
+    target: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    let storage = sqlite_indexed_storage(deps, context).await?;
+    let namespace = |owned_agent_id: &OwnedAgentId| IndexedStorageNamespace::OpLog {
+        owned_agent_id: owned_agent_id.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let stored = storage
+        .read(
+            "oplog",
+            "test_read",
+            "entry",
+            namespace(source),
+            &source.storage_key(),
+            OplogIndex::INITIAL.as_u64(),
+            OplogIndex::INITIAL.as_u64(),
+        )
+        .await?;
+    let (id, value) = stored
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("the oplog of {source} is empty"))?;
+    let mut entry: OplogEntry =
+        golem_common::serialization::deserialize(&value).map_err(|err| anyhow!(err))?;
+    let OplogEntry::Create { parameters, .. } = &mut entry else {
+        anyhow::bail!("the first entry of {source} is not a Create entry");
+    };
+    parameters.agent_id = target.agent_id;
+    storage
+        .append(
+            "oplog",
+            "test_copy_create",
+            "entry",
+            namespace(target),
+            &target.storage_key(),
+            id,
+            golem_common::serialization::serialize(&entry).map_err(|err| anyhow!(err))?,
+            None,
+        )
+        .await?;
+    Ok(())
+}
+
+/// Copies a durable agent's complete oplog to another ID while retaining the source's key.
+/// Both executors must be stopped, as for [`copy_create_entry_to`].
+pub async fn copy_agent_oplog_to(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    source: &OwnedAgentId,
+    target: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    copy_create_entry_to(deps, context, source, target).await?;
+    let storage = sqlite_indexed_storage(deps, context).await?;
+    let namespace = |agent: &OwnedAgentId| IndexedStorageNamespace::OpLog {
+        owned_agent_id: agent.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let last = storage
+        .last_id(
+            "oplog",
+            "test_read",
+            "entry",
+            namespace(source),
+            &source.storage_key(),
+        )
+        .await?
+        .ok_or_else(|| anyhow!("the oplog of {source} is empty"))?;
+    let entries = storage
+        .read(
+            "oplog",
+            "test_read",
+            "entry",
+            namespace(source),
+            &source.storage_key(),
+            OplogIndex::INITIAL.as_u64() + 1,
+            last,
+        )
+        .await?;
+    for (id, value) in entries {
+        storage
+            .append(
+                "oplog",
+                "test_copy",
+                "entry",
+                namespace(target),
+                &target.storage_key(),
+                id,
+                value,
+                None,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
 /// How many entries the agent's durable oplog holds in storage, read without going through any
 /// executor - the same storage [`take_agent_oplog_over_at_epoch`] writes to.
 pub async fn agent_oplog_length(
@@ -3097,10 +3268,10 @@ pub async fn agent_oplog_length(
             "oplog",
             "test_length",
             IndexedStorageNamespace::OpLog {
-                agent_id: owned_agent_id.agent_id(),
+                owned_agent_id: owned_agent_id.clone(),
                 agent_mode: AgentMode::Durable,
             },
-            &owned_agent_id.agent_id.to_redis_key(),
+            &owned_agent_id.storage_key(),
         )
         .await?)
 }
@@ -3561,7 +3732,7 @@ impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
     fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<TestWorkerCtx> {
         {
             let key = (
-                self.agent_id.clone(),
+                self.agent_id,
                 self.durable_ctx
                     .entity_invocation_scope()
                     .map(|scope| scope.invocation_id().start_index()),
@@ -3620,7 +3791,7 @@ impl FuelManagement for TestWorkerCtx {
             .lock()
             .unwrap()
             .get_mut(&(
-                self.agent_id.clone(),
+                self.agent_id,
                 self.durable_ctx
                     .entity_invocation_scope()
                     .map(|scope| scope.invocation_id().start_index()),
@@ -3936,7 +4107,7 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn p3_http_body_producer_hook(&self) -> Option<Arc<dyn P3HttpBodyProducerHook>> {
         self.additional_test_deps
-            .p3_http_body_producer_hook(self.agent_id.clone())
+            .p3_http_body_producer_hook(self.agent_id)
     }
 
     fn entity_invocation_body_hook(&self) -> Option<Arc<dyn EntityInvocationBodyHook>> {
@@ -3944,7 +4115,7 @@ impl WorkerCtx for TestWorkerCtx {
         let entity_name = scope.map(|scope| scope.activation().entity().name().to_string());
         let start_index = scope.map(|scope| scope.invocation_id().start_index());
         self.additional_test_deps.entity_invocation_body_hook(
-            self.agent_id.clone(),
+            self.agent_id,
             entity_name,
             start_index,
         )
@@ -3993,7 +4164,6 @@ impl WorkerCtx for TestWorkerCtx {
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         pending_update: Option<HydratedUpdate>,
-        original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<golem_worker_executor::worker::instance::OwnerExecution>,
@@ -4010,14 +4180,17 @@ impl WorkerCtx for TestWorkerCtx {
         // into the worker context, so test helpers can hold pool permits and
         // exercise pool saturation for any worker on this executor.
         extra_deps.set_websocket_connection_pool(websocket_connection_pool.clone());
-        let worker_agent_id = owned_agent_id.agent_id.clone();
+        let worker_agent_id = owned_agent_id.agent_id;
         let primary = matches!(runtime, OwnerRuntime::Agent);
         let runtime_generation = entity_execution_mode
             .is_none()
             .then(|| extra_deps.record_instance_load(&worker_agent_id));
 
         let entity_reconstruction_claim_hook =
-            extra_deps.entity_reconstruction_claim_hook(worker_agent_id.clone());
+            extra_deps.entity_reconstruction_claim_hook(worker_agent_id);
+        if let ResolvedOwnerContext::Agent(key) = &owner_context {
+            extra_deps.record_agent_key(&worker_agent_id, key.to_string());
+        }
 
         if !Arc::ptr_eq(&execution_status, &owner_resources.execution_status()) {
             return Err(WorkerExecutorError::runtime(
@@ -4061,7 +4234,6 @@ impl WorkerCtx for TestWorkerCtx {
             http_connection_pool,
             websocket_connection_pool,
             pending_update,
-            original_phantom_id,
             account_resource_limits.per_invocation_http_call_limit(),
             account_resource_limits.per_invocation_rpc_call_limit(),
             runtime,
@@ -4069,7 +4241,7 @@ impl WorkerCtx for TestWorkerCtx {
             owner_execution,
             owner_resources,
             entity_reconstruction_claim_hook,
-            extra_deps.replay_admission_hook(worker_agent_id.clone()),
+            extra_deps.replay_admission_hook(worker_agent_id),
             filesystem_capability,
             executable,
             entity_activation,
@@ -4300,35 +4472,27 @@ impl FileSystemReading for TestWorkerCtx {
 }
 
 impl HostWasmRpc for TestWorkerCtx {
-    async fn new(
+    async fn upsert(
         &mut self,
         agent_type_name: String,
         constructor: golem_schema::schema::wit::wire::SchemaValueTree,
-        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
-        config: Vec<
-            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
-        >,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx
-            .new(agent_type_name, constructor, phantom_id, config)
-            .await
-    }
-
-    async fn create(
-        &mut self,
-        agent_type_name: String,
-        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
-        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
-        config: Vec<
-            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
-        >,
     ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
-        self.durable_ctx
-            .create(agent_type_name, constructor, phantom_id, config)
-            .await
+        self.durable_ctx.upsert(agent_type_name, constructor).await
     }
 
-    async fn bind_self(&mut self) -> anyhow::Result<Result<(String, Resource<WasmRpc>), RpcError>> {
+    async fn get_by_id(
+        &mut self,
+        agent_type_name: String,
+        agent_id: golem_schema::schema::wit::wire::AgentId,
+    ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
+        self.durable_ctx.get_by_id(agent_type_name, agent_id).await
+    }
+
+    async fn bind_self(
+        &mut self,
+    ) -> anyhow::Result<
+        Result<(golem_schema::schema::wit::wire::AgentId, Resource<WasmRpc>), RpcError>,
+    > {
         self.durable_ctx.bind_self().await
     }
 
@@ -5866,7 +6030,7 @@ impl TestOplog {
             .unwrap();
         if let Some(failure) = failures.get_mut(&self.owned_agent_id.agent_id) {
             let expected_start = match failure.boundary {
-                RpcMemoryBoundary::CreationCompleted => HostFunctionName::GolemRpcWasmRpcNew,
+                RpcMemoryBoundary::CreationCompleted => HostFunctionName::GolemRpcWasmRpcUpsert,
                 RpcMemoryBoundary::InvocationCompleted | RpcMemoryBoundary::CompletionDelivered => {
                     HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult
                 }
@@ -5991,6 +6155,12 @@ impl TestOplog {
         else {
             return Ok(());
         };
+        if gate.before_commit.load(Ordering::SeqCst) {
+            if after_append && gate.armed.load(Ordering::SeqCst) && (gate.matches)(entry) {
+                *gate.entry.lock().unwrap() = Some(entry.clone());
+            }
+            return Ok(());
+        }
         if after_append && matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
             gate.wait_for_invocation_start
                 .store(false, Ordering::SeqCst);
@@ -6225,36 +6395,33 @@ impl TestOplog {
             _ => "Other",
         };
 
-        // FailOplogAdd{times}On{entry}
+        // FailOplogAdd{times}On{entry} in the agent key
         let re = Regex::new(r"FailOplogAdd(\d+)On([A-Za-z]+)").unwrap();
 
-        let agent_name = self.owned_agent_id.agent_id.agent_id.as_str();
-        if let Some(captures) = re.captures(agent_name) {
+        let agent_key = self
+            .additional_test_deps
+            .agent_key(&self.owned_agent_id.agent_id)
+            .unwrap_or_default();
+        if let Some(captures) = re.captures(&agent_key) {
             let times = &captures[1].parse::<usize>().unwrap_or_default();
             let entry = &captures[2];
             if entry == entry_name {
                 let failed_before = self
                     .additional_test_deps
-                    .get_oplog_failures_count(
-                        self.owned_agent_id.agent_id.clone(),
-                        entry_name.to_string(),
-                    )
+                    .get_oplog_failures_count(self.owned_agent_id.agent_id, entry_name.to_string())
                     .await;
 
                 if failed_before >= *times {
                     Ok(())
                 } else {
                     self.additional_test_deps
-                        .add_oplog_failure(
-                            self.owned_agent_id.agent_id.clone(),
-                            entry_name.to_string(),
-                        )
+                        .add_oplog_failure(self.owned_agent_id.agent_id, entry_name.to_string())
                         .await;
 
                     info!("Failing worker as it hit marked oplog entry");
 
                     Err(format!(
-                        "worker {agent_name} failed on {entry_name} {} times",
+                        "worker {agent_key} failed on {entry_name} {} times",
                         failed_before + 1
                     ))
                 }
@@ -6275,7 +6442,7 @@ impl Oplog for TestOplog {
         let shutdown = self.oplog.executor_shutdown_handle();
         let close = shutdown.clone();
         let deps = self.additional_test_deps.clone();
-        let agent_id = self.owned_agent_id.agent_id.clone();
+        let agent_id = self.owned_agent_id.agent_id;
         golem_worker_executor::services::oplog::OplogShutdownHandle::new(
             move || {
                 shutdown.fence();
@@ -6537,6 +6704,20 @@ impl Oplog for TestOplog {
     {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
+        if level != CommitLevel::ReportOnly
+            && let Some(gate) = self
+                .additional_test_deps
+                .agent_initialization_enqueue_gate(&self.owned_agent_id.agent_id)
+                .await
+            && gate.before_commit.load(Ordering::SeqCst)
+        {
+            let entry = gate.entry.lock().unwrap().clone();
+            if let Some(entry) = entry
+                && gate.armed.swap(false, Ordering::SeqCst)
+            {
+                self.pause_at_claimed_test_append(&entry, gate).await?;
+            }
+        }
         let committed = self.oplog.commit(level).await;
         if committed.as_ref().is_ok_and(|entries| {
             entries
@@ -6615,7 +6796,7 @@ impl Oplog for TestOplog {
     async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
         let gate = {
             let mut gates = self.additional_test_deps.oplog_read_gates.lock().unwrap();
-            let key = (self.owned_agent_id.agent_id.clone(), oplog_index);
+            let key = (self.owned_agent_id.agent_id, oplog_index);
             gates.remove(&key)
         };
         if let Some(gate) = gate {
@@ -6638,7 +6819,7 @@ impl Oplog for TestOplog {
             .snapshot_download_failures
             .lock()
             .unwrap()
-            .get(&(self.owned_agent_id.agent_id.clone(), oplog_index))
+            .get(&(self.owned_agent_id.agent_id, oplog_index))
             && let OplogEntry::Snapshot { data, .. } = &mut entry
         {
             *data = OplogPayload::External {
@@ -6652,7 +6833,7 @@ impl Oplog for TestOplog {
             .empty_snapshot_payloads
             .lock()
             .unwrap()
-            .contains(&(self.owned_agent_id.agent_id.clone(), oplog_index))
+            .contains(&(self.owned_agent_id.agent_id, oplog_index))
         {
             match &mut entry {
                 OplogEntry::Snapshot { data, .. } => {
@@ -6676,7 +6857,7 @@ impl Oplog for TestOplog {
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let gate = {
             let mut gates = self.additional_test_deps.oplog_read_gates.lock().unwrap();
-            let key = (self.owned_agent_id.agent_id.clone(), oplog_index);
+            let key = (self.owned_agent_id.agent_id, oplog_index);
             gates.remove(&key)
         };
         if let Some(gate) = gate {
@@ -6750,9 +6931,9 @@ impl Oplog for TestOplog {
                 .snapshot_download_failures
                 .lock()
                 .unwrap();
-            let found = failures.iter().find_map(|(key, (id, failure))| {
-                (id == &payload_id).then(|| (key.clone(), *failure))
-            });
+            let found = failures
+                .iter()
+                .find_map(|(key, (id, failure))| (id == &payload_id).then_some((*key, *failure)));
             match found {
                 Some((key, SnapshotDownloadFailure::Once)) => {
                     failures.remove(&key);
@@ -6917,6 +7098,34 @@ impl Oplog for TestOplog {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> golem_worker_executor::services::oplog::OplogAddPairReceipt {
+        let gate = self
+            .additional_test_deps
+            .agent_initialization_enqueue_gates
+            .read_sync(&self.owned_agent_id.agent_id, |_, gate| {
+                gate.before_commit
+                    .load(Ordering::SeqCst)
+                    .then(|| gate.clone())
+            })
+            .flatten();
+        if let Some(gate) = gate {
+            let first = start.clone();
+            return self.oplog.enqueue_add_pair(
+                start,
+                Box::new(move |index| {
+                    let second = make_second(index);
+                    // Observe both entries inside the atomic writer job, without splitting the
+                    // pair or depending on its receipt being polled before the next commit.
+                    if gate.armed.load(Ordering::SeqCst) {
+                        if (gate.matches)(&first) {
+                            *gate.entry.lock().unwrap() = Some(first);
+                        } else if (gate.matches)(&second) {
+                            *gate.entry.lock().unwrap() = Some(second.clone());
+                        }
+                    }
+                    second
+                }),
+            );
+        }
         self.oplog.enqueue_add_pair(start, make_second)
     }
 
@@ -6932,7 +7141,7 @@ impl Oplog for TestOplog {
                 details,
             ));
         }
-        self.oplog.add_pair(start, make_second).await
+        self.enqueue_add_pair(start, make_second).await
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
@@ -7004,28 +7213,31 @@ impl<T: RdbmsType> TestRdms<T> {
         agent_id: &AgentId,
         entry_name: &str,
     ) -> Result<(), rdbms::RdbmsError> {
-        // FailRdbmsTx{times}On{entry}
+        // FailRdbmsTx{times}On{entry} in the agent key
         let re = Regex::new(r"FailRdbmsTx(\d+)On([A-Za-z]+)").unwrap();
 
-        let agent_name = agent_id.agent_id.as_str();
-        if let Some(captures) = re.captures(agent_name) {
+        let agent_key = self
+            .additional_test_deps
+            .agent_key(agent_id)
+            .unwrap_or_default();
+        if let Some(captures) = re.captures(&agent_key) {
             let times = &captures[1].parse::<usize>().unwrap_or_default();
             let entry = &captures[2];
             if entry == entry_name {
                 let failed_before = self
                     .additional_test_deps
-                    .get_rdbms_tx_failures_count(agent_id.clone(), entry_name.to_string())
+                    .get_rdbms_tx_failures_count(*agent_id, entry_name.to_string())
                     .await;
 
                 if failed_before >= *times {
                     Ok(())
                 } else {
                     self.additional_test_deps
-                        .add_rdbms_tx_failure(agent_id.clone(), entry_name.to_string())
+                        .add_rdbms_tx_failure(*agent_id, entry_name.to_string())
                         .await;
                     Err(rdbms::RdbmsError::Other(format!(
                         "worker {} failed on {} {} times",
-                        agent_name,
+                        agent_key,
                         entry_name,
                         failed_before + 1
                     )))
@@ -7224,6 +7436,9 @@ pub struct AdditionalTestDeps {
     oplog_download_corruptions: Arc<std::sync::Mutex<HashMap<AgentId, PayloadId>>>,
     oplog_download_outage_hits: Arc<std::sync::Mutex<HashMap<AgentId, Vec<PayloadId>>>>,
     instance_load_counts: Arc<std::sync::Mutex<HashMap<AgentId, usize>>>,
+    /// The key text of each keyed agent that a worker context was created for. The
+    /// failure-injection hooks of the oplog and RDBMS wrappers read their triggers from it.
+    agent_keys: Arc<std::sync::Mutex<HashMap<AgentId, String>>>,
     runtime_disposal_probes:
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<usize>>>>,
     snapshot_download_failures: Arc<std::sync::Mutex<SnapshotDownloadFailures>>,
@@ -7313,6 +7528,7 @@ impl AdditionalTestDeps {
             oplog_download_corruptions: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_outage_hits: Arc::new(std::sync::Mutex::new(HashMap::new())),
             instance_load_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            agent_keys: Arc::default(),
             runtime_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             snapshot_download_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
@@ -7656,6 +7872,7 @@ impl AdditionalTestDeps {
             armed: AtomicBool::new(true),
             matches,
             after_append: AtomicBool::new(false),
+            before_commit: AtomicBool::new(false),
             commit_prefix: AtomicBool::new(false),
             abort_append: AtomicBool::new(false),
             wait_for_invocation_start: AtomicBool::new(false),
@@ -7928,7 +8145,7 @@ impl AdditionalTestDeps {
         self.oplog_download_outage_hits
             .lock()
             .unwrap()
-            .entry(agent_id.clone())
+            .entry(*agent_id)
             .or_default()
             .push(payload_id);
     }
@@ -7944,9 +8161,17 @@ impl AdditionalTestDeps {
 
     fn record_instance_load(&self, agent_id: &AgentId) -> usize {
         let mut counts = self.instance_load_counts.lock().unwrap();
-        let count = counts.entry(agent_id.clone()).or_default();
+        let count = counts.entry(*agent_id).or_default();
         *count += 1;
         *count
+    }
+
+    fn record_agent_key(&self, agent_id: &AgentId, key: String) {
+        self.agent_keys.lock().unwrap().insert(*agent_id, key);
+    }
+
+    fn agent_key(&self, agent_id: &AgentId) -> Option<String> {
+        self.agent_keys.lock().unwrap().get(agent_id).cloned()
     }
 
     fn instance_load_count(&self, agent_id: &AgentId) -> usize {
@@ -7971,7 +8196,7 @@ impl AdditionalTestDeps {
     }
 
     fn take_non_snapshot_oplog_read(&self, agent_id: &AgentId, oplog_index: OplogIndex) -> bool {
-        let key = (agent_id.clone(), oplog_index);
+        let key = (*agent_id, oplog_index);
         let mut reads = self.non_snapshot_oplog_reads.lock().unwrap();
         match reads.get_mut(&key) {
             Some(0) => {
@@ -8079,6 +8304,7 @@ struct AgentInitializationEnqueueGate {
     /// The entry the gate fires on; the initialization enqueue unless a test arms it otherwise.
     matches: fn(&OplogEntry) -> bool,
     after_append: AtomicBool,
+    before_commit: AtomicBool,
     commit_prefix: AtomicBool,
     abort_append: AtomicBool,
     wait_for_invocation_start: AtomicBool,
@@ -8108,6 +8334,11 @@ impl AgentInitializationEnqueueGateHandle {
             .unwrap()
             .clone()
             .expect("the append gate has not intercepted an entry")
+    }
+
+    /// Releases the paused append or commit. Drop also releases it as failure cleanup.
+    pub fn release(self) {
+        drop(self);
     }
 
     /// Refuses the intercepted receipt only after executor shutdown fences its oplog generation.
@@ -8418,7 +8649,7 @@ impl golem_worker_executor::workerctx::ReplayAdmissionHook for TestReplayAdmissi
             .card_audits
             .lock()
             .unwrap()
-            .get_mut(&(self.agent_id.clone(), start_index))
+            .get_mut(&(self.agent_id, start_index))
             && function == "golem::permissions::derive::persist-derived-card"
         {
             assert!(
@@ -8433,7 +8664,7 @@ impl golem_worker_executor::workerctx::ReplayAdmissionHook for TestReplayAdmissi
     async fn before_runtime_card_audit_lookup(&self, start_index: OplogIndex) {
         let gate = {
             let mut gates = self.card_audits.lock().unwrap();
-            let key = (self.agent_id.clone(), start_index);
+            let key = (self.agent_id, start_index);
             let matches = gates.get(&key).is_some_and(|gate| {
                 gate.issuing_task.is_some() && gate.issuing_task == tokio::task::try_id()
             });
@@ -8475,21 +8706,16 @@ mod entity_body_completion_gate_tests {
     #[test]
     #[test_r::timeout("30s")]
     async fn indexed_body_completion_gate_lets_same_named_sibling_complete() {
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::nil()),
-            agent_id: "body-gate-test".to_string(),
-        };
+        let agent_id = AgentId::from_parts(1, 1);
         let deps = AdditionalTestDeps::default();
         let cancelled = OplogIndex::from_u64(7);
         let sibling = OplogIndex::from_u64(11);
-        let mut gate = deps.gate_next_live_entity_body_completion(
-            agent_id.clone(),
-            "middleware-probe".to_string(),
-        );
+        let mut gate =
+            deps.gate_next_live_entity_body_completion(agent_id, "middleware-probe".to_string());
         gate.restrict_to_start(cancelled);
         let hook = |start_index| {
             deps.entity_invocation_body_hook(
-                agent_id.clone(),
+                agent_id,
                 Some("middleware-probe".to_string()),
                 Some(start_index),
             )
@@ -8525,10 +8751,7 @@ mod replay_admission_gate_tests {
     #[test]
     #[test_r::timeout("30s")]
     async fn dropped_gate_does_not_steal_rearmed_matching_gate() {
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::nil()),
-            agent_id: "gate-test".to_string(),
-        };
+        let agent_id = AgentId::from_parts(1, 2);
         let gates = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let signals = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let deps = AdditionalTestDeps {
@@ -8538,13 +8761,13 @@ mod replay_admission_gate_tests {
         };
 
         let stale = deps.gate_next_replay_access_admission(
-            agent_id.clone(),
+            agent_id,
             "monotonic-clock::now".to_string(),
             ReplayAdmissionStage::BeforeDeferredStart,
         );
         drop(stale);
         let mut current = deps.gate_next_replay_access_admission(
-            agent_id.clone(),
+            agent_id,
             "monotonic-clock::now".to_string(),
             ReplayAdmissionStage::BeforeDeferredStart,
         );
@@ -9608,8 +9831,8 @@ impl FailingRpc {
 impl Rpc for RecordingRpc {
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
+        exclusive: bool,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -9623,7 +9846,7 @@ impl Rpc for RecordingRpc {
         self.inner
             .create_and_initialize(
                 target,
-                environment_id,
+                exclusive,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -9674,8 +9897,7 @@ impl Rpc for RecordingRpc {
 
     async fn create_demand(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -9691,7 +9913,6 @@ impl Rpc for RecordingRpc {
         self.inner
             .create_demand(
                 target,
-                environment_id,
                 method_name,
                 self_created_by,
                 self_agent_id,
@@ -9708,8 +9929,7 @@ impl Rpc for RecordingRpc {
 
     async fn invoke_and_await(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -9731,7 +9951,6 @@ impl Rpc for RecordingRpc {
         self.inner
             .invoke_and_await(
                 target,
-                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 expected_callee_fingerprint,
@@ -9751,8 +9970,7 @@ impl Rpc for RecordingRpc {
 
     async fn invoke(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -9770,7 +9988,6 @@ impl Rpc for RecordingRpc {
         self.inner
             .invoke(
                 target,
-                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 expected_callee_fingerprint,
@@ -9792,8 +10009,8 @@ impl Rpc for RecordingRpc {
 impl Rpc for FailingRpc {
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
+        exclusive: bool,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -9806,7 +10023,7 @@ impl Rpc for FailingRpc {
         self.inner
             .create_and_initialize(
                 target,
-                environment_id,
+                exclusive,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -9855,8 +10072,7 @@ impl Rpc for FailingRpc {
 
     async fn create_demand(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -9871,7 +10087,6 @@ impl Rpc for FailingRpc {
         self.inner
             .create_demand(
                 target,
-                environment_id,
                 method_name,
                 self_created_by,
                 self_agent_id,
@@ -9888,8 +10103,7 @@ impl Rpc for FailingRpc {
 
     async fn invoke_and_await(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -9916,7 +10130,6 @@ impl Rpc for FailingRpc {
             self.inner
                 .invoke_and_await(
                     target,
-                    environment_id,
                     idempotency_key,
                     freshness_disposition,
                     expected_callee_fingerprint,
@@ -9937,8 +10150,7 @@ impl Rpc for FailingRpc {
 
     async fn invoke(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -9955,7 +10167,6 @@ impl Rpc for FailingRpc {
         self.inner
             .invoke(
                 target,
-                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 expected_callee_fingerprint,

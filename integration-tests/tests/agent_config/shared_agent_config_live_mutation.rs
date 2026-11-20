@@ -23,7 +23,7 @@ use golem_common::model::deployment::DeploymentAgentSecretDefault;
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::model::{AgentStatus, PromiseId};
 use golem_common::schema::{ExternalSchemaValue, FromSchema, SchemaGraph, SchemaType, SchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
@@ -82,7 +82,7 @@ async fn agent_reads_updated_environment_secret(
     })
     .await?;
 
-    let agent_id = agent_id!("SharedConfigAgent", "test-agent");
+    let agent_id = agent_key!("SharedConfigAgent", "test-agent");
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
@@ -194,7 +194,7 @@ async fn repeated_secret_reveal_invocation_replays_pinned_original_value(
     })
     .await?;
 
-    let agent_id = agent_id!("SharedConfigAgent", "test-agent-pinned-secret");
+    let agent_id = agent_key!("SharedConfigAgent", "test-agent-pinned-secret");
     let worker = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let promise_id_value = user
@@ -255,7 +255,7 @@ async fn repeated_secret_reveal_invocation_replays_pinned_original_value(
     user.simulated_crash(&worker).await?;
     user.wait_for_status(&worker, AgentStatus::Suspended, Duration::from_secs(10))
         .await?;
-    user.complete_promise(&promise_id, b"resume".to_vec())
+    user.complete_promise(&worker.environment_id, &promise_id, b"resume".to_vec())
         .await?;
 
     let replayed = invocation
@@ -317,7 +317,7 @@ async fn agent_fails_on_deleted_environment_secret(
     })
     .await?;
 
-    let agent_id = agent_id!("SharedConfigAgent", "test-agent");
+    let agent_id = agent_key!("SharedConfigAgent", "test-agent");
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
@@ -416,7 +416,7 @@ async fn agent_reads_recreated_environment_secret(
     })
     .await?;
 
-    let agent_id = agent_id!("SharedConfigAgent", "test-agent");
+    let agent_id = agent_key!("SharedConfigAgent", "test-agent");
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
@@ -499,7 +499,7 @@ async fn agent_reads_secret_after_canonicalized_update(
     })
     .await?;
 
-    let agent_id = agent_id!("LocalCasingSharedConfigAgent", "test-agent");
+    let agent_id = agent_key!("LocalCasingSharedConfigAgent", "test-agent");
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 

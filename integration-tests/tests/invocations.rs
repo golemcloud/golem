@@ -20,10 +20,9 @@ use golem_client::model::{
     InvocationState, InvocationSummary,
 };
 use golem_common::base_model::api::error_code;
-use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::{AgentStatus, IdempotencyKey, PromiseId};
 use golem_common::schema::{ExternalSchemaValue, FromSchema, TypedSchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
@@ -61,14 +60,14 @@ async fn invocation_api_reads_and_cancels_invocations(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
-    let (app, env) = user.app_and_env().await?;
+    let (_, env) = user.app_and_env().await?;
     let component = user
         .component(&env.id, "golem_it_agent_rpc_rust_release")
         .store()
         .await?;
-    let agent = agent_id!("RpcBlockingCounter", "rest-invocations");
+    let agent = agent_key!("RpcBlockingCounter", "rest-invocations");
     let agent_id = user.start_agent(&component.id, agent.clone()).await?;
-    let agent_text = agent_id.to_string();
+    let agent_uuid = agent_id.agent_id.0;
     let env_id = env.id.0;
     let client = user
         .deps
@@ -77,7 +76,7 @@ async fn invocation_api_reads_and_cancels_invocations(
         .await;
     let lookup_one = async |key: &IdempotencyKey| -> anyhow::Result<InvocationSummary> {
         let mut found = client
-            .lookup_invocations(&env_id, &agent_text, None, &key.value)
+            .lookup_invocations(&env_id, &agent_uuid, None, &key.value)
             .await?
             .invocations;
         assert_eq!(found.len(), 1, "one invocation per key and agent");
@@ -162,7 +161,7 @@ async fn invocation_api_reads_and_cancels_invocations(
         let page = client
             .list_invocations(
                 &env_id,
-                &agent_text,
+                &agent_uuid,
                 None,
                 None,
                 None,
@@ -199,7 +198,7 @@ async fn invocation_api_reads_and_cancels_invocations(
     let only_pending = client
         .list_invocations(
             &env_id,
-            &agent_text,
+            &agent_uuid,
             None,
             Some(&[InvocationState::Pending]),
             None,
@@ -220,7 +219,7 @@ async fn invocation_api_reads_and_cancels_invocations(
     let constructor = client
         .list_invocations(
             &env_id,
-            &agent_text,
+            &agent_uuid,
             None,
             None,
             Some(&InvocationKind::Constructor),
@@ -235,7 +234,7 @@ async fn invocation_api_reads_and_cancels_invocations(
     let inc_by = client
         .list_invocations(
             &env_id,
-            &agent_text,
+            &agent_uuid,
             Some("inc_by"),
             None,
             None,
@@ -256,7 +255,7 @@ async fn invocation_api_reads_and_cancels_invocations(
         let page = client
             .list_invocations(
                 &env_id,
-                &agent_text,
+                &agent_uuid,
                 None,
                 None,
                 None,
@@ -289,7 +288,7 @@ async fn invocation_api_reads_and_cancels_invocations(
             client
                 .list_invocations(
                     &env_id,
-                    &agent_text,
+                    &agent_uuid,
                     None,
                     None,
                     None,
@@ -311,19 +310,22 @@ async fn invocation_api_reads_and_cancels_invocations(
         .worker_service()
         .agent_http_client(&user.token)
         .await;
-    let request = invocation_request(
-        app.name.0.clone(),
-        env.name.0.clone(),
-        &agent,
-        "inc_by",
-        data_value!(10u64),
-        AgentInvocationMode::Await,
-    )?;
+    let request = AgentInvocationRequest {
+        agent_id: Some(agent_uuid),
+        parameters: None,
+        method: "inc_by".to_string(),
+        method_parameters: ExternalSchemaValue::try_from(data_value!(10u64).into_parts().1)
+            .map_err(anyhow::Error::msg)?,
+        mode: AgentInvocationMode::Await,
+        schedule_at: None,
+        expected_fingerprint: None,
+    };
+    let agent_type_name = agent.agent_type.0.clone();
     let awaited = {
         let awaited_key = awaited_key.value.clone();
         tokio::spawn(async move {
             agent_client
-                .invoke_agent(Some(&awaited_key), &request)
+                .invoke_agent(&env_id, &agent_type_name, Some(&awaited_key), &request)
                 .await
                 .map(|_| ())
         })
@@ -331,7 +333,7 @@ async fn invocation_api_reads_and_cancels_invocations(
     let awaited_pending = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let found = client
-                .lookup_invocations(&env_id, &agent_text, None, &awaited_key.value)
+                .lookup_invocations(&env_id, &agent_uuid, None, &awaited_key.value)
                 .await;
             if let Ok(mut found) = found {
                 break found.invocations.remove(0);
@@ -406,7 +408,10 @@ async fn invocation_api_reads_and_cancels_invocations(
     assert_eq!(
         error_code(
             client
-                .get_invocation(&env_id, &format!("{agent_text}.{}", Uuid::new_v4()))
+                .get_invocation(
+                    &env_id,
+                    &format!("{}.{}", agent_id.agent_id, Uuid::new_v4())
+                )
                 .await
         ),
         (404, error_code::INVOCATION_NOT_FOUND.to_string())
@@ -414,7 +419,7 @@ async fn invocation_api_reads_and_cancels_invocations(
     assert_eq!(
         error_code(
             client
-                .lookup_invocations(&env_id, &agent_text, None, "unused-key")
+                .lookup_invocations(&env_id, &agent_uuid, None, "unused-key")
                 .await
         ),
         (404, error_code::INVOCATION_NOT_FOUND.to_string())
@@ -441,7 +446,7 @@ async fn invocation_api_reads_and_cancels_invocations(
         403
     );
 
-    user.complete_promise(&promise, Vec::new()).await?;
+    user.complete_promise(&env.id, &promise, Vec::new()).await?;
     Ok(())
 }
 
@@ -455,12 +460,12 @@ async fn invoke_returns_invocation_headers_that_resolve(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
-    let (app, env) = user.app_and_env().await?;
+    let (_, env) = user.app_and_env().await?;
     let component = user
         .component(&env.id, "golem_it_agent_rpc_rust_release")
         .store()
         .await?;
-    let agent = agent_id!("RpcBlockingCounter", "headers \"a/b\" 雪");
+    let agent = agent_key!("RpcBlockingCounter", "headers \"a/b\" 雪");
     let agent_id = user.start_agent(&component.id, agent.clone()).await?;
 
     let worker_service = user.deps.worker_service();
@@ -470,16 +475,18 @@ async fn invoke_returns_invocation_headers_that_resolve(
         worker_service.http_port()
     );
     let http = worker_service.base_http_client().await;
-    let request = invocation_request(
-        app.name.0.clone(),
-        env.name.0.clone(),
-        &agent,
-        "inc_by",
-        data_value!(3u64),
-        AgentInvocationMode::Await,
-    )?;
+    let request = serde_json::json!({
+        "agentId": agent_id.agent_id,
+        "method": "inc_by",
+        "methodParameters": ExternalSchemaValue::try_from(data_value!(3u64).into_parts().1)
+            .map_err(anyhow::Error::msg)?,
+        "mode": "await",
+    });
     let response = http
-        .post(format!("{base}/v1/agents/invoke-agent"))
+        .post(format!(
+            "{base}/v1/runtime/envs/{}/agent-types/{}/invoke",
+            env.id.0, agent.agent_type.0
+        ))
         .bearer_auth(user.token.secret())
         .json(&request)
         .send()
@@ -493,14 +500,13 @@ async fn invoke_returns_invocation_headers_that_resolve(
             .to_str()?
             .to_string())
     };
-    let encoded_id = header("Golem-Invocation-Id")?;
+    let invocation_id = header("Golem-Invocation-Id")?;
     assert_eq!(header("Golem-Environment-Id")?, env.id.0.to_string());
-    let invocation_id = urlencoding::decode(&encoded_id)?.into_owned();
-    assert!(invocation_id.starts_with(&format!("{agent_id}.")));
+    assert!(invocation_id.starts_with(&format!("{}.", agent_id.agent_id)));
 
     let got = http
         .get(format!(
-            "{base}/v1/runtime/envs/{}/invocations/{encoded_id}",
+            "{base}/v1/runtime/envs/{}/invocations/{invocation_id}",
             env.id.0
         ))
         .bearer_auth(user.token.secret())
@@ -513,9 +519,9 @@ async fn invoke_returns_invocation_headers_that_resolve(
 
     let removed = http
         .delete(format!(
-            "{base}/v1/components/{}/workers/{}/invocations/{}",
-            component.id.0,
-            urlencoding::encode(&agent_id.agent_id),
+            "{base}/v1/runtime/envs/{}/agents/{}/invocations/{}",
+            env.id.0,
+            agent_id.agent_id,
             Uuid::new_v4()
         ))
         .bearer_auth(user.token.secret())
@@ -527,31 +533,4 @@ async fn invoke_returns_invocation_headers_that_resolve(
         removed.status()
     );
     Ok(())
-}
-
-fn invocation_request(
-    app_name: String,
-    env_name: String,
-    agent: &ParsedAgentKey,
-    method_name: &str,
-    params: TypedSchemaValue,
-    mode: AgentInvocationMode,
-) -> anyhow::Result<AgentInvocationRequest> {
-    Ok(AgentInvocationRequest {
-        app_name,
-        env_name,
-        agent_type_name: agent.agent_type.0.clone(),
-        parameters: ExternalSchemaValue::try_from(agent.parameters.value().clone())
-            .map_err(anyhow::Error::msg)?,
-        phantom_id: agent.phantom_id,
-        config: None,
-        method_name: method_name.to_string(),
-        method_parameters: ExternalSchemaValue::try_from(params.into_parts().1)
-            .map_err(anyhow::Error::msg)?,
-        mode,
-        schedule_at: None,
-        idempotency_key: None,
-        deployment_revision: None,
-        owner_account_email: None,
-    })
 }

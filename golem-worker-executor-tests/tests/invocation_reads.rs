@@ -21,9 +21,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     InvocationKind, InvocationLifecycleState, InvocationSummary, ListInvocationsRequest,
 };
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AgentInvocation, IdempotencyKey, InvocationId, OwnedAgentId};
-use golem_common::{agent_id, data_value};
+use golem_common::model::{AgentInvocation, IdempotencyKey, InvocationId};
+use golem_common::{agent_key, data_value};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -65,12 +66,12 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let server = agent_id!("ScheduledInvocationServer", "invocation-reads");
+    let server = agent_key!("ScheduledInvocationServer", "invocation-reads");
     let target = executor.start_agent(&component.id, server.clone()).await?;
     let owner = executor
         .start_agent(
             &component.id,
-            agent_id!("ScheduledInvocationClient", "invocation-reads-owner"),
+            agent_key!("ScheduledInvocationClient", "invocation-reads-owner"),
         )
         .await?;
     let env = component.environment_id;
@@ -79,13 +80,16 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
         method_name: "inc_global_by".to_string(),
         input: data_value!(1u64).into_parts().1,
         invocation_context: InvocationContextStack::fresh(),
-        caller: callers::agent(owner.clone()),
+        caller: callers::agent(
+            owner.agent_id,
+            AgentTypeName("ScheduledInvocationClient".to_string()),
+        ),
         scope_card: None,
     };
     executor
         .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
         .await?;
-    let owned = OwnedAgentId::new(env, &target);
+    let owned = target.clone();
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let due = Utc::now() + chrono::Duration::hours(1);
 
@@ -95,7 +99,7 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
         .await?;
     assert!(
         worker
-            .cancel_scheduled_invocation(cancelled, receipt, &owner)
+            .cancel_scheduled_invocation(cancelled, receipt, &owner.agent_id)
             .await?
     );
     let scheduled = InvocationId(uuid::Uuid::new_v4());
@@ -106,7 +110,7 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
 
     // Get names the state, kind and operation; an unknown ID is no invocation, not an error.
     let got = executor
-        .get_invocation(&target, env, scheduled)
+        .get_invocation(&target.agent_id, env, scheduled)
         .await?
         .map_err(|error| anyhow::anyhow!("{error:?}"))?
         .expect("the scheduled invocation");
@@ -114,7 +118,7 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
     assert_eq!(got.kind, InvocationKind::Method as i32);
     assert_eq!(got.operation.as_deref(), Some("inc_global_by"));
     let cancelled_got = executor
-        .get_invocation(&target, env, cancelled)
+        .get_invocation(&target.agent_id, env, cancelled)
         .await?
         .map_err(|error| anyhow::anyhow!("{error:?}"))?
         .expect("the cancelled invocation");
@@ -124,7 +128,7 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
     );
     assert_eq!(
         executor
-            .get_invocation(&target, env, InvocationId(uuid::Uuid::new_v4()))
+            .get_invocation(&target.agent_id, env, InvocationId(uuid::Uuid::new_v4()))
             .await?
             .map_err(|error| anyhow::anyhow!("{error:?}"))?,
         None
@@ -133,7 +137,7 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
     // The whole list: the constructor run, the awaited call, the cancelled and the scheduled one.
     let all = executor
         .list_invocations(
-            &target,
+            &target.agent_id,
             env,
             ListInvocationsRequest {
                 page_size: 100,
@@ -161,7 +165,7 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
     loop {
         let page = executor
             .list_invocations(
-                &target,
+                &target.agent_id,
                 env,
                 ListInvocationsRequest {
                     page_size: 2,
@@ -183,7 +187,7 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
     // Filters by state and kind.
     let methods_in_flight = executor
         .list_invocations(
-            &target,
+            &target.agent_id,
             env,
             ListInvocationsRequest {
                 page_size: 100,
@@ -209,7 +213,7 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
     // A cursor of another agent, and a malformed one, are invalid requests.
     let first_page = executor
         .list_invocations(
-            &target,
+            &target.agent_id,
             env,
             ListInvocationsRequest {
                 page_size: 1,
@@ -227,7 +231,7 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
     ] {
         let refused = executor
             .list_invocations(
-                &owner,
+                &owner.agent_id,
                 env,
                 ListInvocationsRequest {
                     page_size: 1,
@@ -245,7 +249,9 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
 
     // A deleted agent has no invocations to read.
     executor.delete_worker(&target).await?;
-    let gone = executor.get_invocation(&target, env, scheduled).await?;
+    let gone = executor
+        .get_invocation(&target.agent_id, env, scheduled)
+        .await?;
     assert!(format!("{gone:?}").contains("AgentNotFound"), "{gone:?}");
     Ok(())
 }
@@ -265,7 +271,7 @@ async fn invocations_are_looked_up_by_the_callers_key(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let server = agent_id!("ScheduledInvocationServer", "invocation-lookup");
+    let server = agent_key!("ScheduledInvocationServer", "invocation-lookup");
     let target = executor.start_agent(&component.id, server.clone()).await?;
     let env = component.environment_id;
 
@@ -301,7 +307,7 @@ async fn invocations_are_looked_up_by_the_callers_key(
         operations
     };
     let found = executor
-        .lookup_invocations(&target, env, &key, None)
+        .lookup_invocations(&target.agent_id, env, &key, None)
         .await?
         .map_err(|error| anyhow::anyhow!("{error:?}"))?;
     assert_eq!(
@@ -309,20 +315,20 @@ async fn invocations_are_looked_up_by_the_callers_key(
         vec!["get_global_value", "inc_global_by"]
     );
     let narrowed = executor
-        .lookup_invocations(&target, env, &key, Some("inc_global_by"))
+        .lookup_invocations(&target.agent_id, env, &key, Some("inc_global_by"))
         .await?
         .map_err(|error| anyhow::anyhow!("{error:?}"))?;
     assert_eq!(operations(&narrowed), vec!["inc_global_by"]);
     // Each found invocation is the one get reads by its ID.
     let by_id = executor
-        .get_invocation(&target, env, id_of(&narrowed[0]))
+        .get_invocation(&target.agent_id, env, id_of(&narrowed[0]))
         .await?
         .map_err(|error| anyhow::anyhow!("{error:?}"))?;
     assert_eq!(by_id.as_ref(), Some(&narrowed[0]));
     // A key nobody used finds nothing.
     assert_eq!(
         executor
-            .lookup_invocations(&target, env, &IdempotencyKey::fresh(), None)
+            .lookup_invocations(&target.agent_id, env, &IdempotencyKey::fresh(), None)
             .await?
             .map_err(|error| anyhow::anyhow!("{error:?}"))?,
         Vec::new()
@@ -336,7 +342,7 @@ async fn invocations_are_looked_up_by_the_callers_key(
     for caller in [AuthCtx::User(other), AuthCtx::System] {
         let found = executor
             .as_caller(caller.clone())
-            .lookup_invocations(&target, env, &key, None)
+            .lookup_invocations(&target.agent_id, env, &key, None)
             .await?
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert_eq!(found, Vec::new(), "{caller:?}");
@@ -347,7 +353,7 @@ async fn invocations_are_looked_up_by_the_callers_key(
     executor.start_agent(&component.id, server.clone()).await?;
     assert_eq!(
         executor
-            .lookup_invocations(&target, env, &key, None)
+            .lookup_invocations(&target.agent_id, env, &key, None)
             .await?
             .map_err(|error| anyhow::anyhow!("{error:?}"))?,
         Vec::new()
@@ -382,7 +388,7 @@ async fn a_finished_ephemeral_invocation_is_listed_after_its_instance_is_gone(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let ephemeral = agent_id!("ScheduledEphemeralTarget", "invocation-reads-ephemeral");
+    let ephemeral = agent_key!("ScheduledEphemeralTarget", "invocation-reads-ephemeral");
     let key = IdempotencyKey::fresh();
     let result = executor
         .invoke_and_await_agent_with_key(&component, &ephemeral, &key, "inc", data_value!(0u64))
@@ -392,7 +398,7 @@ async fn a_finished_ephemeral_invocation_is_listed_after_its_instance_is_gone(
 
     let listed = executor
         .list_invocations(
-            &agent,
+            &agent.agent_id,
             env,
             ListInvocationsRequest {
                 page_size: 100,
@@ -409,7 +415,7 @@ async fn a_finished_ephemeral_invocation_is_listed_after_its_instance_is_gone(
     assert_eq!(state_of(inc), InvocationLifecycleState::Completed);
     assert_eq!(inc.operation.as_deref(), Some("inc"));
     let found = executor
-        .lookup_invocations(&agent, env, &key, None)
+        .lookup_invocations(&agent.agent_id, env, &key, None)
         .await?
         .map_err(|error| anyhow::anyhow!("{error:?}"))?;
     assert_eq!(found, vec![inc.clone()]);

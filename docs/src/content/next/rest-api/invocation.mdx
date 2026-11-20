@@ -14,7 +14,7 @@ Newest change first, with the invocation ID as tie-breaker. Pass `nextCursor` of
 
 Name|Type|Required|Description
 ---|---|---|---
-agent|string|Yes|The agent, as `<component UUID>/<agent name>`
+agent|string|Yes|The agent ID
 operation|string|No|Only invocations of this method name or `tool:<tool>/<command path>`
 state|array|No|Only invocations in one of these states
 kind|#/components/schemas/InvocationKind|No|-
@@ -30,10 +30,7 @@ cursor|string|No|-
   "invocations": [
     {
       "invocationId": "string",
-      "agentId": {
-        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-        "agentId": "string"
-      },
+      "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
       "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
       "state": "scheduled",
       "kind": "method",
@@ -62,7 +59,7 @@ route, find nothing. No match is `404`.
 
 Name|Type|Required|Description
 ---|---|---|---
-agent|string|Yes|The agent, as `<component UUID>/<agent name>`
+agent|string|Yes|The agent ID
 operation|string|No|Only the invocation of this method name or `tool:<tool>/<command path>`
 
 **Example Response JSON**
@@ -72,10 +69,7 @@ operation|string|No|Only the invocation of this method name or `tool:<tool>/<com
   "invocations": [
     {
       "invocationId": "string",
-      "agentId": {
-        "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-        "agentId": "string"
-      },
+      "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
       "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
       "state": "scheduled",
       "kind": "method",
@@ -99,10 +93,7 @@ Path|Method|Protected
 {
   "summary": {
     "invocationId": "string",
-    "agentId": {
-      "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-      "agentId": "string"
-    },
+    "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
     "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
     "state": "scheduled",
     "kind": "method",
@@ -184,10 +175,7 @@ with the code `CANNOT_CANCEL_RUNNING_INVOCATION`.
 ```json copy
 {
   "invocationId": "string",
-  "agentId": {
-    "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
-    "agentId": "string"
-  },
+  "agentId": "bc309ecf-5f66-4057-93c5-6611cc9cb7b2",
   "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
   "state": "scheduled",
   "kind": "method",

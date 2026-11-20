@@ -265,15 +265,15 @@ async fn pending_input(
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("Networking", "p2-native-input-seed"),
+            agent_key!("Networking", "p2-native-input-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -298,25 +298,21 @@ async fn pending_input(
     let baseline_updates = registry.applied_updates().len();
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("Networking", "monthly-p2-native-input")
+        agent_key!("Networking", "monthly-p2-native-input")
     } else {
-        agent_id!("EphemeralNetworking", "monthly-p2-native-input")
+        agent_key!("EphemeralNetworking", "monthly-p2-native-input")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                operation.method(),
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        operation.method(),
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -325,6 +321,15 @@ async fn pending_input(
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            operation.method(),
+        ),
     )
     .await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -355,7 +360,7 @@ async fn pending_input(
         let (entries, connect_start) = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 if let Ok(start) = completed_setup(&entries) {
                     break Ok::<_, anyhow::Error>((entries, start));
                 }
@@ -449,7 +454,7 @@ async fn pending_input(
         .await??;
         tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
         if refresh.is_some() { join_request(&mut refresh, "stop refresh").await?; }
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         if let Some(prefix) = &prefix {
             let last = *prefix.last_key_value().unwrap().0;
             ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "stop changed the complete committed prefix");
@@ -542,7 +547,7 @@ async fn pending_input(
             registry.set_policy(grant.clone());
             start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
             join_request(&mut refresh, "policy refresh").await?;
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             let (mut resumed_peer, _) =
                 tokio::time::timeout(Duration::from_secs(10), listener.accept())
                     .await
@@ -556,7 +561,7 @@ async fn pending_input(
             }
             let resumed = join_request(&mut invocation, "invocation result").await??;
             operation.assert_result(resumed)?;
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             if let Some(prefix) = &prefix {
                 let last = *prefix.last_key_value().unwrap().0;
                 ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "reconstruction changed the complete committed prefix");
@@ -580,7 +585,7 @@ async fn pending_input(
             operation.assert_result(cached)?;
             ensure!(
                 count_agent_invocation_pair_since(
-                    &executor.get_oplog(&id, OplogIndex::INITIAL).await?,
+                    &executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
                     OplogIndex::INITIAL,
                 ) == (2, 2)
             );
@@ -610,7 +615,7 @@ async fn pending_input(
             }).await??;
             operation.assert_result(fresh)?;
             ensure!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err(), "exactly three native connections expected");
-            let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
             assert_settled_history(&history)?;
             connections += 1;
@@ -644,7 +649,7 @@ async fn pending_input(
                     .is_err(),
                 "terminal ephemeral splice must not reconnect"
             );
-            let probe_name = agent_id!("EphemeralNetworking", "monthly-p2-splice-probe");
+            let probe_name = agent_key!("EphemeralNetworking", "monthly-p2-splice-probe");
             let probe_key = IdempotencyKey::fresh();
             let probe = executor.invoke_and_await_agent_with_key(
                 &component,

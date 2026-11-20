@@ -42,6 +42,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
 use golem_common::model::plugin_registration::PluginRegistrationId;
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{
     AgentId, AgentInvocation, AgentMetadata, AgentStatusRecord, InvocationId, InvocationStatus,
     OwnedAgentId, ScanCursor, ShardId,
@@ -253,17 +254,16 @@ struct ForwardingOplogState {
 const OPLOG_PROC_NS: Uuid = uuid!("A7E3F1B2-8C4D-5E6F-9A0B-1C2D3E4F5A6B");
 
 fn oplog_processor_idempotency_key(
+    environment_id: EnvironmentId,
     source_agent_id: &AgentId,
     plugin_installation_id: &EnvironmentPluginGrantId,
     batch_first_index: OplogIndex,
     batch_last_index: OplogIndex,
 ) -> InvocationId {
     let mut buf = Vec::with_capacity(128);
-    buf.extend_from_slice(b"oplog-proc-v1\0");
-    buf.extend_from_slice(source_agent_id.component_id.0.as_bytes());
-    let worker_name = source_agent_id.agent_id.as_bytes();
-    buf.extend_from_slice(&(worker_name.len() as u32).to_be_bytes());
-    buf.extend_from_slice(worker_name);
+    buf.extend_from_slice(b"oplog-proc-v2\0");
+    buf.extend_from_slice(environment_id.0.as_bytes());
+    buf.extend_from_slice(source_agent_id.as_uuid().as_bytes());
     buf.extend_from_slice(plugin_installation_id.0.as_bytes());
     buf.extend_from_slice(&batch_first_index.as_u64().to_be_bytes());
     buf.extend_from_slice(&batch_last_index.as_u64().to_be_bytes());

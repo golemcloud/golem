@@ -20,7 +20,6 @@ use super::{
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::caller::GolemSubject;
-use crate::base_model::component::ComponentId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
 use crate::base_model::{AgentFingerprint, AgentId};
@@ -65,10 +64,7 @@ impl Workload {
             "agent" => Workload::Agent(AgentPrincipal {
                 issuer,
                 agent_id: uuid(input, "agentId"),
-                address: AgentId {
-                    component_id: ComponentId(Uuid::from_u128(0x6b1f0c2d)),
-                    agent_id: "Analyst(\"a\")".to_string(),
-                },
+                address: AgentId(uuid(input, "agentId")),
                 fingerprint: AgentFingerprint(uuid(input, "fingerprint")),
                 agent_type: AgentTypeName(text(input, "agentType").to_string()),
                 environment_id,
@@ -254,10 +250,7 @@ fn make_agent(agent_type: &str) -> AgentPrincipal {
     AgentPrincipal {
         issuer: "https://golem.example".to_string(),
         agent_id: Uuid::parse_str("abcdef12-3456-4789-abcd-ef0123456789").unwrap(),
-        address: AgentId {
-            component_id: ComponentId(Uuid::from_u128(0x6b1f0c2d)),
-            agent_id: "Analyst(\"a\")".to_string(),
-        },
+        address: AgentId(Uuid::parse_str("abcdef12-3456-4789-abcd-ef0123456789").unwrap()),
         fingerprint: AgentFingerprint(
             Uuid::parse_str("11111111-2222-4333-8444-555555555555").unwrap(),
         ),

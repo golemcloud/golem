@@ -128,7 +128,7 @@ struct CurrentComponent {
     fetched_at: Instant,
 }
 
-const MAX_CURRENT_LOOKUP_ATTEMPTS: usize = 3;
+const CURRENT_LOOKUP_RETRY_WINDOW: Duration = Duration::from_secs(30);
 
 impl RemoteComponentService {
     pub fn new(client: Arc<dyn RegistryService>, config: &ComponentServiceConfig) -> Self {
@@ -200,7 +200,11 @@ impl ComponentService for RemoteComponentService {
         &self,
         component_id: ComponentId,
     ) -> Result<Component, ComponentServiceError> {
-        for _ in 0..MAX_CURRENT_LOOKUP_ATTEMPTS {
+        // Invalidations are global, so unrelated deployments can invalidate several reads
+        // in a row. Bound retries by elapsed time, not by the number of deployments.
+        let retry_deadline = Instant::now() + CURRENT_LOOKUP_RETRY_WINDOW;
+        while Instant::now() < retry_deadline {
+            tokio::task::yield_now().await;
             let generation = self.generation.load(Ordering::SeqCst);
             let client = self.client.clone();
             let key = (component_id, generation);

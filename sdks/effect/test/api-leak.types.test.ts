@@ -51,17 +51,34 @@ const ClientProbe = defineAgent({
 })
 
 {
-  const _get: Effect.Effect<
-    ReturnType<typeof ClientProbe.client.get> extends Effect.Effect<infer A, any, any> ? A : never,
+  type Success<T> = T extends Effect.Effect<infer A, any, any> ? A : never
+  const _upsert: Effect.Effect<
+    Success<ReturnType<typeof ClientProbe.client.upsert>>,
+    | import("../src/Client.js").RemoteCallError
+    | import("../src/WitCodec.js").UnsupportedSchemaError,
+    RpcClient | import("effect").Scope.Scope
+  > = ClientProbe.client.upsert({})
+  void _upsert
+  const _create: Effect.Effect<
+    Success<ReturnType<typeof ClientProbe.client.create>>,
     | import("../src/Client.js").RemoteCallError
     | import("../src/WitCodec.js").UnsupportedSchemaError
     | import("../src/Config.js").ConfigError,
     RpcClient | import("effect").Scope.Scope
-  > = ClientProbe.client.get({})
-  void _get
+  > = ClientProbe.client.create({}, { keyed: true, env: { MODE: "test" } })
+  void _create
+  const _agentId: Effect.Effect<
+    import("../src/AgentId.js").AgentId,
+    import("../src/Client.js").RemoteCallError
+  > = undefined as unknown as Success<ReturnType<typeof ClientProbe.client.upsert>>["agentId"]
+  void _agentId
 
   // @ts-expect-error raw config values bypass declaration validation and are not public input
-  ClientProbe.client.get({}, { agentConfig: [] })
+  ClientProbe.client.create({}, { agentConfig: [] })
+  // @ts-expect-error upsert takes no config overrides
+  ClientProbe.client.upsert({}, { config: {} })
+  // @ts-expect-error getById takes a typed agent ID, not its text form
+  ClientProbe.client.getById("00000000-0000-8000-8000-000000000000")
 }
 
 /**
@@ -171,11 +188,6 @@ type AssertEqual<X, Y> =
     Permissions.PermissionsHostError,
     PermissionsClient | import("effect").Scope.Scope
   > = Permissions.walletScoped
-  const _holder: Effect.Effect<
-    Permissions.Holder,
-    Permissions.PermissionsHostError,
-    AgentHostClient
-  > = Permissions.agentHolder(undefined as never)
   const _validate: Effect.Effect<void, Failure, PermissionsClient> = Permissions.validateGrant({
     class: "kv",
     owner: "?env",
@@ -249,7 +261,6 @@ type AssertEqual<X, Y> =
     _install,
     _wallet,
     _walletScoped,
-    _holder,
     _validate,
     _sameCard,
   ]
@@ -322,14 +333,14 @@ type AssertEqual<X, Y> =
       WitTypes.PermissionCard
     void _templateInConcreteSchema
     // @ts-expect-error a template card cannot be a client's default scope card
-    void ClientProbe.client.get({}, { scopeCard: template })
+    void ClientProbe.client.upsert({}, { scopeCard: template })
   }
   void _negative
 
   const _remote = Effect.gen(function* () {
-    const client = yield* ClientProbe.client.get({}, { scopeCard: scope })
+    const client = yield* ClientProbe.client.upsert({}, { scopeCard: scope })
     // @ts-expect-error a persistent card cannot be a client's default scope card
-    yield* ClientProbe.client.get({}, { scopeCard: card })
+    yield* ClientProbe.client.upsert({}, { scopeCard: card })
     // @ts-expect-error a persistent card cannot be a per-call scope card
     void client.ping.withScopeCard(card)
     void client.ping.withScopeCard(scope)

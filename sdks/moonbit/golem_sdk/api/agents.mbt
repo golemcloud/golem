@@ -6,7 +6,7 @@ pub using @raw {
   type RevertAgentTarget,
   type FilterComparator,
   type StringFilterComparator,
-  type AgentNameFilter,
+  type AgentKeyFilter,
   type AgentStatusFilter,
   type AgentVersionFilter,
   type AgentCreatedAtFilter,
@@ -34,41 +34,20 @@ pub fn resolve_component_id(
 }
 
 ///|
-/// Get the agent-id for a given component and agent name.
-/// Returns None when no component for the specified reference exists.
-pub fn resolve_agent_id(
-  component_reference : String,
-  agent_name : String,
-) -> @types.AgentId? {
-  @raw.resolve_agent_id(component_reference, agent_name)
-}
-
-///|
-/// Get the agent-id for a given component and agent name.
-/// Returns None when no component for the specified component-reference or
-/// no agent with the specified agent-name exists.
-pub fn resolve_agent_id_strict(
-  component_reference : String,
-  agent_name : String,
-) -> @types.AgentId? {
-  @raw.resolve_agent_id_strict(component_reference, agent_name)
-}
-
-///|
 /// Get the current agent's metadata.
 /// Requires self-view in the effective permission card, within the initialCard
 /// upper bound. Do not call during pure initialization. Stored environment and
 /// configuration fields are returned in full, without per-key WASI filtering.
-/// Snapshot restoration instead reads GOLEM_AGENT_ID through WASI and
-/// requires separate environment-read permission.
+/// Snapshot restoration instead reads GOLEM_AGENT_ID and GOLEM_AGENT_TYPE
+/// through WASI and requires separate environment-read permission.
 pub fn get_self_metadata() -> AgentMetadata {
   @raw.get_self_metadata().unwrap()
 }
 
 ///|
 /// Get agent metadata for a specific agent.
-pub fn get_agent_metadata(agent_id : @types.AgentId) -> AgentMetadata? {
-  @raw.get_agent_metadata(agent_id)
+pub fn get_agent_metadata(agent_id : @schema.AgentId) -> AgentMetadata? {
+  @raw.get_agent_metadata(agent_id.to_wit())
 }
 
 ///|
@@ -76,35 +55,39 @@ pub fn get_agent_metadata(agent_id : @types.AgentId) -> AgentMetadata? {
 /// once the request has been processed, not waiting for the agent to
 /// get updated.
 pub fn update_agent(
-  agent_id : @types.AgentId,
+  agent_id : @schema.AgentId,
   target_revision : UInt64,
   mode : UpdateMode,
 ) -> Unit {
-  @raw.update_agent(agent_id, target_revision, mode).unwrap()
+  @raw.update_agent(agent_id.to_wit(), target_revision, mode).unwrap()
 }
 
 ///|
-/// Fork an agent to another agent at a given oplog index.
+/// Forks an agent at a given oplog index into a new agent of the same type,
+/// and returns the ID that Golem issued for the new agent. The new agent has
+/// no key.
 pub fn fork_agent(
-  source_agent_id : @types.AgentId,
-  target_agent_id : @types.AgentId,
+  source_agent_id : @schema.AgentId,
   oplog_idx_cut_off : UInt64,
-) -> Unit {
-  @raw.fork_agent(source_agent_id, target_agent_id, oplog_idx_cut_off).unwrap()
+) -> @schema.AgentId {
+  @schema.AgentId::from_wit(
+    @raw.fork_agent(source_agent_id.to_wit(), oplog_idx_cut_off).unwrap(),
+  )
 }
 
 ///|
 /// Revert an agent to a previous state.
 pub fn revert_agent(
-  agent_id : @types.AgentId,
+  agent_id : @schema.AgentId,
   revert_target : RevertAgentTarget,
 ) -> Unit {
-  @raw.revert_agent(agent_id, revert_target).unwrap()
+  @raw.revert_agent(agent_id.to_wit(), revert_target).unwrap()
 }
 
 ///|
-/// Forks the current agent at the current execution point. The new agent
-/// gets the same base agent ID but with a new unique phantom ID.
+/// Forks the current agent at the current execution point. The new agent has
+/// the same type, a new ID that Golem issues and no key. Both sides receive
+/// the ID of the forked agent in the `ForkResult`.
 pub fn fork() -> ForkResult {
   @raw.fork().unwrap()
 }
@@ -117,16 +100,16 @@ pub(all) struct AgentsPager {
 }
 
 ///|
-/// Creates an agent enumeration request. Enumerates all agents of all types
-/// defined in the given component, filtered by the optional conditions.
-/// If `precise` is true, the server will calculate the most recent state
-/// of all returned agents.
+/// Creates an agent enumeration request. Enumerates the agents of the given
+/// agent type in the current environment, filtered by the optional
+/// conditions. If `precise` is true, the server will calculate the most recent
+/// state of all returned agents.
 pub fn get_agents(
-  component_id : @types.ComponentId,
+  agent_type_name : String,
   filter : AgentAnyFilter?,
   precise : Bool,
 ) -> AgentsPager {
-  { inner: @raw.GetAgents::get_agents(component_id, filter, precise), }
+  { inner: @raw.GetAgents::get_agents(agent_type_name, filter, precise), }
 }
 
 ///|

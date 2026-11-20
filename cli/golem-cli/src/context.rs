@@ -833,7 +833,7 @@ impl Context {
     ) -> anyhow::Result<tokio::sync::RwLockWriteGuard<'_, ApplicationContextState>> {
         let mut state = self.app_context_state.write().await;
         state
-            .init(&self.app_context_config, &self.file_download_client)
+            .init(&self.app_context_config, &self.config_dir)
             .await?;
         Ok(state)
     }
@@ -1088,7 +1088,7 @@ impl ApplicationContextState {
     async fn init(
         &mut self,
         config: &Option<ApplicationContextConfig>,
-        file_download_client: &reqwest::Client,
+        config_dir: &Path,
     ) -> anyhow::Result<()> {
         if self.app_context.is_some() {
             return Ok(());
@@ -1123,7 +1123,7 @@ impl ApplicationContextState {
                 config.local_server.clone(),
                 config.component_presets.clone(),
                 config.builtin_local_url.clone(),
-                file_download_client.clone(),
+                config_dir,
             )
             .await
             .map_err(Arc::new),

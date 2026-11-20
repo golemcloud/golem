@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::agent_webhooks::AgentWebhooksService;
-use super::direct_invocation_auth::DirectInvocationAuthService;
+use super::direct_invocation_auth::{DirectInvocationAuthService, EnvironmentOwnerAccountId};
 use super::environment_state::EnvironmentStateService;
 use super::external_durable_stream::ExternalDurableStreamService;
 use super::file_loader::FileLoader;
@@ -43,6 +43,7 @@ use crate::services::{
     worker_enumeration, worker_fork,
 };
 use crate::worker::invocation::validate_agent_method_invocation;
+use crate::worker::target::ResolvedTarget;
 use crate::worker::{CreateIntent, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -60,13 +61,11 @@ use golem_common::base_model::durable_stream::{
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{
-    AgentError as ModelAgentError, AgentInvocationMode, AgentTarget,
-    InvocationFreshnessDisposition, ParsedAgentKey,
+    AgentError as ModelAgentError, AgentInvocationMode, InvocationFreshnessDisposition,
 };
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, ScopeCard};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::{
@@ -140,10 +139,12 @@ pub trait Rpc: Send + Sync {
     ) -> Result<golem_common::model::ScheduleId, RpcError>;
 
     /// Explicit creation observes the constructor outcome; preparation never starts execution.
+    /// An `exclusive` creation fails when the agent already exists, unless it is a retry of
+    /// the creation under the same `idempotency_key`; otherwise it joins the existing agent.
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
+        exclusive: bool,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -156,8 +157,7 @@ pub trait Rpc: Send + Sync {
 
     async fn create_demand(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -176,8 +176,7 @@ pub trait Rpc: Send + Sync {
     /// activation; ephemeral targets pass none.
     async fn invoke_and_await(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -195,8 +194,7 @@ pub trait Rpc: Send + Sync {
 
     async fn invoke_and_await_streaming(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
         _idempotency_key: IdempotencyKey,
         _method_name: String,
         _method_parameters: ProtoSchemaValue,
@@ -248,8 +246,7 @@ pub trait Rpc: Send + Sync {
     /// `expected_callee_fingerprint` has the same meaning as for [`Rpc::invoke_and_await`].
     async fn invoke(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -331,11 +328,26 @@ impl<E> DurableStreamRemoteError<E> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RpcError {
-    ProtocolError { details: String },
-    Denied { details: String },
-    NotFound { details: String },
-    RemoteInternalError { details: String },
-    RemoteAgentError { error: Box<ModelAgentError> },
+    ProtocolError {
+        details: String,
+    },
+    Denied {
+        details: String,
+    },
+    NotFound {
+        details: String,
+    },
+    RemoteInternalError {
+        details: String,
+    },
+    RemoteAgentError {
+        error: Box<ModelAgentError>,
+    },
+    /// A keyed create found an agent that already has the key, or the agent at the ID that a
+    /// key derives has another key.
+    Conflict {
+        details: String,
+    },
 }
 
 impl From<SerializableRpcError> for RpcError {
@@ -348,6 +360,7 @@ impl From<SerializableRpcError> for RpcError {
                 Self::RemoteInternalError { details }
             }
             SerializableRpcError::RemoteAgentError { error } => Self::RemoteAgentError { error },
+            SerializableRpcError::Conflict { details } => Self::Conflict { details },
         }
     }
 }
@@ -364,6 +377,7 @@ impl From<RpcError> for SerializableRpcError {
             RpcError::RemoteAgentError { error } => {
                 SerializableRpcError::RemoteAgentError { error }
             }
+            RpcError::Conflict { details } => SerializableRpcError::Conflict { details },
         }
     }
 }
@@ -378,6 +392,7 @@ impl Display for RpcError {
                 write!(f, "Remote internal error: {details}")
             }
             RpcError::RemoteAgentError { error } => write!(f, "Remote agent error: {error}"),
+            RpcError::Conflict { details } => write!(f, "Conflict: {details}"),
         }
     }
 }
@@ -403,8 +418,11 @@ impl From<tonic::Status> for RpcError {
 impl From<WorkerExecutorError> for RpcError {
     fn from(value: WorkerExecutorError) -> Self {
         match value {
-            WorkerExecutorError::AgentAlreadyExists { agent_id } => RpcError::Denied {
-                details: format!("Worker {agent_id} already exists"),
+            WorkerExecutorError::AgentAlreadyExists { agent_id } => RpcError::Conflict {
+                details: format!("Agent {agent_id} already exists"),
+            },
+            error @ WorkerExecutorError::AgentKeyCollision { .. } => RpcError::Conflict {
+                details: error.to_string(),
             },
             error @ WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => RpcError::Denied {
                 details: error.to_string(),
@@ -445,7 +463,7 @@ impl From<WorkerProxyError> for RpcError {
             WorkerProxyError::Unauthorized(error) => RpcError::Denied { details: error },
             WorkerProxyError::LimitExceeded(error) => RpcError::Denied { details: error },
             WorkerProxyError::NotFound(error) => RpcError::NotFound { details: error },
-            WorkerProxyError::AlreadyExists(error) => RpcError::Denied { details: error },
+            WorkerProxyError::AlreadyExists(error) => RpcError::Conflict { details: error },
             WorkerProxyError::InternalError(error) => error.into(),
         }
     }
@@ -459,6 +477,7 @@ impl From<crate::preview2::golem::agent::host::RpcError> for RpcError {
             WitRpcError::Denied(details) => Self::Denied { details },
             WitRpcError::NotFound(details) => Self::NotFound { details },
             WitRpcError::RemoteInternalError(details) => Self::RemoteInternalError { details },
+            WitRpcError::Conflict(details) => Self::Conflict { details },
             WitRpcError::RemoteAgentError(err) => {
                 match golem_common::schema::agent::wit::decode_agent_error(err) {
                     Ok(error) => Self::RemoteAgentError {
@@ -480,6 +499,7 @@ impl From<RpcError> for crate::preview2::golem::agent::host::RpcError {
             RpcError::Denied { details } => Self::Denied(details),
             RpcError::NotFound { details } => Self::NotFound(details),
             RpcError::RemoteInternalError { details } => Self::RemoteInternalError(details),
+            RpcError::Conflict { details } => Self::Conflict(details),
             RpcError::RemoteAgentError { error } => {
                 match golem_common::schema::agent::wit::encode_agent_error(&error) {
                     Ok(error) => Self::RemoteAgentError(error),

@@ -10,6 +10,20 @@ import {
 // Values
 pub async fn audit(@tool-middleware.RawToolInvocation, @tool-middleware.UnderlyingTool) -> Result[@tool-middleware.RawInvocationResult, @tool-middleware.ToolInvokeError[@tool-middleware.RawTypedSchemaValue]]
 
+pub fn cabi_realloc(Int32, Int32, Int32, Int32) -> Int32
+
+pub fn wasmExportAsyncInvokeToolMiddleware(Int32, Int32, Int32) -> Int32
+
+pub fn wasmExportDiscoverToolMiddlewares() -> Int32
+
+pub fn wasmExportDiscoverToolMiddlewaresPostReturn(Int32) -> Unit
+
+pub fn wasmExportGetToolMiddleware(Int32, Int32) -> Int32
+
+pub fn wasmExportGetToolMiddlewarePostReturn(Int32) -> Unit
+
+pub fn wasmExportInvokeToolMiddleware(Int32) -> Int32
+
 // Errors
 
 // Types and methods

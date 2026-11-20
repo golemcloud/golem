@@ -169,7 +169,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         "agent.list",
         arb_agent_list_result
     ),
-    registry_entry!("AgentCreateView", "agent.new", arb_agent_new_result),
+    registry_entry!("AgentCreateView", "agent.create", arb_agent_create_result),
     registry_entry!("AgentOplogEntryView", "agent.oplog", arb_agent_oplog_result),
     registry_entry!(
         "AgentOplogExportReportView",
@@ -219,6 +219,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         "agent.update",
         arb_agent_update_result
     ),
+    registry_entry!("AgentUpsertView", "agent.upsert", arb_agent_upsert_result),
     registry_entry!(
         "TokenDeleteView",
         "api-token.delete",
@@ -924,7 +925,6 @@ fn cli_output_schema_focus_rejects_unknown_type() {
 fn agent_list_structured_output_masks_secret_config_paths() {
     let output = crate::model::agent::AgentsMetadataResponseView {
         agents: vec![sample_agent_metadata_view()],
-        cursors: BTreeMap::new(),
         cursor: None,
     };
 
@@ -1069,6 +1069,7 @@ fn component_metadata_displays_tools_middlewares_and_files() {
         component_name: sample.component_name.clone(),
         hash: Default::default(),
         wasm_hash: Default::default(),
+        package_metadata: None,
         application_id: golem_common::model::application::ApplicationId(uuid::Uuid::nil()),
         account_id: golem_common::model::account::AccountId(uuid::Uuid::nil()),
         component_size: sample.component_size,
@@ -1250,7 +1251,12 @@ fn assert_no_plaintext(value: &Value, plaintexts: &[&str]) {
 fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
     crate::model::agent::AgentMetadataView {
         component_name: golem_common::model::component::ComponentName("component".to_string()),
-        agent_id: crate::model::agent::RawAgentId("agent()".to_string()),
+        agent_id: golem_common::model::AgentId::from_parts(7, 1),
+        agent_type: Some(golem_common::model::agent::AgentTypeName(
+            "Agent".to_string(),
+        )),
+        agent_key: Some("Agent()".to_string()),
+        fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
         created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
         environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
         env: BTreeMap::new().into_iter().collect(),
@@ -1576,6 +1582,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            package_metadata: None,
             agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
@@ -1593,6 +1600,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            package_metadata: None,
             agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
@@ -2466,6 +2474,17 @@ fn arb_uuid() -> BoxedStrategy<uuid::Uuid> {
     any::<u128>().prop_map(uuid::Uuid::from_u128).boxed()
 }
 
+fn arb_agent_id() -> BoxedStrategy<golem_common::model::AgentId> {
+    (any::<u32>(), any::<u128>())
+        .prop_map(|(type_tag, h)| golem_common::model::AgentId::from_parts(type_tag, h >> 38))
+        .boxed()
+}
+
+/// The agent ID with the generated UUID text.
+fn generated_agent_id(uuid: &str) -> golem_common::model::AgentId {
+    golem_common::model::AgentId(uuid::Uuid::parse_str(uuid).expect("generated UUID should parse"))
+}
+
 fn arb_small_u64() -> BoxedStrategy<u64> {
     (0u64..1000).boxed()
 }
@@ -2530,7 +2549,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
     use golem_common::base_model::retry_policy::{
         ApiImmediatePolicy, ApiPredicate, ApiPredicateTrue, ApiRetryPolicy,
     };
-    use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
+    use golem_common::model::component::{ComponentRevision, PluginPriority};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::invocation_context::{SpanId, TraceId};
@@ -2566,15 +2585,8 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }
     }
 
-    fn component_id() -> ComponentId {
-        ComponentId(Uuid::parse_str("13a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap())
-    }
-
-    fn agent_id(name: &str) -> AgentId {
-        AgentId {
-            component_id: component_id(),
-            agent_id: name.to_string(),
-        }
+    fn agent_id(h: u128) -> AgentId {
+        AgentId::from_parts(7, h)
     }
 
     fn plugin(priority: i32) -> PluginInstallationDescription {
@@ -2732,7 +2744,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::Create(CreateParams {
             timestamp: timestamp(),
-            agent_id: agent_id("generated-agent"),
+            agent_id: agent_id(1),
+            agent_type_name: Some(golem_common::model::agent::AgentTypeName(
+                "GeneratedAgent".to_string(),
+            )),
             owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             agent_mode: golem_common::model::agent::AgentMode::Durable,
             component_revision: ComponentRevision::new(1).unwrap(),
@@ -2743,13 +2758,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 value: typed_string_value("configured"),
             }],
             environment_id: EnvironmentId::new(),
-            parent: Some(agent_id("parent-agent")),
+            parent: Some(agent_id(2)),
             component_size: 10,
             initial_total_linear_memory_size: 20,
             initial_active_plugins: BTreeSet::from_iter([plugin(0)]),
-            original_phantom_id: Some(
-                Uuid::parse_str("23a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
-            ),
             instance_id: Uuid::parse_str("33a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
             never_live: true,
         }),
@@ -3101,7 +3113,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             plugin: plugin(4),
             source_component_revision: ComponentRevision::INITIAL,
-            target_agent_id: agent_id("target-agent"),
+            target_agent_id: agent_id(3),
             confirmed_up_to: OplogIndex::from_u64(20),
             sending_up_to: OplogIndex::from_u64(21),
             last_batch_start: OplogIndex::from_u64(19),
@@ -3899,16 +3911,12 @@ fn arb_tool_invoke_help_result() -> OutputDocumentStrategy {
 fn arb_tool_invoke_result() -> OutputDocumentStrategy {
     use golem_client::model::NativeToolInvocationResponse;
     use golem_common::model::AgentId;
-    use golem_common::model::component::ComponentId;
 
     any::<u128>()
         .prop_map(|key| {
             to_structured_output_value(crate::model::tool_invoke::ToolInvokeView {
                 response: NativeToolInvocationResponse {
-                    agent_id: AgentId {
-                        component_id: ComponentId(uuid::Uuid::nil()),
-                        agent_id: "agent".into(),
-                    },
+                    agent_id: AgentId::from_parts(7, 1).0,
                     idempotency_key: uuid::Uuid::from_u128(key),
                     result: None,
                     status: None,
@@ -3976,15 +3984,10 @@ fn arb_value_and_type() -> BoxedStrategy<golem_common::schema::TypedSchemaValue>
 fn arb_agent_list_result() -> OutputDocumentStrategy {
     (
         proptest::collection::vec(arb_agent_metadata_view(), 0..5),
-        proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..4),
         proptest::option::of(arb_small_string()),
     )
         .prop_map(
-            |(agents, cursors, cursor)| crate::model::agent::AgentsMetadataResponseView {
-                agents,
-                cursors,
-                cursor,
-            },
+            |(agents, cursor)| crate::model::agent::AgentsMetadataResponseView { agents, cursor },
         )
         .prop_map(|output| {
             to_structured_output_value(output).expect("generated DTO should serialize")
@@ -3992,13 +3995,42 @@ fn arb_agent_list_result() -> OutputDocumentStrategy {
         .boxed()
 }
 
-fn arb_agent_new_result() -> OutputDocumentStrategy {
-    serialized_output((arb_small_string(), arb_small_string()).prop_map(
-        |(component_name, agent_id)| crate::model::agent::AgentCreateView {
-            component_name: golem_common::model::component::ComponentName(component_name),
-            agent_id: crate::model::agent::RawAgentId(agent_id),
-        },
-    ))
+fn arb_agent_create_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            arb_small_string(),
+            arb_small_string(),
+            arb_agent_id(),
+            arb_uuid(),
+        )
+            .prop_map(|(component_name, agent_type, agent_id, fingerprint)| {
+                crate::model::agent::AgentCreateView {
+                    component_name: golem_common::model::component::ComponentName(component_name),
+                    agent_type: golem_common::model::agent::AgentTypeName(agent_type),
+                    agent_id,
+                    agent_fingerprint: golem_common::model::AgentFingerprint(fingerprint),
+                }
+            }),
+    )
+}
+
+fn arb_agent_upsert_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            arb_small_string(),
+            arb_small_string(),
+            arb_agent_id(),
+            arb_uuid(),
+        )
+            .prop_map(|(component_name, agent_type, agent_id, fingerprint)| {
+                crate::model::agent::AgentUpsertView {
+                    component_name: golem_common::model::component::ComponentName(component_name),
+                    agent_type: golem_common::model::agent::AgentTypeName(agent_type),
+                    agent_id,
+                    agent_fingerprint: golem_common::model::AgentFingerprint(fingerprint),
+                }
+            }),
+    )
 }
 
 fn arb_agent_oplog_result() -> OutputDocumentStrategy {
@@ -4054,12 +4086,10 @@ fn arb_agent_oplog_export_header() -> OutputDocumentStrategy {
             |(keep, filtered, name)| {
                 let key = oplog_export_key();
                 let ctx = ObfuscationContext::new(&key, keep);
-                let agent_id = golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(uuid!(
-                        "13a5c8d4-f05e-4e23-b982-f4d413e181cb"
-                    )),
-                    agent_id: format!("agent(\"{name}\")"),
-                };
+                let h = name
+                    .bytes()
+                    .fold(0u128, |h, b| (h << 8 | u128::from(b)) % (1 << 90));
+                let agent_id = golem_common::model::AgentId::from_parts(7, h);
                 crate::model::agent::oplog_export_view::AgentOplogExportHeaderView(
                     crate::oplog_export::model::OplogExportHeader {
                         obfuscate: true,
@@ -4512,7 +4542,7 @@ fn arb_agent_update_result() -> OutputDocumentStrategy {
 /// (`AgentUpdateMeta` / `AgentRedeploymentMeta`).
 type AgentTransitionFields = (
     golem_common::model::component::ComponentName,
-    crate::model::agent::RawAgentId,
+    golem_common::model::AgentId,
     golem_common::model::component::ComponentRevision,
     golem_common::model::component::ComponentRevision,
 );
@@ -4522,14 +4552,14 @@ type AgentTransitionFields = (
 fn arb_agent_transition_fields() -> BoxedStrategy<AgentTransitionFields> {
     (
         arb_small_string(),
-        arb_small_string(),
+        arb_agent_id(),
         arb_small_u64(),
         arb_small_u64(),
     )
         .prop_map(|(component_name, agent_id, from_revision, revision)| {
             (
                 golem_common::model::component::ComponentName(component_name),
-                crate::model::agent::RawAgentId(agent_id),
+                agent_id,
                 golem_common::model::component::ComponentRevision::new(from_revision)
                     .expect("generated revision should be valid"),
                 golem_common::model::component::ComponentRevision::new(revision)
@@ -4554,24 +4584,27 @@ fn arb_agent_update_meta() -> BoxedStrategy<crate::model::deploy::AgentUpdateMet
 
 fn arb_agent_redeployment_meta()
 -> BoxedStrategy<crate::model::agent::action_result::AgentRedeploymentMeta> {
-    arb_agent_transition_fields()
-        .prop_map(|(component_name, agent_id, from_revision, revision)| {
-            crate::model::agent::action_result::AgentRedeploymentMeta {
-                component_name,
-                agent_id,
-                from_revision,
-                revision,
-            }
-        })
+    (arb_agent_transition_fields(), arb_agent_id())
+        .prop_map(
+            |((component_name, agent_id, from_revision, revision), recreated_agent_id)| {
+                crate::model::agent::action_result::AgentRedeploymentMeta {
+                    component_name,
+                    agent_id,
+                    recreated_agent_id,
+                    from_revision,
+                    revision,
+                }
+            },
+        )
         .boxed()
 }
 
 fn arb_agent_action_error() -> BoxedStrategy<crate::model::agent::AgentActionError> {
-    (arb_small_string(), arb_small_string(), arb_small_string())
+    (arb_small_string(), arb_agent_id(), arb_small_string())
         .prop_map(
             |(component_name, agent_id, error)| crate::model::agent::AgentActionError {
                 component_name: golem_common::model::component::ComponentName(component_name),
-                agent_id: crate::model::agent::RawAgentId(agent_id),
+                agent_id,
                 error,
             },
         )
@@ -4580,11 +4613,11 @@ fn arb_agent_action_error() -> BoxedStrategy<crate::model::agent::AgentActionErr
 
 fn arb_agent_deletion_meta() -> BoxedStrategy<crate::model::agent::action_result::AgentDeletionMeta>
 {
-    (arb_small_string(), arb_small_string())
+    (arb_small_string(), arb_agent_id())
         .prop_map(|(component_name, agent_id)| {
             crate::model::agent::action_result::AgentDeletionMeta {
                 component_name: golem_common::model::component::ComponentName(component_name),
-                agent_id: crate::model::agent::RawAgentId(agent_id),
+                agent_id,
             }
         })
         .boxed()
@@ -4652,7 +4685,15 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
 
             crate::model::agent::AgentMetadataView {
                 component_name: golem_common::model::component::ComponentName(component_name),
-                agent_id: crate::model::agent::RawAgentId(agent_id),
+                agent_id: generated_agent_id(&agent_id),
+                agent_type: Some(golem_common::model::agent::AgentTypeName(
+                    "GeneratedAgent".to_string(),
+                )),
+                agent_key: (component_revision % 2 == 0)
+                    .then(|| format!("GeneratedAgent(\"{agent_id}\")")),
+                fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::from_u128(
+                    u128::from(retry_count),
+                )),
                 created_by: golem_common::model::account::AccountId(
                     uuid::Uuid::parse_str(&created_by).expect("generated UUID should parse"),
                 ),
@@ -4807,7 +4848,7 @@ fn arb_agent_delete_result() -> OutputDocumentStrategy {
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, agent)| {
             crate::model::agent::action_result::AgentDeleteView {
                 deleted,
-                agent_id: agent,
+                agent_id: generated_agent_id(&agent),
             }
         }),
     )
@@ -4825,7 +4866,7 @@ fn arb_agent_file_contents_result() -> OutputDocumentStrategy {
             .prop_map(|(saved, agent, path, output_path, bytes)| {
                 crate::model::agent::action_result::AgentFileContentsResult {
                     saved,
-                    agent_id: agent,
+                    agent_id: generated_agent_id(&agent),
                     path,
                     output_path: output_path.into(),
                     bytes: bytes as usize,
@@ -4839,7 +4880,7 @@ fn arb_agent_interrupt_result() -> OutputDocumentStrategy {
         (any::<bool>(), arb_small_string()).prop_map(|(interrupted, agent)| {
             crate::model::agent::action_result::AgentInterruptResult {
                 interrupted,
-                agent_id: agent,
+                agent_id: generated_agent_id(&agent),
             }
         }),
     )
@@ -4850,7 +4891,7 @@ fn arb_agent_resume_result() -> OutputDocumentStrategy {
         (any::<bool>(), arb_small_string()).prop_map(|(resumed, agent)| {
             crate::model::agent::action_result::AgentResumeResult {
                 resumed,
-                agent_id: agent,
+                agent_id: generated_agent_id(&agent),
             }
         }),
     )
@@ -4861,7 +4902,7 @@ fn arb_agent_simulate_crash_result() -> OutputDocumentStrategy {
         (any::<bool>(), arb_small_string()).prop_map(|(simulated, agent)| {
             crate::model::agent::action_result::AgentSimulateCrashResult {
                 simulated,
-                agent_id: agent,
+                agent_id: generated_agent_id(&agent),
             }
         }),
     )
@@ -5387,7 +5428,7 @@ fn arb_invocation_summary() -> BoxedStrategy<golem_client::model::InvocationSumm
 
     (
         arb_uuid(),
-        arb_small_string(),
+        arb_uuid(),
         prop_oneof![
             Just(InvocationState::Scheduled),
             Just(InvocationState::Pending),
@@ -5409,21 +5450,15 @@ fn arb_invocation_summary() -> BoxedStrategy<golem_client::model::InvocationSumm
         arb_datetime(),
     )
         .prop_map(
-            |(uuid, agent, state, kind, operation, accepted_at, changed_at)| {
-                let agent_id = golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(uuid),
-                    agent_id: agent,
-                };
-                InvocationSummary {
-                    invocation_id: format!("{agent_id}.{uuid}"),
-                    agent_id,
-                    environment_id: uuid,
-                    state,
-                    kind,
-                    operation,
-                    accepted_at,
-                    changed_at,
-                }
+            |(uuid, agent, state, kind, operation, accepted_at, changed_at)| InvocationSummary {
+                invocation_id: format!("{agent}.{uuid}"),
+                agent_id: agent,
+                environment_id: uuid,
+                state,
+                kind,
+                operation,
+                accepted_at,
+                changed_at,
             },
         )
         .boxed()
@@ -5562,7 +5597,7 @@ fn arb_agent_revert_result() -> OutputDocumentStrategy {
                 |(reverted, agent, last_oplog_index, number_of_invocations)| {
                     crate::model::agent::action_result::AgentRevertResult {
                         reverted,
-                        agent_id: agent,
+                        agent_id: generated_agent_id(&agent),
                         last_oplog_index,
                         number_of_invocations,
                     }
@@ -5582,7 +5617,7 @@ fn arb_agent_plugin_toggle_result() -> OutputDocumentStrategy {
             .prop_map(|(activated, agent, plugin, priority)| {
                 crate::model::agent::action_result::AgentPluginToggleResult {
                     activated,
-                    agent_id: agent,
+                    agent_id: generated_agent_id(&agent),
                     plugin,
                     priority,
                 }
@@ -6707,6 +6742,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: current_component_hash,
+                    package_metadata: None,
                     agent_types: BTreeMap::from_iter([(
                         "agent".to_string(),
                         golem_common::model::diff::HashOf::form_value(sample_agent_type_schema(
@@ -6752,6 +6788,11 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: new_component_hash,
+                    package_metadata: Some(golem_common::model::component::ComponentPackageMetadata {
+                        source: "./fixture.tar".into(),
+                        package_digest: format!("sha256:{}", "12".repeat(32)),
+                        layer_digest: format!("sha256:{}", "34".repeat(32)),
+                    }),
                     agent_types: BTreeMap::from_iter([
                         (
                             "agent".to_string(),

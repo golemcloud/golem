@@ -2,12 +2,12 @@
  * @since 1.5.0
  */
 import { Effect } from "effect"
-import type * as CoreTypes from "golem:core/types@2.0.0"
+import type { AgentId } from "./AgentId.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
+import { agentIdFromWit } from "./internal/agentId.js"
 
 /**
- * Read the running agent's own structured
- * {@link CoreTypes.AgentId}.
+ * Read the running agent's own typed {@link AgentId}.
  *
  * Each execution reads durable host metadata without caching. During
  * replay it reproduces the identity observed at that point in history;
@@ -32,9 +32,7 @@ import { AgentHostClient } from "./host/AgentHostClient.js"
  * @since 1.5.0
  * @category host services
  */
-export const SelfAgentId: Effect.Effect<CoreTypes.AgentId, never, AgentHostClient> = Effect.gen(
-  function* () {
-    const host = yield* AgentHostClient
-    return yield* Effect.sync(() => host.getSelfMetadata().agentId)
-  },
-)
+export const SelfAgentId: Effect.Effect<AgentId, never, AgentHostClient> = Effect.gen(function* () {
+  const host = yield* AgentHostClient
+  return yield* Effect.sync(() => agentIdFromWit(host.getSelfMetadata().agentId))
+})

@@ -148,7 +148,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             let lowered = lower_invocation(
                                 agent_invocation,
                                 &component_metadata,
-                                agent_id.as_ref(),
+                                store.as_context().data().durable_ctx().owner_context(),
                             )?;
                             Ok::<_, WorkerExecutorError>((worker, uses_streams, lowered))
                         }
@@ -1001,6 +1001,6 @@ pub(in crate::durable_host) fn prepare_failure(
         error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
         | WorkerExecutorError::PreviousInvocationExited
         | WorkerExecutorError::Interrupted { .. }) => error,
-        error => WorkerExecutorError::failed_to_resume_worker(agent_id.clone(), error),
+        error => WorkerExecutorError::failed_to_resume_worker(*agent_id, error),
     }
 }

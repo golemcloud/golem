@@ -67,6 +67,9 @@
       "$ref": "#/definitions/invocation.list"
     },
     {
+      "$ref": "#/definitions/agent.create"
+    },
+    {
       "$ref": "#/definitions/agent.delete"
     },
     {
@@ -92,9 +95,6 @@
     },
     {
       "$ref": "#/definitions/agent.list"
-    },
-    {
-      "$ref": "#/definitions/agent.new"
     },
     {
       "$ref": "#/definitions/agent.oplog"
@@ -134,6 +134,9 @@
     },
     {
       "$ref": "#/definitions/agent.update"
+    },
+    {
+      "$ref": "#/definitions/agent.upsert"
     },
     {
       "$ref": "#/definitions/api-token.delete"
@@ -1900,6 +1903,39 @@
       },
       "additionalProperties": false
     },
+    "agent.create": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem agent create`: the ID and fingerprint of the created agent.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent create",
+      "required": [
+        "$type",
+        "componentName",
+        "agentType",
+        "agentId",
+        "agentFingerprint"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.create"
+        },
+        "componentName": {
+          "type": "string"
+        },
+        "agentType": {
+          "type": "string"
+        },
+        "agentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agentFingerprint": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
     "agent.delete": {
       "type": "object",
       "description": "Single structured output document emitted by `golem agent delete`.",
@@ -1918,7 +1954,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         }
       },
       "additionalProperties": false
@@ -1977,7 +2014,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         },
         "path": {
           "type": "string"
@@ -2055,7 +2093,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         }
       },
       "additionalProperties": false
@@ -2162,7 +2201,7 @@
       "required": [
         "$type",
         "agents",
-        "cursors"
+        "cursor"
       ],
       "properties": {
         "$type": {
@@ -2174,39 +2213,9 @@
             "$ref": "#/definitions/AgentMetadataView"
           }
         },
-        "cursors": {
-          "type": "object",
-          "description": "Without `--page`: the scan cursor of each component that has more agents. Pass one back as `--scan-cursor` with that component selected.",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
         "cursor": {
-          "type": "string",
-          "description": "With `--page`: the cursor of the next page, which names the component and its scan cursor. Pass it back unchanged as `--scan-cursor` with `--page`. Absent on the last page."
-        }
-      },
-      "additionalProperties": false
-    },
-    "agent.new": {
-      "type": "object",
-      "description": "Single structured output document emitted by `golem agent new`.",
-      "x-golem-output-mode": "single",
-      "x-golem-command": "agent new",
-      "required": [
-        "$type",
-        "componentName",
-        "agentId"
-      ],
-      "properties": {
-        "$type": {
-          "const": "agent.new"
-        },
-        "componentName": {
-          "type": "string"
-        },
-        "agentId": {
-          "type": "string"
+          "description": "Opaque cursor of the next page, covering every listed agent type that has more results; null when every listed agent type was fully listed.",
+          "type": ["string", "null"]
         }
       },
       "additionalProperties": false
@@ -3341,7 +3350,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         },
         "plugin": {
           "type": "string"
@@ -3404,7 +3414,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         }
       },
       "additionalProperties": false
@@ -3427,7 +3438,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         },
         "lastOplogIndex": {
           "type": "integer",
@@ -3458,7 +3470,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         }
       },
       "additionalProperties": false
@@ -3538,6 +3551,39 @@
           "items": {
             "$ref": "#/definitions/AgentActionError"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.upsert": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem agent upsert`: the ID and fingerprint of the keyed agent, created when it did not exist.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent upsert",
+      "required": [
+        "$type",
+        "componentName",
+        "agentType",
+        "agentId",
+        "agentFingerprint"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.upsert"
+        },
+        "componentName": {
+          "type": "string"
+        },
+        "agentType": {
+          "type": "string"
+        },
+        "agentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agentFingerprint": {
+          "type": "string",
+          "format": "uuid"
         }
       },
       "additionalProperties": false
@@ -6681,6 +6727,9 @@
       "required": [
         "componentName",
         "agentId",
+        "agentType",
+        "agentKey",
+        "fingerprint",
         "createdBy",
         "environmentId",
         "env",
@@ -6699,7 +6748,10 @@
       ],
       "properties": {
         "componentName": { "type": "string" },
-        "agentId": { "type": "string" },
+        "agentId": { "type": "string", "format": "uuid" },
+        "agentType": { "type": ["string", "null"] },
+        "agentKey": { "type": ["string", "null"] },
+        "fingerprint": { "type": "string", "format": "uuid" },
         "createdBy": { "type": "string" },
         "environmentId": { "type": "string" },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -6943,13 +6995,8 @@
       ]
     },
     "AgentId": {
-      "type": "object",
-      "required": ["componentId", "agentId"],
-      "properties": {
-        "componentId": { "type": "string" },
-        "agentId": { "type": "string" }
-      },
-      "additionalProperties": false
+      "type": "string",
+      "format": "uuid"
     },
     "PluginInstallationDescription": {
       "type": "object",
@@ -6974,11 +7021,12 @@
     },
     "PublicOplogEntryCreate": {
       "type": "object",
-      "required": ["type", "timestamp", "agentId", "ownerKind", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId", "neverLive"],
+      "required": ["type", "timestamp", "agentId", "agentTypeName", "ownerKind", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId", "neverLive"],
       "properties": {
         "type": { "const": "Create" },
         "timestamp": { "type": "string" },
         "agentId": { "$ref": "#/definitions/AgentId" },
+        "agentTypeName": { "type": ["string", "null"] },
         "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool", "oplog-processor"] },
         "agentMode": { "$ref": "#/definitions/AgentMode" },
         "componentRevision": { "type": "integer", "minimum": 0 },
@@ -6990,7 +7038,6 @@
         "componentSize": { "type": "integer", "minimum": 0 },
         "initialTotalLinearMemorySize": { "type": "integer", "minimum": 0 },
         "initialActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } },
-        "originalPhantomId": { "type": ["string", "null"] },
         "instanceId": { "type": "string" },
         "neverLive": { "type": "boolean" }
       },
@@ -7666,7 +7713,7 @@
       "required": ["componentName", "agentId"],
       "properties": {
         "componentName": { "type": "string" },
-        "agentId": { "type": "string" }
+        "agentId": { "type": "string", "format": "uuid" }
       },
       "additionalProperties": false
     },
@@ -7675,7 +7722,7 @@
       "required": ["componentName", "agentId", "error"],
       "properties": {
         "componentName": { "type": "string" },
-        "agentId": { "type": "string" },
+        "agentId": { "type": "string", "format": "uuid" },
         "error": { "type": "string" }
       },
       "additionalProperties": false
@@ -7685,7 +7732,7 @@
       "required": ["componentName", "agentId", "fromRevision", "revision"],
       "properties": {
         "componentName": { "type": "string" },
-        "agentId": { "type": "string" },
+        "agentId": { "type": "string", "format": "uuid" },
         "fromRevision": { "type": "integer", "minimum": 0 },
         "revision": { "type": "integer", "minimum": 0 }
       },
@@ -7693,10 +7740,11 @@
     },
     "AgentRedeploymentMeta": {
       "type": "object",
-      "required": ["componentName", "agentId", "fromRevision", "revision"],
+      "required": ["componentName", "agentId", "recreatedAgentId", "fromRevision", "revision"],
       "properties": {
         "componentName": { "type": "string" },
-        "agentId": { "type": "string" },
+        "agentId": { "type": "string", "format": "uuid" },
+        "recreatedAgentId": { "type": "string", "format": "uuid" },
         "fromRevision": { "type": "integer", "minimum": 0 },
         "revision": { "type": "integer", "minimum": 0 }
       },
@@ -7859,9 +7907,10 @@
     },
     "ComponentDiffPayload": {
       "type": "object",
-      "required": ["wasmChanged", "componentConfigChanged"],
+      "required": ["wasmChanged", "packageMetadataChanged", "componentConfigChanged"],
       "properties": {
         "wasmChanged": { "type": "boolean" },
+        "packageMetadataChanged": { "type": "boolean" },
         "agentTypeChanges": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/AgentTypeDiffMapValue" }
@@ -8910,7 +8959,7 @@
           "type": "object",
           "required": ["agentId", "idempotencyKey", "result", "status", "componentRevision", "agentFingerprint", "oplogIndex"],
           "properties": {
-            "agentId": { "type": "object" },
+            "agentId": { "type": "string", "format": "uuid" },
             "idempotencyKey": { "type": "string" },
             "result": { "type": ["object", "null"] },
             "status": {},
@@ -8953,11 +9002,10 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["kind", "componentId", "agentId"],
+          "required": ["kind", "agentId"],
           "properties": {
             "kind": { "const": "agent" },
-            "componentId": { "type": "string", "format": "uuid" },
-            "agentId": { "type": "string" }
+            "agentId": { "type": "string", "format": "uuid" }
           },
           "additionalProperties": false
         },
@@ -11106,6 +11154,10 @@
       "rustType": "InvocationListView"
     },
     {
+      "type": "agent.create",
+      "rustType": "AgentCreateView"
+    },
+    {
       "type": "agent.delete",
       "rustType": "AgentDeleteView"
     },
@@ -11140,10 +11192,6 @@
     {
       "type": "agent.list",
       "rustType": "AgentsMetadataResponseView"
-    },
-    {
-      "type": "agent.new",
-      "rustType": "AgentCreateView"
     },
     {
       "type": "agent.oplog",
@@ -11196,6 +11244,10 @@
     {
       "type": "agent.update",
       "rustType": "TryUpdateAllWorkersView"
+    },
+    {
+      "type": "agent.upsert",
+      "rustType": "AgentUpsertView"
     },
     {
       "type": "api-token.delete",

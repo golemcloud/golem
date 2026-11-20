@@ -54,6 +54,7 @@ flate2 = { workspace = true }
 goldenfile = { workspace = true }
 h2 = { workspace = true }
 http = { workspace = true }
+hyper = { workspace = true }
 redis = { workspace = true }
 sqlx = { workspace = true }
 test-r = { workspace = true }

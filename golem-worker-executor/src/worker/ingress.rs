@@ -19,12 +19,14 @@ use golem_common::model::InvocationId;
 
 use crate::worker::*;
 use chrono::{DateTime, Utc};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{IdempotencyKey, ScheduleId, ScheduledAction};
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn enqueue_oplog_processor<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>
@@ -38,7 +40,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let worker = deps
             .active_agents()
-            .get_or_add_oplog_processor(deps, owned_agent_id, component_revision)
+            .get_or_add_oplog_processor(deps, owned_agent_id, component_id, component_revision)
             .await?;
         // The batch runs as the processor agent itself, in both roles.
         let mut invocation = invocation;
@@ -189,7 +191,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // The observer task does a final epoch recheck before insert
             // (`populate_read_only_cache`), so it needs the live atomic.
             let read_only_cache_epoch = self.read_only_cache_epoch.clone();
-            let agent_id = self.owned_agent_id.agent_id.clone();
+            let agent_id = self.owned_agent_id.agent_id;
             let idem = idempotency_key;
             tokio::spawn(async move {
                 let wait_result = obs_sub
@@ -605,7 +607,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // caller's wait would pick an arbitrary winner. The request that owns the
             // execution is the honest originator.
             let origin = TraceOrigin::capture_current();
-            let owner_agent_id = self.owned_agent_id.agent_id.clone();
+            let owner_agent_id = self.owned_agent_id.agent_id;
             let owner_idempotency_key = idempotency_key;
 
             let pending_or_final = async {
@@ -1402,11 +1404,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Refuses an inspection that would be the first start of an ephemeral agent: it would run
     /// the constructor before a schedule whose commit the caller may still be repairing. A
     /// worker that a delete has claimed gives the deletion error, as starting it would.
-    pub(crate) async fn ensure_inspection_may_start(&self) -> Result<(), WorkerExecutorError> {
+    pub(crate) async fn ensure_inspection_may_start(
+        &self,
+        owner: Option<&NewOwner>,
+    ) -> Result<(), WorkerExecutorError> {
+        {
+            let instance = self.instance.lock().await;
+            instance.ensure_not_deleting()?;
+            self.ensure_owns_key(owner)?;
+        }
         if self.agent_mode() != AgentMode::Ephemeral {
             return Ok(());
         }
-        self.instance.lock().await.ensure_not_deleting()?;
         let status = self.state_actor.try_status().await?;
         if super::invocation_loop::ephemeral_inspection_may_start(
             &status,
@@ -1628,15 +1637,20 @@ pub(in crate::worker) fn inactive_ephemeral_agent_error() -> WorkerExecutorError
     WorkerExecutorError::invalid_request(INACTIVE_EPHEMERAL_AGENT_ERROR)
 }
 
+/// Checks the identity of an invocation's target. A KnownFresh invocation skips the lookup of
+/// an existing agent, so it is accepted only for an ephemeral instance whose ID derives from the
+/// invocation's owner key: no other invocation reaches that ID.
 pub(in crate::worker) fn validate_resolved_invocation_identity(
     agent_mode: AgentMode,
-    phantom_id: Option<Uuid>,
+    environment_id: EnvironmentId,
+    agent_id: &AgentId,
+    keyed: bool,
     idempotency_key: &IdempotencyKey,
     freshness_disposition: InvocationFreshnessDisposition,
 ) -> Result<(), WorkerExecutorError> {
-    if agent_mode == AgentMode::Ephemeral && phantom_id.is_none() {
+    if agent_mode == AgentMode::Ephemeral && keyed {
         return Err(WorkerExecutorError::invalid_request(
-            "An ephemeral invocation requires a final phantom agent ID",
+            "An ephemeral agent has no key: address it by ID",
         ));
     }
 
@@ -1650,8 +1664,10 @@ pub(in crate::worker) fn validate_resolved_invocation_identity(
         ));
     }
 
-    let expected_phantom_id = ephemeral_invocation_phantom_id(idempotency_key);
-    if phantom_id != Some(expected_phantom_id) {
+    let derived = agent_id
+        .type_id()
+        .map(|type_id| AgentId::ephemeral_invocation(environment_id, type_id, idempotency_key));
+    if derived.as_ref() != Some(agent_id) {
         return Err(WorkerExecutorError::invalid_request(
             "KnownFresh ephemeral agent id does not match the invocation idempotency key",
         ));

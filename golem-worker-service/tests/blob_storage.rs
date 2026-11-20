@@ -21,7 +21,6 @@ use aws_sdk_s3::config::Credentials;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::widen_infallible;
@@ -295,7 +294,7 @@ fn compressed_oplog() -> BlobStorageNamespace {
         environment_id: EnvironmentId(
             Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
         ),
-        component_id: ComponentId(Uuid::new_v4()),
+        type_tag: Uuid::new_v4().as_u128() as u32,
         agent_mode: AgentMode::Durable,
         level: 0,
     }
@@ -310,32 +309,31 @@ fn custom_storage() -> BlobStorageNamespace {
     }
 }
 
-/// The filesystem snapshots of one agent whose name holds a `..` segment. The rules of a blob
-/// name refuse such a segment, so the location of the agent must not hold its name.
+/// The agent of [`filesystem_snapshots`] and [`other_incarnation`].
+fn snapshot_agent() -> AgentId {
+    AgentId::from_parts(7, 0x2a)
+}
+
+/// The filesystem snapshots of one incarnation of one agent.
 #[test_dep(scope = PerWorker, tagged_as = "fss")]
 fn filesystem_snapshots() -> BlobStorageNamespace {
     filesystem_snapshots_of(
         "4c8c5ff4-2a42-4e81-ac48-e63005f609fd",
-        "7e0e4c9a-3c34-4d52-8d6f-0d2f6b6d3a11",
-        r#"counter("a/../b")"#,
+        snapshot_agent(),
         "5f1d6a2b-0c3e-4a7b-9d1f-6e2a3b4c5d6e",
     )
 }
 
-/// The filesystem snapshots namespace of the incarnation `fingerprint` of the agent `agent` of the
-/// component `component` in the environment `environment`.
+/// The filesystem snapshots namespace of the incarnation `fingerprint` of the agent `agent_id` in
+/// the environment `environment`.
 fn filesystem_snapshots_of(
     environment: &str,
-    component: &str,
-    agent: &str,
+    agent_id: AgentId,
     fingerprint: &str,
 ) -> BlobStorageNamespace {
     BlobStorageNamespace::FilesystemSnapshots {
         environment_id: EnvironmentId(Uuid::parse_str(environment).unwrap()),
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::parse_str(component).unwrap()),
-            agent_id: agent.to_string(),
-        },
+        agent_id,
         fingerprint: AgentFingerprint(Uuid::parse_str(fingerprint).unwrap()),
     }
 }
@@ -2836,13 +2834,13 @@ fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamesp
             agent_mode,
         },
         BlobStorageNamespace::CompressedOplog {
-            component_id,
+            type_tag,
             agent_mode,
             level,
             ..
         } => BlobStorageNamespace::CompressedOplog {
             environment_id,
-            component_id,
+            type_tag,
             agent_mode,
             level,
         },
@@ -2890,13 +2888,9 @@ async fn list_blobs_below_stays_in_its_namespace(
 /// components and the filesystem snapshots of it.
 fn namespaces_of_one_environment() -> Vec<BlobStorageNamespace> {
     let environment = "0b6f0a52-9d4e-4f0c-8a39-2d0f7f6a1c11";
-    let component = "7e0e4c9a-3c34-4d52-8d6f-0d2f6b6d3a11";
     let environment_id = EnvironmentId(Uuid::parse_str(environment).unwrap());
-    let component_id = ComponentId(Uuid::parse_str(component).unwrap());
-    let agent_id = AgentId {
-        component_id,
-        agent_id: r#"counter("a/../b")"#.to_string(),
-    };
+    let agent_id = snapshot_agent();
+    let type_tag = agent_id.type_tag();
     let mut namespaces = vec![
         BlobStorageNamespace::CompilationCache { environment_id },
         BlobStorageNamespace::CustomStorage { environment_id },
@@ -2904,21 +2898,20 @@ fn namespaces_of_one_environment() -> Vec<BlobStorageNamespace> {
         BlobStorageNamespace::Components { environment_id },
         filesystem_snapshots_of(
             environment,
-            component,
-            &agent_id.agent_id,
+            agent_id,
             "5f1d6a2b-0c3e-4a7b-9d1f-6e2a3b4c5d6e",
         ),
     ];
     for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
         namespaces.push(BlobStorageNamespace::OplogPayload {
             environment_id,
-            agent_id: agent_id.clone(),
+            agent_id,
             agent_mode,
         });
         for level in [0, 1] {
             namespaces.push(BlobStorageNamespace::CompressedOplog {
                 environment_id,
-                component_id,
+                type_tag,
                 agent_mode,
                 level,
             });
@@ -4763,36 +4756,32 @@ async fn the_filesystem_snapshots_namespace_gives_each_agent_incarnation_its_own
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
 ) {
     // Each namespace holds a blob at the same path with its own bytes. The agents differ in their
-    // name, their environment, their component or their incarnation. The last three namespaces are
-    // other kinds of namespace of the same environment. One agent name holds a `..` segment, which
-    // the rules of a blob name refuse. So a location of that agent must not hold the name. The two
-    // oplog payload namespaces are of that agent name in two components.
+    // ID, their environment or their incarnation. Two agent IDs differ only in their type tag, and
+    // two differ only in their H. The last three namespaces are other kinds of namespace of the
+    // same environment. The two oplog payload namespaces are of two agents that differ only in
+    // their type tag.
     let storage = test.get_blob_storage().await;
     let label = "the_filesystem_snapshots_namespace_gives_each_agent_incarnation_its_own_location";
     let environment = "0a8cd1b1-5c35-4f0e-9c67-2bb4c0f0f3a1";
     let other_environment = "1b9de2c2-6d46-4a1f-8d78-3cc5d101a4b2";
-    let component = "2caef3d3-7e57-4b2a-9e89-4dd6e212b5c3";
-    let other_component = "3dbf04e4-8f68-4c3b-8f9a-5ee7f323c6d4";
-    let agent = r#"counter("a")"#;
-    let dot_segment_agent = r#"counter("a/../b")"#;
-    let oplog_payload_of = |component: &str| BlobStorageNamespace::OplogPayload {
+    let agent = AgentId::from_parts(3, 0x51);
+    let other_h_agent = AgentId::from_parts(3, 0x52);
+    let other_type_agent = AgentId::from_parts(4, 0x51);
+    let oplog_payload_of = |agent_id: AgentId| BlobStorageNamespace::OplogPayload {
         environment_id: EnvironmentId(Uuid::parse_str(environment).unwrap()),
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::parse_str(component).unwrap()),
-            agent_id: dot_segment_agent.to_string(),
-        },
+        agent_id,
         agent_mode: AgentMode::Durable,
     };
     let fingerprint = "4e0a15f5-9a79-4d4c-8a0b-6ff8a434d7e5";
     let other_fingerprint = "5f1b26a6-ab8a-4e5d-9b1c-70a9b545e8f6";
     let namespaces = [
-        filesystem_snapshots_of(environment, component, agent, fingerprint),
-        filesystem_snapshots_of(environment, component, dot_segment_agent, fingerprint),
-        filesystem_snapshots_of(other_environment, component, agent, fingerprint),
-        filesystem_snapshots_of(environment, other_component, agent, fingerprint),
-        filesystem_snapshots_of(environment, component, agent, other_fingerprint),
-        oplog_payload_of(component),
-        oplog_payload_of(other_component),
+        filesystem_snapshots_of(environment, agent, fingerprint),
+        filesystem_snapshots_of(environment, other_h_agent, fingerprint),
+        filesystem_snapshots_of(other_environment, agent, fingerprint),
+        filesystem_snapshots_of(environment, other_type_agent, fingerprint),
+        filesystem_snapshots_of(environment, agent, other_fingerprint),
+        oplog_payload_of(agent),
+        oplog_payload_of(other_type_agent),
         BlobStorageNamespace::CustomStorage {
             environment_id: EnvironmentId(Uuid::parse_str(environment).unwrap()),
         },
@@ -4865,8 +4854,7 @@ async fn the_filesystem_snapshots_namespace_gives_each_agent_incarnation_its_own
 fn other_incarnation() -> BlobStorageNamespace {
     filesystem_snapshots_of(
         "4c8c5ff4-2a42-4e81-ac48-e63005f609fd",
-        "7e0e4c9a-3c34-4d52-8d6f-0d2f6b6d3a11",
-        r#"counter("a/../b")"#,
+        snapshot_agent(),
         "6a2e7b3c-1d4f-4b8c-ae20-7f3b4c5d6e7f",
     )
 }

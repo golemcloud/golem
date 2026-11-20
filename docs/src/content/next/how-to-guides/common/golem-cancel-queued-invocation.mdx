@@ -11,7 +11,7 @@ Agent invocations are processed sequentially — one at a time. When an invocati
 An invocation is selected in one of two ways:
 
 - by its **agent and idempotency key**: set a key explicitly when triggering an invocation with `--idempotency-key`, or use `--idempotency-key -` to have Golem generate one;
-- by its **invocation ID**, `<component UUID>/<agent name>.<UUID>`, as printed by `golem invocation list`.
+- by its **invocation ID**, `<agent ID>.<UUID>`, as printed by `golem invocation list`.
 
 The same idempotency key used for more than one method of the agent selects one invocation per method. `invocation get` shows all of them, each with its operation; `invocation cancel` needs `--method <METHOD>` to choose one, using the method name as shown in the Operation column of `golem invocation list`.
 

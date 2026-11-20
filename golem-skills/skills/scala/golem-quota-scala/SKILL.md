@@ -121,8 +121,8 @@ Split a portion of your quota to pass to a child agent:
 val parentToken = QuotaToken("api-calls", BigInt(1000))
 val childToken: QuotaToken = parentToken.split(BigInt(200))
 // Assumes SummarizerAgent has no identity fields and uses durable mode.
-val childAgent = SummarizerAgentClient.newPhantom()
-val summary = childAgent.summarize(text, childToken)
+// `create()` makes a new child agent without a key.
+val summary = SummarizerAgentClient.create().flatMap(_.summarize(text, childToken))
 ```
 
 The child agent receives the `QuotaToken` as a method parameter and uses it for its own reservations. Merge returned tokens back:

@@ -43,7 +43,6 @@ use crate::schema::validation::placement::validate_agent_type_placement;
 use crate::schema::validation::value::{validate_record_fields, validate_value};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// Name of the synthetic single user-supplied field that carries the parts of
 /// a multimodal agent input (`list<variant<… Role::Multimodal>>`).
@@ -310,7 +309,7 @@ pub enum FieldSource {
     UserSupplied,
 }
 
-/// Identifies a deployed, instantiated agent.
+/// An agent type and its constructor parameters.
 ///
 /// Carries the constructor parameters as a self-contained
 /// [`TypedSchemaValue`] pair so receivers can interpret the parameter values
@@ -323,22 +322,13 @@ pub struct ParsedAgentKey {
     pub agent_type: AgentTypeName,
     /// Constructor parameters, paired with their self-contained schema graph.
     pub parameters: TypedSchemaValue,
-    /// Optional phantom identifier used to disambiguate otherwise-identical
-    /// agent ids; `None` when the agent type does not use phantom ids.
-    #[serde(default)]
-    pub phantom_id: Option<Uuid>,
 }
 
 impl ParsedAgentKey {
-    pub fn new(
-        agent_type: AgentTypeName,
-        parameters: TypedSchemaValue,
-        phantom_id: Option<Uuid>,
-    ) -> Self {
+    pub fn new(agent_type: AgentTypeName, parameters: TypedSchemaValue) -> Self {
         Self {
             agent_type,
             parameters,
-            phantom_id,
         }
     }
 }

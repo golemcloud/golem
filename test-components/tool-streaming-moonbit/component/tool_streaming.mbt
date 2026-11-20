@@ -176,8 +176,8 @@ pub fn MatrixCoreArtifact::inspect(
   matrix_core_inspect(
     request,
     multiplier,
-    context,
-    @api.get_self_metadata().agent_id.agent_id,
+    principal,
+    self_agent_id_text(),
   )
 }
 

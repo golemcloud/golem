@@ -562,12 +562,12 @@ impl AgentLifecycleGates {
             .and_then(Weak::upgrade)
             .unwrap_or_else(|| {
                 let gate = Arc::new(RwLock::new(()));
-                gates.insert(agent_id.clone(), Arc::downgrade(&gate));
+                gates.insert(*agent_id, Arc::downgrade(&gate));
                 gate
             });
 
         AgentLifecycleGate {
-            agent_id: agent_id.clone(),
+            agent_id: *agent_id,
             gate,
             registry: self.clone(),
         }
@@ -645,18 +645,20 @@ impl DefaultWorkerService {
     }
 
     fn invocation_result_index_namespace(
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
     ) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentInvocationResultIndex {
-            agent_id: agent_id.clone(),
+            owned_agent_id: owned_agent_id.clone(),
             fingerprint,
         }
     }
 
-    fn rejected_periodic_snapshots_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
+    fn rejected_periodic_snapshots_namespace(
+        owned_agent_id: &OwnedAgentId,
+    ) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots {
-            agent_id: agent_id.clone(),
+            owned_agent_id: owned_agent_id.clone(),
         }
     }
 
@@ -675,7 +677,7 @@ impl DefaultWorkerService {
         let _guard = lock.inner.lock().await;
         self.remove_all_fields(
             owned_agent_id,
-            Self::invocation_result_index_namespace(&owned_agent_id.agent_id, fingerprint),
+            Self::invocation_result_index_namespace(owned_agent_id, fingerprint),
             "invocation-result index",
         )
         .await

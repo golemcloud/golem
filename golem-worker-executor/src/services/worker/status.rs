@@ -464,11 +464,11 @@ impl DefaultWorkerService {
     /// `core`, `membership`, `regions`, `updates`, per-transfer `tr:`/`ts:` fields, and the
     /// `entity-replay` marker with per-entry `er:`/`eo:`/`ep:`/`em:`/`ec:` replay indexes).
     pub(super) fn status_namespace(
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
     ) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentStatus {
-            agent_id: Arc::new(agent_id.clone()),
+            owned_agent_id: owned_agent_id.clone(),
             fingerprint,
         }
     }
@@ -478,11 +478,11 @@ impl DefaultWorkerService {
     /// save / throttled idle) and never advanced by the background flusher, so it can serve as a
     /// fold baseline that always predates any later jump region.
     pub(super) fn checkpoint_namespace(
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
     ) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentStatusCheckpoint {
-            agent_id: Arc::new(agent_id.clone()),
+            owned_agent_id: owned_agent_id.clone(),
             fingerprint,
         }
     }
@@ -501,7 +501,7 @@ impl DefaultWorkerService {
     ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
         self.read_split_status(
             owned_agent_id,
-            Self::status_namespace(&owned_agent_id.agent_id, fingerprint),
+            Self::status_namespace(owned_agent_id, fingerprint),
         )
         .await
     }

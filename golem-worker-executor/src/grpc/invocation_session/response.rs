@@ -216,7 +216,7 @@ pub(super) async fn send_rejection_with_worker_error(
                     .map(Into::into)
             })
             .flatten(),
-        start.agent_id.clone(),
+        super::request::start_agent_id(start),
         worker_error,
     )
     .await;

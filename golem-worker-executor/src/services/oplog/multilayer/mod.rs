@@ -35,11 +35,11 @@ use futures::FutureExt;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     AtomicOplogIndex, OplogEntry, OplogIndex, PayloadId, RawOplogPayload,
 };
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
 use golem_common::related_span;
@@ -240,10 +240,10 @@ pub trait OplogArchiveService: Debug + Send + Sync {
     /// `None` scans both modes (durable and ephemeral). When scanning multiple modes the
     /// active mode is encoded into the returned `ScanCursor` so the caller resumes the same
     /// pagination correctly.
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,

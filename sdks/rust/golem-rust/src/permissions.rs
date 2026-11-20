@@ -482,7 +482,7 @@ fn install_card(
     target: &Holder,
 ) -> Result<(), PermissionError> {
     let target = target.to_raw();
-    raw_wallet::install_card(take_raw_card(handle), &target).map_err(PermissionError::from)
+    raw_wallet::install_card(take_raw_card(handle), target).map_err(PermissionError::from)
 }
 
 /// A card in the caller's [`wallet`], labelled with its kind.

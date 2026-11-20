@@ -14,21 +14,14 @@
 
 use super::{bound_from_proto, decode_cursor, encode_cursor};
 use crate::worker::invocations::InvocationPagePosition;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId, InvocationId, OplogIndex, OwnedAgentId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use test_r::test;
 use uuid::Uuid;
 
-fn agent(name: &str, component_id: ComponentId) -> OwnedAgentId {
-    OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id,
-            agent_id: name.to_string(),
-        },
-    )
+fn agent(h: u128) -> OwnedAgentId {
+    OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, h))
 }
 
 fn position() -> InvocationPagePosition {
@@ -44,7 +37,7 @@ fn is_invalid_request(result: Result<InvocationPagePosition, WorkerExecutorError
 
 #[test]
 fn a_cursor_round_trips_for_its_own_agent() {
-    let owner = agent("a", ComponentId::new());
+    let owner = agent(1);
     let fingerprint = AgentFingerprint(Uuid::new_v4());
     let position = position();
 
@@ -57,19 +50,13 @@ fn a_cursor_round_trips_for_its_own_agent() {
 
 #[test]
 fn a_cursor_of_another_agent_or_incarnation_is_refused() {
-    let component_id = ComponentId::new();
-    let owner = agent("a", component_id);
+    let owner = agent(1);
     let fingerprint = AgentFingerprint(Uuid::new_v4());
     let cursor = encode_cursor(&owner, fingerprint, position()).unwrap();
 
     assert!(is_invalid_request(decode_cursor(
         &cursor,
-        &agent("b", component_id),
-        fingerprint
-    )));
-    assert!(is_invalid_request(decode_cursor(
-        &cursor,
-        &agent("a", ComponentId::new()),
+        &agent(2),
         fingerprint
     )));
     // A deleted and re-created agent has a new fingerprint.
@@ -82,7 +69,7 @@ fn a_cursor_of_another_agent_or_incarnation_is_refused() {
 
 #[test]
 fn a_malformed_cursor_is_an_invalid_request_and_never_panics() {
-    let owner = agent("a", ComponentId::new());
+    let owner = agent(1);
     let fingerprint = AgentFingerprint(Uuid::new_v4());
     // Not base64, empty, an unknown serialization version, and truncated data.
     for value in ["%%%", "", "_w", "Aw"] {

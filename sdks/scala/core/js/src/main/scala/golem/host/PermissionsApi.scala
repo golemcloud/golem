@@ -16,7 +16,6 @@
 
 package golem.host
 
-import golem.HostApi
 import golem.host.js._
 import golem.schema.{
   FromSchema,
@@ -228,19 +227,15 @@ object PermissionsApi {
   sealed trait Holder extends Product with Serializable
 
   object Holder {
-    final case class Account(accountId: UUID)               extends Holder
-    final case class App(appId: UUID)                       extends Holder
-    final case class Agent(agentId: HostApi.AgentIdLiteral) extends Holder
-
-    /** An agent holder from a component id and an agent id string. */
-    def agent(componentId: HostApi.ComponentIdLiteral, agentId: String): Holder =
-      Agent(JsAgentId(componentId, agentId))
+    final case class Account(accountId: UUID)      extends Holder
+    final case class App(appId: UUID)              extends Holder
+    final case class Agent(agentId: golem.AgentId) extends Holder
 
     private[PermissionsApi] def toJs(holder: Holder): JsHolder =
       holder match {
         case Account(uuid) => JsHolder.account(JsUuid.fromUuid(uuid))
         case App(uuid)     => JsHolder.app(JsUuid.fromUuid(uuid))
-        case Agent(id)     => JsHolder.agent(id)
+        case Agent(id)     => JsHolder.agent(JsAgentId.fromAgentId(id))
       }
   }
 

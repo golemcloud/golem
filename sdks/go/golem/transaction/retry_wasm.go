@@ -19,7 +19,7 @@ var sagaNext = func(state []byte, elapsed uint64, attempt int64, kind string) ([
 	if err != nil {
 		return nil, 0, false, &PolicyError{Message: err.Error()}
 	}
-	uri := "urn:worker:" + meta.AgentID.ComponentID.String() + "/" + meta.AgentID.AgentID
+	uri := "urn:agent:" + meta.EnvironmentID.String() + "/" + meta.AgentID.String()
 	props := []wt.Tuple2[string, api.PredicateValue]{
 		{F0: "attempt", F1: api.MakePredicateValueInteger(attempt)},
 		{F0: "error-kind", F1: api.MakePredicateValueText(kind)},

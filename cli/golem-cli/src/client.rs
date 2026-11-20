@@ -580,7 +580,7 @@ impl GolemClients {
                 context: worker_invoke_context(),
             },
             invocation: InvocationClientLive {
-                context: worker_context()
+                context: worker_context(),
             },
             worker_range_reads: WorkerClientLive {
                 context: ClientContext {
@@ -588,7 +588,7 @@ impl GolemClients {
                     base_url: config.worker_url.clone(),
                     security_token: security_token.clone(),
                 },
-            }
+            },
         })
     }
 

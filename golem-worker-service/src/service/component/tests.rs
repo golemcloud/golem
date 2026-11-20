@@ -31,16 +31,18 @@ use tokio_util::sync::CancellationToken;
 pub(crate) struct TestRegistry {
     revisions: Vec<Component>,
     pub(crate) deployed: Mutex<Option<Component>>,
-    next_lookup: Mutex<Option<Arc<LookupGate>>>,
+    pub(crate) deployed_agent_type: Mutex<Option<RegisteredAgentType>>,
+    pub(crate) next_lookup: Mutex<Option<Arc<LookupGate>>>,
 }
 
-struct LookupGate {
-    started: Semaphore,
-    release: Semaphore,
+/// Holds the next deployed lookup after it read the registry state, until the test releases it.
+pub(crate) struct LookupGate {
+    pub(crate) started: Semaphore,
+    pub(crate) release: Semaphore,
 }
 
 impl LookupGate {
-    fn new() -> Arc<Self> {
+    pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             started: Semaphore::new(0),
             release: Semaphore::new(0),
@@ -49,10 +51,19 @@ impl LookupGate {
 }
 
 impl TestRegistry {
+    async fn pass_lookup_gate(&self) {
+        let gate = self.next_lookup.lock().unwrap().take();
+        if let Some(gate) = gate {
+            gate.started.add_permits(1);
+            gate.release.acquire().await.unwrap().forget();
+        }
+    }
+
     pub(crate) fn new(revisions: Vec<Component>, deployed: Option<Component>) -> Self {
         Self {
             revisions,
             deployed: Mutex::new(deployed),
+            deployed_agent_type: Mutex::new(None),
             next_lookup: Mutex::new(None),
         }
     }
@@ -74,6 +85,7 @@ pub(crate) fn component() -> Component {
         metadata: ComponentMetadata::default(),
         created_at: chrono::Utc::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: "test".into(),
     }
 }
@@ -101,12 +113,22 @@ impl RegistryService for TestRegistry {
             .unwrap()
             .clone()
             .ok_or_else(|| RegistryServiceError::NotFound("component".into()));
-        let gate = self.next_lookup.lock().unwrap().take();
-        if let Some(gate) = gate {
-            gate.started.add_permits(1);
-            gate.release.acquire().await.unwrap().forget();
-        }
+        self.pass_lookup_gate().await;
         result
+    }
+    async fn get_deployed_agent_type(
+        &self,
+        _: EnvironmentId,
+        agent_type_name: &AgentTypeName,
+    ) -> Result<Option<RegisteredAgentType>, RegistryServiceError> {
+        let result = self
+            .deployed_agent_type
+            .lock()
+            .unwrap()
+            .clone()
+            .filter(|registered| registered.agent_type.type_name == *agent_type_name);
+        self.pass_lookup_gate().await;
+        Ok(result)
     }
     async fn get_all_deployed_component_revisions(
         &self,
@@ -406,6 +428,72 @@ async fn invalidation_fences_pending_successes_and_errors() {
             b.revision
         );
     }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn current_lookup_survives_a_burst_of_deployment_invalidations() {
+    let a = component();
+    let registry = Arc::new(TestRegistry::new(vec![a.clone()], Some(a.clone())));
+    let service = Arc::new(RemoteComponentService::new(
+        registry.clone(),
+        &ComponentServiceConfig::default(),
+    ));
+    let mut gate = LookupGate::new();
+    *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+    let mut caller = tokio::spawn({
+        let service = service.clone();
+        async move { service.get_current_by_id(a.id).await }
+    });
+    for _ in 0..4 {
+        tokio::select! {
+            started = gate.started.acquire() => started.unwrap().forget(),
+            result = &mut caller => panic!("lookup stopped during deployment invalidation: {result:?}"),
+        }
+        service.invalidate_current().await;
+        let next = LookupGate::new();
+        *registry.next_lookup.lock().unwrap() = Some(next.clone());
+        gate.release.add_permits(1);
+        gate = next;
+    }
+    gate.started.acquire().await.unwrap().forget();
+    let mut latest = a.clone();
+    latest.revision = ComponentRevision::new(3).unwrap();
+    *registry.deployed.lock().unwrap() = Some(latest.clone());
+    service.invalidate_current().await;
+    gate.release.add_permits(1);
+    assert_eq!(caller.await.unwrap().unwrap().revision, latest.revision);
+}
+
+#[test]
+fn current_lookup_invalidation_retries_have_a_time_bound() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let a = component();
+            let registry = Arc::new(TestRegistry::new(vec![a.clone()], Some(a.clone())));
+            let gate = LookupGate::new();
+            *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+            let service = Arc::new(RemoteComponentService::new(
+                registry,
+                &ComponentServiceConfig::default(),
+            ));
+            let caller = tokio::spawn({
+                let service = service.clone();
+                async move { service.get_current_by_id(a.id).await }
+            });
+            gate.started.acquire().await.unwrap().forget();
+            service.invalidate_current().await;
+            tokio::time::advance(Duration::from_secs(31)).await;
+            gate.release.add_permits(1);
+            assert!(matches!(
+                caller.await.unwrap(),
+                Err(ComponentServiceError::InternalError(_))
+            ));
+        });
 }
 
 #[test]

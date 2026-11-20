@@ -67,8 +67,9 @@ async fn create_agent(ctx: &mut TestContext, name: &str) {
         .cli([
             flag::YES,
             cmd::AGENT,
-            cmd::NEW,
+            cmd::CREATE,
             &constructor,
+            "--keyed",
             "--config",
             "allowed=\"owner-allowed\"",
             "--config",

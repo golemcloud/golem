@@ -522,7 +522,7 @@ impl WaitingWorker {
 
             let phase_start = std::time::Instant::now();
             let mut concurrent_agent_permit = registered_concurrent_account
-                .acquire(agent_id.clone())
+                .acquire(agent_id)
                 .instrument(related_span!(
                     worker_trace.startup_origin,
                     Level::INFO,

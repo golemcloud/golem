@@ -44,7 +44,7 @@ final case class Example1Impl(name: String, count: Int) extends Example1 {
   import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
   override def run(): Future[String] = {
-    val client = CounterAgentClient.get(s"x-${name}")
+    val client = CounterAgentClient.upsert(s"x-${name}")
     client.increment().map { n =>
       s"Result: ${n}"
     }

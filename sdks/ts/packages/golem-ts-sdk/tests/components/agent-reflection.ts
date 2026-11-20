@@ -1,4 +1,4 @@
-import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+import { AgentId, defineAgent, method } from '@golemcloud/golem-ts-sdk';
 import { z } from 'zod';
 
 defineAgent({
@@ -10,7 +10,7 @@ defineAgent({
   init: () => ({ count: 7 }),
   methods: {
     add({ amount }) {
-      if (this.getId().parts().typeName !== 'Counter') throw new Error('wrong reflected identity');
+      if (!(this.getId() instanceof AgentId)) throw new Error('untyped agent identity');
       this.count += amount;
       return this.count;
     },

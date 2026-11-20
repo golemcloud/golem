@@ -43,9 +43,13 @@ use uuid::Uuid;
 pub struct CreateParameters {
     pub component_id: crate::model::component::ComponentId,
     pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
-    /// Full structural type and parameter text, without a phantom suffix.
-    /// Phantom, ephemeral, fork and component-baseline owners have no canonical key.
+    /// Full structural `Type(params)` text of the key that the agent owns. Only a keyed
+    /// durable agent owns its key; agents created without a key, ephemeral agents, forks
+    /// and other owners have none.
     pub canonical_key: Option<String>,
+    /// The canonical constructor parameter text of a component agent, without its type
+    /// name. Every component agent has it, keyed or not.
+    pub constructor_parameters: Option<String>,
     pub agent_id: AgentId,
     pub owner_kind: OwnerKind,
     pub agent_mode: AgentMode,
@@ -58,7 +62,6 @@ pub struct CreateParameters {
     pub initial_total_linear_memory_size: u64,
     pub initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
     pub local_agent_config: Vec<UntypedAgentConfigEntry>,
-    pub original_phantom_id: Option<Uuid>,
     pub instance_id: Uuid,
     pub create_request: CreateRequest,
     /// Whether the owner is a never-live sandbox. A marked owner reports the `Sandboxed` status.
@@ -112,8 +115,8 @@ pub enum CreateRequestKind {
     GetOrCreate,
     /// Creates the owner only if it does not exist yet.
     Exclusive,
-    /// Creates an owner whose ID carries a phantom ID.
-    Phantom,
+    /// Creates an owner without a key.
+    Unkeyed,
     /// Copies another owner's history.
     Fork,
 }
@@ -133,6 +136,7 @@ pub enum OplogEnrichmentEntry {
 #[desert(evolution())]
 pub struct CreateProjectionParameters {
     pub agent_id: AgentId,
+    pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
     pub owner_kind: OwnerKind,
     pub agent_mode: AgentMode,
     pub component_revision: ComponentRevision,
@@ -144,7 +148,6 @@ pub struct CreateProjectionParameters {
     pub initial_total_linear_memory_size: u64,
     pub initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
     pub local_agent_config: Vec<UntypedAgentConfigEntry>,
-    pub original_phantom_id: Option<Uuid>,
     pub instance_id: Uuid,
     pub never_live: bool,
 }
@@ -153,8 +156,9 @@ impl From<CreateParameters> for CreateProjectionParameters {
     fn from(value: CreateParameters) -> Self {
         let CreateParameters {
             component_id: _,
-            agent_type_name: _,
+            agent_type_name,
             canonical_key: _,
+            constructor_parameters: _,
             agent_id,
             owner_kind,
             agent_mode,
@@ -167,13 +171,13 @@ impl From<CreateParameters> for CreateProjectionParameters {
             initial_total_linear_memory_size,
             initial_active_plugins,
             local_agent_config,
-            original_phantom_id,
             instance_id,
             create_request: _,
             never_live,
         } = value;
         Self {
             agent_id,
+            agent_type_name,
             owner_kind,
             agent_mode,
             component_revision,
@@ -185,7 +189,6 @@ impl From<CreateParameters> for CreateProjectionParameters {
             initial_total_linear_memory_size,
             initial_active_plugins,
             local_agent_config,
-            original_phantom_id,
             instance_id,
             never_live,
         }

@@ -14,7 +14,6 @@
 
 use super::super::ConfirmOutcome;
 use super::*;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, OwnedAgentId};
 use std::collections::HashMap;
@@ -22,13 +21,7 @@ use test_r::test;
 
 fn agent_snapshots(name: &str) -> AgentSnapshots {
     AgentSnapshots::agent(
-        &OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: name.to_string(),
-            },
-        ),
+        &OwnedAgentId::new(EnvironmentId::new(), &crate::test_agent_id(name)),
         golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
     )
 }
@@ -501,13 +494,7 @@ fn only_transitions_that_end_or_add_work_wake_the_waiters() {
     let agent = agent_snapshots("wakes");
     let name = FilesystemSnapshotName::periodic();
     let names = snapshot_names(&["p-1"]);
-    let flight = (
-        AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "target".to_string(),
-        },
-        [0; 32],
-    );
+    let flight = (AgentId::from_parts(7, 1), [0; 32]);
     let fresh = State::default;
 
     assert_eq!(
@@ -896,13 +883,7 @@ fn a_delete_of_all_at_the_bound_names_the_agent_whose_names_it_evicts() {
         agent_snapshots("source"),
         agent_snapshots("stage"),
     );
-    let flight = (
-        AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "target".to_string(),
-        },
-        [9; 32],
-    );
+    let flight = (AgentId::from_parts(7, 2), [9; 32]);
     request_names(&mut state, &first, &snapshot_names(&["p-1"]));
     request_names(&mut state, &second, &snapshot_names(&["p-2"]));
     step(&mut state, |state| fork_began(state, &source, &flight));
@@ -1320,13 +1301,7 @@ fn a_second_save_of_an_agent_is_refused_while_the_first_runs() {
 #[test]
 fn fork_ended_gives_the_stage_scope_only_for_an_attempt_that_never_published() {
     let source = agent_snapshots("source");
-    let flight = (
-        AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "target".to_string(),
-        },
-        [7; 32],
-    );
+    let flight = (AgentId::from_parts(7, 3), [7; 32]);
     let end_of = |publishing: bool, published: bool| {
         let mut state = State::default();
         let stage = agent_snapshots("stage");
@@ -1376,13 +1351,7 @@ fn fork_ended_gives_the_stage_scope_only_for_an_attempt_that_never_published() {
 #[test]
 fn the_end_of_a_fork_attempt_deletes_its_stage_only_when_nothing_can_publish_it() {
     let source = agent_snapshots("source");
-    let flight = (
-        AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "target".to_string(),
-        },
-        [8; 32],
-    );
+    let flight = (AgentId::from_parts(7, 4), [8; 32]);
     let end_of = |publishing: bool, stage: bool, outcome: Option<ForkOutcome>| {
         let mut state = State::default();
         let staged = agent_snapshots("stage");
@@ -1425,13 +1394,7 @@ fn the_end_of_a_fork_attempt_deletes_its_stage_only_when_nothing_can_publish_it(
 fn a_fork_of_a_source_whose_snapshots_are_being_deleted_is_refused() {
     let mut state = State::default();
     let source = agent_snapshots("source");
-    let flight = (
-        AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "target".to_string(),
-        },
-        [1; 32],
-    );
+    let flight = (AgentId::from_parts(7, 5), [1; 32]);
 
     delete_all_snapshots(&mut state, &source);
     let began = step(&mut state, |state| fork_began(state, &source, &flight));
@@ -1584,7 +1547,7 @@ proptest::proptest! {
                 }
                 Step::ForkBegan(from, stage) => {
                     fork_counter = fork_counter.wrapping_add(1);
-                    let flight = (AgentId { component_id: ComponentId::new(), agent_id: "target".to_string() }, [fork_counter; 32]);
+                    let flight = (AgentId::from_parts(7, 6), [fork_counter; 32]);
                     if step(&mut state, |state| fork_began(state, &agents[from], &flight)) {
                         forks.push((agents[from].clone(), flight, stages[stage].clone(), false));
                     }

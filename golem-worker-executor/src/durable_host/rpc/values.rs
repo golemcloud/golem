@@ -99,8 +99,23 @@ impl PreparedRpcInvocation {
         }
     }
 
+    /// The retry properties of a dispatch of this invocation to `remote_agent_id`.
+    pub(super) fn retry_properties(
+        &self,
+        verb: &str,
+        remote_agent_id: &OwnedAgentId,
+    ) -> golem_common::model::retry_policy::RetryProperties {
+        golem_common::model::RetryContext::rpc(
+            verb,
+            remote_agent_id,
+            self.remote_component_id,
+            &self.remote_agent_type.type_name,
+            &self.method_name,
+        )
+    }
+
     pub(super) fn is_ephemeral(&self) -> bool {
-        self.ephemeral_logical_agent_id.is_some()
+        self.ephemeral.is_some()
     }
 
     pub(super) fn is_streaming(&self) -> bool {
@@ -158,9 +173,10 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
     let own_agent_id = ctx.owned_agent_id().clone();
     let (
         logical_remote_agent_id,
-        ephemeral_logical_agent_id,
+        ephemeral,
         connection_span_id,
         remote_agent_type,
+        remote_component_id,
         remote_method_streams,
         env,
         config,
@@ -170,9 +186,10 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         let (env, config) = payload.target_activation.target_creation_data();
         (
             payload.remote_agent_id.clone(),
-            payload.ephemeral_logical_agent_id.clone(),
+            payload.ephemeral.clone(),
             payload.span_id.clone(),
             payload.remote_agent_type.clone(),
+            payload.remote_component_id,
             payload.remote_method_streams.clone(),
             env,
             config,
@@ -197,7 +214,7 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         )));
     }
 
-    if ephemeral_logical_agent_id.is_none() && logical_remote_agent_id == own_agent_id {
+    if ephemeral.is_none() && logical_remote_agent_id == own_agent_id {
         match ctx.runtime() {
             golem_common::model::entity::OwnerRuntime::Agent => {
                 return Err(anyhow::anyhow!(
@@ -217,7 +234,7 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
 
     Ok(Ok(PreparedRpcInvocation {
         logical_remote_agent_id,
-        ephemeral_logical_agent_id,
+        ephemeral,
         connection_span_id,
         env,
         config,
@@ -225,6 +242,7 @@ pub(super) fn prepare_rpc_invocation<Ctx: WorkerCtx>(
         input_value,
         streaming,
         remote_agent_type,
+        remote_component_id,
     }))
 }
 

@@ -200,8 +200,6 @@ EOF
 }
 
 upgrade='headers: [{name: upgrade, present_match: true}]'
-workers='safe_regex: {regex: "^/v1/components/[^/]+/workers(/.*)?$"}'
-agents='path_separated_prefix: /v1/agents'
 runtime='path_separated_prefix: /v1/runtime'
 
 config=$(cat <<EOF
@@ -272,10 +270,7 @@ static_resources:
               # The metrics of the services stay inside the deployment.
               - match: {path_separated_prefix: /metrics}
                 direct_response: {status: 404}
-$(route "{${workers}, ${upgrade}}" worker_service_websocket)
-$(route "{${agents}, ${upgrade}}" worker_service_websocket)
-$(route "{${workers}}" worker_service)
-$(route "{${agents}}" worker_service)
+$(route "{${runtime}, ${upgrade}}" worker_service_websocket)
 $(route "{${runtime}}" worker_service)
 $(route "{prefix: /}" registry_service)
             # HTTP API deployments do not serve WebSockets, so the router answers an upgrade

@@ -401,8 +401,7 @@ impl SshCommandHandler {
             self.ctx.worker_service_url().as_str(),
             &session.owner.application_name.to_string(),
             &session.owner.environment_name.to_string(),
-            &agent.component_id.0.to_string(),
-            &agent.agent_id,
+            &agent.to_string(),
         );
         SessionHistory::open(&path).unwrap_or_else(|error| {
             log_warn(format!(
@@ -739,7 +738,7 @@ impl SshCommandHandler {
             let clients = self.ctx.golem_clients().await.ok()?;
             clients
                 .worker
-                .get_worker_metadata(&agent.component_id.0, &agent.agent_id)
+                .get_worker_metadata(&session.owner.environment.environment_id.0, &agent.0, None)
                 .await
                 .ok()
         };

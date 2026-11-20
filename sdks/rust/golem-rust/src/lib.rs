@@ -466,12 +466,6 @@ fn wire_uuid_to_schema(value: schema::wit::wire::Uuid) -> Uuid {
     Uuid::from_u64_pair(value.high_bits, value.low_bits)
 }
 
-fn schema_component_id_to_wire(value: ComponentId) -> schema::wit::wire::ComponentId {
-    schema::wit::wire::ComponentId {
-        uuid: schema_uuid_to_wire(value.uuid),
-    }
-}
-
 fn wire_component_id_to_schema(value: schema::wit::wire::ComponentId) -> ComponentId {
     ComponentId {
         uuid: wire_uuid_to_schema(value.uuid),
@@ -480,16 +474,12 @@ fn wire_component_id_to_schema(value: schema::wit::wire::ComponentId) -> Compone
 
 fn schema_agent_id_to_wire(value: AgentId) -> schema::wit::wire::AgentId {
     schema::wit::wire::AgentId {
-        component_id: schema_component_id_to_wire(value.component_id),
-        agent_id: value.agent_id,
+        uuid: schema_uuid_to_wire(value.uuid),
     }
 }
 
 fn wire_agent_id_to_schema(value: schema::wit::wire::AgentId) -> AgentId {
-    AgentId {
-        component_id: wire_component_id_to_schema(value.component_id),
-        agent_id: value.agent_id,
-    }
+    AgentId::new(wire_uuid_to_schema(value.uuid))
 }
 
 fn schema_promise_id_to_wire(value: &PromiseId) -> schema::wit::wire::PromiseId {
@@ -664,13 +654,13 @@ impl From<AgentStatus> for host_api::AgentStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
-pub struct AgentNameFilter {
+pub struct AgentKeyFilter {
     pub comparator: StringFilterComparator,
     pub value: String,
 }
 
-impl From<host_api::AgentNameFilter> for AgentNameFilter {
-    fn from(value: host_api::AgentNameFilter) -> Self {
+impl From<host_api::AgentKeyFilter> for AgentKeyFilter {
+    fn from(value: host_api::AgentKeyFilter) -> Self {
         Self {
             comparator: Into::into(value.comparator),
             value: value.value,
@@ -678,8 +668,8 @@ impl From<host_api::AgentNameFilter> for AgentNameFilter {
     }
 }
 
-impl From<AgentNameFilter> for host_api::AgentNameFilter {
-    fn from(value: AgentNameFilter) -> Self {
+impl From<AgentKeyFilter> for host_api::AgentKeyFilter {
+    fn from(value: AgentKeyFilter) -> Self {
         Self {
             comparator: Into::into(value.comparator),
             value: value.value,
@@ -815,7 +805,7 @@ impl From<AgentConfigVarsFilter> for host_api::AgentConfigVarsFilter {
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum AgentPropertyFilter {
-    Name(AgentNameFilter),
+    Key(AgentKeyFilter),
     Status(AgentStatusFilter),
     Version(AgentVersionFilter),
     CreatedAt(AgentCreatedAtFilter),
@@ -826,7 +816,7 @@ pub enum AgentPropertyFilter {
 impl From<host_api::AgentPropertyFilter> for AgentPropertyFilter {
     fn from(value: host_api::AgentPropertyFilter) -> Self {
         match value {
-            host_api::AgentPropertyFilter::Name(value) => Self::Name(Into::into(value)),
+            host_api::AgentPropertyFilter::Key(value) => Self::Key(Into::into(value)),
             host_api::AgentPropertyFilter::Status(value) => Self::Status(Into::into(value)),
             host_api::AgentPropertyFilter::Version(value) => Self::Version(Into::into(value)),
             host_api::AgentPropertyFilter::CreatedAt(value) => Self::CreatedAt(Into::into(value)),
@@ -839,7 +829,7 @@ impl From<host_api::AgentPropertyFilter> for AgentPropertyFilter {
 impl From<AgentPropertyFilter> for host_api::AgentPropertyFilter {
     fn from(value: AgentPropertyFilter) -> Self {
         match value {
-            AgentPropertyFilter::Name(value) => Self::Name(Into::into(value)),
+            AgentPropertyFilter::Key(value) => Self::Key(Into::into(value)),
             AgentPropertyFilter::Status(value) => Self::Status(Into::into(value)),
             AgentPropertyFilter::Version(value) => Self::Version(Into::into(value)),
             AgentPropertyFilter::CreatedAt(value) => Self::CreatedAt(Into::into(value)),
@@ -894,6 +884,8 @@ impl From<AgentAnyFilter> for host_api::AgentAnyFilter {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentMetadata {
     pub agent_id: AgentId,
+    pub agent_type_name: Option<String>,
+    pub fingerprint: Uuid,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub config: Vec<(String, String)>,
@@ -907,6 +899,8 @@ impl From<host_api::AgentMetadata> for AgentMetadata {
     fn from(value: host_api::AgentMetadata) -> Self {
         Self {
             agent_id: wire_agent_id_to_schema(value.agent_id),
+            agent_type_name: value.agent_type_name,
+            fingerprint: wire_uuid_to_schema(value.fingerprint),
             args: value.args,
             env: value.env,
             config: value.config,
@@ -922,6 +916,8 @@ impl From<AgentMetadata> for host_api::AgentMetadata {
     fn from(value: AgentMetadata) -> Self {
         Self {
             agent_id: schema_agent_id_to_wire(value.agent_id),
+            agent_type_name: value.agent_type_name,
+            fingerprint: schema_uuid_to_wire(value.fingerprint),
             args: value.args,
             env: value.env,
             config: value.config,
@@ -940,14 +936,10 @@ pub struct GetAgents {
 pub use host_api::AgentOperationError;
 
 impl GetAgents {
-    pub fn new(component_id: ComponentId, filter: Option<&AgentAnyFilter>, precise: bool) -> Self {
+    pub fn new(agent_type_name: &str, filter: Option<&AgentAnyFilter>, precise: bool) -> Self {
         let raw_filter = filter.cloned().map(host_api::AgentAnyFilter::from);
         Self {
-            raw: host_api::GetAgents::new(
-                schema_component_id_to_wire(component_id),
-                raw_filter.as_ref(),
-                precise,
-            ),
+            raw: host_api::GetAgents::new(agent_type_name, raw_filter.as_ref(), precise),
         }
     }
 
@@ -960,7 +952,7 @@ impl GetAgents {
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct ForkDetails {
-    pub forked_phantom_id: Uuid,
+    pub forked_agent_id: AgentId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
@@ -973,10 +965,10 @@ impl From<host_api::ForkResult> for ForkResult {
     fn from(value: host_api::ForkResult) -> Self {
         match value {
             host_api::ForkResult::Original(details) => Self::Original(ForkDetails {
-                forked_phantom_id: wire_uuid_to_schema(details.forked_phantom_id),
+                forked_agent_id: wire_agent_id_to_schema(details.forked_agent_id),
             }),
             host_api::ForkResult::Forked(details) => Self::Forked(ForkDetails {
-                forked_phantom_id: wire_uuid_to_schema(details.forked_phantom_id),
+                forked_agent_id: wire_agent_id_to_schema(details.forked_agent_id),
             }),
         }
     }
@@ -1004,12 +996,12 @@ pub fn create_promise() -> PromiseId {
 
 pub fn get_promise(promise_id: &PromiseId) -> PromiseResult {
     PromiseResult {
-        raw: host_api::get_promise(&schema_promise_id_to_wire(promise_id)),
+        raw: host_api::get_promise(schema_promise_id_to_wire(promise_id)),
     }
 }
 
 pub fn complete_promise(promise_id: &PromiseId, data: &[u8]) -> bool {
-    host_api::complete_promise(&schema_promise_id_to_wire(promise_id), data)
+    host_api::complete_promise(schema_promise_id_to_wire(promise_id), data)
 }
 
 pub fn oplog_commit(replicas: u8) {
@@ -1026,7 +1018,7 @@ pub fn get_self_metadata() -> Result<AgentMetadata, AgentOperationError> {
 }
 
 pub fn get_agent_metadata(agent_id: &AgentId) -> Option<AgentMetadata> {
-    host_api::get_agent_metadata(&schema_agent_id_to_wire(agent_id.clone())).map(Into::into)
+    host_api::get_agent_metadata(schema_agent_id_to_wire(agent_id.clone())).map(Into::into)
 }
 
 pub fn update_agent(
@@ -1035,7 +1027,7 @@ pub fn update_agent(
     mode: UpdateMode,
 ) -> Result<(), AgentOperationError> {
     host_api::update_agent(
-        &schema_agent_id_to_wire(agent_id.clone()),
+        schema_agent_id_to_wire(agent_id.clone()),
         target_revision,
         Into::into(mode),
     )
@@ -1043,14 +1035,6 @@ pub fn update_agent(
 
 pub fn resolve_component_id(component_reference: &str) -> Option<ComponentId> {
     host_api::resolve_component_id(component_reference).map(wire_component_id_to_schema)
-}
-
-pub fn resolve_agent_id(component_reference: &str, agent_name: &str) -> Option<AgentId> {
-    host_api::resolve_agent_id(component_reference, agent_name).map(wire_agent_id_to_schema)
-}
-
-pub fn resolve_agent_id_strict(component_reference: &str, agent_name: &str) -> Option<AgentId> {
-    host_api::resolve_agent_id_strict(component_reference, agent_name).map(wire_agent_id_to_schema)
 }
 
 pub fn fork() -> Result<ForkResult, AgentOperationError> {

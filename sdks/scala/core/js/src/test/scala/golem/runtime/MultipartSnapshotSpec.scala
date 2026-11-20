@@ -230,16 +230,17 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
         IndexImpl.initializations = 0
         IndexImpl.restorations = 0
         Guest.resetForTesting()
+        val agentId       = golem.AgentId(java.util.UUID.fromString("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))
         val identityInput = SchemaPayload.encode[String]("init")(InputRecordCodec.single[String]("name"))
         js.Dynamic.global
           .selectDynamic("globalThis")
           .updateDynamic("__golemScalaTestHost")(
             js.Dynamic.literal(
               "getSelfMetadata" -> (() =>
-                js.Dynamic.literal("agentId" -> js.Dynamic.literal("agentId" -> "multipart-index()"))
-              ),
-              "parseAgentId" -> ((_: String) =>
-                js.Array[js.Any]("multipart-index", js.Dynamic.literal("value" -> identityInput), js.undefined)
+                js.Dynamic.literal(
+                  "agentId"       -> golem.host.js.JsAgentId.fromAgentId(agentId),
+                  "agentTypeName" -> "multipart-index"
+                )
               )
             )
           )
@@ -248,7 +249,7 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
           .fromState(Saved(17, "restore"), Map("index" -> SnapshotPart(bytes, "application/octet-stream")))
           .toOption
           .get
-        val context = SnapshotRestoreContext(Vector("init"), "multipart-index()", None, None)
+        val context = SnapshotRestoreContext(Vector("init"), agentId, None)
         for {
           wrong <- defn.snapshotHandlers.get
                      .load(SnapshotPayload(Array.emptyByteArray, "application/octet-stream"), context)
@@ -262,7 +263,8 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
                                  wire(envelope.replace("\"version\":1", "\"version\":1e0")),
                                  "multipart/mixed; boundary=b"
                                )
-                             )
+                             ),
+                             identityInput
                            )
                          )
                          .failed
@@ -271,13 +273,17 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
           failed             <- FutureInterop
                       .fromPromise(
                         Guest.LoadSnapshot
-                          .load(jsSnapshot(MultipartSnapshotCodec.encode(missing).toOption.get))
+                          .load(
+                            jsSnapshot(MultipartSnapshotCodec.encode(missing).toOption.get),
+                            identityInput
+                          )
                       )
                       .failed
           stateAfterFailure = Guest.stateForTesting
           _                <- FutureInterop.fromPromise(
                  Guest.LoadSnapshot.load(
-                   jsSnapshot(MultipartSnapshotCodec.encode(saved).toOption.get)
+                   jsSnapshot(MultipartSnapshotCodec.encode(saved).toOption.get),
+                   identityInput
                  )
                )
           reencoded <- FutureInterop.fromPromise(Guest.SaveSnapshot.save())

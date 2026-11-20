@@ -141,10 +141,9 @@ object Transactions {
                 "error-kind" -> JsPredicateValue.text(kind)
               ) ++ name.toList.map(value => "transaction-name" -> JsPredicateValue.text(value))
               val decision = try {
-                val id        = HostApi.getSelfMetadata().agentId
-                val component = JsUuid.toUuid(id.componentId.uuid).toString
-                val noun      = s"urn:worker:$component/${id.agentId}"
-                val policy    = RetryApi.resolveRetryPolicy("saga", noun, properties)
+                val self   = HostApi.getSelfMetadata()
+                val noun   = s"urn:agent:${JsUuid.toUuid(self.environmentId.uuid)}/${self.agentId}"
+                val policy = RetryApi.resolveRetryPolicy("saga", noun, properties)
                 RetryApi.nextRetryDelay(
                   policy,
                   state,

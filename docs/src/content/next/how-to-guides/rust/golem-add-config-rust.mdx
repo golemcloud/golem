@@ -84,24 +84,32 @@ Regular config keys in `golem.yaml` retain Rust field names, including `snake_ca
 Override or supply config when creating an agent instance:
 
 ```shell
-golem agent new 'MyAgent("agent-1")' \
+golem agent create --keyed 'MyAgent("agent-1")' \
   --config foo=42 \
   --config 'bar="hello"' \
   --config nested.a=true \
   --config nested.b="[1, 2, 3]"
 ```
 
-Dot-separated keys address nested struct fields.
+Dot-separated keys address nested struct fields. With `--keyed`, the command creates the keyed agent of the constructor parameters, so later `golem agent invoke 'MyAgent("agent-1")' ...` calls reach it; it fails when that agent already exists. Without `--keyed`, each call creates a new agent without a key, reachable only by the agent ID that the command prints.
 
 ## 5. RPC Config Overrides
 
-When calling an agent via RPC, use the generated `*ConfigRpc` type and `get_with_config` to override config at call time:
+When creating an agent via RPC, pass the generated `*ConfigRpc` type as the `config` of the async `create`. `upsert` takes no overrides:
 
 ```rust
-let agent = MyAgentClient::get_with_config(name, MyAgentConfigRpc {
-    foo: Some(42),
-    ..Default::default()
-});
+let agent = MyAgentClient::create(
+    name,
+    golem_rust::CreateOptions {
+        keyed: true,
+        config: MyAgentConfigRpc {
+            foo: Some(42),
+            ..Default::default()
+        },
+        env: Vec::new(),
+    },
+)
+.await?;
 ```
 
 ## Config Cascade
@@ -112,5 +120,5 @@ Config values follow the same cascade as environment variables:
 component, and agent layer, not as one final global layer.
 
 - Values in `golem.yaml` act as defaults.
-- Values passed via `golem agent new --config` or RPC `get_with_config` override those defaults.
+- Values passed via `golem agent create --config` or the `config` of an RPC `create` override those defaults.
 - If the config includes `Secret<T>` fields, also use [`golem-add-secret-rust`](/next/how-to-guides/rust/golem-add-secret-rust) for secret-specific declaration and CLI guidance.

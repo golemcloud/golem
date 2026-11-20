@@ -18,7 +18,6 @@ use crate::service::auth::AuthService;
 use crate::service::worker::{InvocationListQuery, WorkerService};
 use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, IdempotencyKey, OwnedInvocationId};
 use golem_common::recorded_http_api_request;
@@ -31,15 +30,13 @@ use poem_openapi_derive::{Enum, Object, OpenApi, Union};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::Instrument;
-use uuid::Uuid;
 
 type Result<T> = std::result::Result<T, ApiEndpointError>;
 
 /// The invocations of agents in one environment.
 ///
-/// An invocation ID is `<component UUID>/<agent name>.<UUID>`. In a path it is percent-encoded,
-/// including its `/`. The ID resolves only in the environment of its agent; in any other
-/// environment the invocation is not found.
+/// An invocation ID is `<agent ID>.<UUID>`. The ID resolves only in the environment of its
+/// agent; in any other environment the invocation is not found.
 ///
 /// Until invocation grants exist, `get`, `list` and `lookup` require the agent's `view`
 /// permission, and `cancel` its `cancel-invocation` permission.
@@ -71,8 +68,8 @@ impl InvocationApi {
     async fn list_invocations(
         &self,
         environment_id: Path<EnvironmentId>,
-        /// The agent, as `<component UUID>/<agent name>`
-        agent: Query<String>,
+        /// The agent ID
+        agent: Query<AgentId>,
         /// Only invocations of this method name or `tool:<tool>/<command path>`
         operation: Query<Option<String>>,
         /// Only invocations in one of these states
@@ -88,7 +85,7 @@ impl InvocationApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<InvocationPage>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let agent_id = parse_agent_id(&agent.0)?;
+        let agent_id = agent.0;
         let record = recorded_http_api_request!(
             "list_invocations",
             environment_id = %environment_id.0,
@@ -128,15 +125,15 @@ impl InvocationApi {
     async fn lookup_invocations(
         &self,
         environment_id: Path<EnvironmentId>,
-        /// The agent, as `<component UUID>/<agent name>`
-        agent: Query<String>,
+        /// The agent ID
+        agent: Query<AgentId>,
         /// Only the invocation of this method name or `tool:<tool>/<command path>`
         operation: Query<Option<String>>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<IdempotencyKey>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvocationLookupResult>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-        let agent_id = parse_agent_id(&agent.0)?;
+        let agent_id = agent.0;
         let record = recorded_http_api_request!(
             "lookup_invocations",
             environment_id = %environment_id.0,
@@ -223,39 +220,8 @@ impl InvocationApi {
 }
 
 fn parse_invocation_id(text: &str) -> Result<OwnedInvocationId> {
-    let invocation_id: OwnedInvocationId = text.parse().map_err(|error: String| {
+    text.parse().map_err(|error: String| {
         ApiEndpointError::bad_request(api::error_code::VALIDATION_ERROR, golem_common::safe(error))
-    })?;
-    let agent_id = normalize_agent_id(invocation_id.agent_id())?;
-    Ok(OwnedInvocationId::new(agent_id, invocation_id.id()))
-}
-
-fn parse_agent_id(text: &str) -> Result<AgentId> {
-    let invalid = |detail: String| {
-        ApiEndpointError::bad_request(
-            api::error_code::INVALID_WORKER_ID,
-            golem_common::safe(format!(
-                "invalid agent: expected <component UUID>/<agent name>: {detail}"
-            )),
-        )
-    };
-    let (component, name) = text
-        .split_once('/')
-        .ok_or_else(|| invalid("missing '/'".to_string()))?;
-    let component_id =
-        ComponentId(Uuid::parse_str(component).map_err(|error| invalid(error.to_string()))?);
-    normalize_agent_id(&AgentId {
-        component_id,
-        agent_id: name.to_string(),
-    })
-}
-
-fn normalize_agent_id(agent_id: &AgentId) -> Result<AgentId> {
-    AgentId::from_agent_name_string(agent_id.component_id, &agent_id.agent_id).map_err(|error| {
-        ApiEndpointError::bad_request(
-            api::error_code::INVALID_WORKER_ID,
-            golem_common::safe(format!("Invalid agent id: {error}")),
-        )
     })
 }
 
@@ -305,7 +271,7 @@ pub enum InvocationKind {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct InvocationSummary {
-    /// `<component UUID>/<agent name>.<UUID>`, not percent-encoded
+    /// `<agent ID>.<UUID>`
     pub invocation_id: String,
     pub agent_id: AgentId,
     pub environment_id: EnvironmentId,

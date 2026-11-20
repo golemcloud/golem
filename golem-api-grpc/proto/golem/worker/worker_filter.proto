@@ -12,7 +12,7 @@ import "google/protobuf/timestamp.proto";
 
 message AgentFilter {
   oneof filter {
-    AgentNameFilter name = 1;
+    AgentKeyFilter key = 1;
     AgentRevisionFilter revision = 2;
     AgentStatusFilter status = 3;
     AgentCreatedAtFilter created_at = 4;
@@ -22,6 +22,7 @@ message AgentFilter {
     AgentNotFilter not = 8;
     AgentConfigVarsFilter config = 9;
     AgentModeFilter mode = 10;
+    AgentIdFilter id = 11;
   }
 }
 
@@ -37,9 +38,14 @@ message AgentOrFilter {
   repeated AgentFilter filters = 1;
 }
 
-message AgentNameFilter {
+message AgentKeyFilter {
   golem.common.StringFilterComparator comparator = 1;
   string value = 2;
+}
+
+message AgentIdFilter {
+  golem.common.FilterComparator comparator = 1;
+  AgentId value = 2;
 }
 
 message AgentRevisionFilter {

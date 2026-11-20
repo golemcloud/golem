@@ -19,31 +19,27 @@ use crate::storage::indexed::{
     IndexedStorageNamespace, ScanResume,
 };
 use assert2::check;
-use golem_common::model::AgentId;
-use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{AgentId, OwnedAgentId};
+use uuid::Uuid;
 
-fn test_agent_id() -> AgentId {
-    use std::sync::OnceLock;
-    static WORKER_ID: OnceLock<AgentId> = OnceLock::new();
-
-    WORKER_ID
-        .get_or_init(|| AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "worker".to_string(),
-        })
-        .clone()
+fn test_owned_agent_id() -> OwnedAgentId {
+    OwnedAgentId::new(
+        EnvironmentId(Uuid::from_u128(1)),
+        &AgentId::from_parts(7, 1),
+    )
 }
 
 fn staged_namespace() -> IndexedStorageNamespace {
     IndexedStorageNamespace::StagedOpLog {
-        agent_id: test_agent_id(),
+        owned_agent_id: test_owned_agent_id(),
         agent_mode: golem_common::model::agent::AgentMode::Durable,
     }
 }
 
 fn primary_namespace() -> IndexedStorageNamespace {
     IndexedStorageNamespace::OpLog {
-        agent_id: test_agent_id(),
+        owned_agent_id: test_owned_agent_id(),
         agent_mode: golem_common::model::agent::AgentMode::Durable,
     }
 }
@@ -104,7 +100,7 @@ async fn staged_publication_is_atomic_validated_and_hidden() {
                 "read",
                 "entry",
                 IndexedStorageNamespace::OpLog {
-                    agent_id: test_agent_id(),
+                    owned_agent_id: test_owned_agent_id(),
                     agent_mode: golem_common::model::agent::AgentMode::Durable
                 },
                 "target",
@@ -162,7 +158,7 @@ async fn staged_publication_is_atomic_validated_and_hidden() {
                     "test",
                     "exists",
                     IndexedStorageNamespace::OpLog {
-                        agent_id: test_agent_id(),
+                        owned_agent_id: test_owned_agent_id(),
                         agent_mode: golem_common::model::agent::AgentMode::Durable
                     },
                     key
@@ -232,7 +228,7 @@ async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
             "read",
             "entry",
             IndexedStorageNamespace::OpLog {
-                agent_id: test_agent_id(),
+                owned_agent_id: test_owned_agent_id(),
                 agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             "target",
@@ -266,7 +262,7 @@ async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
                 "read",
                 "entry",
                 IndexedStorageNamespace::OpLog {
-                    agent_id: test_agent_id(),
+                    owned_agent_id: test_owned_agent_id(),
                     agent_mode: golem_common::model::agent::AgentMode::Durable
                 },
                 "target",
@@ -317,7 +313,7 @@ async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
                     "append",
                     "entry",
                     IndexedStorageNamespace::OpLog {
-                        agent_id: test_agent_id(),
+                        owned_agent_id: test_owned_agent_id(),
                         agent_mode: golem_common::model::agent::AgentMode::Durable,
                     },
                     "ordinary-race",
@@ -341,7 +337,7 @@ async fn scan_stable_pages_in_order_and_hands_a_key_back_once() {
     for key in ["k1", "k2", "k3", "k4", "k5"] {
         api.append(
             IndexedStorageNamespace::OpLog {
-                agent_id: test_agent_id(),
+                owned_agent_id: test_owned_agent_id(),
                 agent_mode,
             },
             key,
@@ -384,21 +380,21 @@ async fn scan_stable_pages_in_order_and_hands_a_key_back_once() {
 }
 
 #[test]
-async fn a_scan_gives_the_key_of_an_agent_whose_name_holds_a_slash() {
-    // The oplogs write each agent under its `to_redis_key`, and a scan of a component uses the
-    // component id as the prefix.
+async fn a_scan_of_a_type_prefix_gives_the_storage_key_of_its_agent() {
+    // The oplogs write each agent under its `storage_key`, which holds a `/`, and a scan of the
+    // agents of one type uses the type's storage key prefix.
     let storage = super::InMemoryIndexedStorage::new();
     let api = storage.with_entity("test", "test", "test");
     let agent_mode = golem_common::model::agent::AgentMode::Durable;
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: r#"counter("a/b")"#.to_string(),
-    };
-    let key = agent_id.to_redis_key();
-    let prefix = agent_id.component_id.0.to_string();
+    let owned_agent_id = test_owned_agent_id();
+    let key = owned_agent_id.storage_key();
+    let prefix = OwnedAgentId::type_storage_key_prefix(
+        owned_agent_id.environment_id,
+        owned_agent_id.agent_id.type_id().unwrap(),
+    );
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: agent_id.clone(),
+            owned_agent_id: owned_agent_id.clone(),
             agent_mode,
         },
         &key,
@@ -410,7 +406,7 @@ async fn a_scan_gives_the_key_of_an_agent_whose_name_holds_a_slash() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::CompressedOpLog {
-            agent_id: agent_id.clone(),
+            owned_agent_id: owned_agent_id.clone(),
             agent_mode,
             level: 1,
         },
@@ -474,7 +470,7 @@ async fn closest_exact_match() {
 
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -486,7 +482,7 @@ async fn closest_exact_match() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -498,7 +494,7 @@ async fn closest_exact_match() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -510,7 +506,7 @@ async fn closest_exact_match() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -524,7 +520,7 @@ async fn closest_exact_match() {
     let result = api
         .closest(
             IndexedStorageNamespace::OpLog {
-                agent_id: test_agent_id(),
+                owned_agent_id: test_owned_agent_id(),
                 agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
@@ -544,7 +540,7 @@ async fn closest_no_match() {
 
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -556,7 +552,7 @@ async fn closest_no_match() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -568,7 +564,7 @@ async fn closest_no_match() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -580,7 +576,7 @@ async fn closest_no_match() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -594,7 +590,7 @@ async fn closest_no_match() {
     let result: Option<(u64, i32)> = api
         .closest(
             IndexedStorageNamespace::OpLog {
-                agent_id: test_agent_id(),
+                owned_agent_id: test_owned_agent_id(),
                 agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
@@ -614,7 +610,7 @@ async fn closest_match() {
 
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -626,7 +622,7 @@ async fn closest_match() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -638,7 +634,7 @@ async fn closest_match() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -650,7 +646,7 @@ async fn closest_match() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -664,7 +660,7 @@ async fn closest_match() {
     let result = api
         .closest(
             IndexedStorageNamespace::OpLog {
-                agent_id: test_agent_id(),
+                owned_agent_id: test_owned_agent_id(),
                 agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
@@ -684,7 +680,7 @@ async fn read() {
 
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -696,7 +692,7 @@ async fn read() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -708,7 +704,7 @@ async fn read() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -720,7 +716,7 @@ async fn read() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -734,7 +730,7 @@ async fn read() {
     let result = api
         .read(
             IndexedStorageNamespace::OpLog {
-                agent_id: test_agent_id(),
+                owned_agent_id: test_owned_agent_id(),
                 agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
@@ -755,7 +751,7 @@ async fn read_wider() {
 
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -767,7 +763,7 @@ async fn read_wider() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -779,7 +775,7 @@ async fn read_wider() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -791,7 +787,7 @@ async fn read_wider() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -805,7 +801,7 @@ async fn read_wider() {
     let result = api
         .read(
             IndexedStorageNamespace::OpLog {
-                agent_id: test_agent_id(),
+                owned_agent_id: test_owned_agent_id(),
                 agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
@@ -826,7 +822,7 @@ async fn first() {
 
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -838,7 +834,7 @@ async fn first() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -852,7 +848,7 @@ async fn first() {
     let result = api
         .first(
             IndexedStorageNamespace::OpLog {
-                agent_id: test_agent_id(),
+                owned_agent_id: test_owned_agent_id(),
                 agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
@@ -871,7 +867,7 @@ async fn last() {
 
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -883,7 +879,7 @@ async fn last() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -897,7 +893,7 @@ async fn last() {
     let result = api
         .last(
             IndexedStorageNamespace::OpLog {
-                agent_id: test_agent_id(),
+                owned_agent_id: test_owned_agent_id(),
                 agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
@@ -916,7 +912,7 @@ async fn drop_prefix() {
 
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -928,7 +924,7 @@ async fn drop_prefix() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -940,7 +936,7 @@ async fn drop_prefix() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -952,7 +948,7 @@ async fn drop_prefix() {
     .unwrap();
     api.append(
         IndexedStorageNamespace::OpLog {
-            agent_id: test_agent_id(),
+            owned_agent_id: test_owned_agent_id(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
         },
         key,
@@ -967,7 +963,7 @@ async fn drop_prefix() {
         .with("test", "test")
         .drop_prefix(
             IndexedStorageNamespace::OpLog {
-                agent_id: test_agent_id(),
+                owned_agent_id: test_owned_agent_id(),
                 agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,
@@ -980,7 +976,7 @@ async fn drop_prefix() {
     let result = api
         .read(
             IndexedStorageNamespace::OpLog {
-                agent_id: test_agent_id(),
+                owned_agent_id: test_owned_agent_id(),
                 agent_mode: golem_common::model::agent::AgentMode::Durable,
             },
             key,

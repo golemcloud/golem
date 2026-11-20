@@ -29,7 +29,7 @@ use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_client::api::InvocationClient;
 use golem_client::model::{InvocationKind, InvocationState};
-use golem_common::model::OwnedInvocationId;
+use golem_common::model::{AgentId, OwnedInvocationId};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -110,14 +110,14 @@ impl InvocationCommandHandler {
         page_size: Option<u32>,
         cursor: Option<String>,
     ) -> anyhow::Result<()> {
-        let (environment_id, agent) = self.resolve_agent(agent).await?;
+        let (environment_id, agent_id) = self.resolve_agent(agent).await?;
         let states = status.into_iter().map(state).collect::<Vec<_>>();
         let clients = self.ctx.golem_clients().await?;
         let page = clients
             .invocation
             .list_invocations(
                 &environment_id,
-                &agent,
+                &agent_id.0,
                 operation.as_deref(),
                 (!states.is_empty()).then_some(states.as_slice()),
                 kind.map(self::kind).as_ref(),
@@ -187,13 +187,13 @@ impl InvocationCommandHandler {
         let (Some(agent), Some(idempotency_key)) = (agent, idempotency_key) else {
             bail!("select an invocation by its ID, or by --agent and --idempotency-key");
         };
-        let (environment_id, agent_text) = self.resolve_agent(agent).await?;
+        let (environment_id, agent_id) = self.resolve_agent(agent).await?;
         let clients = self.ctx.golem_clients().await?;
         let found = clients
             .invocation
             .lookup_invocations(
                 &environment_id,
-                &agent_text,
+                &agent_id.0,
                 method.as_deref(),
                 &idempotency_key,
             )
@@ -203,7 +203,7 @@ impl InvocationCommandHandler {
             .unwrap_or_default();
         if found.is_empty() {
             log_error(format!(
-                "No invocation of agent {agent_text} has the idempotency key {idempotency_key}"
+                "No invocation of agent {agent_id} has the idempotency key {idempotency_key}"
             ));
             bail!(NonSuccessfulExit)
         }
@@ -216,18 +216,13 @@ impl InvocationCommandHandler {
         ))
     }
 
-    /// The environment of an agent, and the agent as `<component UUID>/<agent name>`.
-    async fn resolve_agent(&self, agent: RawAgentId) -> anyhow::Result<(Uuid, String)> {
+    /// The environment of an agent, and its agent ID.
+    async fn resolve_agent(&self, agent: RawAgentId) -> anyhow::Result<(Uuid, AgentId)> {
         self.ctx.silence_app_context_init().await;
         let agent_handler = self.ctx.agent_handler();
         let agent_id_match = agent_handler.match_agent_id(agent).await?;
-        let (component, agent_id) = agent_handler
-            .component_by_agent_id_match(&agent_id_match)
-            .await?;
-        Ok((
-            component.environment_id.0,
-            format!("{}/{}", component.id.0, agent_id.0),
-        ))
+        let agent_id = agent_handler.agent_id_of(&agent_id_match).await?;
+        Ok((agent_id_match.environment.environment_id.0, agent_id))
     }
 }
 

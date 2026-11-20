@@ -326,6 +326,9 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .cmd_build(component_name, build_args)
                         .await
                 }
+                GolemCliSubcommand::Install { file } => {
+                    crate::package::install(&ctx.global_flags, &file)
+                }
                 GolemCliSubcommand::Package {
                     subcommand: crate::command::PackageSubcommand::Pack { output },
                 } => {

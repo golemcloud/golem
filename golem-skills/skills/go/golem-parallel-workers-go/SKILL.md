@@ -11,9 +11,9 @@ A single Golem agent admits invocations **sequentially**. Within one invocation,
 
 1. **`CallAsync` + `Future.Get`** — start several cross-agent calls at once, then await each. `Call` / `MustCall` await one call at a time **per goroutine**; calls in separate goroutines can overlap at yield points. `CallAsync` returns immediately, so several calls are in flight together, and a goroutine blocked in `Future.Get` yields to the component-model event loop while the others proceed.
 2. **`Trigger` + promises** — fire-and-forget each worker, hand each a promise ID, then await all the promises. Best for long-running work where you don't want a call in flight the whole time.
-3. **`golem.ForkSelf`** — copy the running agent, state included, at the current point; the copy continues under a new phantom id.
+3. **`golem.ForkSelf`** — copy the running agent, state included, at the current point; the copy continues as a new agent, with a new agent ID and no key.
 
-> **Platform contract:** a single target instance handles one invocation at a time. Independent invocation execution comes from fanning out to **different** target instances (distinct full identities), not from calling the same instance repeatedly. This does not prohibit goroutine concurrency within one invocation.
+> **Platform contract:** a single target instance handles one invocation at a time. Independent invocation execution comes from fanning out to **different** target instances (distinct keys or agent IDs), not from calling the same instance repeatedly. This does not prohibit goroutine concurrency within one invocation.
 
 ## Approach 1: async fan-out with `CallAsync` / `Future.Get`
 
@@ -67,7 +67,7 @@ func init() {
         futures := make([]*golem.Future[string], len(in.Items))
         for i, item := range in.Items {
             // A distinct worker instance per item → they run concurrently.
-            c := worker.Agent.Get(worker.ID{Index: int64(i)})
+            c := worker.Agent.Upsert(worker.ID{Index: int64(i)})
             futures[i] = worker.Process.CallAsync(c, worker.ProcessIn{Item: item})
         }
 
@@ -112,7 +112,7 @@ agent.Handle(coordinator.DispatchAndCollect, func(ctx *golem.Context[state], in 
 
     // Fire-and-forget: hand each worker its region and its promise id.
     for i, region := range in.Regions {
-        c := worker.Agent.Get(worker.ID{Index: int64(i)})
+        c := worker.Agent.Upsert(worker.ID{Index: int64(i)})
         worker.RunReport.MustTrigger(c, worker.RunReportIn{Region: region, Promise: promises[i].ID()})
     }
 
@@ -139,7 +139,7 @@ agent.Handle(worker.RunReport, func(_ *golem.Context[state], in worker.RunReport
 
 ## Approach 3: `golem.ForkSelf`
 
-`golem.ForkSelf` copies the running agent at the current point. Both copies continue from there: `forked` tells them apart, and `phantomID` is the copy's id on both sides. Synchronize them with a promise:
+`golem.ForkSelf` copies the running agent at the current point. Both copies continue from there: `forked` tells them apart, and `forkedID` is the copy's agent ID on both sides. Synchronize them with a promise:
 
 ```go
 agent.Handle(coordinator.Compute, func(ctx *golem.Context[state], _ golem.Unit) string {
@@ -174,7 +174,7 @@ Fork in a loop for N-way fan-out: each iteration's copy takes slice `i` and retu
 - Don't hold a `*golem.Future` across invocations — start it and collect or cancel it within the same handler. A second `Get` returns the same result. To abandon a result, call `Cancel` **before collecting it**: a later `Get` returns `golem.ErrCallCancelled`. Cancellation is best effort; the remote invocation may already have executed. `Cancel` after collection does nothing.
 - `Future.Get` returns a remote failure as an error, and `Promise.Await` returns an error only for a payload that does not decode; their `Must` forms panic. Model expected outcomes as a `golem.Result` in the method output.
 - Avoid a **synchronous** cycle: two agents each blocking in `Call` / `MustCall` on the other deadlocks. Break cycles with `Trigger` / promises.
-- Worker instances persist after the coordinator finishes (they are durable by default); give them stable IDs you can address again, or make them ephemeral (see `golem-stateless-agent-go`).
+- Worker instances persist after the coordinator finishes (they are durable by default); give them stable keys you can address again, or make them ephemeral (see `golem-stateless-agent-go`).
 
 ### Related Skills
 
@@ -183,4 +183,4 @@ Fork in a loop for N-way fan-out: each iteration's copy takes slice `i` and retu
 | `golem-call-another-agent-go` | The synchronous / async call mechanics (`Call`, `CallAsync`) |
 | `golem-fire-and-forget-go` | `Trigger` details for fire-and-forget dispatch |
 | `golem-wait-for-external-input-go` | Promises used to collect worker results |
-| `golem-multi-instance-agent-go` | Address many worker instances by `ID` (and phantoms) |
+| `golem-multi-instance-agent-go` | Address many worker instances by key or agent ID |
