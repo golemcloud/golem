@@ -5814,12 +5814,29 @@ fn arb_new_app_result() -> OutputDocumentStrategy {
 }
 
 fn arb_package_digest() -> OutputDocumentStrategy {
-    serialized_output(any::<[u8; 32]>().prop_map(|bytes| {
-        use sha2::{Digest, Sha256};
-        crate::package::PackageDigest {
-            digest: format!("sha256:{:x}", Sha256::digest(bytes)),
-        }
-    }))
+    use crate::package::{ExportKind, OmittedExport, PackageDigest};
+    serialized_output(
+        (any::<[u8; 32]>(), any::<bool>()).prop_map(|(bytes, has_exports)| {
+            use sha2::{Digest, Sha256};
+            PackageDigest {
+                digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+                omitted_exports: if has_exports {
+                    vec![
+                        OmittedExport {
+                            kind: ExportKind::HttpApi,
+                            name: "api.example.com".into(),
+                        },
+                        OmittedExport {
+                            kind: ExportKind::Mcp,
+                            name: "mcp.example.com".into(),
+                        },
+                    ]
+                } else {
+                    vec![]
+                },
+            }
+        }),
+    )
 }
 
 fn arb_template_list_result() -> OutputDocumentStrategy {

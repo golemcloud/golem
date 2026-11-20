@@ -331,16 +331,14 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     subcommand: crate::command::PackageSubcommand::Pack { output },
                 } => {
                     let ctx = ctx.get_or_init().await?;
-                    let (digest, bytes) = ctx.component_handler().pack_application().await?;
+                    let (report, bytes) = ctx.component_handler().pack_application().await?;
                     crate::package::write_package(&output, &bytes)?;
-                    ctx.log_handler()
-                        .log_output(crate::package::PackageDigest { digest })
+                    ctx.log_handler().log_output(report)
                 }
                 GolemCliSubcommand::Publish { dry_run: _ } => {
                     let ctx = ctx.get_or_init().await?;
-                    let (digest, _) = ctx.component_handler().pack_application().await?;
-                    ctx.log_handler()
-                        .log_output(crate::package::PackageDigest { digest })
+                    let (report, _) = ctx.component_handler().pack_application().await?;
+                    ctx.log_handler().log_output(report)
                 }
                 GolemCliSubcommand::GenerateBridge {
                     language,
