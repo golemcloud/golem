@@ -2446,6 +2446,24 @@ fn a_lookup_matches_grants_of_its_host_whatever_their_ports() {
             .authorize(&lookup("db.test"))
             .unwrap()
     );
+    // A grant of every host with a port names no host, so it allows no lookup, also as a ceiling.
+    for grant in ["*:443", "*:1-65535"] {
+        assert!(
+            !surface(grant, None)
+                .authorize(&lookup("db.internal"))
+                .unwrap(),
+            "{grant}"
+        );
+    }
+    let ceiling = EffectiveSurface::from_grants(
+        &[network("*", network_grant("*"))],
+        &[],
+        &[network("*", network_grant("*:443"))],
+        &[],
+        &holder,
+    )
+    .unwrap();
+    assert!(!ceiling.authorize(&lookup("db.internal")).unwrap());
     // The connect is still checked against the port.
     let connect = |port| {
         network_target::socket_target(

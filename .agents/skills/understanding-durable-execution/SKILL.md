@@ -3461,7 +3461,8 @@ target initializer's lookups link after them. A tool entity Store keeps its own 
 empty, and links on replay too. The lookup itself is
 checked against `dns_target(name)`, a request-only `NetworkResourcePattern::Lookup` that a grant of
 the host matches whatever ports it names, so `db.internal:5432` allows the lookup and only port 5432
-for the connect. A denial covers a lookup only when it covers every port that a connect can use (1 to 65535).
+for the connect. A grant of only `*` with ports, such as `*:443`, names no host and allows no
+lookup. A denial covers a lookup only when it covers every port that a connect can use (1 to 65535).
 
 **DNS record lookups.** `golem:network/dns` (`durable_host/sockets/dns.rs`) queries one record
 type of one name (A, AAAA, CNAME, MX, NS, PTR, SRV, TXT, CAA, SOA, NAPTR) with `hickory-resolver`
