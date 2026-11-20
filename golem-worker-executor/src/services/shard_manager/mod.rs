@@ -20,13 +20,11 @@ use crate::services::shutdown::{self, Shutdown};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use golem_common::base_model::shard_lease;
-use golem_common::model::{
-    ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision,
-};
+use golem_common::model::{ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId};
 use golem_service_base::clients::shard_manager::{
     ExecutorEndpoint, ShardLease, ShardLeaseError, ShardManagerError,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::{Duration, Instant};
@@ -244,8 +242,9 @@ pub struct GrpcShardManagerService {
     renewal_loop_started: AtomicBool,
     /// Wakes the renewal loop ahead of its timer; see [`ShardManagerService::renew_now`].
     renew_now: Arc<tokio::sync::Notify>,
-    /// Exponential backoff for failed renewals: doubles from
-    /// `MIN_RENEWAL_INTERVAL` up to `retry_cap()`, reset by every grant.
+    /// Exponential backoff for failed renewals. It starts at `MIN_RENEWAL_INTERVAL`
+    /// and doubles up to `MAX_RETRY_INTERVAL`, capped by the granted cadence when present.
+    /// Every grant resets it.
     retry_backoff: RwLock<Duration>,
     /// The cadence the last granted lease implied (`TTL / 3`), which caps the
     /// backoff so a retry never waits longer than the lease it is saving.
@@ -322,9 +321,8 @@ impl GrpcShardManagerService {
     /// all of it - and never less than the floor, so it always outlasts the manager's own budget
     /// for storing what the call asked for.
     ///
-    /// Deliberately not `retry_cap()`. The backoff ceiling answers "how long may we wait between
-    /// attempts", this answers "how long may one attempt take"; conflating them let a single hung
-    /// call consume a whole renewal period.
+    /// The retry backoff caps the wait between attempts. This deadline limits one attempt.
+    /// Using the backoff cap here would let a hung call consume a whole renewal period.
     fn rpc_deadline(&self) -> Duration {
         shard_lease::rpc_deadline(
             *self.granted_cadence.read().unwrap(),
@@ -336,26 +334,12 @@ impl GrpcShardManagerService {
         *self.executor_id.read().unwrap()
     }
 
-    /// `min(last granted TTL / 3, 30 s)` — the ceiling the retry backoff climbs
-    /// to. Before anything has been granted there is no lease to
-    /// outlive, so only the absolute ceiling applies.
-    ///
-    /// Bounds the wait *between* attempts only; one attempt is bounded by
-    /// [`Self::rpc_deadline`].
-    fn retry_cap(&self) -> Duration {
-        match *self.granted_cadence.read().unwrap() {
-            Some(cadence) => cadence.min(MAX_RETRY_INTERVAL),
-            None => MAX_RETRY_INTERVAL,
-        }
-    }
-
-    /// The delay after a failed renewal: the current backoff, which then
-    /// doubles for the next failure, capped by `retry_cap()`.
+    /// Return the delay after a failed renewal and advance the retry backoff.
     fn next_retry_delay(&self) -> RenewalDelay {
-        let cap = self.retry_cap();
+        let cadence = *self.granted_cadence.read().unwrap();
         let mut backoff = self.retry_backoff.write().unwrap();
-        let delay = (*backoff).min(cap);
-        *backoff = delay.saturating_mul(2).min(cap);
+        let (delay, next_backoff) = retry_delays_for(cadence, *backoff);
+        *backoff = next_backoff;
         Some(delay)
     }
 
@@ -486,31 +470,31 @@ impl GrpcShardManagerService {
     /// set is older than the last delivery applied crossed with a push on the
     /// network: its set is ignored, or it would put the older set back, and
     /// its lease is adopted, because it answers this executor's own request.
-    fn adopt_lease(
-        &self,
-        shard_epochs: BTreeMap<ShardId, ShardEpoch>,
-        expires_at: Instant,
-        revision: ShardLeaseRevision,
-    ) -> (RenewalDelay, bool) {
-        let shard_epochs: HashMap<ShardId, ShardEpoch> = shard_epochs.into_iter().collect();
-        let announcement_owed = match self.shard_service.update_lease(
-            &shard_epochs,
+    fn adopt_lease(&self, lease: ShardLease) -> (RenewalDelay, bool) {
+        let ShardLease {
+            shard_epochs,
             expires_at,
             revision,
-        ) {
+            executor_count,
+        } = lease;
+        let shard_epochs: HashMap<ShardId, ShardEpoch> = shard_epochs.into_iter().collect();
+        let outcome =
+            self.shard_service
+                .update_lease(&shard_epochs, expires_at, revision, executor_count);
+        let announcement_owed = renewal_recovery_owed(
+            outcome.as_ref().ok(),
+            self.recovery_outstanding.load(Ordering::SeqCst),
+        );
+        match outcome {
             Ok(ShardDeliveryOutcome::Applied { set_changed: true }) => {
                 info!(
                     %revision,
                     "Shard lease renewal corrected the shard set; sweeping and recovering agents"
                 );
-                true
             }
             Ok(ShardDeliveryOutcome::Applied { set_changed: false }) => {
-                if self.recovery_outstanding.load(Ordering::SeqCst) != 0 {
+                if announcement_owed {
                     info!(%revision, "Running the agent recovery still owed from an earlier delivery");
-                    true
-                } else {
-                    false
                 }
             }
             Ok(ShardDeliveryOutcome::Stale { delivered, applied }) => {
@@ -519,13 +503,11 @@ impl GrpcShardManagerService {
                     %applied,
                     "Ignoring the shard set of a renewal older than the last delivery applied; the lease clock moved"
                 );
-                false
             }
             // Only a push is refused for its sender: a reply's sender is the one followed.
-            Ok(ShardDeliveryOutcome::FromAnotherManager { .. }) => false,
+            Ok(ShardDeliveryOutcome::FromAnotherManager { .. }) => {}
             Err(error) => {
                 warn!(%error, "Failed to apply a renewed shard lease");
-                false
             }
         };
         let cadence = renewal_interval_for(Some(expires_at), Instant::now());
@@ -547,21 +529,7 @@ impl GrpcShardManagerService {
             .register(endpoint, pod_name, self.executor_id())
             .await?;
 
-        let number_of_shards: usize = registration.number_of_shards.try_into().map_err(|_| {
-            ShardManagerError::ConversionError(format!(
-                "RegisterSuccess.number_of_shards {} does not fit a usize",
-                registration.number_of_shards
-            ))
-        })?;
-
-        // `ShardId::from_agent_id` divides by it, so a zero would abort this executor on its
-        // first routing decision rather than fail the registration. `AssignShards` refuses one
-        // for the same reason; this is the other door the count comes through.
-        if number_of_shards == 0 {
-            return Err(ShardManagerError::ConversionError(
-                "RegisterSuccess.number_of_shards must not be 0".to_string(),
-            ));
-        }
+        let number_of_shards = decode_registration_shard_count(registration.number_of_shards)?;
 
         // Started here rather than by the caller because this is the first
         // point at which a lease exists, and started unconditionally so that a
@@ -612,7 +580,7 @@ impl GrpcShardManagerService {
         match renewed {
             Ok(lease) => {
                 record_shard_lease_renewal(ShardLeaseRenewalOutcome::Granted);
-                self.adopt_lease(lease.shard_epochs, lease.expires_at, lease.revision)
+                self.adopt_lease(lease)
             }
             Err(ShardLeaseError::LeaseNotFound(details)) => {
                 record_shard_lease_renewal(ShardLeaseRenewalOutcome::LeaseNotFound);
@@ -656,6 +624,7 @@ impl GrpcShardManagerService {
                                 &lease.shard_epochs.into_iter().collect(),
                                 Some(lease.expires_at),
                                 lease.revision,
+                                lease.executor_count,
                             );
                             if let ShardDeliveryOutcome::Stale { delivered, applied } = outcome {
                                 // A push read from a later state of the same process crossed
@@ -696,6 +665,46 @@ impl GrpcShardManagerService {
     }
 }
 
+/// The current retry delay and the backoff for the next failure.
+/// The cap limits the wait between attempts, not an RPC's duration.
+fn retry_delays_for(cadence: Option<Duration>, current: Duration) -> (Duration, Duration) {
+    let cap = match cadence {
+        Some(cadence) => cadence.min(MAX_RETRY_INTERVAL),
+        None => MAX_RETRY_INTERVAL,
+    };
+    let delay = current.min(cap);
+    (delay, delay.saturating_mul(2).min(cap))
+}
+
+fn decode_registration_shard_count(value: u32) -> Result<usize, ShardManagerError> {
+    let number_of_shards: usize = value.try_into().map_err(|_| {
+        ShardManagerError::ConversionError(format!(
+            "RegisterSuccess.number_of_shards {value} does not fit a usize"
+        ))
+    })?;
+
+    // `ShardId::from_agent_id` divides by it.
+    if number_of_shards == 0 {
+        return Err(ShardManagerError::ConversionError(
+            "RegisterSuccess.number_of_shards must not be 0".to_string(),
+        ));
+    }
+
+    Ok(number_of_shards)
+}
+
+fn renewal_recovery_owed(
+    outcome: Option<&ShardDeliveryOutcome>,
+    recovery_outstanding: u64,
+) -> bool {
+    match outcome {
+        Some(ShardDeliveryOutcome::Applied { set_changed }) => {
+            *set_changed || recovery_outstanding != 0
+        }
+        _ => false,
+    }
+}
+
 /// `(expires_at - now) / 3`, floored, so three attempts fit inside one lease.
 ///
 /// A lease that never expires yields `None`, which parks the
@@ -722,6 +731,7 @@ impl ShardManagerService for GrpcShardManagerService {
         let (number_of_shards, lease) = self.register_granted(endpoint, pod_name).await?;
         Ok(ShardAssignment {
             number_of_shards,
+            executor_count: lease.executor_count,
             shard_epochs: lease.shard_epochs.into_iter().collect(),
             expires_at: Some(lease.expires_at),
             revision: Some(lease.revision),

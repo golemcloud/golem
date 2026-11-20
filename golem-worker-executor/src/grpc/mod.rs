@@ -209,6 +209,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &shard_assignment.shard_epochs,
                 shard_assignment.expires_at,
                 revision,
+                shard_assignment.executor_count,
             ),
             // The single-shard executor: no shard manager delivered this assignment, so there is
             // nothing to order it against.

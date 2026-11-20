@@ -14,6 +14,146 @@
 
 test_r::enable!();
 
+mod executor_count {
+    use anyhow::Context;
+    use futures::{StreamExt, future::join_all};
+    use golem_test_framework::components::worker_executor::WorkerExecutor;
+    use golem_test_framework::components::worker_executor::spawned::SpawnedWorkerExecutor;
+    use golem_test_framework::config::{
+        DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+    };
+    use integration_tests::sharding::observe_executor_count;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use test_r::{test, timeout};
+    use tokio_stream::wrappers::IntervalStream;
+    use tracing::Level;
+
+    async fn reports_count(
+        executors: &[Arc<dyn WorkerExecutor>],
+        expected: usize,
+    ) -> anyhow::Result<Box<[[u64; 3]]>> {
+        let client = reqwest::Client::new();
+        let observed = IntervalStream::new(tokio::time::interval(Duration::from_millis(100)))
+            .then(|_| {
+                let client = &client;
+                observe_executor_count(expected, move || async move {
+                    let metrics = join_all(executors.iter().map(|executor| async move {
+                        let (url, _) = executor
+                            .metrics_endpoint()
+                            .context("executor has no metrics endpoint")?;
+                        anyhow::Ok(
+                            client
+                                .get(url)
+                                .send()
+                                .await?
+                                .error_for_status()?
+                                .text()
+                                .await?,
+                        )
+                    }))
+                    .await
+                    .into_iter()
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .into_boxed_slice();
+                    Ok(metrics)
+                })
+            })
+            .filter_map(|reported| std::future::ready(reported.transpose()));
+        tokio::pin!(observed);
+        observed.next().await.unwrap()
+    }
+
+    #[test]
+    #[timeout("180s")]
+    async fn a_third_executor_refreshes_both_existing_counts_within_one_lease() {
+        super::tests::Tracing::init();
+        let config = EnvBasedTestDependenciesConfig {
+            worker_executor_cluster_size: 2,
+            number_of_shards_override: Some(4),
+            db_type: DbType::Sqlite,
+            redis_port: 23100,
+            registry_http_port: 23101,
+            registry_grpc_port: 23102,
+            shard_manager_http_port: 23103,
+            shard_manager_grpc_port: 23104,
+            compilation_http_port: 23105,
+            compilation_grpc_port: 23106,
+            worker_http_port: 23107,
+            worker_grpc_port: 23108,
+            worker_custom_request_port: 23109,
+            worker_mcp_port: 23110,
+            executor_base_http_port: 23120,
+            executor_base_grpc_port: 23130,
+            ..EnvBasedTestDependenciesConfig::default()
+        }
+        .with_env_overrides();
+        let executable = config.service_binaries_dir().join("worker-executor");
+        let working_directory = config.golem_repo_root.join("golem-worker-executor");
+        let third_http_port = config.executor_base_http_port + 2;
+        let third_grpc_port = config.executor_base_grpc_port + 2;
+        let deps = EnvBasedTestDependencies::new(config).await.unwrap();
+        let executors = deps.worker_executor_cluster().to_vec().into_boxed_slice();
+
+        // At the 10% threshold, four shards give both initial executors shards.
+        // A third executor can remain empty. Its join moves no shards.
+        let balanced = IntervalStream::new(tokio::time::interval(Duration::from_millis(100)))
+            .then(|_| async { deps.shard_manager().get_routing_table().await.unwrap() })
+            .filter(|table| std::future::ready(table.shards_per_pod().len() == 2));
+        tokio::pin!(balanced);
+        let before = tokio::time::timeout(Duration::from_secs(60), balanced.next())
+            .await
+            .expect("both initial executors must own shards")
+            .unwrap();
+        // Finish the count-two observation and its attempt baseline before the third starts.
+        let attempts_before =
+            tokio::time::timeout(Duration::from_secs(60), reports_count(&executors, 2))
+                .await
+                .expect("both executors must first receive an assignment and report two")
+                .unwrap();
+        let joined = tokio::time::Instant::now();
+        let third = SpawnedWorkerExecutor::new(
+            &executable,
+            &working_directory,
+            third_http_port,
+            third_grpc_port,
+            deps.rdb(),
+            deps.shard_manager(),
+            deps.worker_service(),
+            Level::WARN,
+            Level::WARN,
+            Level::WARN,
+            deps.registry_service(),
+            None,
+            None,
+            false,
+            false,
+        )
+        .await;
+        let attempts_after = tokio::time::timeout_at(
+            joined + Duration::from_secs(60),
+            reports_count(&executors, 3),
+        )
+        .await
+        .expect("both earlier executors must report three and finish the follow-up within one lease period")
+        .unwrap();
+        assert_eq!(
+            attempts_after, attempts_before,
+            "only renewals may refresh the counts"
+        );
+        let after = deps.shard_manager().get_routing_table().await.unwrap();
+        assert_eq!(
+            before.shards_per_pod(),
+            after.shards_per_pod(),
+            "the join must not move any shard"
+        );
+        third
+            .kill_and_wait(tokio::time::Instant::now() + Duration::from_secs(30))
+            .await
+            .unwrap();
+    }
+}
+
 #[test_r::sequential]
 mod tests {
     use async_trait::async_trait;

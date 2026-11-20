@@ -83,6 +83,7 @@ async fn run_retirement_during_insert(
     if shard_lost {
         let response = client
             .assign_shards(AssignShardsRequest {
+                executor_count: 1,
                 number_of_shards: 1,
                 shard_epochs: vec![ShardEpochEntry {
                     shard_id: Some(golem_api_grpc::proto::golem::shardmanager::ShardId {
@@ -164,6 +165,7 @@ async fn run_retirement_during_insert(
     if shard_lost {
         let response = client
             .assign_shards(AssignShardsRequest {
+                executor_count: 1,
                 number_of_shards: 1,
                 shard_epochs: vec![ShardEpochEntry {
                     shard_id: Some(golem_api_grpc::proto::golem::shardmanager::ShardId {

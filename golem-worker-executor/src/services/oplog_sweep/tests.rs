@@ -1099,6 +1099,7 @@ fn all_shards() -> Arc<ShardServiceDefault> {
         &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
         None,
         revision_of(MANAGER, 0),
+        1,
     );
     shard_service
 }
@@ -2403,7 +2404,7 @@ async fn an_agent_on_another_shard_is_left_alone() {
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
     let shards = Arc::new(ShardServiceDefault::new());
-    shards.register(4, &HashMap::new(), None, revision_of(MANAGER, 0));
+    shards.register(4, &HashMap::new(), None, revision_of(MANAGER, 0), 1);
     let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 
     sweeper.sweep_once(&CancellationToken::new()).await;
@@ -2434,7 +2435,7 @@ async fn a_reshard_drops_the_tracking_entries_it_no_longer_owns() {
 
     // The shard moves to another executor before the agent ever went quiet for us.
     shards
-        .assign_shards(4, &HashMap::new(), revision_of(MANAGER, 1))
+        .assign_shards(4, &HashMap::new(), revision_of(MANAGER, 1), 1)
         .expect("assignment");
     sweeper.sweep_once(&CancellationToken::new()).await;
 
@@ -3100,6 +3101,7 @@ async fn a_sweep_holding_a_zero_shard_assignment_does_nothing() {
         &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
         None,
         revision_of(MANAGER, 0),
+        1,
     );
     let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 
@@ -3125,6 +3127,7 @@ async fn a_sweep_holding_a_lapsed_lease_does_nothing() {
         &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
         Some(Instant::now()),
         revision_of(MANAGER, 0),
+        1,
     );
     let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 

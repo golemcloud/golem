@@ -123,6 +123,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
                 golem::shardmanager::v1::RegisterSuccess {
                     number_of_shards: ack.number_of_shards as u32,
                     shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
+                    executor_count: ack.grant.executor_count as u32,
                     lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, Utc::now())),
                     revision: ack.grant.revision.0,
                     incarnation_id: crate::sharding::incarnation_id(),
@@ -167,6 +168,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
                 golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
                     golem::shardmanager::v1::ShardLease {
                         shard_epochs: shard_epoch_entries(&grant.shard_epochs),
+                        executor_count: grant.executor_count as u32,
                         lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, Utc::now())),
                         revision: grant.revision.0,
                         incarnation_id: crate::sharding::incarnation_id(),

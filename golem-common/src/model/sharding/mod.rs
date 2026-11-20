@@ -170,7 +170,7 @@ impl Display for ShardLeaseRevision {
 }
 
 /// Which way a delivery reached this executor, which decides what a change of
-/// manager process means - see [`ShardAssignment::apply`].
+/// manager process means - see [`transition_shard_assignment`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ShardDeliveryPath {
     /// The answer to a registration or a renewal this executor sent.
@@ -206,6 +206,8 @@ pub enum ShardDeliveryOutcome {
 #[derive(Clone, Debug, Default)]
 pub struct ShardAssignment {
     pub number_of_shards: usize,
+    /// The executor lease count from the last accepted grant or assignment.
+    pub executor_count: usize,
     /// Exactly the shards this executor holds. The shard manager pushes the
     /// complete set; anything absent from it has been dropped.
     pub shard_epochs: HashMap<ShardId, ShardEpoch>,
@@ -234,6 +236,7 @@ impl ShardAssignment {
     ) -> Self {
         Self {
             number_of_shards,
+            executor_count: 1,
             shard_epochs: shard_ids
                 .into_iter()
                 .map(|shard_id| (shard_id, ShardEpoch::default()))
@@ -276,155 +279,6 @@ impl ShardAssignment {
             .collect()
     }
 
-    /// Full replace from a push: hold exactly these shards, drop everything
-    /// else. One of the three doors a delivery comes through, with
-    /// [`Self::adopt_grant`] and [`Self::revoke_shards`]; all three gate the
-    /// set on the revision the same way in [`Self::apply`]. The lease is
-    /// untouched: a push has no request of this executor's to anchor a lease
-    /// to, so it carries none.
-    pub fn set_shards(
-        &mut self,
-        number_of_shards: usize,
-        shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        revision: ShardLeaseRevision,
-    ) -> ShardDeliveryOutcome {
-        self.apply(
-            Some(number_of_shards),
-            shard_epochs,
-            revision,
-            ShardDeliveryPath::Push,
-        )
-    }
-
-    /// A grant: the answer to this executor's own registration
-    /// (`number_of_shards` is `Some`) or renewal, carrying the shard manager's
-    /// set for it and a lease anchored where the request was sent.
-    ///
-    /// The lease clock always moves, whatever becomes of the set. A grant
-    /// answers a request this executor made, anchored before the request went
-    /// out, so its expiry is never later than the manager's; and since a push
-    /// carries no lease, refusing a grant's would cost this executor a renewal
-    /// every time a rebalance push crossed a renewal reply - which is how an
-    /// executor the manager keeps renewing would end up fencing itself. The
-    /// set goes through [`Self::apply`]'s revision gate like every other
-    /// delivery: the revision orders sets and the request time orders leases,
-    /// and the two are independent. Normally the set is exactly what was
-    /// held, because a renewal never advances an epoch; when it is not, the
-    /// manager is correcting a push this executor never received, and the
-    /// caller sweeps and recovers agents exactly as it would for a push.
-    ///
-    /// The expiry is written as is, not maxed against the current one: each
-    /// grant is the manager's current word, and the manager's own deadline for
-    /// this executor never moves earlier, so a later grant is never the shorter
-    /// one. Grants arrive in the order they were asked for (the renewal loop
-    /// awaits each one), so a later grant is always anchored later.
-    pub fn adopt_grant(
-        &mut self,
-        number_of_shards: Option<usize>,
-        shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Instant,
-        revision: ShardLeaseRevision,
-    ) -> ShardDeliveryOutcome {
-        self.expires_at = Some(expires_at);
-        self.apply(
-            number_of_shards,
-            shard_epochs,
-            revision,
-            ShardDeliveryPath::Reply,
-        )
-    }
-
-    /// The one place any delivery's set is applied, including
-    /// [`Self::revoke_shards`], which turns its delta into the set it leaves
-    /// behind and comes through here.
-    ///
-    /// Two deliveries can cross on the network - a renewal reply computed
-    /// before a push, arriving after it - and both say "hold exactly this", so
-    /// without an order the older set would win. The revision is that order: a
-    /// set older than the last one applied is ignored. Equal revisions come
-    /// from the same persisted state and carry the same set, so they apply
-    /// harmlessly. The lease is not this function's business: only
-    /// [`Self::adopt_grant`] moves it, and it does so before coming here.
-    ///
-    /// That order holds within one manager process. A delivery from another
-    /// one is told apart by how it came. A reply answers a request this
-    /// executor has just made, so its sender is the manager in charge: the
-    /// executor follows it from here on and its numbers start over, which is
-    /// what lets a manager that lost its history deliver a set at all. A push
-    /// proves nothing of the kind - a deposed manager can still be sending -
-    /// so it is ignored, and the caller renews to hear from the one in charge.
-    /// Starting the numbers over cannot let an old manager's delayed push
-    /// back in, because that push no longer names the process followed. The
-    /// first delivery applied names the process followed, whichever way it
-    /// came; on an executor that is a registration's reply, because the shard
-    /// service refuses pushes until a registration has installed an
-    /// assignment.
-    fn apply(
-        &mut self,
-        number_of_shards: Option<usize>,
-        shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        revision: ShardLeaseRevision,
-        path: ShardDeliveryPath,
-    ) -> ShardDeliveryOutcome {
-        if let Some(applied) = self.revision {
-            if revision.incarnation != applied.incarnation {
-                match path {
-                    // The process in charge answered: its numbers start over.
-                    ShardDeliveryPath::Reply => {}
-                    ShardDeliveryPath::Push => {
-                        return ShardDeliveryOutcome::FromAnotherManager {
-                            delivered: revision,
-                            applied,
-                        };
-                    }
-                }
-            } else if revision.number < applied.number {
-                return ShardDeliveryOutcome::Stale {
-                    delivered: revision,
-                    applied,
-                };
-            }
-        }
-        let set_changed = self.shard_epochs != *shard_epochs;
-        if let Some(number_of_shards) = number_of_shards {
-            self.number_of_shards = number_of_shards;
-        }
-        self.shard_epochs = shard_epochs.clone();
-        self.revision = Some(revision);
-        ShardDeliveryOutcome::Applied { set_changed }
-    }
-
-    /// A revoke: `shard_ids` are dropped and everything else is kept.
-    ///
-    /// The one delta among the deliveries, but applied as the set it leaves behind, so it goes
-    /// through the same gate as the rest: a grant read before the shards moved and arriving after
-    /// this is older, and cannot put them back. Like any push it carries no lease and touches none.
-    ///
-    /// Adopting the revoke's revision is safe even though this is a delta, because the shard
-    /// manager sends the full set at that same revision in the same pass: nothing older than it is
-    /// still needed.
-    pub fn revoke_shards(
-        &mut self,
-        shard_ids: &HashSet<ShardId>,
-        revision: ShardLeaseRevision,
-    ) -> ShardDeliveryOutcome {
-        let mut remaining = self.shard_epochs.clone();
-        remaining.retain(|shard_id, _| !shard_ids.contains(shard_id));
-        self.apply(None, &remaining, revision, ShardDeliveryPath::Push)
-    }
-
-    /// Drops every shard, keeping `number_of_shards`, and leaves the lease
-    /// **lapsed** as of `now`. Used when the shard manager no longer knows this
-    /// executor's lease.
-    ///
-    /// The expiry is not reset to `None`, because `None` means
-    /// "never expires". A cleared assignment must read as not ready, so
-    /// admission keeps refusing until a re-registration installs a fresh grant.
-    pub fn clear(&mut self, now: Instant) {
-        self.shard_epochs.clear();
-        self.expires_at = Some(now);
-    }
-
     /// The single place the never-expires rule is spelled: a `None` expiry is
     /// always live.
     pub fn lease_is_live(&self, now: Instant) -> bool {
@@ -433,6 +287,194 @@ impl ShardAssignment {
             Some(expires_at) => now < expires_at,
         }
     }
+}
+
+/// An input to the executor's assignment transition. Maps and sets are borrowed for one
+/// operation; the transition owns the current assignment and never clones it to change it.
+#[derive(Clone, Copy, Debug)]
+pub enum ShardAssignmentEvent<'a> {
+    Register {
+        number_of_shards: usize,
+        shard_epochs: &'a HashMap<ShardId, ShardEpoch>,
+        expires_at: Option<Instant>,
+        revision: ShardLeaseRevision,
+        executor_count: usize,
+    },
+    Assign {
+        number_of_shards: usize,
+        shard_epochs: &'a HashMap<ShardId, ShardEpoch>,
+        revision: ShardLeaseRevision,
+        executor_count: usize,
+    },
+    Renew {
+        shard_epochs: &'a HashMap<ShardId, ShardEpoch>,
+        expires_at: Instant,
+        revision: ShardLeaseRevision,
+        executor_count: usize,
+    },
+    Revoke {
+        shard_ids: &'a HashSet<ShardId>,
+        revision: ShardLeaseRevision,
+    },
+    InstallUnexpiring {
+        number_of_shards: usize,
+        shard_epochs: &'a HashMap<ShardId, ShardEpoch>,
+    },
+    Clear {
+        now: Instant,
+    },
+}
+
+/// Returns the assignment after one event and the delivery outcome, if the event delivered
+/// anything. `None` is the outcome of a clear, or of a delivery refused before registration;
+/// the latter also leaves the assignment absent. Registration and standalone installation
+/// always return an assignment and an outcome.
+///
+/// Revisions order sets within one manager incarnation. Equal revisions apply, including the
+/// full assignment sent after a revoke. A reply adopts another manager's incarnation, while a
+/// push from another manager is refused. An internal registration without an expiry uses the
+/// push gate. Every registration adopts its expiry even when that gate refuses the set.
+///
+/// A renewal adopts its exact expiry even when its set is stale: the request anchors the lease
+/// independently of the set's revision. A push or revoke never changes expiry. Clear removes
+/// the set and lapses the lease without discarding the last revision or executor count.
+pub fn transition_shard_assignment(
+    state: Option<ShardAssignment>,
+    event: ShardAssignmentEvent<'_>,
+) -> (Option<ShardAssignment>, Option<ShardDeliveryOutcome>) {
+    use ShardAssignmentEvent as E;
+
+    match event {
+        E::InstallUnexpiring {
+            number_of_shards,
+            shard_epochs,
+        } => {
+            let set_changed = state
+                .as_ref()
+                .is_none_or(|current| current.shard_epochs != *shard_epochs);
+            return (
+                Some(ShardAssignment {
+                    number_of_shards,
+                    executor_count: 1,
+                    shard_epochs: shard_epochs.clone(),
+                    expires_at: None,
+                    revision: None,
+                }),
+                Some(ShardDeliveryOutcome::Applied { set_changed }),
+            );
+        }
+        E::Clear { now } => {
+            return (
+                state.map(|mut current| {
+                    current.shard_epochs.clear();
+                    current.expires_at = Some(now);
+                    current
+                }),
+                None,
+            );
+        }
+        _ => {}
+    }
+
+    let mut current = match state {
+        Some(current) => current,
+        None if matches!(event, E::Register { .. }) => ShardAssignment::default(),
+        None => return (None, None),
+    };
+    let (number_of_shards, shard_epochs, revision, path, executor_count) = match event {
+        E::Register {
+            number_of_shards,
+            shard_epochs,
+            expires_at,
+            revision,
+            executor_count,
+        } => {
+            current.expires_at = expires_at;
+            let path = if expires_at.is_some() {
+                ShardDeliveryPath::Reply
+            } else {
+                ShardDeliveryPath::Push
+            };
+            (
+                Some(number_of_shards),
+                Some(shard_epochs),
+                revision,
+                path,
+                Some(executor_count),
+            )
+        }
+        E::Renew {
+            shard_epochs,
+            expires_at,
+            revision,
+            executor_count,
+        } => {
+            current.expires_at = Some(expires_at);
+            (
+                None,
+                Some(shard_epochs),
+                revision,
+                ShardDeliveryPath::Reply,
+                Some(executor_count),
+            )
+        }
+        E::Assign {
+            number_of_shards,
+            shard_epochs,
+            revision,
+            executor_count,
+        } => (
+            Some(number_of_shards),
+            Some(shard_epochs),
+            revision,
+            ShardDeliveryPath::Push,
+            Some(executor_count),
+        ),
+        E::Revoke { revision, .. } => (None, None, revision, ShardDeliveryPath::Push, None),
+        E::Clear { .. } | E::InstallUnexpiring { .. } => unreachable!(),
+    };
+    if let Some(applied) = current.revision {
+        let refused = if revision.incarnation != applied.incarnation {
+            (path == ShardDeliveryPath::Push).then_some(ShardDeliveryOutcome::FromAnotherManager {
+                delivered: revision,
+                applied,
+            })
+        } else {
+            (revision.number < applied.number).then_some(ShardDeliveryOutcome::Stale {
+                delivered: revision,
+                applied,
+            })
+        };
+        if let Some(outcome) = refused {
+            return (Some(current), Some(outcome));
+        }
+    }
+    let set_changed = if let Some(shard_epochs) = shard_epochs {
+        let changed = current.shard_epochs != *shard_epochs;
+        if changed {
+            current.shard_epochs = shard_epochs.clone();
+        }
+        changed
+    } else if let E::Revoke { shard_ids, .. } = event {
+        let before = current.len();
+        current
+            .shard_epochs
+            .retain(|shard_id, _| !shard_ids.contains(shard_id));
+        current.len() != before
+    } else {
+        unreachable!()
+    };
+    if let Some(number_of_shards) = number_of_shards {
+        current.number_of_shards = number_of_shards;
+    }
+    if let Some(executor_count) = executor_count {
+        current.executor_count = executor_count;
+    }
+    current.revision = Some(revision);
+    (
+        Some(current),
+        Some(ShardDeliveryOutcome::Applied { set_changed }),
+    )
 }
 
 impl Display for ShardAssignment {
