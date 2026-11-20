@@ -643,5 +643,19 @@ mod tests {
                 .iter()
                 .for_each(|(negotiated, expected)| assert_eq!(negotiated, expected));
         }
+
+        #[test]
+        async fn initialize_advertises_tools_resources_and_prompts() {
+            let harness = InvocationHarness::with_run_method(AgentMode::Durable);
+            let answer = messages(
+                &endpoint(&harness),
+                post(initialize(1, "2025-06-18"), stateless(&harness, false)),
+            )
+            .await;
+            let capabilities = &answer[0]["result"]["capabilities"];
+            ["tools", "resources", "prompts"]
+                .into_iter()
+                .for_each(|capability| assert!(capabilities[capability].is_object(), "{answer:?}"));
+        }
     }
 }
