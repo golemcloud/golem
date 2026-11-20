@@ -27,13 +27,6 @@ fn initialize_snapshot_clock() {
     let mut hasher = std::hash::RandomState::new().build_hasher();
     hasher.write_u32(0x5eed);
     let environment = std::env::vars().collect::<Vec<_>>();
-    // Discovery runs without an agent ID. Its stdout must stay out of the package digest output.
-    // The print is here, after the environment read. A separate constructor for it ran before the
-    // agent registrations, so the recorded initializer block started with `get-environment` and
-    // not with `insecure_seed`, the order that the snapshot-assisted update tests expect.
-    if !environment.iter().any(|(name, _)| name == "GOLEM_AGENT_ID") {
-        println!("agent-counters discovery stdout");
-    }
     // A language runtime may also make a durable call that is not a read while it initializes.
     if environment
         .iter()

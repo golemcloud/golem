@@ -6,6 +6,16 @@ use golem_rust::bindings::golem::api::context::start_span;
 use golem_rust::quota::QuotaToken;
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
+/// The same constructor as in agent-counters. The snapshot-assisted update tests replay the
+/// initializer block of one revision in the other, so both revisions make the same initializer
+/// calls in the same order.
+#[ctor::ctor]
+fn print_discovery_output() {
+    if std::env::var_os("GOLEM_AGENT_ID").is_none() {
+        println!("agent-counters discovery stdout");
+    }
+}
+
 /// Resource name the chaos suite's quota stream reserves against. Must match the
 /// resource the chaos prep creates on the environment — see
 /// `integration_tests::chaos::prep`.

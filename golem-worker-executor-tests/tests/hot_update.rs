@@ -7908,18 +7908,38 @@ fn first_index_of(
         .oplog_index
 }
 
-/// The durable calls of the core initializer of agent-counters, in the order the constructors
-/// make them. The core initializer runs every constructor of the component. The first agent
-/// registration draws the keys of `RandomState`, and the memory-growth constructor reads the
-/// environment; the standard library keeps both, so the initializer witness reads only the clock.
+/// The durable calls of the core initializer of agent-counters. The core initializer runs every
+/// constructor of the component. The first agent registration draws the keys of `RandomState`,
+/// and the first constructor that reads the environment makes the environment read; the standard
+/// library keeps both, so the initializer witness reads only the clock. The order of the calls
+/// depends on the order in which the linker runs the constructors, so the tests compare the calls
+/// in any order.
 const INITIALIZER_CALLS: [&str; 3] = [
     "random::insecure_seed::insecure_seed",
     "cli::environment::get-environment",
     "monotonic_clock::now",
 ];
 
-/// The last durable call of the core initializer of agent-counters.
-const LAST_INITIALIZER_CALL: &str = INITIALIZER_CALLS[INITIALIZER_CALLS.len() - 1];
+/// `calls` in a fixed order, to compare them with [`initializer_calls`] in any order.
+fn sorted(mut calls: Vec<String>) -> Vec<String> {
+    calls.sort();
+    calls
+}
+
+/// [`INITIALIZER_CALLS`] in the fixed order of [`sorted`].
+fn initializer_calls() -> Vec<String> {
+    sorted(
+        INITIALIZER_CALLS
+            .iter()
+            .map(|call| call.to_string())
+            .collect(),
+    )
+}
+
+/// Whether `function_name` is one of [`INITIALIZER_CALLS`].
+fn is_initializer_call(function_name: &str) -> bool {
+    INITIALIZER_CALLS.contains(&function_name)
+}
 
 /// A snapshot-based update to a target whose core initializer makes durable calls, the
 /// environment read among them. The update appends the calls of the target's initializer after
@@ -8001,8 +8021,8 @@ async fn a_snapshot_based_update_runs_a_target_initializer_that_makes_durable_ca
         "the bootstrap range {bootstrap} lies between the update entries {pending_update} and {successful_update}"
     );
     assert_eq!(
-        starts_in(&oplog, bootstrap.start..=bootstrap.end),
-        INITIALIZER_CALLS
+        sorted(starts_in(&oplog, bootstrap.start..=bootstrap.end)),
+        initializer_calls()
     );
     assert_eq!(version, 2);
     assert_eq!(count, 2);
@@ -8263,8 +8283,11 @@ async fn a_failed_snapshot_based_update_keeps_the_source_and_its_initializer_sta
         "Manual update failed to load snapshot: Snapshot is empty"
     );
     assert_eq!(
-        starts_in(&oplog, pending_update.next()..=failed_update.previous()),
-        INITIALIZER_CALLS,
+        sorted(starts_in(
+            &oplog,
+            pending_update.next()..=failed_update.previous()
+        )),
+        initializer_calls(),
         "the attempt recorded the durable calls of the target initializer"
     );
     assert_eq!(version, 1);
@@ -8319,11 +8342,16 @@ async fn an_interrupted_snapshot_based_update_attempt_replays_its_initializer_ca
         tokio::time::timeout(Duration::from_secs(30), gate.entered()).await?;
         let start = gate.start_index();
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        if oplog.iter().any(|entry| {
-            entry.oplog_index == start
-                && matches!(&entry.entry, PublicOplogEntry::Start(params)
-                    if params.function_name == LAST_INITIALIZER_CALL)
-        }) {
+        // The gated call is the last call of the target initializer when the calls since the
+        // `PendingUpdate` entry are all the initializer calls, in any order.
+        let initializer_done = oplog
+            .iter()
+            .find(|entry| matches!(entry.entry, PublicOplogEntry::PendingUpdate(_)))
+            .is_some_and(|pending_update| {
+                sorted(starts_in(&oplog, pending_update.oplog_index.next()..=start))
+                    == initializer_calls()
+            });
+        if initializer_done {
             break start;
         }
         let next = executor.gate_next_call_end(&worker_id, true).await;
@@ -8372,13 +8400,16 @@ async fn an_interrupted_snapshot_based_update_attempt_replays_its_initializer_ca
         .find(|entry| {
             entry.oplog_index > pending_update
                 && matches!(&entry.entry, PublicOplogEntry::Start(params)
-                    if params.function_name == INITIALIZER_CALLS[0])
+                    if is_initializer_call(&params.function_name))
         })
         .expect("the first attempt made the first initializer call")
         .oplog_index;
     assert_eq!(
-        starts_in(&first_attempt, pending_update.next()..=first_attempt_tip),
-        INITIALIZER_CALLS,
+        sorted(starts_in(
+            &first_attempt,
+            pending_update.next()..=first_attempt_tip
+        )),
+        initializer_calls(),
         "the first attempt committed the durable calls of the target initializer"
     );
     assert!(
@@ -8416,13 +8447,16 @@ async fn an_interrupted_snapshot_based_update_attempt_replays_its_initializer_ca
         "the bootstrap range {bootstrap} covers every entry of the interrupted attempt up to {last_call_end}"
     );
     assert_eq!(
-        starts_in(&oplog, pending_update.next()..=successful_update.previous()),
-        INITIALIZER_CALLS,
+        sorted(starts_in(
+            &oplog,
+            pending_update.next()..=successful_update.previous()
+        )),
+        initializer_calls(),
         "the next attempt replayed the calls of the interrupted attempt instead of recording new ones"
     );
     assert_eq!(
-        starts_in(&oplog, bootstrap.start..=bootstrap.end),
-        INITIALIZER_CALLS
+        sorted(starts_in(&oplog, bootstrap.start..=bootstrap.end)),
+        initializer_calls()
     );
     assert_eq!(version, 2);
     assert_eq!(count, 1);
@@ -8484,7 +8518,7 @@ async fn a_divergent_bootstrap_block_fails_the_snapshot_based_update(
             && oplog.iter().any(|entry| {
                 entry.oplog_index == start
                     && matches!(&entry.entry, PublicOplogEntry::Start(params)
-                        if params.function_name == INITIALIZER_CALLS[0])
+                        if is_initializer_call(&params.function_name))
             })
         {
             break pending_update;
@@ -8740,8 +8774,8 @@ async fn a_snapshot_assisted_update_replays_the_source_initializer_block_for_its
     );
     assert!(bootstrap.end < record && record < strategy);
     assert_eq!(
-        starts_in(&oplog, bootstrap.start..=bootstrap.end),
-        INITIALIZER_CALLS
+        sorted(starts_in(&oplog, bootstrap.start..=bootstrap.end)),
+        initializer_calls()
     );
     assert_eq!(
         starts_in(&oplog, strategy.next()..=successful_update.previous()),
@@ -8826,8 +8860,8 @@ async fn a_snapshot_assisted_update_requested_right_after_its_record_recovers_th
         "no invocation and no durable call lies between the record {record} and the strategy entry {strategy}"
     );
     assert_eq!(
-        starts_in(&oplog, bootstrap.start..=bootstrap.end),
-        INITIALIZER_CALLS
+        sorted(starts_in(&oplog, bootstrap.start..=bootstrap.end)),
+        initializer_calls()
     );
     assert_eq!(
         starts_in(&oplog, strategy.next()..=successful_update.previous()),
