@@ -3716,6 +3716,884 @@ async fn dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_
     Ok(())
 }
 
+/// A middleware starts an MCP tool invocation and cancels it while the upstream server holds its
+/// `tools/call`. The entity body records `Cancelled` after the body's records. Each of two
+/// executor restarts replays the cancelled body, which claims its records before the abort,
+/// without calling the server again, and a fresh invocation then runs live and settles.
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use serde_json::{Value, json};
+    use std::sync::Mutex;
+
+    let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (pending_started, mut pending_started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let handler = post({
+        let requests = requests.clone();
+        move |axum::Json(body): axum::Json<Value>| {
+            let requests = requests.clone();
+            let pending_started = pending_started.clone();
+            async move {
+                assert_eq!(body["method"], "tools/call");
+                let value = body["params"]["arguments"]["value"]
+                    .as_str()
+                    .expect("projected string argument")
+                    .to_string();
+                let first_pending = {
+                    let mut requests = requests.lock().unwrap();
+                    let first_pending = value.ends_with("-pending")
+                        && !requests.iter().any(|seen| seen.ends_with("-pending"));
+                    requests.push(value.clone());
+                    first_pending
+                };
+                // Only the first pending call is held, so a repeated call is counted instead
+                // of hanging the test.
+                if first_pending {
+                    pending_started.send(()).unwrap();
+                    std::future::pending::<()>().await;
+                }
+                axum::Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {
+                        "content": [{"type": "text", "text": format!("stdout:{value}")}],
+                        "structuredContent": {"evidence": format!("leaf({value})")}
+                    }
+                }))
+            }
+        }
+    });
+    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/mcp", handler))
+            .await
+            .unwrap();
+    }));
+    let expected_requests = [
+        "middleware(cancelled)-first",
+        "middleware(cancelled)-second",
+        "middleware(cancelled)-pending",
+    ];
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_tool_streaming_rust_middleware_release",
+        )
+        .name("golem-it:tool-streaming-rust-middleware-cancelled-mcp")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_it_tool_streaming_rust_middleware_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let transform = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-universal-transform-input")
+        .unwrap();
+    let fanout = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-universal-mcp-fanout")
+        .unwrap();
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools.clone(),
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![(
+            transform.name.as_str(),
+            empty_middleware_parameters(transform),
+        )],
+    );
+    deployment.registered_tools.clear();
+    deployment.tool_bindings.clear();
+    deployment.tool_middleware_chains.clear();
+    deployment.mcp_imports = vec![McpImport {
+        url: format!("http://127.0.0.1:{port}/mcp"),
+        auth: None,
+        security_scheme: None,
+        prefix: None,
+        include: None,
+        exclude: None,
+        version: None,
+    }];
+    deployment.tool_middleware_configuration.universal = [transform, fanout]
+        .into_iter()
+        .map(|definition| ToolMiddlewareInstallation {
+            name: ToolMiddlewareName::try_from(definition.name.as_str()).unwrap(),
+            version: Some(definition.version.clone()),
+            parameters: NormalizedJsonValue::new(json!({})),
+            account: None,
+            secret_keys_readable: None,
+            secret_keys_revealable: None,
+            filesystem_access: ToolFilesystemAccess::Unset,
+        })
+        .collect();
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let source = McpImportSource {
+        environment_id: context.default_environment_id,
+        deployment_revision: 1_u64.try_into().unwrap(),
+        import_index: 0,
+        upstream_tool_name: String::new(),
+    };
+    let projected = ProjectedTool::new(
+        &json!({
+            "name": "upstream-probe",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+                "required": ["value"],
+                "additionalProperties": false
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {"evidence": {"type": "string"}},
+                "required": ["evidence"],
+                "additionalProperties": false
+            }
+        }),
+        tool_name.as_str(),
+        Limits::default(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    environment_state.set_mcp_observation(
+        source.clone(),
+        Ok(McpImportObservation {
+            source: source.clone(),
+            protocol_version: golem_mcp_import::transport::PROTOCOL_VERSION.to_string(),
+            tools: vec![projected],
+            diagnostics: Vec::new(),
+        }),
+    );
+    let mut credential_source = source;
+    credential_source.upstream_tool_name = "upstream-probe".to_string();
+    environment_state.set_mcp_credential(
+        credential_source,
+        golem_service_base::clients::registry::McpRuntimeCredential {
+            credential: None,
+            oauth_grant_generation: None,
+        },
+    );
+
+    let (checkpoint_port, checkpoint_server, mut checkpoints) =
+        start_promise_checkpoint_server().await;
+    let agent_id = agent_key!("ToolStreamingCaller", "cancelled-mcp-body");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([(
+                "MIDDLEWARE_PROMISE_CHECKPOINT_PORT".to_string(),
+                checkpoint_port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let call_executor = executor.clone();
+    let call_component = caller_component.clone();
+    let call_agent = agent_id.clone();
+    let call = tokio::spawn(async move {
+        call_executor
+            .invoke_and_await_agent(
+                &call_component,
+                &call_agent,
+                "dynamic_mcp_chain_probe",
+                data_value!("cancelled"),
+            )
+            .await?
+            .into_typed::<Vec<String>>()
+    });
+    // The middleware cancels the pending tool invocation when this checkpoint's promise
+    // completes, and the server holds its `tools/call` until then.
+    let checkpoint = next_promise_checkpoint(&mut checkpoints, "mcp-pending-admitted").await?;
+    tokio::time::timeout(Duration::from_secs(30), pending_started_rx.recv())
+        .await?
+        .expect("the pending MCP request reached the server");
+    executor
+        .complete_promise(
+            &worker_id.environment_id,
+            &executor
+                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .await?,
+            vec![],
+        )
+        .await?;
+    let result = call.await??;
+    assert_eq!(
+        result,
+        [
+            "leaf(middleware(cancelled)-second)",
+            "stdout:middleware(cancelled)-second"
+        ],
+        "the middleware returns the completed underlying call"
+    );
+
+    assert_eq!(*requests.lock().unwrap(), expected_requests);
+    let live = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_cancelled_mcp_body_history(&live);
+
+    let mut executor = executor;
+    let mut history = live;
+    for restart in 1..=2 {
+        drop(executor);
+        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let probe: String = executor
+            .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(probe, "replayed");
+        let fresh = history.len();
+        // The next invocation starts only after the fresh one settled, so once a second probe
+        // returns, the fresh invocation's `AgentInvocationSettled` is in the oplog.
+        let next: String = executor
+            .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(next, "replayed");
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert!(
+            fresh_invocation_settled(&oplog[fresh..]).is_some(),
+            "the fresh invocation settled before the next one started (restart {restart})"
+        );
+        assert_eq!(
+            *requests.lock().unwrap(),
+            expected_requests,
+            "replaying the cancelled body called the MCP server again (restart {restart})"
+        );
+        assert_eq!(
+            oplog[..fresh]
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            history
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            "the replay kept the recorded history (restart {restart})"
+        );
+        let settled = fresh_invocation_settled(&oplog[fresh..]).unwrap();
+        assert!(
+            !oplog.iter().any(|entry| entry.oplog_index > settled
+                && matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(_)
+                        | PublicOplogEntry::End(_)
+                        | PublicOplogEntry::Cancelled(_)
+                )),
+            "no positional entry follows the fresh invocation's settlement at {settled} \
+             (restart {restart})"
+        );
+        assert_cancelled_mcp_body_history(&oplog);
+        history = oplog;
+    }
+
+    drop(executor);
+    drop(server);
+    checkpoint_server.abort();
+    Ok(())
+}
+
+/// The `AgentInvocationSettled` of the first invocation that starts in `entries`.
+fn fresh_invocation_settled(entries: &[PublicOplogEntryWithIndex]) -> Option<OplogIndex> {
+    let invocation_id = entries.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+            PublicAgentInvocation::AgentMethodInvocation(method) => Some(method.invocation_id),
+            _ => None,
+        },
+        _ => None,
+    })?;
+    entries.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::AgentInvocationSettled(settled)
+            if settled.invocation_id == invocation_id =>
+        {
+            Some(entry.oplog_index)
+        }
+        _ => None,
+    })
+}
+
+/// Checks the settled history of `cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart`:
+/// one entity body is cancelled, once; the MCP call that was in flight under it has one terminal,
+/// an `End`; every `Start` has a terminal; every invocation finishes once.
+fn assert_cancelled_mcp_body_history(oplog: &[PublicOplogEntryWithIndex]) {
+    let terminals = |start: OplogIndex| {
+        oplog
+            .iter()
+            .filter(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == start,
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
+                _ => false,
+            })
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>()
+    };
+    let function_at = |index: OplogIndex| {
+        oplog.iter().find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if entry.oplog_index == index => {
+                Some(start.function_name.clone())
+            }
+            _ => None,
+        })
+    };
+    let cancelled = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cancelled.len(),
+        1,
+        "one entity body is cancelled: {cancelled:?}"
+    );
+    let body = cancelled[0];
+    assert_eq!(
+        function_at(body).as_deref(),
+        Some("golem::entity::invoke"),
+        "the cancelled Start at {body} is an entity body"
+    );
+    assert_eq!(
+        terminals(body).len(),
+        1,
+        "the cancelled body has one terminal"
+    );
+
+    let mcp_calls = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if start.function_name == "golem::tool::mcp::call" => {
+                Some((entry.oplog_index, start.parent_start_index))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        mcp_calls.len(),
+        3,
+        "each MCP call starts once: {mcp_calls:?}"
+    );
+    let in_flight = mcp_calls
+        .iter()
+        .filter(|(_, parent)| *parent == Some(body))
+        .map(|(index, _)| *index)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        in_flight.len(),
+        1,
+        "one MCP call was in flight under the cancelled body: {mcp_calls:?}"
+    );
+    let in_flight_terminals = terminals(in_flight[0]);
+    assert!(
+        matches!(
+            in_flight_terminals.as_slice(),
+            [terminal] if oplog.iter().any(|entry| entry.oplog_index == *terminal
+                && matches!(entry.entry, PublicOplogEntry::End(_)))
+        ),
+        "the native MCP body closes its in-flight call with one End: {in_flight_terminals:?}"
+    );
+
+    for entry in oplog {
+        if let PublicOplogEntry::Start(start) = &entry.entry {
+            let index = entry.oplog_index;
+            assert!(
+                !terminals(index).is_empty(),
+                "the Start of {} at {index} has no terminal",
+                start.function_name
+            );
+        }
+    }
+
+    let mut finished = BTreeMap::new();
+    for entry in oplog {
+        if let PublicOplogEntry::AgentInvocationFinished(params) = &entry.entry {
+            *finished.entry(params.invocation_id).or_insert(0) += 1;
+        }
+    }
+    assert!(
+        finished.values().all(|count| *count == 1),
+        "every invocation finishes once: {finished:?}"
+    );
+}
+
+/// A WebSocket peer that counts the connections it accepts per request path, sends nothing, and
+/// holds every connection open until the peer stops.
+async fn start_held_websocket_peer() -> (
+    u16,
+    Arc<std::sync::Mutex<BTreeMap<String, usize>>>,
+    tokio_util::task::AbortOnDropHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind held WebSocket peer");
+    let port = listener
+        .local_addr()
+        .expect("held WebSocket address")
+        .port();
+    let connections = Arc::new(std::sync::Mutex::new(BTreeMap::<String, usize>::new()));
+    let accepted = connections.clone();
+    let peer = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        let mut held = tokio::task::JoinSet::new();
+        loop {
+            let (socket, _) = listener.accept().await.expect("accept a held WebSocket");
+            let accepted = accepted.clone();
+            held.spawn(async move {
+                let mut socket = tokio_tungstenite::accept_hdr_async(
+                    socket,
+                    |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                     response| {
+                        *accepted
+                            .lock()
+                            .unwrap()
+                            .entry(request.uri().path().to_string())
+                            .or_default() += 1;
+                        Ok(response)
+                    },
+                )
+                .await
+                .expect("accept the held WebSocket handshake");
+                while socket.next().await.is_some() {}
+            });
+        }
+    }));
+    (port, connections, peer)
+}
+
+/// The nearest entity body of the `Start` at `index`, through its `parent_start_index` and
+/// `observational_owner` chain.
+fn nearest_entity_body(
+    oplog: &[PublicOplogEntryWithIndex],
+    index: OplogIndex,
+) -> Option<OplogIndex> {
+    let start = |index: OplogIndex| {
+        oplog.iter().find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if entry.oplog_index == index => Some(start),
+            _ => None,
+        })
+    };
+    let mut current = start(index)?;
+    loop {
+        let parent = current.parent_start_index.or(current.observational_owner)?;
+        let parent_start = start(parent)?;
+        if parent_start.function_name == "golem::entity::invoke" {
+            return Some(parent);
+        }
+        current = parent_start;
+    }
+}
+
+/// Checks the history of a Wasm tool body that the caller cancelled while `open_call` was in
+/// flight under it: the body has one `Cancelled`, the in-flight call has no terminal and is the only
+/// `Start` without one, and every invocation finishes once.
+fn assert_cancelled_open_call_history(
+    oplog: &[PublicOplogEntryWithIndex],
+    body: OplogIndex,
+    open_call: OplogIndex,
+) {
+    let terminals = |start: OplogIndex| {
+        oplog
+            .iter()
+            .filter(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == start,
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
+                _ => false,
+            })
+            .collect::<Vec<_>>()
+    };
+    let body_terminals = terminals(body);
+    assert!(
+        matches!(
+            body_terminals.as_slice(),
+            [terminal] if matches!(terminal.entry, PublicOplogEntry::Cancelled(_))
+        ),
+        "the cancelled body at {body} has one terminal, a Cancelled: {body_terminals:?}"
+    );
+    assert!(
+        terminals(open_call).is_empty(),
+        "the call in flight at the cancellation keeps no terminal"
+    );
+    for entry in oplog {
+        if let PublicOplogEntry::Start(start) = &entry.entry {
+            assert!(
+                entry.oplog_index == open_call || !terminals(entry.oplog_index).is_empty(),
+                "the Start of {} at {} has no terminal",
+                start.function_name,
+                entry.oplog_index
+            );
+        }
+    }
+    let mut finished = BTreeMap::new();
+    for entry in oplog {
+        if let PublicOplogEntry::AgentInvocationFinished(params) = &entry.entry {
+            *finished.entry(params.invocation_id).or_insert(0) += 1;
+        }
+    }
+    assert!(
+        finished.values().all(|count| *count == 1),
+        "every invocation finishes once: {finished:?}"
+    );
+}
+
+/// A Wasm tool body connects a WebSocket, keeps a `receive` in flight, pauses at a promise
+/// checkpoint, and is cancelled by its caller while the receive is open, so the receive's
+/// `LeaveIncompleteOnDrop` `Start` stays without a terminal under the body's `Cancelled`. After the
+/// cancelled result, the caller makes a receive of its own on a second connection.
+///
+/// After a restart, the replayed body's receive is held before its claim. The body must not be
+/// aborted while that receive is unclaimed, so the caller, whose own receive follows the cancelled
+/// result, must not claim its receive while the body's receive is held. Nothing observable marks
+/// the moment replay commits the body's `Cancelled` while the body waits, so the test checks this
+/// absence over a bounded window; a body aborted at its `Cancelled` lets the caller claim its
+/// receive within it. The hold is what makes such an abort precede the receive's claim: a receive
+/// released at once usually claims its `Start` before replay commits the `Cancelled`. An abort that
+/// precedes the claim also fails the body-end check, which refuses a cancelled body that left a
+/// recorded call unclaimed. Once released, the body's receive is claimed and neither repairs nor
+/// connects again, and the caller continues. A second restart replays the settled history. A fresh
+/// invocation runs live and settles after each restart.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn cancelled_wasm_tool_body_with_an_open_websocket_receive_recovers_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (peer_port, peer_connections, peer) = start_held_websocket_peer().await;
+    let expected_connections =
+        BTreeMap::from([("/hold".to_string(), 1), ("/marker".to_string(), 1)]);
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let (checkpoint_port, checkpoint_server, mut checkpoints) =
+        start_promise_checkpoint_server().await;
+    let agent_id = agent_key!("ToolStreamingCaller", "cancelled-open-receive");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                ("WEBSOCKET_HOLD_PORT".to_string(), peer_port.to_string()),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let call_executor = executor.clone();
+    let call_component = caller_component.clone();
+    let call_agent = agent_id.clone();
+    let call = tokio::spawn(async move {
+        call_executor
+            .invoke_and_await_agent(
+                &call_component,
+                &call_agent,
+                "cancel_run_then_receive",
+                data_value!(
+                    "open-receive-wait",
+                    format!("ws://127.0.0.1:{peer_port}/marker")
+                ),
+            )
+            .await?
+            .into_typed::<String>()
+    });
+
+    let checkpoint = next_promise_checkpoint(&mut checkpoints, "open-call-held").await?;
+    wait_for_promise_checkpoint_to_await(&executor, &worker_id.agent_id, &checkpoint).await?;
+    let at_checkpoint = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let open_calls = at_checkpoint
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem:websocket/client::receive"
+                    && !at_checkpoint.iter().any(|terminal| match &terminal.entry {
+                        PublicOplogEntry::End(end) => end.start_index == entry.oplog_index,
+                        PublicOplogEntry::Cancelled(cancelled) => {
+                            cancelled.start_index == entry.oplog_index
+                        }
+                        _ => false,
+                    }) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [open_call] = open_calls.as_slice() else {
+        anyhow::bail!("expected one WebSocket receive in flight: {open_calls:?}");
+    };
+    let open_call = *open_call;
+    let body = nearest_entity_body(&at_checkpoint, checkpoint.oplog_idx)
+        .expect("the checkpoint runs in the tool body");
+    assert_eq!(
+        nearest_entity_body(&at_checkpoint, open_call),
+        Some(body),
+        "the open receive at {open_call} runs under the tool body at {body}"
+    );
+    executor
+        .complete_promise(
+            &worker_id.environment_id,
+            &executor
+                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .await?,
+            vec![],
+        )
+        .await?;
+    let result = tokio::time::timeout(Duration::from_secs(60), call).await???;
+    assert_eq!(result, "open-call-held:Err(ToolRpcError::Cancelled):None");
+
+    let live = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_cancelled_open_call_history(&live, body, open_call);
+    let body_cancelled = live
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == body => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let caller_receive = live
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem:websocket/client::receive-with-timeout" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("the caller's receive is recorded");
+    assert!(
+        open_call < body_cancelled && body_cancelled < caller_receive,
+        "the caller's receive at {caller_receive} follows the body's Cancelled at \
+         {body_cancelled}, which follows the body's open receive at {open_call}"
+    );
+    assert_eq!(*peer_connections.lock().unwrap(), expected_connections);
+
+    let mut executor = executor;
+    let mut history = live;
+    for restart in 1..=2 {
+        drop(executor);
+        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let mut gates = (restart == 1).then(|| {
+            (
+                executor.gate_next_replay_access_admission(
+                    &worker_id.agent_id,
+                    "client::receive",
+                    ReplayAdmissionStage::BeforeScope,
+                ),
+                executor.gate_next_replay_access_admission(
+                    &worker_id.agent_id,
+                    "client::receive-with-timeout",
+                    ReplayAdmissionStage::AfterStart,
+                ),
+            )
+        });
+        let mut probe = executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "replay_probe",
+            data_value!(),
+        );
+        if let Some((body_receive, caller_receive)) = gates.as_mut() {
+            tokio::select! {
+                entered = tokio::time::timeout(Duration::from_secs(30), body_receive.entered()) => {
+                    entered.map_err(|_| {
+                        anyhow::anyhow!("the replayed body did not reach its receive")
+                    })?;
+                }
+                result = &mut probe => anyhow::bail!(
+                    "the fresh invocation ended before the replayed body reached its receive: \
+                     {result:?}"
+                ),
+            }
+            tokio::select! {
+                entered = tokio::time::timeout(Duration::from_secs(5), caller_receive.entered()) => {
+                    if entered.is_ok() {
+                        anyhow::bail!(
+                            "the replayed caller claimed its receive, which follows the body's \
+                             Cancelled, before the body claimed its in-flight receive"
+                        );
+                    }
+                }
+                result = &mut probe => anyhow::bail!(
+                    "the fresh invocation ended while the body's in-flight receive was held: \
+                     {result:?}"
+                ),
+            }
+            body_receive.release();
+            tokio::select! {
+                entered = tokio::time::timeout(Duration::from_secs(30), caller_receive.entered()) => {
+                    entered.map_err(|_| {
+                        anyhow::anyhow!(
+                            "the replayed caller did not claim its receive after the body's \
+                             receive was released"
+                        )
+                    })?;
+                }
+                result = &mut probe => anyhow::bail!(
+                    "the fresh invocation ended before the replayed caller claimed its receive: \
+                     {result:?}"
+                ),
+            }
+            caller_receive.release();
+        }
+        let probe: String = tokio::time::timeout(Duration::from_secs(60), probe)
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("the fresh invocation did not complete (restart {restart})")
+            })??
+            .into_typed()?;
+        assert_eq!(probe, "replayed");
+        let fresh = history.len();
+        // The next invocation starts only after the fresh one settled, so once a second probe
+        // returns, the fresh invocation's `AgentInvocationSettled` is in the oplog.
+        let next: String = executor
+            .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(next, "replayed");
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert!(
+            fresh_invocation_settled(&oplog[fresh..]).is_some(),
+            "the fresh invocation settled before the next one started (restart {restart})"
+        );
+        assert_eq!(
+            *peer_connections.lock().unwrap(),
+            expected_connections,
+            "replaying the cancelled body connected again (restart {restart})"
+        );
+        assert_eq!(
+            oplog[..fresh]
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            history
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            "the replay kept the recorded history (restart {restart})"
+        );
+        assert!(
+            !oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+            "the replay recorded no error (restart {restart})"
+        );
+        let settled = fresh_invocation_settled(&oplog[fresh..]).unwrap();
+        assert!(
+            !oplog.iter().any(|entry| entry.oplog_index > settled
+                && matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(_)
+                        | PublicOplogEntry::End(_)
+                        | PublicOplogEntry::Cancelled(_)
+                )),
+            "no positional entry follows the fresh invocation's settlement at {settled} \
+             (restart {restart})"
+        );
+        assert_cancelled_open_call_history(&oplog, body, open_call);
+        history = oplog;
+    }
+
+    drop(executor);
+    drop(peer);
+    checkpoint_server.abort();
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]

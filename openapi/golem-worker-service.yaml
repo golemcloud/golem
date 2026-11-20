@@ -9491,6 +9491,10 @@ components:
         observationalOwner:
           type: integer
           format: uint64
+        driver:
+          type: integer
+          format: uint64
+          description: The invocation that drives the call when it is not the invocation the call belongs to.
         carriesRequest:
           type: boolean
           description: |-
@@ -11162,6 +11166,7 @@ components:
       - observational-owner
       - request-presence
       - parent
+      - driver
     StoredCard:
       type: object
       oneOf:
@@ -12565,6 +12570,9 @@ components:
         invocationId:
           $ref: '#/components/schemas/DurableInvocationId'
         observationalOwner:
+          type: integer
+          format: uint64
+        driver:
           type: integer
           format: uint64
         request:

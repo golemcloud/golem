@@ -1744,6 +1744,41 @@ impl PrivateDurableWorkerState {
         let key = attribution::InvocationKey::Invocation(invocation_key);
         self.attribution.retain_export_returned(key);
         self.invocations.begin(key);
+        self.tail_work.end_invocation();
+    }
+
+    /// Sets the `AgentInvocationStarted` index of the invocation the loop runs. Store tasks of
+    /// earlier invocations that resume from now on are driven by it.
+    pub fn set_loop_invocation_start_index(&mut self, start_index: OplogIndex) {
+        let invocation = self.invocations.loop_entry_mut();
+        invocation.start_index = Some(start_index);
+        self.tail_work
+            .begin_invocation(start_index, &invocation.tail_work);
+    }
+
+    /// Records that the invocation the loop runs closed at its `AgentInvocationSettled`. The live
+    /// work of a parked store task then waits for the next invocation to drive it
+    /// ([`tail_work::TailActivity::park_until_driven`]).
+    pub(crate) fn close_loop_invocation(&mut self) {
+        self.tail_work.end_invocation();
+    }
+
+    /// The `AgentInvocationStarted` index of the invocation that drives the running host code
+    /// when that code is not attributed to the invocation the loop runs: a store task that its
+    /// spawning invocation left behind, resumed by a later invocation, or agent-level work that
+    /// runs while an invocation is current. `None` for code of the invocation the loop runs and
+    /// for code attributed to nothing.
+    pub(crate) fn recording_driver(&self) -> Option<OplogIndex> {
+        let attributed = self.attribution.resolve()?;
+        if attributed == self.invocations.loop_key() {
+            return None;
+        }
+        let driver = self.tail_work.current_invocation();
+        debug_assert!(
+            driver.is_some(),
+            "work of {attributed:?} records while no invocation is current"
+        );
+        driver
     }
 
     /// Ends the loop's invocation without beginning another, as an entity Store does when its
@@ -1754,6 +1789,7 @@ impl PrivateDurableWorkerState {
             .retain_export_returned(attribution::InvocationKey::AgentLevel);
         self.invocations
             .begin(attribution::InvocationKey::AgentLevel);
+        self.tail_work.end_invocation();
     }
 
     /// The execution state of the invocation the running host code belongs to.

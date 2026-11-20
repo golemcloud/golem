@@ -11,13 +11,15 @@ pub(super) use commit::is_auto_skippable_hint;
 use reads::is_active_stream_observation;
 use retained::{custom_subtree_entry_is_drainable, host_internal_calls_are_replay_inert};
 pub(super) use selection::{
-    head_owner, scope_entry_owner, start_parent, terminal_kind, terminal_start_index,
+    head_owner, is_custom_invocation_start, is_entity_invocation_start, scope_entry_owner,
+    start_parent, terminal_kind, terminal_start_index,
 };
 #[cfg(test)]
 pub(super) use selection::{missing_start_waits_for, nearest_active_body};
 pub(super) use settling::historical_reconstruction_owner_failure;
 
 use super::claims::{AdmissionRefusal, RecordedStart, StartClaim, matching_admission_refusal};
+use super::owners::Class;
 use super::{
     AbandonedStarts, AgentInvocationResult, AgentInvocationStartedEntry, Arc, AtomicBool,
     AtomicOplogIndex, AtomicReplayTransitionPhase, BlockedOn, BootstrapTail, CHUNK_SIZE,

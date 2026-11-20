@@ -255,12 +255,19 @@ while an invocation boundary (a terminal, an `AgentInvocationSettled` or another
 `AgentInvocationStarted`) lies between the cursor and the marker: a reader retained across
 invocations is consumed in a later invocation, which cannot replay until this one settles. Cursor
 operations and waits for a marker in the current invocation remain active.
-A destructor whose terminal is missing can repair only after the natural replay-to-live transition;
-if recovery returns before its Store task resumes, the next invocation can drive that repair.
+A destructor whose terminal is missing can repair only after the natural replay-to-live transition,
+and only while an invocation that the recorded history has not closed drives the primary Store
+(`ReplayState::await_driving_invocation`); otherwise the next invocation drives that repair.
 The task becomes active before performing effects or appending a terminal, and settlement waits
 for it before settling that invocation: before `AgentInvocationSettled` for an invocation that
 records its result at the export's return, before `AgentInvocationFinished` for the others. Work
 that must survive a restart belongs in the oplog, not in a task.
+A resumed task counts on the invocation the loop runs when it resumes, not on its spawner. Every
+`Start` that code not attributed to the loop's invocation records (a resumed task of an earlier
+invocation, or agent-level work) carries `driver` = the `AgentInvocationStarted` of the loop's
+invocation (`PrivateDurableWorkerState::recording_driver`); the loop's own calls and snapshotting
+record none. Every replayed claim checks the recorded `driver` against the claiming call's; a
+mismatch is a `ReplayDivergence` whose mismatched field is `driver`.
 
 ## Invocation anchors and the authority cut-off
 

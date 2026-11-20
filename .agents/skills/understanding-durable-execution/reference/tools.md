@@ -342,6 +342,19 @@ trap paths retain owner recovery. Every host call the body makes records its own
 with `parent_start_index` pointing at its enclosing scope — normally that entity `Start`
 (`durable_host/concurrent/call.rs`).
 
+A body cancelled live can leave a `LeaveIncompleteOnDrop` call in flight: its `Start` precedes the
+body's `Cancelled` and has no terminal. That is the one incomplete `Start` settled history may
+keep. Replay re-runs the body and aborts it only after it claimed every call it recorded
+(`coordinate_entity_reconstruction`): closed calls return their recorded results, and the
+in-flight call is claimed and waits without being repaired, so the abort drops it at the same
+point the live cancellation did. A later claim, positional read or stream read of the body
+waits until the abort; work under the body after it settled, such as the disposal of its
+resources, is decided as for any settled body. A body that returns with a recorded call
+unclaimed is a divergence.
+Nothing is folded, repaired or appended. A body cancelled by the live caller during an
+incomplete replay (`IncompleteCancelled`, `IncompleteLiveAdmissionCancelled`) is not covered:
+the cancellation stops it before it re-claims its calls.
+
 `OwnerExecution` (`worker/instance/mod.rs`) is "the durable execution stream shared by every Store
 belonging to one owner": entity Stores clone the primary's `ReplayState`, which shares the cursor
 rather than opening a second cursor over the same oplog, and `HostedInstance::invoke_scoped` runs

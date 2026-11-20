@@ -1020,6 +1020,7 @@ where
                             accessor,
                             response,
                             crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+                            None,
                         )
                         .await
                     },
@@ -1032,6 +1033,7 @@ where
         accessor,
         response,
         crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+        None,
     )
     .await
 }

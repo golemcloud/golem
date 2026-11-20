@@ -491,7 +491,7 @@ function renderReportNode(key, n, open) {
     case 'flag': return leaf(h('span', { class: 'b' }, String(n.value)));
     case 'number': {
       const el = leaf(h('span', { class: 'n' }, String(n.value)));
-      if (key && /(Index|^retryFrom$|^start$|^end$|^confirmedUpTo$|^sendingUpTo$|^lastBatchStart$|^observationalOwner$)/.test(key) && n.value > 0) el.append(' ', indexLink(n.value));
+      if (key && /(Index|^retryFrom$|^start$|^end$|^confirmedUpTo$|^sendingUpTo$|^lastBatchStart$|^observationalOwner$|^driver$)/.test(key) && n.value > 0) el.append(' ', indexLink(n.value));
       return el;
     }
     default: return leaf(ty(n.kind));
@@ -677,7 +677,7 @@ function renderJson(key, v, open) {
   }
   if (typeof v === 'number' || typeof v === 'bigint') {
     const el = h('div', { class: 'leaf' }, keyLabel(key), h('span', { class: 'n' }, String(v)));
-    if (key && /(Index|^retryFrom$|^start$|^end$|^confirmedUpTo$|^sendingUpTo$|^lastBatchStart$|^observationalOwner$)/.test(key) && v > 0) el.append(' ', indexLink(v));
+    if (key && /(Index|^retryFrom$|^start$|^end$|^confirmedUpTo$|^sendingUpTo$|^lastBatchStart$|^observationalOwner$|^driver$)/.test(key) && v > 0) el.append(' ', indexLink(v));
     return el;
   }
   if (typeof v === 'boolean') return h('div', { class: 'leaf' }, keyLabel(key), h('span', { class: 'b' }, String(v)));
@@ -755,7 +755,7 @@ function summary(e) {
   const p = e.entry; const t = e.type;
   switch (t) {
     case 'Create': return [span('fn', 'agent created'), ' ', span('val', `revision ${p.componentRevision} · ${p.agentMode || ''} · ${bytesText(p.componentSize)}` + (p.parent ? ` · parent ${EXPORT ? fieldText(p.parent) : (p.parent.agentId || '')}` : ''))];
-    case 'Start': return [span('fn', p.functionName), span('val', '(' + typedText(p.request, 110) + ')'), p.observationalOwner != null ? span('val', ' · observational') : null, p.denial != null ? span('err', ' · denied: ' + fieldText(p.denial)) : null];
+    case 'Start': return [span('fn', p.functionName), span('val', '(' + typedText(p.request, 110) + ')'), p.observationalOwner != null ? span('val', ' · observational') : null, p.driver != null ? span('val', ' · driven by ' + p.driver) : null, p.denial != null ? span('err', ' · denied: ' + fieldText(p.denial)) : null];
     case 'End': return [span('val', '← #' + idxOf(p.startIndex)), ' ', p.response != null ? [arrow(), span('val', typedText(p.response, 120))] : span('val', 'scope end'), p.forcedCommit ? span('val', ' · forced commit') : null];
     case 'Cancelled': return [span('err', 'cancelled'), span('val', ' ← #' + idxOf(p.startIndex)), p.partial != null ? [span('val', ' · partial: '), span('val', typedText(p.partial, 80))] : null];
     case 'CompletionDelivered': return [span('val', 'result of #' + idxOf(p.startIndex) + ' delivered to the guest')];
@@ -939,6 +939,7 @@ function groupHeader(n) {
     if (n.completion) right.push(h('span', { class: 'tag ' + (n.completion.type === 'CompletionDiscarded' ? 'warn' : ''), title: n.completion.type }, n.completion.type === 'CompletionDiscarded' ? 'discarded' : 'delivered'));
     if (n.frames.length) right.push(h('span', { class: 'tag' }, n.frames.length + ' frames'));
     if (p.observationalOwner != null) right.push(h('span', { class: 'tag' }, 'observational'));
+    if (p.driver != null) right.push(h('span', { class: 'tag' }, 'driven by ' + p.driver));
     if (p.denial != null) right.push(h('span', { class: 'tag warn', title: fieldText(p.denial) }, 'denied'));
     if (end) right.push(h('span', { class: 'tag', title: 'end entry index' }, '→ #' + end.index));
   } else if (n.kind === 'entity') {

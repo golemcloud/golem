@@ -433,6 +433,7 @@ fn start_entry(index: u64, function: &str, request: Option<TypedSchemaValue>) ->
             function_name: function.to_string(),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request,
             durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
             span_started: None,

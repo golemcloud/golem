@@ -1711,6 +1711,7 @@ fn retry_deadline_belongs_to_the_waiting_call_until_its_terminal() {
         function_name: HostFunctionName::Custom(name.to_string()),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
@@ -1987,6 +1988,7 @@ async fn background_work_after_invocation_result_runs_until_settled() {
                 function_name: HostFunctionName::Custom("background".to_string()),
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                     HostRequestNoInput {},
                 )))),
@@ -5410,6 +5412,7 @@ impl TestCaseBuilder {
                 function_name: HostFunctionName::Custom(name.to_string()),
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 request: Some(OplogPayload::Inline(Box::new(i))),
                 durable_function_type: func_type,
                 span_started: None,

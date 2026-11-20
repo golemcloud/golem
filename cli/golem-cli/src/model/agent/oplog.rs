@@ -361,6 +361,9 @@ impl TextOutput for PublicOplogEntry {
                 if let Some(owner) = params.observational_owner {
                     logln(format!("{pad}observational owner: {}", owner));
                 }
+                if let Some(driver) = params.driver {
+                    logln(format!("{pad}driver:            {}", driver));
+                }
                 if let Some(request) = &params.request {
                     logln(format!(
                         "{pad}input:             {}",
@@ -1548,6 +1551,7 @@ mod tests {
             parent_start_index: None,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             carries_request: true,
             request: request
                 .map(|request| Box::new(request.to_string().into_typed_schema_value().unwrap())),

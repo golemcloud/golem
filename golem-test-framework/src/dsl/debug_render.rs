@@ -58,6 +58,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             if let Some(parent) = params.parent_start_index {
                 let _ = writeln!(result, "{pad}parent start index: {parent}");
             }
+            if let Some(driver) = params.driver {
+                let _ = writeln!(result, "{pad}driver:            {driver}");
+            }
             if let Some(request) = &params.request {
                 let _ = writeln!(
                     result,

@@ -112,6 +112,11 @@ oplog_entry! {
     /// `observational_owner` is the `Start` index of a custom durable invocation whose physical
     /// call tree is recorded for observability but does not participate in replay. It is absent
     /// for ordinary replayable calls.
+    /// `driver` is the `AgentInvocationStarted` index of the invocation whose settlement waits for
+    /// this call. It is present in two cases: a store task that records after its spawning
+    /// invocation closed records the invocation that resumed it, and agent-level work recorded
+    /// while an invocation runs records that invocation, even when the call's invocation id is
+    /// anchored at the same invocation. It is absent otherwise.
     /// `request` is `Some(...)` for real host calls and `None` for scopes that have no
     /// host-level request payload (batched-write, future transaction scopes).
     /// `denial` is the reason the host denied the call before it ran. A denied call never runs
@@ -126,6 +131,7 @@ oplog_entry! {
             function_name: payload::host_functions::HostFunctionName,
             invocation_id: Option<DurableInvocationId>,
             observational_owner: Option<OplogIndex>,
+            driver: Option<OplogIndex>,
             request: Option<payload::OplogPayload<payload::HostRequest>>,
             durable_function_type: DurableFunctionType,
             span_started: Option<Box<SpanStarted>>,
@@ -136,6 +142,7 @@ oplog_entry! {
             function_name: String,
             invocation_id: Option<DurableInvocationId>,
             observational_owner: Option<OplogIndex>,
+            driver: Option<OplogIndex>,
             request: Option<TypedSchemaValue>,
             durable_function_type: PublicDurableFunctionType,
             span_started: Option<PublicSpanStarted>,

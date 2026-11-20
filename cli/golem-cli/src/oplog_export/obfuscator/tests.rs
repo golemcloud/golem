@@ -137,6 +137,7 @@ fn start(index: u64, function: &str, request: TypedSchemaValue) -> PublicOplogEn
             function_name: function.to_string(),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(request),
             durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
             span_started: None,
@@ -3807,6 +3808,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
             function_name: fqfn::<host_functions::GolemRpcWasmRpcInvoke>().to_string(),
             invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(1), 3)),
             observational_owner: Some(OplogIndex::from_u64(1)),
+            driver: None,
             request: Some(request(rpc_invoke(SchemaValue::String("MARKER".into())))),
             durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
             span_started: Some(marker_span_started()),
@@ -3903,6 +3905,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
                         parent_start_index: None,
                         invocation_id: None,
                         observational_owner: None,
+                        driver: None,
                         carries_request: true,
                         request: Some(Box::new(
                             "MARKER".to_string().into_typed_schema_value().unwrap(),

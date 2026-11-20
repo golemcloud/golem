@@ -711,6 +711,7 @@ pub trait ToolStreamingCaller {
         directory: String,
         gate: golem_rust::PromiseId,
     ) -> bool;
+    async fn cancel_run_then_receive(&self, mode: String, websocket_url: String) -> String;
     async fn filesystem_policy_write_read(
         &self,
         path: String,
@@ -3354,6 +3355,35 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         };
         let (result, ()) = (raw_result(&invocation), cancel).join().await;
         matches!(result, Err(ToolRpcError::Cancelled))
+    }
+
+    // Runs the streaming tool in `mode` and cancels it once its first stdout chunk arrives. After
+    // the cancelled result, connects a WebSocket to `websocket_url` and makes one receive that
+    // times out at once.
+    async fn cancel_run_then_receive(&self, mode: String, websocket_url: String) -> String {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (stdout_target, mut stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input(&mode),
+            Some(closed_raw_stdin()),
+            Some(stdout_target),
+            None,
+        );
+        let first = raw_chunk(&mut stdout).await;
+        invocation.cancel();
+        let result = raw_result(&invocation).await;
+        let connection =
+            golem_rust::websocket::WebsocketConnection::connect(&websocket_url, None, None)
+                .expect("connect the WebSocket after the cancelled result");
+        let received = connection
+            .receive_with_timeout(0)
+            .await
+            .expect("receive with timeout after the cancelled result");
+        format!(
+            "{}:{result:?}:{received:?}",
+            String::from_utf8_lossy(&first)
+        )
     }
 
     async fn filesystem_policy_write_read(

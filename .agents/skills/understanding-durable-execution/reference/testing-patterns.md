@@ -93,14 +93,18 @@ Mistake caught: "cursor rewind is recreation" and fixes that only work while cac
 Do: drop the executor (or `simulated_crash`) and start again; then assert (a) guest-visible state
 via a fresh invocation and (b) oplog shape via `get_oplog`/`search_oplog`: exactly one
 `AgentInvocationFinished` per key, every `Start` in successfully settled history has one
-terminal, no positional `Start`/`End` of an invocation after its `AgentInvocationSettled`, or
+terminal (except a `LeaveIncompleteOnDrop` call that was in flight when its entity body was
+cancelled; any other incomplete `Start` is expected only where the crash was injected), no
+positional `Start`/`End` of an invocation after its `AgentInvocationSettled`, or
 after its terminal (`AgentInvocationFinished` or `AgentInvocationFailed`) when it writes no
 `Settled` (methods that use streams, through stream inputs or a stream result, snapshot save and
 load including a manual update's, oplog-processor batches and external-tool invocations; hint entries such as stream-session
 completion may follow), expected `CompletionDelivered` markers present. Background work of an
 invocation appends its `Start`/`End` entries between its terminal and its `Settled`. The
 exception is the terminal of a retained call or deferred destructor that a later invocation
-drives, or a task parked at a safe park point. When
+drives, or a task parked at a safe park point; such a terminal lands before the driving
+invocation's `Settled`, possibly after its `AgentInvocationFinished`, and a `Start` the resumed
+task records carries that invocation as `driver`. When
 component
 revision, plugins or metadata matter, the restart must go through instance creation
 (`recovering_an_old_worker_after_updating_a_component`).

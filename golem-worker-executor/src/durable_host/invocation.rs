@@ -174,6 +174,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .await?
             {
                 replay_state::SettledAt::Recorded(_) => {
+                    self.state.close_loop_invocation();
                     return self.close_custom_durability_state(invocation);
                 }
                 replay_state::SettledAt::ReplayTail => {
@@ -205,6 +206,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 Ok(refusal) => worker.refused_by(refusal),
                 Err(error) => error,
             })?;
+        self.state.close_loop_invocation();
         let commit_level = match worker.agent_mode() {
             AgentMode::Durable => CommitLevel::Always,
             AgentMode::Ephemeral => CommitLevel::Deferred,
@@ -823,6 +825,17 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Closes the invocation the loop runs at its terminal when the terminal is not recorded at
+    /// the export's return, as `on_agent_invocation_settled` does at `AgentInvocationSettled`: a
+    /// parked store task then cannot resume under the finished invocation and record after its
+    /// terminal, for example while a crash-interrupted invocation completes its durable Stream
+    /// Session.
+    fn close_loop_invocation_at_settled_terminal(&mut self, at_return: bool) {
+        if !at_return {
+            self.state.close_loop_invocation();
+        }
+    }
+
     /// Ends an invocation whose failure, or the status after it, the oplog refused to record.
     async fn refused_terminal_entry(
         &mut self,
@@ -944,7 +957,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let Some(start_index) = start_index else {
                 return Ok(false);
             };
-            self.state.loop_invocation_state_mut().start_index = Some(start_index);
+            self.state.set_loop_invocation_start_index(start_index);
         }
         Ok(true)
     }
@@ -1281,6 +1294,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 {
                     self.state.last_state_change = Some(finished_index);
                 }
+                self.close_loop_invocation_at_settled_terminal(at_return);
                 return Ok(());
             }
             // No terminal exists at the natural tail: complete this interrupted invocation live.
@@ -1314,6 +1328,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         worker
             .commit_oplog_before_status_update(commit_level)
             .await?;
+        self.close_loop_invocation_at_settled_terminal(at_return);
         // Mutations preceding a returned error are retained. Invalidate before publishing
         // the failure so a following reader cannot reuse the pre-invocation state.
         if worker.agent_method_invalidates_read_only_cache(full_function_name) {
@@ -1420,6 +1435,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 if self.invocation_changes_state(full_function_name, &recorded_result) {
                     self.state.last_state_change = Some(finished_index);
                 }
+                self.close_loop_invocation_at_settled_terminal(at_return);
                 debug!("Function {full_function_name} finished");
                 return Ok(());
             }
@@ -1488,6 +1504,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .worker()
                 .commit_oplog_before_status_update(commit_level)
                 .await?;
+            self.close_loop_invocation_at_settled_terminal(at_return);
 
             // Bump the read-only cache epoch after the
             // `AgentInvocationFinished` entry is committed, but *before*

@@ -185,6 +185,7 @@ impl BlockedOn {
 mod abandoned;
 mod claims;
 mod cursor;
+mod owners;
 mod resolution;
 mod starts;
 
@@ -898,9 +899,8 @@ struct CursorState {
     /// [`ReplayState::open_invocation_anchor`], removed by
     /// [`ReplayState::close_invocation_anchor`].
     open_anchors: std::collections::BTreeMap<OplogIndex, OpenInvocation>,
-    /// The highest anchor [`ReplayState::close_invocation_anchor`] closed. Anchors are opened in
-    /// oplog order, so an anchor at or below it that is not open is closed.
-    last_closed_anchor: Option<OplogIndex>,
+    /// The owners of the committed `Start`s, and the invocations that closed.
+    owners: owners::OwnerMap,
     /// The `AgentInvocationSettled` entries the cursor committed or skipped as hints, with their
     /// invocation ids. Entries no open or later anchor can need are pruned when an anchor closes.
     settled_invocations: std::collections::BTreeMap<OplogIndex, golem_common::model::InvocationId>,
@@ -971,15 +971,6 @@ impl CursorState {
             .is_some_and(|(_, entry)| self.is_returned_open_invocation_terminal(entry))
     }
 
-    /// Whether the background work of the invocation anchored at `anchor` has ended: `anchor`
-    /// lies at or below the last anchor [`ReplayState::close_invocation_anchor`] closed and is not
-    /// open. This includes earlier invocations that never opened an anchor.
-    fn is_closed_anchor(&self, anchor: OplogIndex) -> bool {
-        self.last_closed_anchor
-            .is_some_and(|closed| anchor <= closed)
-            && !self.open_anchors.contains_key(&anchor)
-    }
-
     /// The index of the `AgentInvocationSettled` of `invocation_id` that the cursor committed or
     /// skipped after `anchor`.
     fn settled_after(
@@ -1000,28 +991,6 @@ impl CursorState {
             .range(anchor.next()..)
             .next()
             .map(|(index, _)| *index)
-    }
-
-    /// Logs a claim that took a `Start` anchored to an earlier invocation whose background work
-    /// has ended. A `Start` does not record whether a guest import or a spawned store task made
-    /// it, and a store task retained across settlement keeps the attribution of the invocation
-    /// that spawned it, so such a `Start` is tolerated rather than treated as a divergence.
-    fn report_closed_anchor_claim(&self, index: OplogIndex, entry: &OplogEntry) {
-        if let OplogEntry::Start {
-            invocation_id: Some(invocation_id),
-            function_name,
-            ..
-        } = entry
-            && self.is_closed_anchor(invocation_id.anchor)
-        {
-            tracing::error!(
-                anchor = %invocation_id.anchor,
-                start_index = %index,
-                function_name = %function_name,
-                "Replay claimed a Start anchored to an earlier invocation whose background work \
-                 has ended; tolerated for retained store tasks until GOL-1057"
-            );
-        }
     }
 }
 
@@ -1058,10 +1027,6 @@ impl RetainedStartCounts {
         self.total.store(retained.total, Ordering::Release);
         self.http.store(retained.http, Ordering::Release);
         self.rpc.store(retained.rpc, Ordering::Release);
-    }
-
-    fn clear(&self) {
-        self.publish(&starts::RetainedSummary::default());
     }
 
     fn any(&self) -> bool {

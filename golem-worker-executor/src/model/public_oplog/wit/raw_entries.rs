@@ -90,6 +90,7 @@ before (value) {}
         observational_owner: params
         .observational_owner
         .map(golem_common::base_model::OplogIndex::from_u64),
+        driver: params.driver.map(golem_common::base_model::OplogIndex::from_u64),
         request: params.request.map(oplog_payload_from_wit),
         durable_function_type: params.durable_function_type.into(),
         span_started: params.span_started.map(|span| raw_span_started_from_wit(span).map(Box::new)).transpose()?,
@@ -618,6 +619,7 @@ before (value) {}
         function_name: function_name.to_string(),
         invocation_id: invocation_id.map(durable_invocation_id_to_wit),
         observational_owner: observational_owner.map(|i| i.into()),
+        driver: driver.map(|i| i.into()),
         request: request.map(oplog_payload_to_wit).transpose()?,
         durable_function_type: durable_function_type.into(),
         span_started: span_started.map(|span| raw_span_started_to_wit(*span)),

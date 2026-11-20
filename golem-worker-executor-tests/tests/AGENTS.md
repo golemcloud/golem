@@ -33,8 +33,9 @@ machine. Timeouts bound failures; they do not establish ordering.
   teardown and recreation over the same storage — a genuine reconstruction, not OS process
   death), or `simulated_crash`; a cursor reset or `resume` on a resident worker is not a restart.
   Then check both guest-visible state and oplog shape (`get_oplog`, `search_oplog`): one
-  `Finished` per key; every `Start` in successfully settled history has a terminal (an
-  incomplete `Start` is expected only where the crash was injected); no positional `Start`/`End`
+  `Finished` per key; every `Start` in successfully settled history has a terminal, except a
+  `LeaveIncompleteOnDrop` call that was in flight when its entity body was cancelled; any other
+  incomplete `Start` is expected only where the crash was injected; no positional `Start`/`End`
   of an invocation after its `AgentInvocationSettled`, or after its terminal
   (`AgentInvocationFinished` or `AgentInvocationFailed`) when it writes no `Settled`
   (methods that use streams, through stream inputs or a stream result, snapshot save and load

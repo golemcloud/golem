@@ -170,7 +170,7 @@ impl ReplayState {
                 starts,
                 custom_subtrees: HashMap::new(),
                 open_anchors: std::collections::BTreeMap::new(),
-                last_closed_anchor: None,
+                owners: Default::default(),
                 settled_invocations: std::collections::BTreeMap::new(),
                 last_started_invocation: None,
             }),
@@ -625,6 +625,24 @@ impl ReplayState {
             })
     }
 
+    /// Whether the recorded history closes the invocation anchored at `start`: an
+    /// `AgentInvocationSettled` or the next `AgentInvocationStarted` follows it. Its background
+    /// work then ended in the recorded run, with every remaining store task parked, so live work
+    /// of such a task belongs to a later invocation.
+    pub(crate) fn invocation_closed_in_history(&self, start: OplogIndex) -> bool {
+        self.cursor
+            .invocation_finishes
+            .lock()
+            .unwrap()
+            .range(start.next()..)
+            .any(|(_, boundary)| {
+                matches!(
+                    boundary,
+                    InvocationBoundary::Settled | InvocationBoundary::Started
+                )
+            })
+    }
+
     pub(crate) fn transaction_marker(
         &self,
         owner: OplogIndex,
@@ -709,6 +727,7 @@ impl ReplayState {
                 std::cmp::Ordering::Less => {
                     tx.st.replay_buffer.clear();
                     tx.prune_retained_starts(|idx| idx > new_target);
+                    tx.st.owners.truncate_after(new_target);
                     tx.st.settled_invocations.split_off(&new_target.next());
                     cursor
                         .completion_markers

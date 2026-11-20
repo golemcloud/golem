@@ -154,6 +154,7 @@ fn span_lifecycle_projections_keep_asymmetric_ids_and_timestamps() {
             function_name: HostFunctionName::MonotonicClockNow,
             invocation_id: None,
             observational_owner: None,
+            driver: Some(golem_common::base_model::OplogIndex::from_u64(4)),
             request: None,
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: Some(Box::new(started.clone())),
@@ -200,6 +201,7 @@ fn span_lifecycle_projections_keep_asymmetric_ids_and_timestamps() {
             function_name: HostFunctionName::MonotonicClockNow.to_string(),
             invocation_id: None,
             observational_owner: None,
+            driver: Some(golem_common::base_model::OplogIndex::from_u64(4)),
             request: None,
             durable_function_type: DurableFunctionType::ReadLocal.into(),
             span_started: Some(public_started),
@@ -227,6 +229,7 @@ fn span_lifecycle_projections_keep_asymmetric_ids_and_timestamps() {
     let oplog::PublicOplogEntry::Start(start) = &encoded[0] else {
         panic!("expected start")
     };
+    assert_eq!(start.driver, Some(4));
     let projected_start = start.span_started.as_ref().unwrap();
     assert_eq!(projected_start.trace_id, origin_trace_id.to_string());
     assert_eq!(
@@ -961,6 +964,7 @@ fn failed_update_divergence_requests_drop_their_owned_handles() {
             parent_start_index: None,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             carries_request: true,
             request: Some(wire::TypedSchemaValue {
                 graph: wire::SchemaGraph {

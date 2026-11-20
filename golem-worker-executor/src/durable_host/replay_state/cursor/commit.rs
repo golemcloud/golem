@@ -54,6 +54,33 @@ impl CursorTx<'_> {
         result
     }
 
+    /// The owner of `entry` at `read_idx` when it is a `Start`, validated against the recorded
+    /// prefix without changing any state. A reader that changes state for a `Start` before it
+    /// commits it validates the owner first, so a divergent `Start` leaves no state behind and
+    /// every later read reports the same divergence.
+    pub(super) fn validate_start_owner(
+        &self,
+        read_idx: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Result<Option<crate::durable_host::replay_state::owners::RecordOwner>, WorkerExecutorError>
+    {
+        if !matches!(entry, OplogEntry::Start { .. }) {
+            return Ok(None);
+        }
+        self.st
+            .owners
+            .validate_start(read_idx, entry, self.st.has_open_invocation())
+            .map(Some)
+            .map_err(|divergence| {
+                WorkerExecutorError::replay_divergence(ReplayDivergence {
+                    oplog_index: read_idx,
+                    expected: crate::durable_host::replay_state::claims::recorded_step(entry),
+                    actual: ReplayStep::described(divergence),
+                    mismatched: Vec::new(),
+                })
+            })
+    }
+
     async fn commit_entry_inner(
         &mut self,
         read_idx: OplogIndex,
@@ -63,8 +90,15 @@ impl CursorTx<'_> {
         // Apply the fallible commit-only side effects *before* publishing the cursor advance, so a
         // failure (e.g. a corrupt `GolemApiFork` payload) cannot leave the cursor advanced while
         // resolver routing / progress signalling below never run — a partial-publish on the error
-        // path. None of these effects depend on the cursor position.
+        // path. None of these effects depend on the cursor position. The owner of a `Start` is
+        // validated first, so a divergent `Start` changes nothing.
+        let owner = self.validate_start_owner(read_idx, entry)?;
         self.apply_commit_effects(read_idx, entry).await?;
+        if let Some(owner) = owner {
+            self.st.owners.record_start(read_idx, entry, owner);
+        } else if let Some(start) = terminal_start_index(entry) {
+            self.st.owners.commit_terminal(start, entry);
+        }
         if let OplogEntry::Start {
             parent_start_index,
             function_name,
@@ -221,17 +255,6 @@ impl CursorTx<'_> {
     ) -> Result<(), WorkerExecutorError> {
         if let Some(wallet) = &self.cursor.wallet {
             if let Some(parent) = oplog_entry.entity_parent_start_index() {
-                // Hints can precede even the claim of their future entity Start. Validate the
-                // exact reference before retaining its prefix; a released claim cannot recreate it.
-                if wallet.entity_replay_wallet(parent).is_err()
-                    && !self.st.starts.is_claimed_ahead(&parent)
-                    && self.custom_subtree_root(parent).is_none()
-                    && self
-                        .future_entity_start_can_be_claimed(read_idx, parent)
-                        .await?
-                {
-                    wallet.register_replayed_entity(parent);
-                }
                 wallet.capture_entity_prefix(parent);
             }
             if matches!(
@@ -272,6 +295,7 @@ impl CursorTx<'_> {
                 ..
             } => {
                 self.st.last_started_invocation = Some((read_idx, *invocation_id));
+                self.st.owners.commit_invocation_started(read_idx);
                 self.record_wallet_replay_event(
                     read_idx,
                     ReplayEvent::InvocationWalletPinned {

@@ -2258,8 +2258,8 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   `OplogEntry::entity_attribution()`): the primary agent consumes only entries with no entity
   parent, an entity body only entries recorded under its own invocation `Start`. A read that
   finds another Store's entry at the head parks only while that Store can still consume it (the
-  primary while the cursor replays; an entity body whose `Start` is claimed, retained, or
-  scan-ahead claimed). Otherwise `check_parked_positional_read` reports the head as divergence
+  primary while the cursor replays; an entity body while `body_can_still_consume` holds for
+  it). Otherwise `check_parked_positional_read` reports the head as divergence
   instead of hanging replay; the invocation-boundary reader never parks on another Store.
 - A `Start` claim that finds no match decides the missing `Start` only when no active entity
   body encloses the entry at the cursor head. A tool call claims its entity `Start` inline, but
@@ -2307,14 +2307,81 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   constructor request before restoring its span or resource. Matching a call's invocation id
   and function does not authorize a different RPC target. The snapshot negative controls in
   `tests/rpc/gc_timed_cleanup.rs` require rejection and full replay without duplicate effects.
-- Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
-  tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
-  invocation settles (at its terminal on the settled path, at `AgentInvocationSettled` when the
-  result was recorded at the export's return), retained `Start`s that are closed by a recorded
-  `End`/`Cancelled` are released with a warning; an unclosed one is a divergence error
-  (`release_retained_starts_at_live_invocation_end`), so that entry is never appended after an
-  open `Start`. A settled entity body that returned without claiming a retained
-  descendant is a structural divergence (`ensure_body_claimed_retained_descendants`, `entity.rs`).
+- **Owners come from recorded fields only** (`replay_state/owners.rs`, `OwnerMap`). Every
+  committed `Start` gets a `RecordOwner` (an invocation, or `AgentLevel`, plus its nearest
+  enclosing entity `Start`) from one function of its fields and of earlier entries: its `driver`
+  when recorded; else the anchor of its invocation id, resolved through entity and custom `Start`s
+  to an invocation; else its `parent_start_index` or `observational_owner`; else `AgentLevel`.
+  A reference to no earlier committed entry (a forward, deleted or beyond-target index) is an
+  `Orphan`, a divergence wherever it is classified and whenever a `Start` whose owner resolves
+  through it is committed, with or without `driver`; no producer records a forward reference, and
+  a debug assertion in the primary writer (`primary/state.rs` `push`) checks it. One rule covers a
+  parent or observational owner that resolves to no owner: it counts as pruned only when it is a
+  committed `Start` whose owner a close dropped (the map's `pruned` set); any other entry, such as
+  the creation entry or an `End` or hint inside a closed invocation, is an orphan. A pruned
+  reference gives way to a resolved invocation id, or, when the `Start` records no invocation id,
+  to its `driver`. That invocation closed, so every entity body on the reference's chain ended,
+  and the driven `Start` has no enclosing body. The map is resident state derived from the
+  prefix: each cursor rebuilds it, and `set_replay_target` truncates it. Its `closed` map names
+  every invocation whose close the cursor reached, in any order, with its closing entry;
+  truncation drops the closes beyond the new target, and the owners such a close pruned become
+  owners again. The owner of a `Start` is validated before a reader commits or retains it
+  (`validate_start_owner`); a `Start` that a scan-ahead claim finds is validated when the cursor
+  reaches it. So a divergent `Start` is the same divergence on every read. Committing a
+  `Start` without `driver` whose owner invocation already closed, or a root `Start` with no id or
+  driver inside an invocation, or a `Start` whose enclosing entity body's recorded `Cancelled`
+  precedes it, is a divergence. So is any claim whose `driver` (`None` unless
+  `StartClaim::with_driver` sets one) differs from the recorded `driver`. On the producer side,
+  every oplog writer's `push` (primary and ephemeral, `services/oplog/owned_starts.rs`) has a
+  debug assertion that no `Start` without a driver, id, parent or observer is appended between an
+  `AgentInvocationStarted` and its close. It is a debug-build aid, not a guarantee: release
+  builds skip it, a writer reopened in the middle of an invocation checks nothing until the next
+  `AgentInvocationStarted`, and it cannot see whether a recorded parent resolves (an orphan
+  parent or a parent the map never pruned), which only replay detects. A producer inside a
+  custom durable invocation, where a direct call records no id, records the custom root as
+  `observational_owner` (`resolve_current_observational_owner`), as the RDBMS
+  `<scope:transaction>` `Start` does; the fork copy in the target repeats the owner fields of the
+  source's fork `Start` (`ForkCallOwner`: parent, invocation id, observer, driver), so an entity
+  body that called `fork` claims the copy under its entity `Start`. The parent precedes the fork
+  `Start`, so it lies in the copied prefix.
+- **`Start.driver`** names the invocation whose settlement waits for the call in two cases: a
+  store task that records after its spawning invocation closed, parked across a settlement and
+  resumed under a later invocation (see "Spawned tasks may park across invocation settlement"),
+  and agent-level work recorded while an invocation runs, which records that invocation even
+  when the call's invocation id is anchored at the same invocation. It is written by
+  `recording_driver()` only when attribution differs from the loop key, and never in
+  snapshotting mode, so it is sparse; it is part of the raw and public oplog.
+- **One predicate decides whether a body can still consume its records**
+  (`body_can_still_consume`): an entity body can while it replays or its `Start` is claimed ahead,
+  and while its `Start` is retained and its dispatcher can still run (the nearest enclosing body,
+  checked the same way, or the primary Store of the owning invocation while that invocation is
+  open and its primary guest tasks have not exited). Positional readers, the close and the live
+  end all use it.
+- **Closing an invocation classifies each retained `Start`** (`classify`, `Class`): `Keep` when
+  another open invocation owns it (it stays retained for that owner), `Wait` when the closing
+  invocation owns it and an enclosing body can still consume it (the close parks on
+  `BlockedOn::ActiveBody`), `Own` when nothing can claim it anymore. Only `Own` records fold into
+  the abandoned-record tolerance (`AbandonedStarts`); nothing folds a retained `Start` that no
+  close classified as its own. Any other entry
+  at the head when the close reads is a divergence too, unless an active body can still consume
+  it. On the settled path (the terminal closes the invocation) a `Wait` is a divergence: the
+  invocation-boundary reader never parks on another Store.
+- **Every `Start` is retainable**, forks included (`is_retainable_start`): a fork's
+  `ForkReplayed` is deferred to its claim. An `Own` fork is never folded or released
+  (`reject_unclaimed_replay_effect`): applying a fork the replayed guest never requested is a
+  divergence.
+- **At the live invocation end** (at its terminal on the settled path, at
+  `AgentInvocationSettled` when the result was recorded at the export's return),
+  `release_retained_starts_at_live_invocation_end` classifies the retained `Start`s against the
+  ending invocation. It releases `Own` ones that are closed by a recorded `End`/`Cancelled`, with
+  a warning; an unclosed `Own` is a divergence error, so that entry is never appended after an
+  open `Start`. `Wait` and `Keep` records stay retained; the invocation closes in the owner map
+  once nothing waits. Releasing another owner's `Start` would make its late claim re-execute
+  live.
+- A settled entity body that leaves a retained `Start` whose nearest body it is did not claim a
+  call it recorded: a structural divergence (`ensure_body_claimed_retained_descendants`,
+  `entity.rs`, through `retained_record_of_body`). This also holds for a body with a recorded
+  `Cancelled`, which is aborted only after it claimed its records (see "Tool invocations").
 - While unclaimed retained `Start`s exist, a call arriving after the live transition may still be
   their replayed owner, so durable-call admission uses `durable_call_is_live()` (stricter than
   `is_live()`): such calls claim first and append a fresh `Start` only when replay reports none
@@ -2506,8 +2573,10 @@ keyed by start index and scope ID, and each record names its owner key.
 
 - **Tail work.** Settlement and the idle check read only the per-worker `TailWorkTracker`
   (`tail_work.rs`). Each entry also counts the activities of trackers obtained while it was
-  attributed (`tail_work_tracker()` returns a tracker `counting_on` the entry's count). A retained
-  task keeps counting on the invocation that obtained its tracker.
+  attributed (`tail_work_tracker()` returns a tracker `counting_on` the entry's count). A task
+  that parks across a settlement and resumes while the loop runs a later invocation counts on
+  that later invocation from then on (`set_loop_invocation_start_index` sets the tracker's
+  current invocation), and the `Start`s it records carry that invocation as `driver`.
 - **Retry policy scopes.** `golem:api/retry-scope` `retry-policy-scope` opens a named policy for the
   calling task (`golem/retry_scope.rs`). It lives in the task's `GuestTaskContext`, so subtasks
   created while it is open and host calls started while it is open keep it. Policy resolution
@@ -2713,9 +2782,14 @@ replay consumes the terminal where the guest returns
 background work replays, so `Start`/`End` entries of the invocation that follow its terminal are
 claimed under it. `close_invocation_anchor` closes it at the recorded `AgentInvocationSettled`
 (`SettledAt::Recorded`) or at the replay tail (`SettledAt::ReplayTail`), where the Store goes
-live, releases the retained `Start`s and appends `AgentInvocationSettled` itself. The
-abandoned-`Start` check (`replay_state/abandoned.rs`) and the closed-anchor rule run at the
-anchor's close, not at the terminal.
+live, releases the retained `Start`s it owns and appends `AgentInvocationSettled` itself. The
+abandoned-`Start` check (`replay_state/abandoned.rs`) runs at the anchor's close, not at the
+terminal: the close classifies each retained `Start` by its recorded owner (see "Entry
+ownership"), folds only its own, keeps another open invocation's, and waits for an enclosing body
+that can still consume one. The close adds the anchor to the owner map's `closed` map; a later
+`Start` of that invocation is a divergence unless it records a `driver`. A settled-path terminal
+closes its invocation the same way, except that a retained `Start` that would wait is a
+divergence.
 
 The status fold keeps the agent `Running` from a terminal with `awaits_settlement` until its
 `AgentInvocationSettled` (`AgentStatusRecord::settling_invocation`), so interrupts,
@@ -3758,10 +3832,21 @@ owners; collecting a response does not create a second durable call.
 Spawned tasks may park across invocation settlement at guest-driven waits, passive markerless
 replay-tail waits after durable finalization, or a destructor's passive wait for sibling history.
 Cursor operations and recorded-marker waits stay active (`tail_work.rs`). A missing destructor
-terminal can repair only after the natural replay-to-live transition. Recovery can return before
-the parked Store task resumes; a subsequent invocation then drives the repair after its own
-`AgentInvocationStarted`. The task restores activity before effects or terminal recording, so
-that invocation's settlement waits for the repair. The original Start retains the effect's identity.
+terminal can repair only after the natural replay-to-live transition, and only while an open
+invocation drives the primary Store (`ReplayState::await_driving_invocation`). The invocation the
+loop runs is not open once the recorded history closed it (its `AgentInvocationSettled` or the
+next `AgentInvocationStarted` is recorded), nor after its live `AgentInvocationSettled` or its
+settled-path terminal, recorded or replayed (`close_loop_invocation`): a destructor that reaches
+the natural tail while recovery still drains or completes such an invocation parks again.
+Recovery then returns before the parked Store task resumes; a subsequent invocation drives the
+repair after its own `AgentInvocationStarted`. The task restores
+activity before effects or terminal recording, and the restored activity counts on the invocation
+the loop runs then, not on the one that spawned the task, so that invocation's settlement waits
+for the repair. The original Start retains the effect's identity. A `Start` the resumed task
+records carries `driver` = that invocation's `AgentInvocationStarted`, so replay assigns it to the
+driving invocation instead of the closed spawner; a replayed claim checks the recorded `driver`
+against the invocation it counts on. The repair terminal may land between the driving invocation's `AgentInvocationFinished` and its
+`AgentInvocationSettled`.
 Test: `completed_invocation_cache_drops_repair_inside_next_invocation`.
 
 A replayed websocket handle is reconstructed per handle while concurrent accessor calls race to
@@ -3965,6 +4050,20 @@ cursor (`OwnerExecution`, `worker/instance/mod.rs`).
   `body_execution: Skipped` is returned without invoking the export.
 - `HistoricalReconstruction` fences keep the primary's `PendingReplayToLive` fail-closed until
   every completed body has validated (`primary_publication_requires_completed_reconstruction_validation`).
+- A replayed body whose entity `Start` has a recorded `Cancelled` is aborted only after it claimed
+  every call it recorded (`coordinate_entity_reconstruction`, `BodyRecords`,
+  `await_body_records_claimed`). Every record of the body precedes its `Cancelled`, so the
+  condition covers exactly those calls: a closed call returns its recorded result, and an unclosed
+  `LeaveIncompleteOnDrop` call that was in flight at the live cancellation is claimed, and its
+  resolution waits instead of reporting `Incomplete` (so it is never repaired) until the abort
+  drops it. The `Start` stays incomplete in history, as the live run left it. A claim past the
+  recorded calls waits too (`BlockedOn::ActiveBody`), and so does a positional or stream read of
+  the body that would otherwise reject live continuation (`await_cancelled_body_abort`): the
+  live run issued it after its cancellation point. These waits last only while the body is an
+  active reconstruction body; a claim, resolution or read under it made after it settled, such
+  as the disposal of one of its resources, is decided as for any settled body. A body that
+  returns with a recorded call unclaimed is a divergence. A body that blocks forever before it
+  reaches a recorded call hangs replay instead of failing; no structural check detects it.
 - `worker/invocation.rs::permanent_tool_guest_trap` isolates only its fixed Wasm
   instruction-trap allowlist and uncaught Wasm exceptions. Agent and tool classification share
   `model::deterministic_guest_trap`, including GC cast failures, array bounds failures and

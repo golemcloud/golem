@@ -414,6 +414,7 @@ impl Walker<'_, '_> {
                         "observationalOwner",
                         call.observational_owner.as_ref().map(idx),
                     )
+                    .opt("driver", call.driver.as_ref().map(idx))
                     .add("carriesRequest", flag(call.carries_request))
                     .opt("request", request)
                     .build();
@@ -902,6 +903,7 @@ impl Walker<'_, '_> {
                 function_name,
                 invocation_id,
                 observational_owner,
+                driver,
                 request,
                 durable_function_type,
                 span_started,
@@ -921,6 +923,7 @@ impl Walker<'_, '_> {
                         }),
                 )
                 .opt("observationalOwner", observational_owner.as_ref().map(idx))
+                .opt("driver", driver.as_ref().map(idx))
                 .opt(
                     "request",
                     request

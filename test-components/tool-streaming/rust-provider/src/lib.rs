@@ -1692,6 +1692,34 @@ async fn run_nested_capable_parent_end(
     })
 }
 
+// Connects a WebSocket to `WEBSOCKET_HOLD_PORT`, whose peer never sends, and keeps a `receive` in
+// flight. Pauses at a promise checkpoint, then writes one stdout chunk and waits without further
+// host calls until the caller cancels the tool invocation.
+async fn run_open_websocket_receive_wait(
+    mut stdout: OutputStream,
+) -> Result<StreamSummary, StreamingError> {
+    use futures_concurrency::prelude::*;
+
+    let port = std::env::var("WEBSOCKET_HOLD_PORT").expect("WEBSOCKET_HOLD_PORT is configured");
+    let connection = golem_rust::websocket::WebsocketConnection::connect(
+        &format!("ws://127.0.0.1:{port}/hold"),
+        None,
+        None,
+    )
+    .expect("connect the held WebSocket");
+    let receive = async {
+        let message = connection.receive().await;
+        panic!("the held WebSocket received {message:?}");
+    };
+    let checkpoint = async {
+        wait_at_promise_checkpoint("open-call-held").await;
+        assert!(write_chunk(&mut stdout, b"open-call-held".to_vec()).await);
+        std::future::pending::<()>().await;
+    };
+    (receive, checkpoint).join().await;
+    unreachable!("the open receive wait returns only through cancellation")
+}
+
 fn write_owner_file(path: &str, bytes: &[u8]) -> Result<(), String> {
     let (root, _) = wasi::filesystem::preopens::get_directories()
         .into_iter()
@@ -1999,6 +2027,9 @@ impl Streaming for StreamingImpl {
         }
         if mode.starts_with("http-") {
             return stream_through_http(mode, stdin, stdout).await;
+        }
+        if mode == "open-receive-wait" {
+            return run_open_websocket_receive_wait(stdout).await;
         }
         if let Some(size) = mode.strip_prefix("piped-unread-source:") {
             let size: usize = size.parse().expect("source chunk size");

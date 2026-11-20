@@ -284,8 +284,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .data_mut()
                             .durable_ctx_mut()
                             .state
-                            .loop_invocation_state_mut()
-                            .start_index = Some(oplog_index);
+                            .set_loop_invocation_start_index(oplog_index);
                         // An invocation retained only through its start has no recorded body.
                         // Publish live before pure guest code or logging runs, without waiting
                         // for a durable host call to observe the exhausted replay cursor.

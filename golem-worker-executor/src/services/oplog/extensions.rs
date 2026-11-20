@@ -314,6 +314,7 @@ pub trait OplogOps: Oplog {
             function_name,
             invocation_id,
             observational_owner: None,
+            driver: None,
             request: Some(request_payload),
             durable_function_type: function_type,
             span_started: None,

@@ -467,6 +467,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           functionName = "wasi:io/read",
           invocationId = js.Dynamic.literal(anchor = js.BigInt("1"), ordinal = js.BigInt("2")),
           observationalOwner = js.BigInt("11"),
+          driver = js.BigInt("12"),
           request = sampleTypedJs,
           durableFunctionType = js.Dynamic.literal(tag = "read-remote"),
           spanStarted = js.Dynamic.literal(
@@ -502,6 +503,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         s.params.functionName == "wasi:io/read",
         s.params.invocationId.contains(OplogApi.DurableInvocationId(BigInt(1), BigInt(2))),
         s.params.observationalOwner.contains(BigInt(11)),
+        s.params.driver.contains(BigInt(12)),
         s.params.request.isDefined,
         s.params.wrappedFunctionType == DurabilityApi.DurableFunctionType.ReadRemote,
         s.params.denial.contains("access denied"),
@@ -595,6 +597,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
               functionName = "fn",
               invocationId = js.undefined,
               observationalOwner = js.undefined,
+              driver = js.undefined,
               request = js.undefined,
               durableFunctionType = js.Dynamic.literal(tag = "read-local"),
               spanStarted = js.undefined,
@@ -640,6 +643,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         start.params.parentStartIndex.isEmpty,
         start.params.invocationId.isEmpty,
         start.params.observationalOwner.isEmpty,
+        start.params.driver.isEmpty,
         start.params.request.isEmpty,
         end.params.response.isEmpty,
         cancelled.params.partial.isEmpty

@@ -317,12 +317,19 @@ type SpanStarted struct {
 //
 // `denial` is the reason the host denied the call before it ran. A denied
 // call never runs its operation, and its `end` holds the denied response.
+//
+// `driver` is the oplog index of the agent invocation whose settlement waits
+// for this call. It is present in two cases: a store task that records after
+// its spawning invocation closed records the invocation that resumed it, and
+// agent-level work recorded while an invocation runs records that invocation,
+// even when the call's invocation id is anchored at the same invocation.
 type StartParameters struct {
 	Timestamp           wasi_clocks_0_3_0_system_clock.Instant
 	ParentStartIndex    witTypes.Option[uint64]
 	FunctionName        string
 	InvocationId        witTypes.Option[DurableInvocationId]
 	ObservationalOwner  witTypes.Option[uint64]
+	Driver              witTypes.Option[uint64]
 	Request             witTypes.Option[golem_core_types.TypedSchemaValue]
 	DurableFunctionType WrappedFunctionType
 	SpanStarted         witTypes.Option[SpanStarted]
@@ -783,6 +790,8 @@ type ReplayHostCall struct {
 	ParentStartIndex    witTypes.Option[uint64]
 	InvocationId        witTypes.Option[DurableInvocationId]
 	ObservationalOwner  witTypes.Option[uint64]
+	// The invocation that drives the call when it is not the invocation the call belongs to
+	Driver witTypes.Option[uint64]
 	// Whether the call carries a request: true for a durable call, false for a durable scope
 	CarriesRequest bool
 	// The request of the call, when it is known
@@ -843,6 +852,7 @@ const (
 	StartIdentityFieldObservationalOwner uint8 = 3
 	StartIdentityFieldRequestPresence    uint8 = 4
 	StartIdentityFieldParent             uint8 = 5
+	StartIdentityFieldDriver             uint8 = 6
 )
 
 // An identity field of a recorded `Start`, which a replayed host call must match
@@ -1428,6 +1438,7 @@ type RawStartParameters struct {
 	FunctionName        string
 	InvocationId        witTypes.Option[DurableInvocationId]
 	ObservationalOwner  witTypes.Option[uint64]
+	Driver              witTypes.Option[uint64]
 	Request             witTypes.Option[OplogPayload]
 	DurableFunctionType WrappedFunctionType
 	SpanStarted         witTypes.Option[SpanStarted]
@@ -3202,9 +3213,9 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 	returnArea := uintptr(witRuntime.Allocate(pinner, (3 * 4), 4))
 	slice := entries
 	length := uint32(len(slice))
-	result := witRuntime.Allocate(pinner, uintptr(length*(272+28*4)), 8)
+	result := witRuntime.Allocate(pinner, uintptr(length*(304+28*4)), 8)
 	for index, element := range slice {
-		base := unsafe.Add(result, index*(272+28*4))
+		base := unsafe.Add(result, index*(304+28*4))
 		*(*int64)(unsafe.Add(unsafe.Pointer(base), 0)) = int64((element).F0)
 		wasm_lower_1_t419(pinner, (element).F1, unsafe.Add(unsafe.Pointer(base), 8))
 
@@ -3216,7 +3227,7 @@ func EnrichOplogEntries(environmentId golem_api_host.EnvironmentId, agentId gole
 	case 0:
 		result1 := make([]PublicOplogEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(264+28*4))
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(296+28*4))
 			result0 := wasm_lift_1_t420(unsafe.Add(unsafe.Pointer(base), 0))
 
 			result1 = append(result1, result0)
@@ -3265,7 +3276,7 @@ func (self *GetOplog) GetNext() witTypes.Result[witTypes.Option[[]PublicOplogEnt
 		case 1:
 			result0 := make([]PublicOplogEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(264+28*4))
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(296+28*4))
 				result := wasm_lift_1_t420(unsafe.Add(unsafe.Pointer(base), 0))
 
 				result0 = append(result0, result)
@@ -3323,7 +3334,7 @@ func (self *SearchOplog) GetNext() witTypes.Result[witTypes.Option[[]witTypes.Tu
 		case 1:
 			result0 := make([]witTypes.Tuple2[uint64, PublicOplogEntry], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(272+28*4))
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(304+28*4))
 				result := wasm_lift_1_t420(unsafe.Add(unsafe.Pointer(base), 8))
 
 				result0 = append(result0, witTypes.Tuple2[uint64, PublicOplogEntry]{F0: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 0))), F1: result})
@@ -4066,28 +4077,41 @@ func wasm_lower_1_t381(pinner *runtime.Pinner, value RawStartParameters, dst uns
 		panic("unreachable")
 	}
 
-	switch (value).Request.Tag() {
+	switch (value).Driver.Tag() {
 	case witTypes.OptionNone:
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (72 + 2*4))) = int8(int32(0))
 
 	case witTypes.OptionSome:
-		payload := (value).Request.Some()
+		payload := (value).Driver.Some()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (72 + 2*4))) = int8(int32(1))
-		wasm_lower_1_t370(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (80+2*4)))
+		*(*int64)(unsafe.Add(unsafe.Pointer(dst), (80 + 2*4))) = int64(payload)
 
 	default:
 		panic("unreachable")
 	}
-	wasm_lower_1_t246(nil, (value).DurableFunctionType, unsafe.Add(unsafe.Pointer(dst), (104+4*4)))
+
+	switch (value).Request.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (88 + 2*4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Request.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (88 + 2*4))) = int8(int32(1))
+		wasm_lower_1_t370(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (96+2*4)))
+
+	default:
+		panic("unreachable")
+	}
+	wasm_lower_1_t246(nil, (value).DurableFunctionType, unsafe.Add(unsafe.Pointer(dst), (120+4*4)))
 
 	switch (value).SpanStarted.Tag() {
 	case witTypes.OptionNone:
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (112 + 4*4))) = int8(int32(0))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (128 + 4*4))) = int8(int32(0))
 
 	case witTypes.OptionSome:
 		payload := (value).SpanStarted.Some()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (112 + 4*4))) = int8(int32(1))
-		wasm_lower_1_t262(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (120+4*4)))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (128 + 4*4))) = int8(int32(1))
+		wasm_lower_1_t262(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (136+4*4)))
 
 	default:
 		panic("unreachable")
@@ -4095,15 +4119,15 @@ func wasm_lower_1_t381(pinner *runtime.Pinner, value RawStartParameters, dst uns
 
 	switch (value).Denial.Tag() {
 	case witTypes.OptionNone:
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (152 + 16*4))) = int8(int32(0))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (168 + 16*4))) = int8(int32(0))
 
 	case witTypes.OptionSome:
 		payload := (value).Denial.Some()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (152 + 16*4))) = int8(int32(1))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (168 + 16*4))) = int8(int32(1))
 		utf80 := unsafe.Pointer(unsafe.StringData(payload))
 		pinner.Pin(utf80)
-		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (152 + 18*4))) = uint32(uint32(len(payload)))
-		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (152 + 17*4))) = uint32(uintptr(uintptr(utf80)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (168 + 18*4))) = uint32(uint32(len(payload)))
+		*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (168 + 17*4))) = uint32(uintptr(uintptr(utf80)))
 
 	default:
 		panic("unreachable")
@@ -5031,45 +5055,56 @@ func wasm_lift_1_t267(src unsafe.Pointer) StartParameters {
 	default:
 		panic("unreachable")
 	}
-	var option5 witTypes.Option[golem_core_types.TypedSchemaValue]
+	var option4 witTypes.Option[uint64]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (72 + 2*4)))) {
 	case 0:
 
-		option5 = witTypes.None[golem_core_types.TypedSchemaValue]()
+		option4 = witTypes.None[uint64]()
 	case 1:
-		result4 := wasm_lift_1_t81(unsafe.Add(unsafe.Pointer(src), (72 + 3*4)))
 
-		option5 = witTypes.Some[golem_core_types.TypedSchemaValue](result4)
+		option4 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (80 + 2*4)))))
 	default:
 		panic("unreachable")
 	}
-	result6 := wasm_lift_1_t246(unsafe.Add(unsafe.Pointer(src), (72 + 11*4)))
-	var option8 witTypes.Option[SpanStarted]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (72 + 12*4)))) {
+	var option6 witTypes.Option[golem_core_types.TypedSchemaValue]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (88 + 2*4)))) {
 	case 0:
 
-		option8 = witTypes.None[SpanStarted]()
+		option6 = witTypes.None[golem_core_types.TypedSchemaValue]()
 	case 1:
-		result7 := wasm_lift_1_t262(unsafe.Add(unsafe.Pointer(src), (80 + 12*4)))
+		result5 := wasm_lift_1_t81(unsafe.Add(unsafe.Pointer(src), (88 + 3*4)))
 
-		option8 = witTypes.Some[SpanStarted](result7)
+		option6 = witTypes.Some[golem_core_types.TypedSchemaValue](result5)
 	default:
 		panic("unreachable")
 	}
-	var option10 witTypes.Option[string]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (112 + 24*4)))) {
+	result7 := wasm_lift_1_t246(unsafe.Add(unsafe.Pointer(src), (88 + 11*4)))
+	var option9 witTypes.Option[SpanStarted]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (88 + 12*4)))) {
 	case 0:
 
-		option10 = witTypes.None[string]()
+		option9 = witTypes.None[SpanStarted]()
 	case 1:
-		value9 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (112 + 25*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (112 + 26*4))))
+		result8 := wasm_lift_1_t262(unsafe.Add(unsafe.Pointer(src), (96 + 12*4)))
 
-		option10 = witTypes.Some[string](value9)
+		option9 = witTypes.Some[SpanStarted](result8)
+	default:
+		panic("unreachable")
+	}
+	var option11 witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (128 + 24*4)))) {
+	case 0:
+
+		option11 = witTypes.None[string]()
+	case 1:
+		value10 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (128 + 25*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (128 + 26*4))))
+
+		option11 = witTypes.Some[string](value10)
 	default:
 		panic("unreachable")
 	}
 
-	return StartParameters{Timestamp: result, ParentStartIndex: option, FunctionName: value0, InvocationId: option2, ObservationalOwner: option3, Request: option5, DurableFunctionType: result6, SpanStarted: option8, Denial: option10}
+	return StartParameters{Timestamp: result, ParentStartIndex: option, FunctionName: value0, InvocationId: option2, ObservationalOwner: option3, Driver: option4, Request: option6, DurableFunctionType: result7, SpanStarted: option9, Denial: option11}
 }
 
 //go:noinline
@@ -6161,7 +6196,7 @@ func wasm_lower_1_t337(pinner *runtime.Pinner, value FailedSnapshotAssistedUpdat
 func wasm_lower_1_t336(pinner *runtime.Pinner, value ReplayDivergence, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).OplogIndex)
 	wasm_lower_1_t333(pinner, (value).Expected, unsafe.Add(unsafe.Pointer(dst), 8))
-	wasm_lower_1_t333(pinner, (value).Actual, unsafe.Add(unsafe.Pointer(dst), (80+12*4)))
+	wasm_lower_1_t333(pinner, (value).Actual, unsafe.Add(unsafe.Pointer(dst), (96+12*4)))
 	slice := (value).Mismatched
 	length := uint32(len(slice))
 	result := witRuntime.Allocate(pinner, uintptr(length*1), 1)
@@ -6171,8 +6206,8 @@ func wasm_lower_1_t336(pinner *runtime.Pinner, value ReplayDivergence, dst unsaf
 
 	}
 
-	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (152 + 25*4))) = uint32(length)
-	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (152 + 24*4))) = uint32(uintptr(uintptr(result)))
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (184 + 25*4))) = uint32(length)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (184 + 24*4))) = uint32(uintptr(uintptr(result)))
 
 }
 
@@ -6627,10 +6662,10 @@ func wasm_lift_1_t337(src unsafe.Pointer) FailedSnapshotAssistedUpdateDetails {
 //go:noinline
 func wasm_lift_1_t336(src unsafe.Pointer) ReplayDivergence {
 	result := wasm_lift_1_t333(unsafe.Add(unsafe.Pointer(src), 8))
-	result0 := wasm_lift_1_t333(unsafe.Add(unsafe.Pointer(src), (80 + 12*4)))
-	result1 := make([]StartIdentityField, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (152 + 25*4))))
-	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (152 + 25*4)))); index++ {
-		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (152 + 24*4))))), index*1)
+	result0 := wasm_lift_1_t333(unsafe.Add(unsafe.Pointer(src), (96 + 12*4)))
+	result1 := make([]StartIdentityField, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (184 + 25*4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (184 + 25*4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (184 + 24*4))))), index*1)
 
 		result1 = append(result1, uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0)))))
 	}
@@ -7858,22 +7893,35 @@ func wasm_lower_1_t332(pinner *runtime.Pinner, value ReplayHostCall, dst unsafe.
 	default:
 		panic("unreachable")
 	}
+
+	switch (value).Driver.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (64 + 2*4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).Driver.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (64 + 2*4))) = int8(int32(1))
+		*(*int64)(unsafe.Add(unsafe.Pointer(dst), (72 + 2*4))) = int64(payload)
+
+	default:
+		panic("unreachable")
+	}
 	var result int32
 	if (value).CarriesRequest {
 		result = 1
 	} else {
 		result = 0
 	}
-	*(*int8)(unsafe.Add(unsafe.Pointer(dst), (64 + 2*4))) = int8(result)
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), (80 + 2*4))) = int8(result)
 
 	switch (value).Request.Tag() {
 	case witTypes.OptionNone:
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (64 + 3*4))) = int8(int32(0))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (80 + 3*4))) = int8(int32(0))
 
 	case witTypes.OptionSome:
 		payload := (value).Request.Some()
-		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (64 + 3*4))) = int8(int32(1))
-		wasm_lower_1_t81(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (64+4*4)))
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (80 + 3*4))) = int8(int32(1))
+		wasm_lower_1_t81(pinner, payload, unsafe.Add(unsafe.Pointer(dst), (80+4*4)))
 
 	default:
 		panic("unreachable")
@@ -8486,20 +8534,31 @@ func wasm_lift_1_t332(src unsafe.Pointer) ReplayHostCall {
 	default:
 		panic("unreachable")
 	}
-	var option5 witTypes.Option[golem_core_types.TypedSchemaValue]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (64 + 3*4)))) {
+	var option4 witTypes.Option[uint64]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (64 + 2*4)))) {
 	case 0:
 
-		option5 = witTypes.None[golem_core_types.TypedSchemaValue]()
+		option4 = witTypes.None[uint64]()
 	case 1:
-		result4 := wasm_lift_1_t81(unsafe.Add(unsafe.Pointer(src), (64 + 4*4)))
 
-		option5 = witTypes.Some[golem_core_types.TypedSchemaValue](result4)
+		option4 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (72 + 2*4)))))
+	default:
+		panic("unreachable")
+	}
+	var option6 witTypes.Option[golem_core_types.TypedSchemaValue]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (80 + 3*4)))) {
+	case 0:
+
+		option6 = witTypes.None[golem_core_types.TypedSchemaValue]()
+	case 1:
+		result5 := wasm_lift_1_t81(unsafe.Add(unsafe.Pointer(src), (80 + 4*4)))
+
+		option6 = witTypes.Some[golem_core_types.TypedSchemaValue](result5)
 	default:
 		panic("unreachable")
 	}
 
-	return ReplayHostCall{FunctionName: value0, DurableFunctionType: result, ParentStartIndex: option, InvocationId: option2, ObservationalOwner: option3, CarriesRequest: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (64 + 2*4)))) != 0), Request: option5}
+	return ReplayHostCall{FunctionName: value0, DurableFunctionType: result, ParentStartIndex: option, InvocationId: option2, ObservationalOwner: option3, Driver: option4, CarriesRequest: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (80 + 2*4)))) != 0), Request: option6}
 }
 
 //go:noinline

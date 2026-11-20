@@ -73,8 +73,8 @@ use uuid::Uuid;
 
 #[cfg(target_pointer_width = "64")]
 #[test]
-fn raw_oplog_entry_fits_in_176_bytes() {
-    assert!(std::mem::size_of::<OplogEntry>() <= 176);
+fn raw_oplog_entry_fits_in_192_bytes() {
+    assert!(std::mem::size_of::<OplogEntry>() <= 192);
 }
 
 #[test]
@@ -121,6 +121,7 @@ fn durable_function_type_contract() {
             function_name: HostFunctionName::Custom("operation".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: function_type,
             span_started: None,
@@ -172,6 +173,7 @@ fn start_desert_roundtrip() {
         function_name: HostFunctionName::Custom("operation".to_string()),
         invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(300_000), 129)),
         observational_owner: Some(OplogIndex::from_u64(6)),
+        driver: Some(OplogIndex::from_u64(5)),
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: Some(Box::new(SpanStarted {
@@ -632,6 +634,7 @@ fn observational_start_public_protobuf_roundtrip() {
         function_name: "wasi:http/outgoing-handler::handle".to_string(),
         invocation_id: None,
         observational_owner: Some(owner),
+        driver: None,
         request: None,
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
         span_started: None,
@@ -643,6 +646,32 @@ fn observational_start_public_protobuf_roundtrip() {
 }
 
 #[test]
+fn driven_start_public_protobuf_and_json_roundtrip() {
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: Some(OplogIndex::from_u64(12)),
+        function_name: "wasi:http/types::incoming-body::read".to_string(),
+        invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(10), 2)),
+        observational_owner: None,
+        driver: Some(OplogIndex::from_u64(21)),
+        request: None,
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+        span_started: None,
+        denial: None,
+    });
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), entry);
+
+    let json = serde_json::to_value(&entry).unwrap();
+    assert_eq!(json["driver"], serde_json::json!(21));
+    assert_eq!(
+        serde_json::from_value::<PublicOplogEntry>(json).unwrap(),
+        entry
+    );
+}
+
+#[test]
 fn denied_start_public_protobuf_roundtrip() {
     let entry = PublicOplogEntry::Start(StartParams {
         timestamp: Timestamp::now_utc().rounded(),
@@ -650,6 +679,7 @@ fn denied_start_public_protobuf_roundtrip() {
         function_name: "keyvalue::eventual::set".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
         span_started: None,
@@ -1105,6 +1135,7 @@ fn start_serialization_poem_serde_equivalence() {
         function_name: "test".to_string(),
         invocation_id: None,
         observational_owner: Some(OplogIndex::from_u64(7)),
+        driver: None,
         request: Some(typed(
             SchemaType::string(),
             SchemaValue::String("test".to_string()),
@@ -1126,6 +1157,7 @@ fn start_with_span_serialization_poem_serde_equivalence() {
         function_name: "rpc".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: Some(PublicSpanStarted {
@@ -1191,6 +1223,7 @@ fn start_with_handle_serialization_poem_serde_equivalence() {
         function_name: "golem:rpc/wasm-rpc.{invoke-and-await}".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(typed(
             SchemaType::record(vec![
                 nf("uri", SchemaType::string()),
@@ -1220,6 +1253,7 @@ fn start_with_complex_values_serialization_poem_serde_equivalence() {
         function_name: "wasi:keyvalue/store.{get}".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(typed(
             SchemaType::record(vec![
                 nf("name", SchemaType::string()),
@@ -1302,6 +1336,7 @@ fn matcher_matches_payload_less_variant_case_name() {
         function_name: "test".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(typed(
             SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
             SchemaValue::Variant(VariantValuePayload {
@@ -1326,6 +1361,7 @@ fn matcher_matches_variant_payload_under_case_path() {
         function_name: "test".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(typed(
             SchemaType::variant(vec![vc("none", None), vc("some", Some(SchemaType::u32()))]),
             SchemaValue::Variant(VariantValuePayload {
@@ -1358,6 +1394,7 @@ fn matcher_matches_secret_reveal_request_payload() {
         function_name: "golem::secrets::reveal".to_string(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(request),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: None,
@@ -1383,6 +1420,7 @@ fn matcher_matches_span_started_trace_context() {
         function_name: "rpc".into(),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
         span_started: Some(PublicSpanStarted {
@@ -3489,6 +3527,7 @@ mod scope_projection {
             function_name: HostFunctionName::Custom("test".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type,
             span_started: None,

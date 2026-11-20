@@ -98,6 +98,7 @@ sealed trait JsStartParameters extends js.Object {
   def functionName: String                            = js.native
   def invocationId: js.UndefOr[JsDurableInvocationId] = js.native
   def observationalOwner: js.UndefOr[js.BigInt]       = js.native
+  def driver: js.UndefOr[js.BigInt]                   = js.native
   def request: js.UndefOr[JsTypedSchemaValue]         = js.native
   def durableFunctionType: JsWrappedFunctionType      = js.native
   def spanStarted: js.UndefOr[JsSpanStarted]          = js.native

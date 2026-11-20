@@ -247,6 +247,7 @@ impl CursorTx<'_> {
                 }
                 if boundary.tolerates_abandoned()
                     && self.st.starts.get_retained(start_index).is_some()
+                    && !self.marker_body_can_still_consume(&boundary, *start_index)
                 {
                     return Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
                         oplog_index: read_idx,
@@ -290,6 +291,7 @@ impl CursorTx<'_> {
                 // stays reserved even if registration failed or was explicitly removed. Consume
                 // its position without changing any remaining terminal obligation; it must never
                 // be handed to a positional reader.
+                self.validate_start_owner(read_idx, &entry)?;
                 self.st.starts.consume_claimed_start(&read_idx);
                 self.commit_consumed_entry(read_idx, &entry).await?;
                 continue;
@@ -353,25 +355,6 @@ impl CursorTx<'_> {
                 continue;
             }
 
-            if boundary.tolerates_abandoned()
-                && let OplogEntry::Start { function_name, .. } = &entry
-                && !AbandonedStarts::can_drain(function_name)
-            {
-                // The invocation-boundary reader reached a replay-side-effecting `Start` nobody
-                // claimed. Its commit effects must not fire from the boundary drain, and the
-                // replayed guest can no longer claim it (see `AbandonedStarts::can_drain`).
-                return Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
-                    oplog_index: read_idx,
-                    expected: ReplayStep::described(format!(
-                        "unclaimed {function_name:?} Start at {read_idx} — a \
-                         replay-side-effecting record cannot be tolerated as \
-                         abandoned at the invocation boundary"
-                    )),
-                    actual: ReplayStep::invocation_end(),
-                    mismatched: Vec::new(),
-                }));
-            }
-
             if matches!(boundary, BoundaryRead::None)
                 && self.st.is_returned_open_invocation_terminal(&entry)
             {
@@ -386,9 +369,23 @@ impl CursorTx<'_> {
             if condition(&entry) {
                 self.commit_consumed_entry(read_idx, &entry).await?;
                 if let BoundaryRead::InvocationBoundary(abandoned) = &mut boundary {
-                    // The replayed guest has produced its invocation result: whatever is still
-                    // retained is live-only abandoned progress nobody can claim anymore.
-                    self.fold_retained_into_abandoned(abandoned, None)?;
+                    match self.st.last_started_invocation {
+                        Some((started, invocation_id))
+                            if primary_invocation_terminal_id(&entry) == Some(&invocation_id) =>
+                        {
+                            // The replayed guest has produced its invocation result: the retained
+                            // `Start`s of the invocation are live-only abandoned progress nobody
+                            // can claim anymore. The boundary read holds the Store outside the
+                            // concurrent runtime, so it cannot wait for a body.
+                            let own = self.classify_retained_at_boundary(started, read_idx)?;
+                            self.fold_retained_into_abandoned(abandoned, &own)?;
+                            let st = &mut *self.st;
+                            st.owners.close(started, read_idx, |index| {
+                                st.starts.get_retained(&index).is_some()
+                            });
+                        }
+                        _ => {}
+                    }
                 }
                 return Ok(Some((read_idx, entry)));
             } else if unclaimed_starts == UnclaimedStarts::Retain
@@ -399,6 +396,7 @@ impl CursorTx<'_> {
                 // still need the Store this reader holds). Commit past it and retain it for the
                 // owner's claim; the terminal that closes it is attached above when reached. The
                 // non-hint position stays where the owner will observe it at its `begin_function`.
+                self.validate_start_owner(read_idx, &entry)?;
                 self.retain_start(read_idx, entry.clone());
                 self.commit_retained_entry(read_idx, &entry).await?;
                 continue;
@@ -411,22 +409,6 @@ impl CursorTx<'_> {
         }
     }
 
-    /// Whether the entity body whose invocation `Start` is at `owner` can still consume its entry
-    /// at the head `head_idx`: its `Start` is retained or claimed ahead, its body replays, or its
-    /// `Start` is recorded later and can still be claimed.
-    async fn entity_body_can_consume_head(
-        &self,
-        head_idx: OplogIndex,
-        owner: OplogIndex,
-    ) -> Result<bool, WorkerExecutorError> {
-        Ok(self.st.starts.get_retained(&owner).is_some()
-            || self.st.starts.is_claimed_ahead(&owner)
-            || self.cursor.reconstruction_claims.is_body_active(owner)
-            || self
-                .future_entity_start_can_be_claimed(head_idx, owner)
-                .await?)
-    }
-
     /// Classifies a positional read (`positional_reader_accepts`) that returned nothing while the
     /// cursor is still replaying. Such a read parked either at a reserved `CompletionDelivered`
     /// marker or at an entry another Store recorded through this shared cursor (an entity body
@@ -434,9 +416,9 @@ impl CursorTx<'_> {
     /// Store's entry is legitimate only while that Store can still consume it:
     ///
     /// - the primary agent Store replays for as long as the cursor does;
-    /// - an entity body replays once its invocation `Start` is claimed
-    ///   (`reconstruction_claims`), and a `Start` the cursor retained or a scan-ahead claimed is
-    ///   still going to be claimed.
+    /// - an entity body can while `CursorState::body_can_still_consume` holds for it: it
+    ///   replays or its `Start` is claimed ahead, or its `Start` is retained and its dispatcher
+    ///   (the enclosing body, or the primary Store of its open invocation) can still run.
     ///
     /// Anything else is an entity body nobody will reconstruct: waiting would hang replay, so the
     /// head is reported as the divergence it is. The invocation-boundary reader never waits on
@@ -476,13 +458,16 @@ impl CursorTx<'_> {
                 HeadOwner::EntityBody(owner),
             ) => owner,
         };
-        if self.entity_body_can_consume_head(*head_idx, owner).await? {
+        if self
+            .st
+            .body_can_still_consume(&self.cursor.reconstruction_claims, owner, None)
+        {
             Ok(())
         } else {
             Err(WorkerExecutorError::unexpected_oplog_entry(
                 *head_idx,
                 format!(
-                    "{head:?} at {head_idx} was recorded by the entity body started at {owner}, which is neither retained, claimed nor replaying"
+                    "{head:?} at {head_idx} was recorded by the entity body started at {owner}, which can no longer consume it"
                 ),
                 "an entry recorded by this Store",
             ))
@@ -887,83 +872,63 @@ impl ReplayState {
         .await
     }
 
-    /// Returns the earliest retained, still unclaimed durable-call `Start` in `root`'s call tree
-    /// that is not owned by a still running reconstructed entity body (see
-    /// [`CursorState::starts`]).
-    ///
-    /// The cursor steps over unclaimed `Start`s instead of parking on them, so a body that
-    /// returned without re-issuing one of its recorded calls no longer stalls the cursor. Callers
-    /// ask this once the body has settled: any such `Start` is the same structural divergence
-    /// [`Self::await_unconsumed_scope_entry`] reports for a stalled cursor.
-    pub(crate) async fn unclaimed_retained_descendant(
+    /// The first retained `Start` whose nearest entity body is `body`. A settled body that leaves
+    /// one did not claim a call it recorded.
+    pub(crate) async fn retained_record_of_body(
         &self,
-        root: OplogIndex,
-        active_entity_bodies: HashSet<OplogIndex>,
+        body: OplogIndex,
     ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
-        if !self.has_unclaimed_retained_starts() {
-            return Ok(None);
-        }
         self.run_owned_cursor_op(move |state| async move {
-            let cursor = &*state.cursor;
-            let st = cursor.state.lock().await;
-            let Some(last_retained) = st.starts.retained_keys().next_back().copied() else {
-                return Ok(None);
-            };
-            if last_retained <= root {
-                return Ok(None);
-            }
-
-            let mut parents = HashMap::new();
-            let mut next = root.next();
-            while next <= last_retained {
-                let available = u64::from(last_retained) - u64::from(next) + 1;
-                let entries = cursor
-                    .oplog
-                    .read_exact(next, CHUNK_SIZE.min(available))
-                    .await?;
-                let last_read = *entries.last_key_value().unwrap().0;
-                for (index, entry) in entries {
-                    if index > last_retained {
-                        break;
-                    }
-                    if let OplogEntry::Start {
-                        parent_start_index: Some(parent),
-                        ..
-                    } = &entry
-                        && !st.skipped_regions.is_in_deleted_region(index)
-                    {
-                        parents.insert(index, *parent);
-                    }
-                }
-                next = last_read.next();
-            }
-
-            for index in st.starts.retained_keys().copied() {
-                if index <= root {
-                    continue;
-                }
-                let mut owner = index;
-                let mut owned_by_active_body = false;
-                let descendant = loop {
-                    let Some(parent) = parents.get(&owner) else {
-                        break false;
-                    };
-                    if *parent == root {
-                        break true;
-                    }
-                    if active_entity_bodies.contains(parent) {
-                        owned_by_active_body = true;
-                        break false;
-                    }
-                    owner = *parent;
-                };
-                if descendant && !owned_by_active_body {
-                    return Ok(Some(index));
-                }
-            }
-            Ok(None)
+            let st = state.cursor.state.lock().await;
+            Ok(st.retained_record_of_body(body))
         })
         .await
+    }
+
+    /// Resolves once the entity body started at `body` is not a replaying body with a committed
+    /// recorded `Cancelled`. Every record of such a body precedes its `Cancelled`, so a read of
+    /// the body that reaches the replay tail would follow its recorded cancellation point: it
+    /// waits until the body is aborted, which drops a read of the body itself.
+    pub(crate) async fn await_cancelled_body_abort(
+        &self,
+        body: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        loop {
+            let mut bodies = self.cursor.reconstruction_claims.subscribe_bodies();
+            if !bodies.borrow_and_update().contains(&body) {
+                return Ok(());
+            }
+            let cancelled = self
+                .run_owned_cursor_op(move |state| async move {
+                    let st = state.cursor.state.lock().await;
+                    Ok(st.owners.is_cancelled_entity(body))
+                })
+                .await?;
+            if !cancelled {
+                return Ok(());
+            }
+            if bodies.changed().await.is_err() {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Resolves once no retained `Start` has `body` as its nearest entity body: the body claimed
+    /// every call it recorded before the cursor's position.
+    pub(crate) async fn await_body_records_claimed(
+        &self,
+        body: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        loop {
+            let progress = self.cursor.progress.notified();
+            tokio::pin!(progress);
+            progress.as_mut().enable();
+            if self.retained_record_of_body(body).await?.is_none() {
+                return Ok(());
+            }
+            self.wait_while_blocked(BlockedOn::CursorProgress, progress)
+                .await?;
+        }
     }
 
     /// Whether `oplog_index` lies in a deleted (skipped) oplog region. Session replay uses this
@@ -1467,7 +1432,8 @@ impl CursorTx<'_> {
     }
 
     /// One transaction of [`ReplayState::close_invocation_anchor`]. Returns `None` while an entity
-    /// body that can still consume the entry at the head has not consumed it.
+    /// body that can still consume the entry at the head has not consumed it, or a retained
+    /// `Start` of the invocation lies under a body that can still claim it.
     async fn settle_open_anchor(
         &mut self,
         anchor: OplogIndex,
@@ -1512,23 +1478,23 @@ impl CursorTx<'_> {
                 // The live run appends the settlement. The retained `Start`s stay retained: the
                 // caller releases them at the live end of the drain
                 // (`release_retained_starts_at_live_invocation_end`).
-                self.finish_closed_anchor(anchor);
+                self.finish_closed_anchor(anchor, self.cursor.replay_target().next());
                 return Ok(Some(SettledAt::ReplayTail));
             }
             // An entity body replays in its own Store and can outlive the primary Store's guest
             // tasks, so its entry at the head waits for it while it can still consume it.
-            if !self.blocked_on_completion_delivery
-                && let Some((head_idx, HeadOwner::EntityBody(owner))) = self
-                    .st
-                    .replay_buffer
-                    .front()
-                    .map(|(index, entry)| (*index, head_owner(entry)))
-                && self.entity_body_can_consume_head(head_idx, owner).await?
+            if let Some(body) = self.head_body()
+                && self.st.body_can_still_consume(
+                    &self.cursor.reconstruction_claims,
+                    body,
+                    Some(anchor),
+                )
             {
                 return Ok(None);
             }
-            // A reserved `CompletionDelivered` marker or a guest stream observation at the head
-            // is consumed only by a guest read, and every guest task of the invocation exited.
+            // Any other entry at the head is consumed only by a guest read of the primary Store
+            // or by a body that can no longer consume it, and every guest task of the invocation
+            // exited.
             let (index, head) = self
                 .st
                 .replay_buffer
@@ -1548,21 +1514,150 @@ impl CursorTx<'_> {
                 ),
             ));
         };
+        let Some(own) = self.classify_retained_at_close(anchor, settled)? else {
+            return Ok(None);
+        };
         let mut abandoned = AbandonedStarts::default();
-        self.fold_retained_into_abandoned(&mut abandoned, Some((settled, anchor)))?;
+        self.fold_retained_into_abandoned(&mut abandoned, &own)?;
         abandoned.finish(&self.cursor.owned_agent_id)?;
-        self.finish_closed_anchor(anchor);
+        self.finish_closed_anchor(anchor, settled);
         Ok(Some(SettledAt::Recorded(settled)))
     }
 
-    /// Finishes the wallet replay of the invocation anchored at `anchor`, closes the anchor, and
-    /// prunes the settlements no open or later anchor can need.
-    fn finish_closed_anchor(&mut self, anchor: OplogIndex) {
+    /// Whether the settlement walk may leave the delivery marker of the retained `Start` at
+    /// `start_index` at the head: the body that encloses that `Start` can still claim it and
+    /// consume the marker.
+    fn marker_body_can_still_consume(
+        &self,
+        boundary: &BoundaryRead<'_>,
+        start_index: OplogIndex,
+    ) -> bool {
+        let BoundaryRead::Settlement { anchor, .. } = boundary else {
+            return false;
+        };
+        self.st
+            .owners
+            .owner(start_index)
+            .and_then(|owner| owner.body)
+            .is_some_and(|body| {
+                self.st.body_can_still_consume(
+                    &self.cursor.reconstruction_claims,
+                    body,
+                    Some(*anchor),
+                )
+            })
+    }
+
+    /// Classifies the retained `Start`s recorded before `end` for the close of the invocation
+    /// started at `closing`, whose primary guest tasks have exited. Returns the indices of the
+    /// invocation's own `Start`s, or `None` when one of them lies under a body that can still
+    /// claim it. Every `Start` that classifies as a divergence is reported as one.
+    fn classify_retained_at_close(
+        &self,
+        closing: OplogIndex,
+        end: OplogIndex,
+    ) -> Result<Option<std::collections::BTreeSet<OplogIndex>>, WorkerExecutorError> {
+        let mut wait = false;
+        let own = self.classify_retained(closing, end, |_| {
+            wait = true;
+            Ok(())
+        })?;
+        Ok((!wait).then_some(own))
+    }
+
+    /// [`Self::classify_retained_at_close`] for a close that cannot wait for a body: a `Start`
+    /// under a body that can still claim it is reported as a divergence.
+    fn classify_retained_at_boundary(
+        &self,
+        closing: OplogIndex,
+        end: OplogIndex,
+    ) -> Result<std::collections::BTreeSet<OplogIndex>, WorkerExecutorError> {
+        self.classify_retained(closing, end, |index| {
+            Err(boundary_divergence(
+                index,
+                format!(
+                    "the retained Start at {index}, which lies under an entity body that can \
+                     still claim it, at the boundary of the invocation started at {closing}"
+                ),
+            ))
+        })
+    }
+
+    /// Classifies the retained `Start`s recorded before `end` for the close of the invocation
+    /// started at `closing`, returning the invocation's own `Start`s. `on_wait` decides each
+    /// `Start` under a body that can still claim it.
+    fn classify_retained(
+        &self,
+        closing: OplogIndex,
+        end: OplogIndex,
+        mut on_wait: impl FnMut(OplogIndex) -> Result<(), WorkerExecutorError>,
+    ) -> Result<std::collections::BTreeSet<OplogIndex>, WorkerExecutorError> {
+        let mut own = std::collections::BTreeSet::new();
+        let below: Vec<OplogIndex> = self
+            .st
+            .starts
+            .retained_keys()
+            .copied()
+            .filter(|index| *index < end)
+            .collect();
+        for index in below {
+            match self.st.classify(
+                &self.cursor.reconstruction_claims,
+                index,
+                closing,
+                Some(closing),
+            ) {
+                Ok(Class::Own) => {
+                    own.insert(index);
+                }
+                Ok(Class::Keep) => {}
+                Ok(Class::Wait) => on_wait(index)?,
+                Err(divergence) => return Err(boundary_divergence(index, divergence)),
+            }
+        }
+        Ok(own)
+    }
+
+    /// The entity body that consumes the entry at the cursor head, when a body records it: the
+    /// body named by its entity attribution, the nearest body of the `Start` a completion marker
+    /// closes, or the body a stream observation belongs to.
+    fn head_body(&self) -> Option<OplogIndex> {
+        let (_, head) = self.st.replay_buffer.front()?;
+        let body_of_start = |start: OplogIndex| {
+            if self.st.owners.is_entity(start) {
+                return Some(start);
+            }
+            self.st.owners.owner(start).and_then(|owner| owner.body)
+        };
+        match head {
+            OplogEntry::CompletionDelivered { start_index, .. }
+            | OplogEntry::CompletionDiscarded { start_index, .. } => self
+                .st
+                .owners
+                .owner(*start_index)
+                .and_then(|owner| owner.body),
+            OplogEntry::HostStreamFrame {
+                parent_start_index, ..
+            } => body_of_start(*parent_start_index),
+            entry => match head_owner(entry) {
+                HeadOwner::EntityBody(body) => Some(body),
+                HeadOwner::Unattributed | HeadOwner::Agent | HeadOwner::ParentStart(_) => None,
+            },
+        }
+    }
+
+    /// Finishes the wallet replay of the invocation anchored at `anchor`, closes the anchor at
+    /// the entry at `at`, and prunes the settlements no open or later anchor can need. A close at
+    /// the replay tail is at the entry after the replay target, where the live run appends the
+    /// settlement.
+    fn finish_closed_anchor(&mut self, anchor: OplogIndex, at: OplogIndex) {
         if let Some(wallet) = &self.cursor.wallet {
             wallet.finish_replayed_invocation();
         }
         self.st.open_anchors.remove(&anchor);
-        self.st.last_closed_anchor = self.st.last_closed_anchor.max(Some(anchor));
+        let st = &mut *self.st;
+        st.owners
+            .close(anchor, at, |index| st.starts.get_retained(&index).is_some());
         // An anchor needs only the settlements after it, and later anchors lie after this one.
         let keep_from = self
             .st
@@ -1601,7 +1696,7 @@ impl ReplayState {
                     )));
                 }
             };
-            if st.last_closed_anchor.is_some_and(|closed| anchor <= closed)
+            if st.owners.is_closed(anchor)
                 || st
                     .open_anchors
                     .insert(
@@ -1700,6 +1795,7 @@ impl ReplayState {
             let progress = self.cursor.progress.notified();
             tokio::pin!(progress);
             progress.as_mut().enable();
+            let bodies = self.cursor.reconstruction_claims.subscribe_bodies();
             let settled = self
                 .run_owned_cursor_op(move |state| async move {
                     state
@@ -1710,7 +1806,7 @@ impl ReplayState {
             if let Some(settled) = settled {
                 return Ok(settled);
             }
-            self.wait_while_blocked(BlockedOn::CursorProgress, progress)
+            self.wait_while_blocked(BlockedOn::ActiveBody(bodies), progress)
                 .await?;
         }
     }

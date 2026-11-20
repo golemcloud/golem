@@ -487,6 +487,8 @@ impl OwnerExecution {
             .inspect_err(|_| wallet.retire())?;
         *generation = Some(OwnerReplayGeneration { replay, wallet });
         *self.append_tasks.lock().unwrap() = append_tasks;
+        // The reconstructed Store runs no invocation until its loop begins one.
+        self.primary_tail_work.end_invocation();
         // Observation state follows the existing replay generation. Old Store callbacks retain
         // the old coordinator and cannot alter eligibility of the reconstructed generation.
         *self.suspension.lock().unwrap() = super::suspension::OwnerSuspension::new();
@@ -538,6 +540,47 @@ impl OwnerExecution {
             .await?;
         drop(reconstruction);
         Ok(())
+    }
+
+    /// The wallet pin an invocation admitted now records: the current wallet's identity,
+    /// generation and cards.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[doc(hidden)]
+    pub async fn test_current_wallet_pin(
+        &self,
+    ) -> Result<golem_common::model::card::InvocationWalletPin, WorkerExecutorError> {
+        use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
+        let wallet = self.wallet().await?.snapshot();
+        Ok(InvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: wallet.wallet_id_hash,
+                generation: wallet.generation,
+            },
+            pinned_card_ids: wallet.cards.keys().copied().collect(),
+            scope_card_id: None,
+        })
+    }
+
+    /// Replays the `AgentInvocationStarted` at `anchor` through the production reader, as the
+    /// primary Store does before it replays the invocation.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[doc(hidden)]
+    pub async fn test_replay_invocation_started(
+        &self,
+        anchor: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        match self
+            .replay()
+            .await?
+            .get_oplog_entry_agent_invocation_started()
+            .await?
+        {
+            Some(started) if started.oplog_index == anchor => Ok(()),
+            other => Err(WorkerExecutorError::runtime(format!(
+                "expected to replay the AgentInvocationStarted at {anchor}, got {:?}",
+                other.map(|started| started.oplog_index)
+            ))),
+        }
     }
 
     #[cfg(any(test, feature = "test-utils"))]

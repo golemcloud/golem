@@ -182,6 +182,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 == Some(InvocationExecutionMode::ReplayingCompleted)
     }
 
+    /// Run before a rejected live continuation is reported: when this Store is a replaying entity
+    /// body with a recorded `Cancelled`, waits until the body is aborted. Such a body is aborted
+    /// once it claimed its recorded calls, and a read past them would follow its recorded
+    /// cancellation point.
+    pub(crate) fn await_cancelled_body_abort(
+        &self,
+    ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send + 'static + use<Ctx> {
+        await_cancelled_body_abort(
+            self.state.replay_state.clone(),
+            self.entity_invocation_scope()
+                .map(|scope| scope.invocation_id().start_index()),
+        )
+    }
+
     pub(crate) fn prepare_live_continuation_at_replay_tail(
         &self,
         replay_ended: bool,
@@ -206,6 +220,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let store_replay_state = self.state.store_replay_state.clone();
         let rejected = self.rejects_live_continuation_at_replay_tail()
             || (!store_replay_state.is_incomplete_entity() && !replay_ended);
+        let entity_start = self
+            .entity_invocation_scope()
+            .map(|scope| scope.invocation_id().start_index());
         let replay_state = self.state.replay_state.clone();
         let public_state = self.public_state.clone();
         let linear_memory = self.linear_memory.clone();
@@ -223,6 +240,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let store_replay_state = store_replay_state.clone();
             Box::pin(async move {
                 if rejected {
+                    await_cancelled_body_abort(replay_state.clone(), entity_start).await?;
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
                         replay_state.last_replayed_index(),
                         expected,
@@ -423,6 +441,16 @@ impl PendingReplayToLive {
         }
         self.linear_memory.activate_live_usage_if_guest_body();
         Ok(FinishReplayToLive::Live)
+    }
+}
+
+async fn await_cancelled_body_abort(
+    replay_state: ReplayState,
+    entity_start: Option<OplogIndex>,
+) -> Result<(), WorkerExecutorError> {
+    match entity_start {
+        Some(body) => replay_state.await_cancelled_body_abort(body).await,
+        None => Ok(()),
     }
 }
 

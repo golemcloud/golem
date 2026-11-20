@@ -1274,6 +1274,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("agent-custom-owner".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1301,6 +1302,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::GolemEntityInvoke,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(middleware_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1327,6 +1329,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("entity-child".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequestNoInput {}.into()))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
@@ -1380,6 +1383,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::GolemEntityInvoke,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(tool_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: Some(Box::new(SpanStarted {
@@ -1484,6 +1488,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("observational-call".to_string()),
             invocation_id: None,
             observational_owner: Some(observational_owner),
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
@@ -1520,6 +1525,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("transaction".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
@@ -1596,6 +1602,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::GolemToolInvocationRejected,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(rejected_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1856,7 +1863,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
 }
 
 #[test]
-async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors() {
+async fn explicit_entity_attribution_rejects_non_start_and_non_entity_anchors() {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = Arc::new(
@@ -1897,6 +1904,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             function_name: HostFunctionName::Custom("not-an-entity".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1918,6 +1926,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             function_name: HostFunctionName::GolemEntityInvoke,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(entity_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1946,35 +1955,6 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
         ))
         .await
         .unwrap();
-    let invalid_forward_index = invalid_non_entity.next();
-    let future_entity_start = invalid_forward_index.next();
-    assert_eq!(
-        oplog
-            .add(OplogEntry::remove_retry_policy(
-                Some(future_entity_start),
-                "test-policy".to_string()
-            ))
-            .await
-            .unwrap(),
-        invalid_forward_index
-    );
-    assert_eq!(
-        oplog
-            .add(OplogEntry::Start {
-                timestamp: Timestamp::now_utc(),
-                parent_start_index: None,
-                function_name: HostFunctionName::GolemEntityInvoke,
-                invocation_id: None,
-                observational_owner: None,
-                request: None,
-                durable_function_type: DurableFunctionType::WriteLocal,
-                span_started: None,
-                denial: None,
-            })
-            .await
-            .unwrap(),
-        future_entity_start
-    );
     oplog.commit(CommitLevel::Always).await.unwrap();
 
     let components: Arc<dyn ComponentService> = Arc::new(PanicComponentService);
@@ -2000,10 +1980,6 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
     for (index, expected_error) in [
         (invalid_non_start, "does not reference a Start"),
         (invalid_non_entity, "is not an entity invocation"),
-        (
-            invalid_forward_index,
-            "has non-causal entity parent Start index",
-        ),
     ] {
         let result = get_public_oplog_chunk(
             components.clone(),
@@ -2330,6 +2306,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(cancelled_request_payload),
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,

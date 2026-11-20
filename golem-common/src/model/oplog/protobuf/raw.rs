@@ -558,6 +558,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 function_name,
                 invocation_id,
                 observational_owner,
+                driver,
                 request,
                 durable_function_type,
                 span_started,
@@ -568,6 +569,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 function_name: function_name.to_string(),
                 invocation_id: invocation_id.map(Into::into),
                 observational_owner: observational_owner.map(|id| id.as_u64()),
+                driver: driver.map(|id| id.as_u64()),
                 request: request.map(oplog_payload_to_proto).transpose()?,
                 durable_function_type: Some(durable_function_type_to_proto(durable_function_type)),
                 span_started: span_started.map(|span| raw_span_started_to_proto(*span)),
@@ -1243,6 +1245,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     observational_owner: p
                         .observational_owner
                         .map(crate::base_model::OplogIndex::from_u64),
+                    driver: p.driver.map(crate::base_model::OplogIndex::from_u64),
                     request,
                     durable_function_type,
                     span_started: p

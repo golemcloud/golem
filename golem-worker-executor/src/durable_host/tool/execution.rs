@@ -276,6 +276,7 @@ where
                 accessor,
                 response,
                 crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+                None,
             )
             .await?;
             projected.push(project_tool_response(accessor, response));

@@ -7055,7 +7055,7 @@
     },
     "PublicOplogEntryStart": {
       "type": "object",
-      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "request", "durableFunctionType", "spanStarted", "denial"],
+      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "driver", "request", "durableFunctionType", "spanStarted", "denial"],
       "properties": {
         "type": { "const": "Start" },
         "timestamp": { "type": "string" },
@@ -7063,6 +7063,7 @@
         "functionName": { "type": "string" },
         "invocationId": { "oneOf": [{ "$ref": "#/definitions/DurableInvocationId" }, { "type": "null" }] },
         "observationalOwner": { "type": ["integer", "null"], "minimum": 0 },
+        "driver": { "type": ["integer", "null"], "minimum": 0 },
         "request": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
         "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" },
         "spanStarted": { "oneOf": [{ "$ref": "#/definitions/PublicSpanStarted" }, { "type": "null" }] },
@@ -7224,7 +7225,7 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["type", "functionName", "durableFunctionType", "parentStartIndex", "invocationId", "observationalOwner", "carriesRequest", "request"],
+          "required": ["type", "functionName", "durableFunctionType", "parentStartIndex", "invocationId", "observationalOwner", "driver", "carriesRequest", "request"],
           "properties": {
             "type": { "const": "HostCall" },
             "functionName": { "type": "string" },
@@ -7232,6 +7233,7 @@
             "parentStartIndex": { "type": ["integer", "null"], "minimum": 0 },
             "invocationId": { "anyOf": [{ "$ref": "#/definitions/DurableInvocationId" }, { "type": "null" }] },
             "observationalOwner": { "type": ["integer", "null"], "minimum": 0 },
+            "driver": { "type": ["integer", "null"], "minimum": 0 },
             "carriesRequest": { "type": "boolean" },
             "request": { "anyOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] }
           },
@@ -7244,7 +7246,7 @@
     },
     "StartIdentityField": {
       "type": "string",
-      "enum": ["function-name", "function-type", "invocation-id", "observational-owner", "request-presence", "parent"]
+      "enum": ["function-name", "function-type", "invocation-id", "observational-owner", "request-presence", "parent", "driver"]
     },
     "PublicOplogEntryGrowMemory": {
       "type": "object",

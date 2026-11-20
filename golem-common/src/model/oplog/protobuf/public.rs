@@ -140,6 +140,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 observational_owner: start
                     .observational_owner
                     .map(crate::base_model::OplogIndex::from_u64),
+                driver: start.driver.map(crate::base_model::OplogIndex::from_u64),
                 request: start.request.map(TryInto::try_into).transpose()?,
                 durable_function_type: start
                     .durable_function_type
@@ -856,6 +857,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         function_name: start.function_name.clone(),
                         invocation_id: start.invocation_id.map(Into::into),
                         observational_owner: start.observational_owner.map(|id| id.as_u64()),
+                        driver: start.driver.map(|id| id.as_u64()),
                         request: start.request.map(TryInto::try_into).transpose()?,
                         durable_function_type: Some(start.durable_function_type.into()),
                         span_started: start.span_started.map(public_span_started_to_proto),
@@ -1980,6 +1982,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                     function_name: HostFunctionName::from(start.function_name.as_str()),
                     invocation_id: start.invocation_id,
                     observational_owner: start.observational_owner,
+                    driver: start.driver,
                     request,
                     durable_function_type,
                     span_started: start
