@@ -36,21 +36,10 @@ impl NamespaceRoutedKeyValueStorage {
         &self,
         namespace: &KeyValueStorageNamespace,
     ) -> &Arc<dyn KeyValueStorage + Send + Sync> {
-        if Self::is_cache_namespace(namespace) {
-            &self.cache
-        } else {
-            &self.persistent
+        match namespace.expiry() {
+            Some(_) => &self.cache,
+            None => &self.persistent,
         }
-    }
-
-    fn is_cache_namespace(namespace: &KeyValueStorageNamespace) -> bool {
-        matches!(
-            namespace,
-            KeyValueStorageNamespace::Worker { .. }
-                | KeyValueStorageNamespace::AgentStatus { .. }
-                | KeyValueStorageNamespace::AgentInvocationResultIndex { .. }
-                | KeyValueStorageNamespace::AgentDurableStreamSessionIndex { .. }
-        )
     }
 }
 
@@ -85,7 +74,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         value: &[u8],
         expiry: Duration,
     ) -> Result<(), KeyValueStorageError> {
-        if !Self::is_cache_namespace(&namespace) {
+        if namespace.expiry().is_none() {
             return Err(KeyValueStorageError::Other(
                 "expiry is only supported for cache-routed namespaces".to_string(),
             ));
@@ -167,7 +156,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         deletions: &[&str],
         expiry: Duration,
     ) -> Result<bool, KeyValueStorageError> {
-        if !Self::is_cache_namespace(&namespace) {
+        if namespace.expiry().is_none() {
             return Err(KeyValueStorageError::Other(
                 "expiry is only supported for cache-routed namespaces".to_string(),
             ));

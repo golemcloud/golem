@@ -510,4 +510,4 @@ struct UpdateFields {
 
 #[cfg(test)]
 #[path = "tests.rs"]
-mod test;
+pub(crate) mod test;

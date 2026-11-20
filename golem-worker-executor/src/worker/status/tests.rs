@@ -11221,10 +11221,9 @@ fn cancelled_standalone_retention_survives_every_checkpoint_cut() {
     }
 }
 
-mod status_baseline {
+pub(crate) mod status_baseline {
     use super::region_fold::{automatic_admission, failed, idx, succeeded};
     use super::*;
-    use crate::services::worker::stored_split_status;
     use golem_common::model::card::{AgentCardHolder, CardHolder, CardId, StoredCard};
     use golem_common::model::durable_stream::{
         LocalStreamId, SessionStreamRole, StreamCancellationRequest,
@@ -11237,7 +11236,7 @@ mod status_baseline {
     /// One generated entry. A choice selects an earlier entry or value of the sequence by
     /// position. A generated entry that has nothing to select gives a plain lifecycle entry.
     #[derive(Clone, Debug)]
-    enum Generated {
+    pub(crate) enum Generated {
         Pending,
         Started,
         Finished,
@@ -11273,9 +11272,15 @@ mod status_baseline {
         EntityStart(u8, bool),
         EntityEnd(u8),
         EntityDelivered(u8),
+        SetRetryPolicy(bool),
+        RemoveRetryPolicy(bool),
+        ProcessorCheckpoint(bool, u8),
+        CardInstallQueued,
+        CardInstalled(u8),
+        CardRevokedCascade(u8),
     }
 
-    fn generated() -> impl Strategy<Value = Generated> {
+    pub(crate) fn generated() -> impl Strategy<Value = Generated> {
         prop_oneof![
             Just(Generated::Pending),
             Just(Generated::Started),
@@ -11313,6 +11318,13 @@ mod status_baseline {
                 .prop_map(|(parent, entity)| Generated::EntityStart(parent, entity)),
             any::<u8>().prop_map(Generated::EntityEnd),
             any::<u8>().prop_map(Generated::EntityDelivered),
+            any::<bool>().prop_map(Generated::SetRetryPolicy),
+            any::<bool>().prop_map(Generated::RemoveRetryPolicy),
+            (any::<bool>(), any::<u8>())
+                .prop_map(|(second, confirmed)| Generated::ProcessorCheckpoint(second, confirmed)),
+            Just(Generated::CardInstallQueued),
+            any::<u8>().prop_map(Generated::CardInstalled),
+            any::<u8>().prop_map(Generated::CardRevokedCascade),
         ]
     }
 
@@ -11332,6 +11344,8 @@ mod status_baseline {
         snapshot_name: Option<FilesystemSnapshotName>,
         sessions: Vec<StreamSessionKey>,
         queued_revokes: Vec<(OplogIndex, CardId)>,
+        queued_installs: Vec<(OplogIndex, CardId)>,
+        installed: Vec<CardId>,
         transfers: Vec<Transfer>,
         starts: Vec<OplogIndex>,
         entries: BTreeMap<OplogIndex, OplogEntry>,
@@ -11396,6 +11410,7 @@ mod status_baseline {
             EnvironmentPluginGrantId(Uuid::from_u128(1)),
             EnvironmentPluginGrantId(Uuid::from_u128(2)),
         ];
+        let retry_policy_names = ["first", "second"];
         let resource_type_id = || ResourceTypeId {
             name: "resource".to_string(),
             owner: "test:resources".to_string(),
@@ -11631,13 +11646,83 @@ mod status_baseline {
                 },
                 None => OplogEntry::Interrupted { timestamp },
             },
+            Generated::SetRetryPolicy(second) => OplogEntry::SetRetryPolicy {
+                timestamp,
+                entity_parent_start_index: None,
+                policy: Box::new(golem_common::model::retry_policy::NamedRetryPolicy {
+                    name: retry_policy_names[usize::from(*second)].to_string(),
+                    priority: 1,
+                    predicate: golem_common::model::retry_policy::Predicate::True,
+                    policy: golem_common::model::retry_policy::RetryPolicy::Immediate,
+                }),
+            },
+            Generated::RemoveRetryPolicy(second) => OplogEntry::RemoveRetryPolicy {
+                timestamp,
+                entity_parent_start_index: None,
+                name: retry_policy_names[usize::from(*second)].to_string(),
+            },
+            Generated::ProcessorCheckpoint(second, confirmed) => {
+                OplogEntry::OplogProcessorCheckpoint {
+                    timestamp,
+                    plugin_grant_id: grants[usize::from(*second)],
+                    target_agent_id: AgentId::from_parts(8, 1),
+                    confirmed_up_to: idx(1 + u64::from(*confirmed) % (index - 1)),
+                    sending_up_to: idx(index - 1),
+                    last_batch_start: OplogIndex::NONE,
+                    source_component_revision: ComponentRevision::INITIAL,
+                    delivery: None,
+                }
+            }
+            Generated::CardInstallQueued => {
+                let card_id = CardId::new();
+                state.queued_installs.push((idx(index), card_id));
+                OplogEntry::card_event_queued(
+                    None,
+                    Box::new(QueuedCardEvent::install(test_card(card_id))),
+                )
+            }
+            Generated::CardInstalled(choice) => {
+                let (queued_event_index, card_id) = select(&state.queued_installs, *choice)
+                    .map_or((None, CardId::new()), |(queued, card_id)| {
+                        (Some(queued), card_id)
+                    });
+                state
+                    .queued_installs
+                    .retain(|(_, queued)| *queued != card_id);
+                state.installed.push(card_id);
+                OplogEntry::card_installed(
+                    None,
+                    queued_event_index,
+                    Box::new(test_card(card_id).into()),
+                    1,
+                )
+            }
+            Generated::CardRevokedCascade(choice) => {
+                let revoked_card_ids: Vec<CardId> = [
+                    select(&state.installed, *choice),
+                    select(&state.queued_revokes, *choice).map(|(_, card_id)| card_id),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                state
+                    .installed
+                    .retain(|card_id| !revoked_card_ids.contains(card_id));
+                OplogEntry::CardRevokedCascade {
+                    timestamp,
+                    entity_parent_start_index: None,
+                    revoked_card_ids,
+                    affected_wallets: Vec::new(),
+                    local_wallet_generation: 1,
+                }
+            }
         };
         (state, entry.rounded())
     }
 
     /// The oplog of `generated`: the `Create` of an agent at index 1, then one entry for each
     /// generated value.
-    fn oplog(generated: &[Generated]) -> BTreeMap<OplogIndex, OplogEntry> {
+    pub(crate) fn oplog(generated: &[Generated]) -> BTreeMap<OplogIndex, OplogEntry> {
         let create = TestCase::builder(1).build().entries[0].oplog_entry.clone();
         generated
             .iter()
@@ -11656,7 +11741,9 @@ mod status_baseline {
             .entries
     }
 
-    fn fold(
+    /// The status after `entries`, folded from `baseline`. `None` when the fold refuses
+    /// `baseline`.
+    pub(crate) fn fold(
         baseline: AgentStatusRecord,
         entries: BTreeMap<OplogIndex, OplogEntry>,
     ) -> Option<AgentStatusRecord> {
@@ -11671,29 +11758,34 @@ mod status_baseline {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(256))]
 
-        /// A status baseline at any index, stored and read back, folds the rest of the oplog to
-        /// the status of a fold of the whole oplog, in every field. A fold can refuse a baseline
-        /// when a later region covers its index; the reader then falls back to an earlier
-        /// baseline. A baseline at the last index has no later region, so its fold accepts it.
+        /// A status baseline at any index folds the rest of the oplog to the status of a fold
+        /// of the whole oplog, in every field. A fold refuses a baseline only when a later
+        /// `Jump` or `Revert` covers its index; the reader then folds the whole oplog from index
+        /// 1. The write and the read of the stored baseline have their own property in
+        /// `services::worker::tests`.
         #[test]
-        fn a_fold_from_a_stored_baseline_equals_a_fold_of_the_whole_oplog(
+        fn a_fold_from_a_status_baseline_equals_a_fold_of_the_whole_oplog(
             generated in proptest::collection::vec(generated(), 1..40),
         ) {
             let entries = oplog(&generated);
             let whole = fold(AgentStatusRecord::default(), entries.clone()).unwrap();
-            let last = *entries.keys().next_back().unwrap();
 
             entries.keys().try_for_each(|at| {
                 let (before, after): (BTreeMap<_, _>, BTreeMap<_, _>) = entries
                     .clone()
                     .into_iter()
                     .partition(|(index, _)| index <= at);
+                let rewinds_after = after.values().any(|entry| {
+                    matches!(entry, OplogEntry::Jump { .. } | OplogEntry::Revert { .. })
+                });
                 let baseline = fold(AgentStatusRecord::default(), before).unwrap();
-                let stored = stored_split_status(baseline.clone());
-                prop_assert_eq!(stored.as_ref(), Some(&baseline), "baseline at {}", at);
-                match fold(stored.unwrap(), after) {
+                match fold(baseline, after) {
                     Some(status) => prop_assert_eq!(&status, &whole, "baseline at {}", at),
-                    None => prop_assert_ne!(*at, last, "the baseline at the last index is refused"),
+                    None => prop_assert!(
+                        rewinds_after,
+                        "the baseline at {} is refused with no later jump or revert",
+                        at
+                    ),
                 }
                 Ok(())
             })?;

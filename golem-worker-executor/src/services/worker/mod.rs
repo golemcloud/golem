@@ -20,8 +20,6 @@ mod worker_service;
 #[cfg(test)]
 use running_workers::{StaleReason, stale_reason};
 #[cfg(test)]
-pub(crate) use status::stored_split_status;
-#[cfg(test)]
 use status::*;
 
 use super::component::ComponentService;
@@ -37,7 +35,7 @@ use crate::services::oplog::{OplogLifecycleGuard, OplogService};
 use crate::services::shard::ShardService;
 use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::keyvalue::{
-    KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
+    DERIVED_CACHE_EXPIRY, KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
 use crate::worker::snapshot_selection::kept_rejections;
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
@@ -65,8 +63,6 @@ use std::sync::{Arc, Mutex as StdMutex, Weak};
 use tokio::sync::{Mutex as AsyncMutex, RwLock};
 use tracing::{debug, error};
 
-pub(crate) const DERIVED_CACHE_EXPIRY: std::time::Duration =
-    std::time::Duration::from_secs(7 * 24 * 60 * 60);
 const INVOCATION_RESULT_INDEX_METADATA_FIELD: &str = "metadata";
 const INVOCATION_RESULT_INDEX_FIELD_PREFIX: &str = "ir:";
 
@@ -406,15 +402,15 @@ pub trait WorkerService: Send + Sync {
     /// changed are written. The complete invocation-result index is maintained in its dedicated
     /// namespace.
     ///
-    /// `previous_status` is the status currently held in the cache (i.e. the last value
-    /// successfully written). When provided, the delta of changed fields is computed against it.
-    /// Pass `None` on cold paths (worker create, recompute after a cache miss, detach reload) where
-    /// the previously stored fields are reconciled by reading them back.
+    /// `delta_base` is the status currently held in the cache (i.e. the last value successfully
+    /// written). When provided, the delta of changed fields is computed against it. Pass `None` on
+    /// cold paths (worker create, recompute after a cache miss, detach reload) where the
+    /// previously stored fields are reconciled by reading them back.
     ///
-    /// On success the (reassembled) status is returned so the caller can use it as the baseline
-    /// for the next delta. The `AgentMode` is read from `status_value.agent_mode`. Cached status is
-    /// only written for durable workers; for ephemeral workers this is a no-op (returning the
-    /// passed status unchanged).
+    /// On success the (reassembled) status is returned: the delta base of the next write. The
+    /// `AgentMode` is read from `status_value.agent_mode`. Cached status is only written for
+    /// durable workers; for ephemeral workers this is a no-op (returning the passed status
+    /// unchanged).
     ///
     /// Returns `Err` instead of panicking so the background flusher can re-queue the worker on a
     /// transient storage failure.
@@ -422,21 +418,21 @@ pub trait WorkerService: Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-        previous_status: Option<&AgentStatusRecord>,
+        delta_base: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
     ) -> Result<AgentStatusRecord, WorkerExecutorError>;
 
-    /// Reads the worker's *clean* status checkpoint, if any.
+    /// Reads the durable status baseline of the worker (the *clean* status checkpoint), if any.
     ///
-    /// The checkpoint is a full `AgentStatusRecord` written only at structurally clean boundaries
-    /// (snapshot save / throttled idle) and stored in its own per-agent hash
-    /// (see [`KeyValueStorageNamespace::AgentStatusCheckpoint`]). Because it is never advanced into
-    /// an open jump region, it serves as a fold baseline for status recompute that predates any
-    /// later jump, avoiding a full re-read of the oplog from index 1.
+    /// The baseline is a full `AgentStatusRecord` written only at structurally clean boundaries
+    /// and stored in its own per-agent hash (see
+    /// [`KeyValueStorageNamespace::AgentStatusCheckpoint`]). Because it is never advanced into an
+    /// open jump region, a status recompute folds forward from it, also when a later jump region
+    /// follows.
     ///
-    /// Returns `Ok(None)` on a cache miss or stale format, and `Err` when the storage could not be
-    /// read. The transient `agent_mode` field (not part of the persisted `core`) is restored from
-    /// `agent_mode`.
+    /// Returns `Ok(None)` when no baseline is stored or its format is stale, and `Err` when the
+    /// storage could not be read. The transient `agent_mode` field (not part of the persisted
+    /// `core`) is restored from `agent_mode`.
     async fn read_status_checkpoint(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -450,14 +446,13 @@ pub trait WorkerService: Send + Sync {
     /// Same split layout and delta semantics as [`write_cached_status`](Self::write_cached_status),
     /// but targeting the [`KeyValueStorageNamespace::AgentStatusCheckpoint`] hash. No-op for
     /// ephemeral workers (returning the value unchanged). Returns the reassembled record, the
-    /// baseline for the next delta. Returns `Err`, not a panic, when the storage refuses the
-    /// write. Every oplog keeps its entries from index 1, so a baseline that a refused write
-    /// leaves older makes a later fold longer and does not change the status.
+    /// delta base of the next write. Returns `Err`, not a panic, when the storage refuses the
+    /// write.
     async fn write_status_checkpoint(
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-        previous_checkpoint: Option<&AgentStatusRecord>,
+        delta_base: Option<&AgentStatusRecord>,
         checkpoint: AgentStatusRecord,
     ) -> Result<AgentStatusRecord, WorkerExecutorError>;
 

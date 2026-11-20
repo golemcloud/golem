@@ -671,7 +671,11 @@ async fn remembered_status_baseline_recovers_complete_hash_after_cache_loss() {
     let agent_id = AgentId::from_parts(7, 2);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
     let fingerprint = AgentFingerprint::new();
-    let namespace = DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint);
+    let hash = SplitStatusHash::Cache {
+        owned_agent_id: &owned_agent_id,
+        fingerprint,
+    };
+    let namespace = split_status_target(hash).namespace;
     let status = AgentStatusRecord {
         oplog_idx: OplogIndex::from_u64(10),
         skipped_regions: DeletedRegions::from_regions([OplogRegion {
@@ -682,7 +686,7 @@ async fn remembered_status_baseline_recovers_complete_hash_after_cache_loss() {
     };
 
     service
-        .write_split_status(&owned_agent_id, namespace.clone(), None, status.clone())
+        .write_split_status(&owned_agent_id, hash, None, status.clone())
         .await
         .unwrap();
     let fields = storage
@@ -695,18 +699,13 @@ async fn remembered_status_baseline_recovers_complete_hash_after_cache_loss() {
         .unwrap();
 
     service
-        .write_split_status(
-            &owned_agent_id,
-            namespace.clone(),
-            Some(&status),
-            status.clone(),
-        )
+        .write_split_status(&owned_agent_id, hash, Some(&status), status.clone())
         .await
         .unwrap();
 
     assert_eq!(
         service
-            .read_split_status(&owned_agent_id, namespace)
+            .read_split_status(&owned_agent_id, hash)
             .await
             .unwrap(),
         Some(status)
@@ -725,8 +724,10 @@ async fn stale_status_baseline_reconciles_without_mixed_auxiliary_fields() {
     );
     let agent_id = AgentId::from_parts(7, 3);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
-    let namespace =
-        DefaultWorkerService::status_namespace(&owned_agent_id, AgentFingerprint::new());
+    let hash = SplitStatusHash::Cache {
+        owned_agent_id: &owned_agent_id,
+        fingerprint: AgentFingerprint::new(),
+    };
     let persisted = AgentStatusRecord {
         oplog_idx: OplogIndex::from_u64(20),
         skipped_regions: DeletedRegions::from_regions([OplogRegion {
@@ -745,13 +746,13 @@ async fn stale_status_baseline_reconciles_without_mixed_auxiliary_fields() {
     };
 
     service
-        .write_split_status(&owned_agent_id, namespace.clone(), None, persisted)
+        .write_split_status(&owned_agent_id, hash, None, persisted)
         .await
         .unwrap();
     service
         .write_split_status(
             &owned_agent_id,
-            namespace.clone(),
+            hash,
             Some(&remembered),
             replacement.clone(),
         )
@@ -760,7 +761,7 @@ async fn stale_status_baseline_reconciles_without_mixed_auxiliary_fields() {
 
     assert_eq!(
         service
-            .read_split_status(&owned_agent_id, namespace)
+            .read_split_status(&owned_agent_id, hash)
             .await
             .unwrap(),
         Some(replacement)
@@ -777,24 +778,34 @@ async fn cold_status_publication_removes_orphan_transfers_without_a_core() {
     let orphan_value = serialize(transfer).unwrap();
     source.received_card_transfers = ReceivedCardTransferIndex::default();
 
-    for namespace in [
-        DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint),
-        DefaultWorkerService::checkpoint_namespace(&owned_agent_id, fingerprint),
+    for hash in [
+        SplitStatusHash::Cache {
+            owned_agent_id: &owned_agent_id,
+            fingerprint,
+        },
+        SplitStatusHash::Baseline {
+            owned_agent_id: &owned_agent_id,
+            fingerprint,
+        },
     ] {
         storage
             .with_entity("test", "seed_orphan_transfer", "transfer")
-            .set_raw(namespace.clone(), &orphan_field, &orphan_value)
+            .set_raw(
+                split_status_target(hash).namespace,
+                &orphan_field,
+                &orphan_value,
+            )
             .await
             .unwrap();
 
         service
-            .write_split_status(&owned_agent_id, namespace.clone(), None, source.clone())
+            .write_split_status(&owned_agent_id, hash, None, source.clone())
             .await
             .unwrap();
 
         assert_eq!(
             service
-                .read_split_status(&owned_agent_id, namespace)
+                .read_split_status(&owned_agent_id, hash)
                 .await
                 .unwrap(),
             Some(source.clone())
@@ -2034,7 +2045,10 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
         service
             .write_split_status(
                 &owned_agent_id,
-                DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint),
+                SplitStatusHash::Cache {
+                    owned_agent_id: &owned_agent_id,
+                    fingerprint,
+                },
                 None,
                 status.clone(),
             )
@@ -4021,30 +4035,45 @@ async fn removing_the_cached_status_keeps_the_status_baseline() {
 
 #[test]
 fn the_status_cache_expires_and_the_status_baseline_does_not() {
-    let agent_id = test_owned_agent_id("split-status-kind").agent_id;
+    let owned_agent_id = test_owned_agent_id("split-status-target");
     let fingerprint = AgentFingerprint(Uuid::new_v4());
 
+    let targets = [
+        split_status_target(SplitStatusHash::Cache {
+            owned_agent_id: &owned_agent_id,
+            fingerprint,
+        }),
+        split_status_target(SplitStatusHash::Baseline {
+            owned_agent_id: &owned_agent_id,
+            fingerprint,
+        }),
+    ];
+
     assert_eq!(
+        targets,
         [
-            split_status_kind(&DefaultWorkerService::status_namespace(
-                &agent_id,
-                fingerprint
-            )),
-            split_status_kind(&DefaultWorkerService::checkpoint_namespace(
-                &agent_id,
-                fingerprint
-            )),
-        ],
-        [
-            SplitStatusKind {
+            SplitStatusTarget {
+                namespace: KeyValueStorageNamespace::AgentStatus {
+                    owned_agent_id: owned_agent_id.clone(),
+                    fingerprint,
+                },
                 label: "status",
-                expiry: Some(std::time::Duration::from_secs(7 * 24 * 60 * 60)),
             },
-            SplitStatusKind {
+            SplitStatusTarget {
+                namespace: KeyValueStorageNamespace::AgentStatusCheckpoint {
+                    owned_agent_id: owned_agent_id.clone(),
+                    fingerprint,
+                },
                 label: "checkpoint",
-                expiry: None,
             },
         ]
+    );
+    assert_eq!(
+        targets
+            .iter()
+            .map(|target| target.namespace.expiry())
+            .collect::<Vec<_>>(),
+        vec![Some(DERIVED_CACHE_EXPIRY), None]
     );
 }
 
@@ -4052,7 +4081,9 @@ fn the_status_cache_expires_and_the_status_baseline_does_not() {
 /// write that sets no expiry.
 type RecordedWrite = (KeyValueStorageNamespace, Option<std::time::Duration>);
 
-/// An in-memory key-value storage that records the namespace and the expiry of every write.
+/// An in-memory key-value storage that records the namespace and the expiry of every call that
+/// sets a value or compares and changes fields. It does not record `del`, `del_many`,
+/// `remove_from_set` and `remove_from_sorted_set`, because these calls give no expiry.
 #[derive(Debug, Default)]
 struct ExpiryRecordingKeyValueStorage {
     inner: InMemoryKeyValueStorage,
@@ -4386,13 +4417,23 @@ impl KeyValueStorage for ExpiryRecordingKeyValueStorage {
 
 /// The worker service writes and removes the status baseline with no expiry, and the live
 /// status cache with the expiry of a derived cache, on the full write, the delta write and the
-/// removal.
+/// removal. The removal is `WorkerService::remove` of an incarnation that is not the current one,
+/// which deletes no oplog.
 #[test]
 async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
     let storage = Arc::new(ExpiryRecordingKeyValueStorage::default());
-    let (service, owned_agent_id, fingerprint) = status_baseline_test_service(storage.clone());
-    let cache = DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint);
-    let baseline = DefaultWorkerService::checkpoint_namespace(&owned_agent_id, fingerprint);
+    let (service, owned_agent_id, _) = status_baseline_test_service(storage.clone());
+    let fingerprint = AgentFingerprint(Uuid::new_v4());
+    let cache = split_status_target(SplitStatusHash::Cache {
+        owned_agent_id: &owned_agent_id,
+        fingerprint,
+    })
+    .namespace;
+    let baseline = split_status_target(SplitStatusHash::Baseline {
+        owned_agent_id: &owned_agent_id,
+        fingerprint,
+    })
+    .namespace;
     let first = marked_status_baseline();
     let second = AgentStatusRecord {
         component_size: 8,
@@ -4416,15 +4457,27 @@ async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
         .await
         .unwrap();
     service
-        .remove_cached_status(&owned_agent_id, fingerprint)
-        .await
-        .unwrap();
-    service
-        .remove_split_status(&owned_agent_id, baseline.clone())
+        .remove(
+            &mut crate::services::oplog::OpenOplogs::new("delete-test")
+                .lock_lifecycle(&owned_agent_id.agent_id)
+                .await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            fingerprint,
+            None,
+            &|_| {},
+        )
         .await
         .unwrap();
 
-    let week = Some(std::time::Duration::from_secs(7 * 24 * 60 * 60));
+    assert_eq!(
+        service
+            .read_status_checkpoint(&owned_agent_id, fingerprint, AgentMode::Durable)
+            .await
+            .unwrap(),
+        None
+    );
+    let week = Some(DERIVED_CACHE_EXPIRY);
     assert_eq!(
         storage
             .writes()
@@ -4440,4 +4493,84 @@ async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
             (baseline, None),
         ]
     );
+}
+
+mod status_baseline_round_trip {
+    use super::*;
+    use crate::worker::status::test::status_baseline::{Generated, fold, generated, oplog};
+    use proptest::prelude::*;
+    use test_r::test;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Two status baselines of one generated oplog, written with `write_status_checkpoint`
+        /// and read back with `read_status_checkpoint`, are the statuses that were written, in
+        /// every field. The first write is a full write. The second write is a delta write on
+        /// the first. The oplogs have no `Revert`: the write of a baseline with stream history
+        /// catches up the stream session index, which refuses a revert of stream history with
+        /// no fork-cut marker after it, and the generator writes no such marker. A `Jump` gives
+        /// the deleted regions.
+        #[test]
+        fn a_written_status_baseline_reads_back_unchanged(
+            generated in proptest::collection::vec(
+                generated().prop_filter("no revert", |generated| {
+                    !matches!(generated, Generated::Revert(_))
+                }),
+                1..40,
+            ),
+            first in any::<prop::sample::Index>(),
+            second in any::<prop::sample::Index>(),
+        ) {
+            let entries = oplog(&generated);
+            let indexes: Vec<OplogIndex> = entries.keys().copied().collect();
+            let (earlier, later) = (first.index(indexes.len()), second.index(indexes.len()));
+            let (earlier, later) = (earlier.min(later), earlier.max(later));
+            let status_at = |at: OplogIndex| {
+                fold(
+                    AgentStatusRecord::default(),
+                    entries
+                        .range(..=at)
+                        .map(|(index, entry)| (*index, entry.clone()))
+                        .collect(),
+                )
+                .unwrap()
+            };
+            let first = status_at(indexes[earlier]);
+            let second = status_at(indexes[later]);
+
+            let read = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let (service, _, owned_agent_id) = index_test_service(entries.clone());
+                    let fingerprint = AgentFingerprint(Uuid::new_v4());
+                    let read = || {
+                        service.read_status_checkpoint(
+                            &owned_agent_id,
+                            fingerprint,
+                            AgentMode::Durable,
+                        )
+                    };
+                    let written = service
+                        .write_status_checkpoint(&owned_agent_id, fingerprint, None, first.clone())
+                        .await
+                        .unwrap();
+                    let first_read = read().await.unwrap();
+                    service
+                        .write_status_checkpoint(
+                            &owned_agent_id,
+                            fingerprint,
+                            Some(&written),
+                            second.clone(),
+                        )
+                        .await
+                        .unwrap();
+                    (first_read, read().await.unwrap())
+                });
+
+            prop_assert_eq!(read, (Some(first), Some(second)));
+        }
+    }
 }

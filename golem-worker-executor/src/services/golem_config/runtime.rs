@@ -449,14 +449,14 @@ impl Default for InvocationResultsConfig {
     }
 }
 
-/// Controls the *clean* cached `AgentStatusRecord` checkpoint.
+/// Controls the durable status baseline: the *clean* `AgentStatusRecord` checkpoint.
 ///
 /// The checkpoint is a separate copy of the status written only at structurally clean boundaries
-/// (snapshot save, throttled idle) where no jumpable oplog region is open, and is never advanced by
-/// the background flusher. It lets a status recompute fold forward from a baseline that predates any
-/// later jump region instead of re-reading the whole oplog from index 1 (the previous behaviour on
-/// every jump-induced detach). When `enabled` is `false`, no checkpoint is written and recompute
-/// falls back to a full from-scratch fold.
+/// where no jumpable oplog region is open: the snapshot save, the throttled idle boundary, and
+/// the throttled boundary during a long invocation. The background flusher never moves it
+/// forward. A status recompute folds forward from it, also when a later jump region follows. When
+/// `enabled` is `false`, no checkpoint is written. A recompute without a cached status then folds
+/// from a checkpoint that an earlier run wrote, or else from index 1.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentStatusCheckpointConfig {
     /// Whether clean status checkpoints are written.

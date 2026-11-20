@@ -359,7 +359,10 @@ impl WorkerService for DefaultWorkerService {
             .await?;
         self.remove_split_status(
             owned_agent_id,
-            Self::checkpoint_namespace(owned_agent_id, fingerprint),
+            SplitStatusHash::Baseline {
+                owned_agent_id,
+                fingerprint,
+            },
         )
         .await?;
         self.stream_session_index
@@ -436,7 +439,10 @@ impl WorkerService for DefaultWorkerService {
             .await?;
         self.remove_split_status(
             owned_agent_id,
-            Self::status_namespace(owned_agent_id, fingerprint),
+            SplitStatusHash::Cache {
+                owned_agent_id,
+                fingerprint,
+            },
         )
         .await?;
         self.remove_cached_agent_mode_if_fingerprint(owned_agent_id, fingerprint)
@@ -989,7 +995,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-        previous_status: Option<&AgentStatusRecord>,
+        delta_base: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
     ) -> Result<AgentStatusRecord, WorkerExecutorError> {
         record_worker_call("write_status");
@@ -1017,8 +1023,11 @@ impl WorkerService for DefaultWorkerService {
         .await?;
         self.write_split_status(
             owned_agent_id,
-            Self::status_namespace(owned_agent_id, fingerprint),
-            previous_status,
+            SplitStatusHash::Cache {
+                owned_agent_id,
+                fingerprint,
+            },
+            delta_base,
             status_value,
         )
         .await
@@ -1036,7 +1045,10 @@ impl WorkerService for DefaultWorkerService {
         let status = self
             .read_split_status(
                 owned_agent_id,
-                Self::checkpoint_namespace(owned_agent_id, fingerprint),
+                SplitStatusHash::Baseline {
+                    owned_agent_id,
+                    fingerprint,
+                },
             )
             .await?;
         // `agent_mode` is transient (not part of `core`); restore the authoritative value.
@@ -1050,7 +1062,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-        previous_checkpoint: Option<&AgentStatusRecord>,
+        delta_base: Option<&AgentStatusRecord>,
         checkpoint: AgentStatusRecord,
     ) -> Result<AgentStatusRecord, WorkerExecutorError> {
         record_worker_call("write_status_checkpoint");
@@ -1073,8 +1085,11 @@ impl WorkerService for DefaultWorkerService {
         }
         self.write_split_status(
             owned_agent_id,
-            Self::checkpoint_namespace(owned_agent_id, fingerprint),
-            previous_checkpoint,
+            SplitStatusHash::Baseline {
+                owned_agent_id,
+                fingerprint,
+            },
+            delta_base,
             checkpoint,
         )
         .await
