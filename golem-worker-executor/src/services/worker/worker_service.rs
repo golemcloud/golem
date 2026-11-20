@@ -422,6 +422,9 @@ impl WorkerService for DefaultWorkerService {
         fingerprint: AgentFingerprint,
     ) -> Result<(), WorkerExecutorError> {
         record_worker_call("remove_cached_status");
+        // The result index is part of the status cache. Besides deletion, the cached status is
+        // removed when the oplog is fully archived, so that an archived agent keeps nothing in
+        // primary storage; the index goes with it and is rebuilt from the oplog on next access.
         self.clear_invocation_result_index(owned_agent_id, fingerprint)
             .await?;
         self.remove_split_status(
