@@ -16,21 +16,27 @@ use crate::Tracing;
 use golem_worker_executor_test_utils::callers;
 
 use golem_api_grpc::proto::golem::worker::InvocationStart;
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    CreateWorkerRequest, create_worker_response,
+};
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::agent::{AgentKey, AgentMode, ParsedAgentKey};
+use golem_common::model::component::{ComponentDto, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{
     AgentId, IdempotencyKey, InvocationId, InvocationRequestKey, OwnedAgentId,
 };
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
-use golem_test_framework::dsl::TestDsl;
+use golem_common::schema::graph::TypedSchemaValue;
+use golem_common::{agent_key, data_value};
+use golem_test_framework::dsl::{AgentResult, TestDsl};
+use golem_worker_executor::services::agent_types::local_type_id;
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, scheduler_sqlite_storage_config, start,
+    WorkerExecutorTestDependencies, copy_create_entry_to, scheduler_sqlite_storage_config, start,
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -57,6 +63,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("agent_update_v1")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
@@ -88,14 +98,14 @@ inherit_test_dep!(
 
 async fn external_invocation_id(
     executor: &TestWorkerExecutor,
-    worker: &AgentId,
+    worker: &OwnedAgentId,
     key: &IdempotencyKey,
     method: &str,
 ) -> anyhow::Result<InvocationId> {
     let fingerprint = executor.get_worker_metadata(worker).await?.fingerprint;
     Ok(
         InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(key))
-            .finalize(worker.clone(), fingerprint, method)
+            .finalize(worker.agent_id, fingerprint, method)
             .id(),
     )
 }
@@ -117,7 +127,7 @@ macro_rules! method_failure_test {
                 .store()
                 .await?;
             for failure in [$($failure),+] {
-                let agent = agent_id!($agent_type, failure);
+                let agent = agent_key!($agent_type, failure);
                 let worker = executor.start_agent(&component.id, agent.clone()).await?;
                 assert_eq!(
                     executor.invoke_and_await_agent(&component, &agent, $declared, data_value!())
@@ -191,7 +201,7 @@ async fn method_failure_tail_survives_cold_lookup_and_state_reconstruction(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("RustMethodFailure", "cold-failure-tail");
+    let agent = agent_key!("RustMethodFailure", "cold-failure-tail");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let key = IdempotencyKey::fresh();
     let failure = executor
@@ -297,13 +307,13 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("RustMethodFailure", "stream-failure-tail");
+    let agent = agent_key!("RustMethodFailure", "stream-failure-tail");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &agent, "value", data_value!())
         .await?;
     let mut gate = executor
-        .gate_after_next_append(&worker, |entry| {
+        .gate_after_next_append(&worker.agent_id, |entry| {
             matches!(
                 entry,
                 OplogEntry::Start {
@@ -321,7 +331,8 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
         InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key));
     let (_, input) = data_value!(url).into_parts();
     let invocation = InvocationStart {
-        agent_id: Some(worker.clone().into()),
+        target: Some(id_target(&worker)),
+        component_id: Some(component.id.into()),
         method_name: Some("fail_stream_after_http".to_string()),
         input: Some(input.try_into().map_err(anyhow::Error::msg)?),
         mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
@@ -486,13 +497,13 @@ async fn method_failure_repairs_an_incomplete_tail_without_repeating_completed_e
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("RustMethodFailure", "incomplete-failure-tail");
+    let agent = agent_key!("RustMethodFailure", "incomplete-failure-tail");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &agent, "value", data_value!())
         .await?;
     let mut gate = executor
-        .gate_after_next_append(&worker, |entry| {
+        .gate_after_next_append(&worker.agent_id, |entry| {
             matches!(
                 entry,
                 OplogEntry::Start {
@@ -630,27 +641,21 @@ async fn ephemeral_method_failure_keeps_archived_results_and_never_repairs_a_sta
         .store()
         .await?;
     for (index, incomplete) in [false, true].into_iter().enumerate() {
-        let agent = agent_id!(
+        let agent = agent_key!(
             "RustEphemeralMethodFailure",
             format!("failure-{incomplete}")
         );
         let key = IdempotencyKey::fresh();
-        let worker = AgentId::from_agent_id(
-            component.id,
-            &agent
-                .with_ephemeral_invocation_phantom(
-                    &InvocationRequestKey::external(
-                        executor.auth_ctx().idempotency_scope(),
-                        Some(&key),
-                    )
-                    .owner_key("fail_after_http"),
-                )
-                .map_err(anyhow::Error::msg)?,
-        )
-        .map_err(anyhow::Error::msg)?;
+        let worker = ephemeral_agent_id(
+            &executor,
+            component.environment_id,
+            &agent,
+            &key,
+            "fail_after_http",
+        );
         if incomplete {
             let mut gate = executor
-                .gate_after_next_append(&worker, |entry| {
+                .gate_after_next_append(&worker.agent_id, |entry| {
                     matches!(
                         entry,
                         OplogEntry::Start {
@@ -708,10 +713,11 @@ async fn ephemeral_method_failure_keeps_archived_results_and_never_repairs_a_sta
                 .contains(expected),
             "{failure:#}"
         );
-        let owned = OwnedAgentId::new(context.default_environment_id, &worker);
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            while executor.worker_is_cached(&owned).await
-                || crate::oplog_sweep::ephemeral_layer_rows(deps, &context, &worker).await? != 0
+            while executor.worker_is_cached(&worker).await
+                || crate::oplog_sweep::ephemeral_layer_rows(deps, &context, &worker.agent_id)
+                    .await?
+                    != 0
             {
                 tokio::task::yield_now().await;
             }
@@ -785,19 +791,15 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("RustMethodFailure", "fail-constructor");
-    let worker_id = AgentId {
-        component_id: component.id,
-        agent_id: agent.to_string(),
-    };
+    let agent = agent_key!("RustMethodFailure", "fail-constructor");
+    let worker_id = keyed_agent_id(component.environment_id, &agent);
     let creation_error = executor
         .start_agent(&component.id, agent)
         .await
         .expect_err("create must report the constructor failure");
     assert!(format!("{creation_error:#}").contains("constructor gave up"));
-    let owned = OwnedAgentId::new(component.environment_id, &worker_id);
     // Use the acquired shell directly, as ingress does if construction fails after acquisition.
-    let mut worker = executor.active_agent(&owned).await.unwrap().primary();
+    let mut worker = executor.active_agent(&worker_id).await.unwrap().primary();
     executor
         .wait_for_status(&worker_id, AgentStatus::Failed, Duration::from_secs(10))
         .await?;
@@ -807,7 +809,7 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
             drop(worker);
             executor.release().await?;
             executor = start(deps, &context).await?;
-            let healthy = agent_id!("RustMethodFailure", "healthy-after-restart");
+            let healthy = agent_key!("RustMethodFailure", "healthy-after-restart");
             let healthy_id = executor.start_agent(&component.id, healthy.clone()).await?;
             assert_eq!(
                 executor
@@ -816,19 +818,15 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
                     .into_typed::<i64>()?,
                 1
             );
-            let healthy_worker = executor
-                .active_agent(&OwnedAgentId::new(component.environment_id, &healthy_id))
-                .await
-                .unwrap()
-                .primary();
+            let healthy_worker = executor.active_agent(&healthy_id).await.unwrap().primary();
             worker = golem_worker_executor::worker::Worker::get_exact_existing_suspended(
                 healthy_worker.all(),
-                &owned,
+                &worker_id,
                 callers::anonymous(),
             )
             .await?;
         }
-        let before = executor.stored_oplog(&worker_id).await;
+        let before = executor.stored_oplog(&worker_id.agent_id).await;
         for scheduled in [false, true] {
             let invocation = AgentInvocation::AgentMethod {
                 idempotency_key: InvocationId(uuid::Uuid::new_v4()),
@@ -858,7 +856,7 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
             );
             assert!(format!("{error:#}").contains("constructor gave up"));
         }
-        assert_eq!(executor.stored_oplog(&worker_id).await, before);
+        assert_eq!(executor.stored_oplog(&worker_id.agent_id).await, before);
         assert_eq!(
             executor.get_worker_metadata(&worker_id).await?.status,
             AgentStatus::Failed
@@ -940,16 +938,13 @@ async fn method_failure_classification_keeps_constructors_and_rust_panics_fatal(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let agent = agent_id!(agent_type, name);
+        let agent = agent_key!(agent_type, name);
         let worker = if name == "fail-constructor" {
             executor
                 .start_agent(&component.id, agent.clone())
                 .await
                 .expect_err("create must report the constructor failure");
-            let worker = AgentId {
-                component_id: component.id,
-                agent_id: agent.to_string(),
-            };
+            let worker = keyed_agent_id(component.environment_id, &agent);
             executor
                 .wait_for_status(&worker, AgentStatus::Failed, Duration::from_secs(10))
                 .await?;
@@ -1022,13 +1017,13 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
         .store()
         .await?;
     for method in ["value", "panic"] {
-        let agent = agent_id!("RustMethodFailure", format!("mismatched-{method}"));
+        let agent = agent_key!("RustMethodFailure", format!("mismatched-{method}"));
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
         executor
             .invoke_and_await_agent(&component, &agent, "value", data_value!())
             .await?;
         let mut gate = executor
-            .gate_after_next_append(&worker, |entry| {
+            .gate_after_next_append(&worker.agent_id, |entry| {
                 matches!(entry, OplogEntry::AgentInvocationStarted { .. })
             })
             .await;
@@ -1052,10 +1047,11 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
             anchor,
         );
         let terminal_index = executor
-            .commit_oplog_entry_bypassing_worker_status(&worker, terminal.clone())
+            .commit_oplog_entry_bypassing_worker_status(&worker.agent_id, terminal.clone())
             .await?;
-        let persisted_terminal =
-            executor.stored_oplog(&worker).await[terminal_index.as_u64() as usize - 1].clone();
+        let persisted_terminal = executor.stored_oplog(&worker.agent_id).await
+            [terminal_index.as_u64() as usize - 1]
+            .clone();
         gate.abort();
         executor.shutdown_and_wait_for_invocation_loops().await?;
         drop(gate);
@@ -1070,7 +1066,7 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
             format!("{failure:#}").contains("Unexpected oplog entry"),
             "unexpected recovery failure: {failure:#}"
         );
-        let entries = executor.stored_oplog(&worker).await;
+        let entries = executor.stored_oplog(&worker.agent_id).await;
         assert_eq!(
             &entries[terminal_index.as_u64() as usize - 1],
             &persisted_terminal
@@ -1080,7 +1076,8 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
         )).count(), 1, "recovery must not replace or duplicate the recorded method failure");
         let lookup = executor
             .invoke_agent_session(InvocationStart {
-                agent_id: Some(worker.clone().into()),
+                target: Some(id_target(&worker)),
+                component_id: Some(component.id.into()),
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
                 idempotency_key: Some(IdempotencyKey::new(invocation_id.to_string()).into()),
                 component_owner_account_id: Some(component.account_id.into()),
@@ -1160,7 +1157,7 @@ async fn agent_self_rpc_is_not_allowed(
         .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
-    let agent_id = agent_id!("SelfRpcAgent", "worker-name");
+    let agent_id = agent_key!("SelfRpcAgent", "worker-name");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1217,8 +1214,8 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
         SqliteSchedulerStorage::configured(&scheduler_sqlite_storage_config(deps, &context))
             .await
             .map_err(anyhow::Error::msg)?;
-    let agent_id = agent_id!("StreamingRpcTarget", "rejected-schedule");
-    let worker_id = AgentId::from_agent_id(component.id, &agent_id).map_err(anyhow::Error::msg)?;
+    let agent_id = agent_key!("StreamingRpcTarget", "rejected-schedule");
+    let worker_id = keyed_agent_id(component.environment_id, &agent_id);
     let (_, input) = data_value!(vec![1_u32, 2, 3]).into_parts();
     let input: golem_schema::proto::golem::schema::SchemaValue =
         input.try_into().map_err(anyhow::Error::msg)?;
@@ -1237,7 +1234,9 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
     ] {
         let error = executor
             .invoke_agent_session(InvocationStart {
-                agent_id: Some(worker_id.clone().into()),
+                target: Some(key_target(&agent_id)?),
+                constructor: None,
+                component_id: Some(component.id.into()),
                 method_name: Some("produce".to_string()),
                 input: Some(input.clone()),
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
@@ -1309,7 +1308,7 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let streaming_agent_id = agent_id!("StreamingRpcTarget", "pinned-streaming-revision");
+    let streaming_agent_id = agent_key!("StreamingRpcTarget", "pinned-streaming-revision");
     let streaming_worker_id = executor
         .start_agent(&streaming_component.id, streaming_agent_id.clone())
         .await?;
@@ -1320,7 +1319,9 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
     let (_, input) = data_value!(vec![1_u32, 2, 3]).into_parts();
     let error = executor
         .invoke_agent_session(InvocationStart {
-            agent_id: Some(streaming_worker_id.clone().into()),
+            target: Some(id_target(&streaming_worker_id)),
+            constructor: None,
+            component_id: Some(streaming_component.id.into()),
             method_name: Some("produce".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
@@ -1362,7 +1363,7 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
         .component_dep(&context.default_environment_id, agent_rpc)
         .store()
         .await?;
-    let stream_free_agent_id = agent_id!("TestAgent", "pinned-stream-free-revision");
+    let stream_free_agent_id = agent_key!("TestAgent", "pinned-stream-free-revision");
     let stream_free_worker_id = executor
         .start_agent(&stream_free_component.id, stream_free_agent_id.clone())
         .await?;
@@ -1370,10 +1371,12 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
         .update_component(&stream_free_component.id, &agent_rpc_rust.wasm_name)
         .await?;
 
+    // The updated component does not implement `TestAgent`, so only the ID still reaches it.
     let output = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_by_id(
             &stream_free_component,
-            &stream_free_agent_id,
+            &stream_free_worker_id,
+            None,
             "run",
             data_value!(0_f64),
         )
@@ -1430,7 +1433,7 @@ async fn agent_await_parallel_rpc_calls(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!("TestAgent", unique_id);
+    let agent_id = agent_key!("TestAgent", unique_id);
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1449,7 +1452,7 @@ async fn agent_await_parallel_rpc_calls(
 
 #[test]
 #[tracing::instrument]
-async fn agent_env_inheritance(
+async fn rpc_created_agents_do_not_inherit_the_caller_environment(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
@@ -1470,7 +1473,7 @@ async fn agent_env_inheritance(
         .store()
         .await?;
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!("TestAgent", unique_id);
+    let agent_id = agent_key!("TestAgent", unique_id);
 
     let mut env = HashMap::new();
     env.insert("ENV2".to_string(), "22".to_string());
@@ -1486,10 +1489,8 @@ async fn agent_env_inheritance(
         .invoke_and_await_agent(&component, &agent_id, "envVarTest", data_value!())
         .await;
 
-    let child_worker_id = AgentId {
-        component_id: worker_id.component_id,
-        agent_id: "ChildAgent(0.0)".to_string(),
-    };
+    let child_agent_id = agent_key!("ChildAgent", 0.0f64);
+    let child_worker_id = keyed_agent_id(component.environment_id, &child_agent_id);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     executor.check_oplog_is_queryable(&child_worker_id).await?;
@@ -1497,16 +1498,13 @@ async fn agent_env_inheritance(
     let child_metadata = executor.get_worker_metadata(&child_worker_id).await?;
     let parent_identity = executor
         .active_agents()
-        .try_get(&OwnedAgentId::new(component.environment_id, &worker_id))
+        .try_get(&worker_id)
         .await
         .expect("parent is cached")
         .get_initial_worker_metadata();
     let child_identity = executor
         .active_agents()
-        .try_get(&OwnedAgentId::new(
-            component.environment_id,
-            &child_worker_id,
-        ))
+        .try_get(&child_worker_id)
         .await
         .expect("child is cached")
         .get_initial_worker_metadata();
@@ -1529,7 +1527,7 @@ async fn agent_env_inheritance(
     );
     assert_eq!(
         child_identity.canonical_key,
-        Some(child_worker_id.agent_id.clone())
+        Some(child_agent_id.to_string())
     );
 
     let mut parent_env_vars = BTreeMap::new();
@@ -1579,59 +1577,43 @@ async fn agent_env_inheritance(
                 SchemaValue::String(worker_id.agent_id.to_string())
             ),
             (
-                "GOLEM_AGENT_TYPE".to_string(),
-                SchemaValue::String("TestAgent".to_string())
+                "GOLEM_AGENT_KEY".to_string(),
+                SchemaValue::String(agent_id.to_string())
             ),
             (
-                "GOLEM_COMPONENT_ID".to_string(),
-                SchemaValue::String(worker_id.component_id.to_string())
+                "GOLEM_AGENT_TYPE".to_string(),
+                SchemaValue::String("TestAgent".to_string())
             ),
             (
                 "GOLEM_COMPONENT_REVISION".to_string(),
                 SchemaValue::String("0".to_string())
             ),
-            (
-                "GOLEM_WORKER_NAME".to_string(),
-                SchemaValue::String(worker_id.agent_id.to_string())
-            ),
         ]
     );
+    // An agent created by RPC does not inherit its caller's environment: the child sees only
+    // the component's environment of its own type, which is empty here, and its own identity.
     assert_eq!(
         child_env_vars.into_iter().collect::<Vec<_>>(),
         vec![
-            ("ENV1".to_string(), SchemaValue::String("1".to_string())),
-            ("ENV2".to_string(), SchemaValue::String("22".to_string())),
-            ("ENV3".to_string(), SchemaValue::String("33".to_string())),
             (
                 "GOLEM_AGENT_ID".to_string(),
                 SchemaValue::String(child_worker_id.agent_id.to_string())
+            ),
+            (
+                "GOLEM_AGENT_KEY".to_string(),
+                SchemaValue::String(child_agent_id.to_string())
             ),
             (
                 "GOLEM_AGENT_TYPE".to_string(),
                 SchemaValue::String("ChildAgent".to_string())
             ),
             (
-                "GOLEM_COMPONENT_ID".to_string(),
-                SchemaValue::String(child_worker_id.component_id.to_string())
-            ),
-            (
                 "GOLEM_COMPONENT_REVISION".to_string(),
                 SchemaValue::String("0".to_string())
             ),
-            (
-                "GOLEM_WORKER_NAME".to_string(),
-                SchemaValue::String(child_worker_id.agent_id.to_string())
-            ),
         ]
     );
-    assert_eq!(
-        child_metadata.env,
-        HashMap::from_iter(vec![
-            ("ENV1".to_string(), "1".to_string()),
-            ("ENV2".to_string(), "22".to_string()),
-            ("ENV3".to_string(), "33".to_string()),
-        ])
-    );
+    assert_eq!(child_metadata.env, HashMap::new());
 
     Ok(())
 }
@@ -1656,8 +1638,8 @@ async fn ephemeral_agent_works(
         .store()
         .await?;
 
-    let agent_id1 = agent_id!("EphemeralEchoAgent", "param1");
-    let agent_id2 = agent_id!("EphemeralEchoAgent", "param2");
+    let agent_id1 = agent_key!("EphemeralEchoAgent", "param1");
+    let agent_id2 = agent_key!("EphemeralEchoAgent", "param2");
     let idempotency_key = IdempotencyKey::fresh();
     let result1 = executor
         .invoke_and_await_agent_with_key(
@@ -1755,7 +1737,7 @@ async fn ephemeral_agent_rejects_start_when_monthly_memory_is_exhausted(
     let error = executor
         .invoke_and_await_agent(
             &component,
-            &agent_id!("EphemeralCounter", "monthly-memory-exhausted"),
+            &agent_key!("EphemeralCounter", "monthly-memory-exhausted"),
             "increment",
             data_value!(),
         )
@@ -1788,7 +1770,7 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
         )
         .store()
         .await?;
-    let logical_agent_id = agent_id!("EphemeralEchoAgent", "immediate-schedule-retry");
+    let logical_agent_id = agent_key!("EphemeralEchoAgent", "immediate-schedule-retry");
     let idempotency_key = IdempotencyKey::fresh();
 
     let initial_result = executor
@@ -1807,15 +1789,19 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
         executor.auth_ctx().idempotency_scope(),
         Some(&idempotency_key),
     );
-    let final_agent_id = logical_agent_id
-        .with_ephemeral_invocation_phantom(&request_key.owner_key("changeAndGet"))
-        .map_err(anyhow::Error::msg)?;
-    let worker_id =
-        AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
+    let worker_id = ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &logical_agent_id,
+        &idempotency_key,
+        "changeAndGet",
+    );
 
     executor
         .invoke_agent_session(InvocationStart {
-            agent_id: Some(worker_id.into()),
+            target: Some(id_target(&worker_id)),
+            constructor: Some(proto_agent_key(&logical_agent_id)?),
+            component_id: Some(component.id.into()),
             method_name: Some("changeAndGet".to_string()),
             input: Some(
                 SchemaValue::Record { fields: vec![] }
@@ -1867,15 +1853,19 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
         .store()
         .await?;
     let idempotency_key = IdempotencyKey::fresh();
-    let final_agent_id = agent_id!("EphemeralEchoAgent", "unknown-lookup")
-        .with_ephemeral_invocation_phantom(&idempotency_key)
-        .map_err(anyhow::Error::msg)?;
-    let worker_id =
-        AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
+    let worker_id = ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &agent_key!("EphemeralEchoAgent", "unknown-lookup"),
+        &idempotency_key,
+        "changeAndGet",
+    );
 
     executor
         .invoke_agent_session(InvocationStart {
-            agent_id: Some(worker_id.clone().into()),
+            target: Some(id_target(&worker_id)),
+            constructor: None,
+            component_id: Some(component.id.into()),
             method_name: None,
             input: None,
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
@@ -1928,15 +1918,20 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
         executor.auth_ctx().idempotency_scope(),
         Some(&idempotency_key),
     );
-    let final_agent_id = agent_id!("EphemeralEchoAgent", "scheduled-revision")
-        .with_ephemeral_invocation_phantom(&request_key.owner_key("changeAndGet"))
-        .map_err(anyhow::Error::msg)?;
-    let worker_id =
-        AgentId::from_agent_id(component.id, &final_agent_id).map_err(anyhow::Error::msg)?;
+    let logical_agent_id = agent_key!("EphemeralEchoAgent", "scheduled-revision");
+    let worker_id = ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &logical_agent_id,
+        &idempotency_key,
+        "changeAndGet",
+    );
 
     executor
         .invoke_agent_session(InvocationStart {
-            agent_id: Some(worker_id.clone().into()),
+            target: Some(id_target(&worker_id)),
+            constructor: Some(proto_agent_key(&logical_agent_id)?),
+            component_id: Some(component.id.into()),
             method_name: Some("changeAndGet".to_string()),
             input: Some(
                 SchemaValue::Record { fields: vec![] }
@@ -2005,7 +2000,7 @@ async fn create_oplog_entry_persists_durable_agent_mode(
         )
         .store()
         .await?;
-    let agent_id = agent_id!("CounterAgent", "persistence-test");
+    let agent_id = agent_key!("CounterAgent", "persistence-test");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2029,10 +2024,10 @@ async fn create_oplog_entry_persists_durable_agent_mode(
     // The worker remains queryable using its persisted mode.
     executor.check_oplog_is_queryable(&worker_id).await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
-    assert_eq!(metadata.agent_id, worker_id);
+    assert_eq!(metadata.agent_id, worker_id.agent_id);
     let identity = executor
         .active_agents()
-        .try_get(&OwnedAgentId::new(component.environment_id, &worker_id))
+        .try_get(&worker_id)
         .await
         .expect("durable agent is cached")
         .get_initial_worker_metadata();
@@ -2046,33 +2041,30 @@ async fn create_oplog_entry_persists_durable_agent_mode(
     );
     assert_eq!(identity.canonical_key, Some(agent_id.to_string()));
 
-    let phantom_id = golem_common::phantom_agent_id!(
-        "CounterAgent",
-        uuid::Uuid::new_v4(),
-        "phantom-persistence"
-    );
-    let phantom_worker_id = executor.start_agent(&component.id, phantom_id).await?;
-    let phantom_worker = executor
+    let unkeyed_worker_id = create_unkeyed_agent(
+        &executor,
+        &component,
+        &agent_key!("CounterAgent", "unkeyed-persistence"),
+    )
+    .await?;
+    let unkeyed_worker = executor
         .active_agents()
-        .try_get(&OwnedAgentId::new(
-            component.environment_id,
-            &phantom_worker_id,
-        ))
+        .try_get(&unkeyed_worker_id)
         .await
-        .expect("explicitly created durable phantom agent is cached");
-    let phantom_metadata = phantom_worker.get_initial_worker_metadata();
-    assert_eq!(phantom_metadata.component_id, component.id);
-    assert_eq!(phantom_metadata.agent_type_name, identity.agent_type_name);
-    assert_eq!(phantom_metadata.agent_mode, AgentMode::Durable);
-    assert_eq!(phantom_metadata.canonical_key, None);
-    let phantom_oplog = golem_worker_executor::services::HasOplog::oplog(phantom_worker.as_ref());
+        .expect("explicitly created durable agent without a key is cached");
+    let unkeyed_metadata = unkeyed_worker.get_initial_worker_metadata();
+    assert_eq!(unkeyed_metadata.component_id, component.id);
+    assert_eq!(unkeyed_metadata.agent_type_name, identity.agent_type_name);
+    assert_eq!(unkeyed_metadata.agent_mode, AgentMode::Durable);
+    assert_eq!(unkeyed_metadata.canonical_key, None);
+    let unkeyed_oplog = golem_worker_executor::services::HasOplog::oplog(unkeyed_worker.as_ref());
     let golem_common::model::oplog::OplogEntry::Create { parameters, .. } =
-        phantom_oplog.read(OplogIndex::INITIAL).await?
+        unkeyed_oplog.read(OplogIndex::INITIAL).await?
     else {
         panic!("expected stored Create");
     };
     assert_eq!(parameters.component_id, component.id);
-    assert_eq!(parameters.agent_type_name, phantom_metadata.agent_type_name);
+    assert_eq!(parameters.agent_type_name, unkeyed_metadata.agent_type_name);
     assert_eq!(parameters.canonical_key, None);
 
     Ok(())
@@ -2099,17 +2091,20 @@ async fn create_oplog_entry_persists_ephemeral_agent_mode(
         )
         .store()
         .await?;
-    let logical_agent_id = agent_id!("EphemeralEchoAgent", "persistence-test");
+    let agent_id = agent_key!("EphemeralEchoAgent", "persistence-test");
     let idempotency_key = IdempotencyKey::fresh();
-    let agent_id = logical_agent_id
-        .with_ephemeral_invocation_phantom(&idempotency_key)
-        .map_err(anyhow::Error::msg)?;
-    let worker_id = AgentId::from_agent_id(component.id, &agent_id).map_err(anyhow::Error::msg)?;
+    let worker_id = ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &agent_id,
+        &idempotency_key,
+        "changeAndGet",
+    );
 
     // Trigger an invocation so the worker has actually been instantiated and Create persisted.
     let identity_executor = executor.clone();
     let component_id = component.id;
-    let identity_checked = executor.probe_next_primary_context(&worker_id, move |ctx| {
+    let identity_checked = executor.probe_next_primary_context(&worker_id.agent_id, move |ctx| {
         Box::pin(async move {
             let identity = identity_executor
                 .active_agents()
@@ -2171,11 +2166,13 @@ async fn explicit_structural_ephemeral_creation_has_no_canonical_key(
         )
         .store()
         .await?;
-    let agent_id = agent_id!("EphemeralEchoAgent", "explicit-creation");
-    let worker_id = executor.start_agent(&component.id, agent_id).await?;
+    let agent_id = agent_key!("EphemeralEchoAgent", "explicit-creation");
+    let worker_id = executor
+        .create_unkeyed_agent(&component.id, None, agent_id, HashMap::new())
+        .await?;
     let worker = executor
         .active_agents()
-        .try_get(&OwnedAgentId::new(component.environment_id, &worker_id))
+        .try_get(&worker_id)
         .await
         .expect("explicitly created ephemeral agent is cached");
     let metadata = worker.get_initial_worker_metadata();
@@ -2209,13 +2206,13 @@ async fn reverted_inactive_ephemeral_agent_stays_inactive(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let logical_agent_id = agent_id!("EphemeralCounter", "reverted-inactive");
+    let logical_agent_id = agent_key!("EphemeralCounter", "reverted-inactive");
 
     let result = executor
         .invoke_and_await_agent(&component, &logical_agent_id, "increment", data_value!())
         .await?;
     let final_agent_id = result.agent_id().clone();
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &final_agent_id);
+    let owned_agent_id = final_agent_id.clone();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while executor.worker_is_cached(&owned_agent_id).await {
             tokio::task::yield_now().await;
@@ -2273,14 +2270,14 @@ async fn archived_ephemeral_agent_remains_observable_and_can_be_deleted(
         )
         .store()
         .await?;
-    let logical_agent_id = agent_id!("EphemeralEchoAgent", "archived-delete");
+    let logical_agent_id = agent_key!("EphemeralEchoAgent", "archived-delete");
 
     let result = executor
         .invoke_and_await_agent(&component, &logical_agent_id, "changeAndGet", data_value!())
         .await?;
     let final_agent_id = result.agent_id().clone();
     assert_eq!(result.into_typed::<String>()?, "archived-delete!");
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &final_agent_id);
+    let owned_agent_id = final_agent_id.clone();
 
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while executor.worker_is_cached(&owned_agent_id).await {
@@ -2290,7 +2287,7 @@ async fn archived_ephemeral_agent_remains_observable_and_can_be_deleted(
     .await?;
 
     let metadata = executor.get_worker_metadata(&final_agent_id).await?;
-    assert_eq!(metadata.agent_id, final_agent_id);
+    assert_eq!(metadata.agent_id, final_agent_id.agent_id);
     assert!(
         !executor
             .get_oplog(&final_agent_id, OplogIndex::INITIAL)
@@ -2316,7 +2313,6 @@ async fn ephemeral_agent_fails_terminally_instead_of_restarting_after_live_metho
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::model::AgentStatus;
-    use golem_common::model::oplog::PublicAgentInvocation;
     use golem_worker_executor_test_utils::{TestExecutorOverrides, start_with_overrides};
     use std::sync::Arc;
     use std::time::Duration;
@@ -2344,11 +2340,11 @@ async fn ephemeral_agent_fails_terminally_instead_of_restarting_after_live_metho
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let blocker_agent = agent_id!("Counter", "ephemeral-restart-blocker");
+    let blocker_agent = agent_key!("Counter", "ephemeral-restart-blocker");
     let blocker_worker = executor
         .start_agent(&component.id, blocker_agent.clone())
         .await?;
-    let blocker_owned = OwnedAgentId::new(context.default_environment_id, &blocker_worker);
+    let blocker_owned = blocker_worker.clone();
     executor
         .wait_for_status(&blocker_worker, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
@@ -2373,7 +2369,7 @@ async fn ephemeral_agent_fails_terminally_instead_of_restarting_after_live_metho
         )
         .await?;
 
-    let ephemeral_agent = agent_id!("EphemeralCounter", "ephemeral-restart-growing");
+    let ephemeral_agent = agent_key!("EphemeralCounter", "ephemeral-restart-growing");
     let idempotency_key = IdempotencyKey::fresh();
     let result = executor
         .invoke_and_await_agent_with_key(
@@ -2387,20 +2383,14 @@ async fn ephemeral_agent_fails_terminally_instead_of_restarting_after_live_metho
     let error = result.expect_err("the accepted invocation must fail terminally");
     assert!(error.to_string().contains("Out of memory"), "{error:#}");
 
-    let worker = AgentId::from_agent_id(
-        component.id,
-        &ephemeral_agent
-            .with_ephemeral_invocation_phantom(
-                &InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&idempotency_key),
-                )
-                .owner_key("allocate_memory"),
-            )
-            .map_err(anyhow::Error::msg)?,
-    )
-    .map_err(anyhow::Error::msg)?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+    let worker = ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &ephemeral_agent,
+        &idempotency_key,
+        "allocate_memory",
+    );
+    let owned = worker.clone();
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_is_cached(&owned).await {
             tokio::task::yield_now().await;
@@ -2501,22 +2491,10 @@ async fn ephemeral_agent_fails_terminally_when_active_memory_limit_is_lowered(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent = agent_id!("EphemeralCounter", "active-memory-limit");
+    let agent = agent_key!("EphemeralCounter", "active-memory-limit");
     let key = IdempotencyKey::fresh();
-    let worker = AgentId::from_agent_id(
-        component.id,
-        &agent
-            .with_ephemeral_invocation_phantom(
-                &InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&key),
-                )
-                .owner_key(METHOD),
-            )
-            .map_err(anyhow::Error::msg)?,
-    )
-    .map_err(anyhow::Error::msg)?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+    let worker = ephemeral_agent_id(&executor, component.environment_id, &agent, &key, METHOD);
+    let owned = worker.clone();
     let invocation = executor.invoke_and_await_agent_with_key(
         &component,
         &agent,
@@ -2562,7 +2540,8 @@ async fn ephemeral_agent_fails_terminally_when_active_memory_limit_is_lowered(
     );
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_is_cached(&owned).await
-            || crate::oplog_sweep::ephemeral_layer_rows(deps, &context, &worker).await? != 0
+            || crate::oplog_sweep::ephemeral_layer_rows(deps, &context, &worker.agent_id).await?
+                != 0
         {
             tokio::task::yield_now().await;
         }
@@ -2641,18 +2620,17 @@ async fn fork_publication_retry_preserves_independent_state_across_restart(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let source = agent_id!("RpcCounter", "fork-retry");
+    let source = agent_key!("RpcCounter", "fork-retry");
     let source_id = executor.start_agent(&component.id, source.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &source, "inc_by", data_value!(5u64))
         .await?;
     let prefix = executor.get_oplog(&source_id, OplogIndex::INITIAL).await?;
     let cut = prefix.last().unwrap().oplog_index;
-    let target = golem_common::phantom_agent_id!("RpcCounter", uuid::Uuid::new_v4(), "fork-retry");
-    let target_id = AgentId::from_agent_id(component.id, &target).map_err(anyhow::Error::msg)?;
+    let target_id = crate::fork::fresh_fork_target(&source_id);
     let source_metadata = executor
         .active_agents()
-        .try_get(&OwnedAgentId::new(component.environment_id, &source_id))
+        .try_get(&source_id)
         .await
         .expect("source is cached")
         .get_initial_worker_metadata();
@@ -2665,26 +2643,29 @@ async fn fork_publication_retry_preserves_independent_state_across_restart(
         Some("RpcCounter")
     );
     assert_eq!(source_metadata.canonical_key, Some(source.to_string()));
-    let error = executor
-        .fork_worker(&source_id, &target.to_string(), cut)
+    let error = crate::fork::fork_worker_to(&executor, &source_id, &target_id, cut)
         .await
         .expect_err("injected lost response");
     assert!(
         error.to_string().contains("lost fork resume response"),
         "{error}"
     );
-    executor
-        .fork_worker(&source_id, &target.to_string(), cut)
-        .await?;
+    crate::fork::fork_worker_to(&executor, &source_id, &target_id, cut).await?;
     executor
         .invoke_and_await_agent(&component, &source, "inc_by", data_value!(11u64))
         .await?;
-    executor
-        .invoke_and_await_agent(&component, &target, "inc_by", data_value!(2u64))
-        .await?;
+    invoke_and_await_agent_by_id(
+        &executor,
+        &component,
+        &target_id,
+        None,
+        "inc_by",
+        data_value!(2u64),
+    )
+    .await?;
     let fork_metadata = executor
         .active_agents()
-        .try_get(&OwnedAgentId::new(component.environment_id, &target_id))
+        .try_get(&target_id)
         .await
         .expect("fork is cached")
         .get_initial_worker_metadata();
@@ -2695,24 +2676,25 @@ async fn fork_publication_retry_preserves_independent_state_across_restart(
     );
     assert_eq!(fork_metadata.canonical_key, None);
     // Retrying after the target has run must not overwrite it with the old prefix.
-    executor
-        .fork_worker(&source_id, &target.to_string(), cut)
-        .await?;
+    crate::fork::fork_worker_to(&executor, &source_id, &target_id, cut).await?;
     assert!(
-        executor
-            .fork_worker(&source_id, &target.to_string(), cut.previous())
+        crate::fork::fork_worker_to(&executor, &source_id, &target_id, cut.previous())
             .await
             .is_err()
     );
     drop(executor);
     let executor = crate::fork::start_with_local_resume(deps, &context, false).await?;
-    executor
-        .fork_worker(&source_id, &target.to_string(), cut)
-        .await?;
-    let actual = executor
-        .invoke_and_await_agent(&component, &target, "get_value", data_value!())
-        .await?
-        .into_typed::<u64>()?;
+    crate::fork::fork_worker_to(&executor, &source_id, &target_id, cut).await?;
+    let actual = invoke_and_await_agent_by_id(
+        &executor,
+        &component,
+        &target_id,
+        None,
+        "get_value",
+        data_value!(),
+    )
+    .await?
+    .into_typed::<u64>()?;
     assert_eq!(actual, 7);
     let actual = executor
         .invoke_and_await_agent(&component, &source, "get_value", data_value!())
@@ -2722,7 +2704,7 @@ async fn fork_publication_retry_preserves_independent_state_across_restart(
     for (id, expected) in [(&source_id, &source_metadata), (&target_id, &fork_metadata)] {
         let reloaded = executor
             .active_agents()
-            .try_get(&OwnedAgentId::new(component.environment_id, id))
+            .try_get(id)
             .await
             .expect("restarted agent is cached")
             .get_initial_worker_metadata();
@@ -2781,8 +2763,11 @@ async fn pending_payload_reuse_preserves_counter_effects_across_restart_and_repl
             .component_dep(&context.default_environment_id, agent_rpc_rust)
             .store()
             .await?;
-        let agent = agent_id!("RpcCounter", format!("payload-reuse-{max_payload_size}"));
-        let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+        let agent = agent_key!("RpcCounter", format!("payload-reuse-{max_payload_size}"));
+        let worker_id = executor
+            .start_agent(&component.id, agent.clone())
+            .await?
+            .agent_id;
         assert_eq!(
             executor
                 .invoke_and_await_agent(&component, &agent, "get_value", data_value!())
@@ -2995,7 +2980,7 @@ async fn pending_payload_reuse_keeps_manual_snapshot_update_distinct_from_method
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent = agent_id!("SnapshotUpdateTest");
+    let agent = agent_key!("SnapshotUpdateTest");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     let key = IdempotencyKey::fresh();
     assert_eq!(
@@ -3064,14 +3049,16 @@ async fn pending_payload_reuse_keeps_manual_snapshot_update_distinct_from_method
 fn counter_invocation(
     component: &golem_common::model::component::ComponentDto,
     executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode,
     schedule_at: Option<prost_types::Timestamp>,
     expected_fingerprint: Option<golem_common::model::AgentFingerprint>,
 ) -> anyhow::Result<InvocationStart> {
     let lookup = mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup;
     Ok(InvocationStart {
-        agent_id: Some(worker_id.clone().into()),
+        target: Some(id_target(worker_id)),
+        constructor: None,
+        component_id: Some(component.id.into()),
         method_name: (!lookup).then(|| "increment".to_string()),
         input: if lookup {
             None
@@ -3107,7 +3094,7 @@ fn counter_invocation(
 async fn assert_every_mode_refuses_fingerprint(
     component: &golem_common::model::component::ComponentDto,
     executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     expected_fingerprint: golem_common::model::AgentFingerprint,
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::worker::AgentInvocationMode;
@@ -3157,7 +3144,7 @@ async fn expected_fingerprint_admits_only_the_named_incarnation(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent = agent_id!("Counter", "expected-fingerprint");
+    let agent = agent_key!("Counter", "expected-fingerprint");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     let first = executor.get_worker_metadata(&worker_id).await?.fingerprint;
 
@@ -3215,5 +3202,368 @@ async fn expected_fingerprint_admits_only_the_named_incarnation(
         1,
         "no refused call ran on the new incarnation"
     );
+    Ok(())
+}
+
+/// The proto form of the agent key of `key`.
+pub(crate) fn proto_agent_key(
+    key: &ParsedAgentKey,
+) -> anyhow::Result<golem_api_grpc::proto::golem::worker::AgentKey> {
+    AgentKey::new(key.agent_type.clone(), key.parameters.clone())?
+        .try_into()
+        .map_err(anyhow::Error::msg)
+}
+
+/// An invocation target that reaches the agent with this ID.
+pub(crate) fn id_target(
+    agent_id: &OwnedAgentId,
+) -> golem_api_grpc::proto::golem::worker::AgentTarget {
+    golem_api_grpc::proto::golem::worker::AgentTarget {
+        target: Some(
+            golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
+                agent_id.agent_id.into(),
+            ),
+        ),
+    }
+}
+
+/// An invocation target that upserts the keyed agent of `key`.
+pub(crate) fn key_target(
+    key: &ParsedAgentKey,
+) -> anyhow::Result<golem_api_grpc::proto::golem::worker::AgentTarget> {
+    Ok(golem_api_grpc::proto::golem::worker::AgentTarget {
+        target: Some(
+            golem_api_grpc::proto::golem::worker::agent_target::Target::Key(proto_agent_key(key)?),
+        ),
+    })
+}
+
+/// The ID of the keyed agent of `key` in `environment_id`.
+pub(crate) fn keyed_agent_id(environment_id: EnvironmentId, key: &ParsedAgentKey) -> OwnedAgentId {
+    let agent_key = AgentKey::new(key.agent_type.clone(), key.parameters.clone())
+        .expect("a test agent key has canonical parameters");
+    OwnedAgentId::new(
+        environment_id,
+        &AgentId::keyed(
+            environment_id,
+            local_type_id(environment_id, &key.agent_type),
+            &agent_key,
+        ),
+    )
+}
+
+/// The ID of the instance that runs the test DSL's ephemeral invocation of `method` on `key`
+/// under `idempotency_key`.
+pub(crate) fn ephemeral_agent_id(
+    executor: &TestWorkerExecutor,
+    environment_id: EnvironmentId,
+    key: &ParsedAgentKey,
+    idempotency_key: &IdempotencyKey,
+    method: &str,
+) -> OwnedAgentId {
+    let owner_key = InvocationRequestKey::external(
+        executor.auth_ctx().idempotency_scope(),
+        Some(idempotency_key),
+    )
+    .owner_key(method);
+    OwnedAgentId::new(
+        environment_id,
+        &AgentId::ephemeral_invocation(
+            environment_id,
+            local_type_id(environment_id, &key.agent_type),
+            &owner_key,
+        ),
+    )
+}
+
+/// Creates an agent of the type and constructor parameters of `key` without a key, at a fresh
+/// ID, and returns its ID.
+pub(crate) async fn create_unkeyed_agent(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    key: &ParsedAgentKey,
+) -> anyhow::Result<OwnedAgentId> {
+    let agent_id = OwnedAgentId::new(
+        component.environment_id,
+        &AgentId::random(local_type_id(component.environment_id, &key.agent_type)),
+    );
+    create_unkeyed_agent_at(executor, component, key, &agent_id).await?;
+    Ok(agent_id)
+}
+
+/// Creates an agent of the type and constructor parameters of `key` without a key at
+/// `agent_id`, such as the instance of an ephemeral invocation before the invocation reaches
+/// it. An existing agent at `agent_id` is kept.
+pub(crate) async fn create_unkeyed_agent_at(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    key: &ParsedAgentKey,
+    agent_id: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    let response = executor
+        .client
+        .clone()
+        .create_worker(CreateWorkerRequest {
+            constructor: Some(proto_agent_key(key)?),
+            unkeyed_id: Some(agent_id.agent_id.into()),
+            component_id: Some(component.id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            ignore_already_existing: true,
+            auth_ctx: Some(executor.auth_ctx().into()),
+            ..Default::default()
+        })
+        .await?
+        .into_inner();
+    match response.result {
+        Some(create_worker_response::Result::Success(_)) => Ok(()),
+        other => Err(anyhow::anyhow!(
+            "Creating {key} without a key failed: {other:?}"
+        )),
+    }
+}
+
+/// Invokes `method` on the agent with ID `agent_id` and awaits its result.
+pub(crate) async fn invoke_and_await_agent_by_id(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_id: &OwnedAgentId,
+    idempotency_key: Option<&IdempotencyKey>,
+    method: &str,
+    params: TypedSchemaValue,
+) -> anyhow::Result<AgentResult> {
+    let (_, input) = params.into_parts();
+    let result = executor
+        .invoke_agent_session(InvocationStart {
+            target: Some(id_target(agent_id)),
+            constructor: None,
+            component_id: Some(component.id.into()),
+            method_name: Some(method.to_string()),
+            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            schedule_at: None,
+            idempotency_key: idempotency_key.cloned().map(Into::into),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(agent_id.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            context: None,
+            caller: Some(callers::anonymous().into()),
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            config: Vec::new(),
+            attempt_id: None,
+            expected_callee_fingerprint: None,
+            durable_input_mappings: Vec::new(),
+            scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
+            request_key: Some(
+                InvocationRequestKey::external(
+                    executor.auth_ctx().idempotency_scope(),
+                    idempotency_key,
+                )
+                .into(),
+            ),
+        })
+        .await?;
+    let value = match result.result {
+        Some(
+            golem_api_grpc::proto::golem::worker::invocation_session_result::Result::MethodResult(
+                value,
+            ),
+        ) => Some(SchemaValue::try_from(value).map_err(anyhow::Error::msg)?),
+        _ => None,
+    };
+    Ok(AgentResult::new(value, agent_id.clone()))
+}
+
+/// The target and constructor with which the test DSL invokes `method` on `key` under
+/// `idempotency_key`: an ephemeral invocation reaches its own instance by ID and creates it from
+/// `key`, and a durable one upserts the keyed agent.
+pub(crate) fn invocation_target(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    key: &ParsedAgentKey,
+    idempotency_key: &IdempotencyKey,
+    method: &str,
+) -> anyhow::Result<(
+    golem_api_grpc::proto::golem::worker::AgentTarget,
+    Option<golem_api_grpc::proto::golem::worker::AgentKey>,
+)> {
+    let ephemeral = component.metadata.agent_types.iter().any(|agent| {
+        agent.declaration.type_name == key.agent_type
+            && agent.declaration.mode == AgentMode::Ephemeral
+    });
+    if ephemeral {
+        let agent_id = ephemeral_agent_id(
+            executor,
+            component.environment_id,
+            key,
+            idempotency_key,
+            method,
+        );
+        Ok((id_target(&agent_id), Some(proto_agent_key(key)?)))
+    } else {
+        Ok((key_target(key)?, None))
+    }
+}
+
+/// The agent ID that an invocation start with an ID target reaches.
+pub(crate) fn start_target_id(
+    start: &InvocationStart,
+) -> Option<golem_api_grpc::proto::golem::worker::AgentId> {
+    match start.target.as_ref()?.target.as_ref()? {
+        golem_api_grpc::proto::golem::worker::agent_target::Target::Id(id) => Some(*id),
+        golem_api_grpc::proto::golem::worker::agent_target::Target::Key(_) => None,
+    }
+}
+
+/// When the ID that a key derives already holds an agent of another key, the key collides: an
+/// invocation by the key and a guest's `upsert` of it fail, and neither reaches that agent.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn a_key_whose_id_holds_an_agent_of_another_key_collides(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let owner = executor
+        .start_agent(&component.id, agent_key!("GolemHostApi", "collision-owner"))
+        .await?;
+    let caller = agent_key!("GolemHostApi", "collision-caller");
+    executor.start_agent(&component.id, caller.clone()).await?;
+    let requested = agent_key!("GolemHostApi", "collision-requested");
+    let collided = keyed_agent_id(context.default_environment_id, &requested);
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    copy_create_entry_to(deps, &context, &owner, &collided).await?;
+
+    let executor = start(deps, &context).await?;
+    let error = executor
+        .invoke_and_await_agent(&component, &requested, "get_self_uri", data_value!())
+        .await
+        .expect_err("an invocation by a colliding key must fail");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains(&format!(
+            "Agent {} has another key than the requested",
+            collided.agent_id
+        )),
+        "{error}"
+    );
+    let upserted = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller,
+            "outbound_agent_rpc_invoke_and_await_result",
+            data_value!("GolemHostApi", "collision-requested", "get_self_uri"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    let error = upserted.expect_err("a guest upsert of a colliding key must fail");
+    assert!(
+        error.contains("has another key than the requested"),
+        "{error}"
+    );
+    let oplog = executor.get_oplog(&collided, OplogIndex::INITIAL).await?;
+    let method_invocations = oplog
+        .iter()
+        .filter(|entry| match &entry.entry {
+            PublicOplogEntry::PendingAgentInvocation(params) => matches!(
+                params.invocation,
+                PublicAgentInvocation::AgentMethodInvocation(_)
+            ),
+            PublicOplogEntry::AgentInvocationStarted(params) => matches!(
+                params.invocation,
+                PublicAgentInvocation::AgentMethodInvocation(_)
+            ),
+            _ => false,
+        })
+        .count();
+    assert_eq!(
+        method_invocations, 0,
+        "no colliding request reaches the agent at the colliding ID: {oplog:#?}"
+    );
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn a_key_collision_hides_the_other_agents_constructor_failure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentStatus;
+    use golem_worker_executor::services::UsesAllDeps;
+    use std::time::Duration;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let owner = agent_key!("RustMethodFailure", "fail-constructor");
+    let owner_id = keyed_agent_id(component.environment_id, &owner);
+    let error = executor
+        .start_agent(&component.id, owner.clone())
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("constructor gave up"));
+    executor
+        .wait_for_status(&owner_id, AgentStatus::Failed, Duration::from_secs(10))
+        .await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let requested = agent_key!("RustMethodFailure", "collision-requested");
+    let collided = keyed_agent_id(component.environment_id, &requested);
+    golem_worker_executor_test_utils::copy_agent_oplog_to(deps, &context, &owner_id, &collided)
+        .await?;
+
+    let executor = start(deps, &context).await?;
+    let before = executor.stored_oplog(&collided.agent_id).await;
+    for resident in [false, true] {
+        if resident {
+            let healthy = executor
+                .start_agent(&component.id, agent_key!("RustMethodFailure", "healthy"))
+                .await?;
+            let worker = executor.active_agent(&healthy).await.unwrap().primary();
+            golem_worker_executor::worker::Worker::get_exact_existing_suspended(
+                worker.all(),
+                &collided,
+                callers::anonymous(),
+            )
+            .await?;
+        }
+        let error = executor
+            .invoke_and_await_agent(&component, &requested, "increment", data_value!())
+            .await
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("has another key than the requested"),
+            "resident={resident}: {error}"
+        );
+        assert!(!error.contains("constructor gave up"), "{error}");
+        assert_eq!(executor.stored_oplog(&collided.agent_id).await, before);
+    }
+    let error = executor
+        .invoke_and_await_agent(&component, &owner, "increment", data_value!())
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("constructor gave up"));
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     Ok(())
 }

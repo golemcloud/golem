@@ -20,7 +20,6 @@ use super::{
 };
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
-use crate::base_model::component::ComponentId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
 use crate::base_model::{AgentFingerprint, AgentId, Timestamp};
@@ -49,10 +48,7 @@ pub fn account_principal() -> Principal {
 pub fn agent_principal() -> Principal {
     Principal::Agent(AgentPrincipal::of_agent(
         ISSUER.to_string(),
-        AgentId {
-            component_id: ComponentId(Uuid::from_u128(0xc0)),
-            agent_id: "Relay(\"r\")".to_string(),
-        },
+        AgentId::from_parts(7, 0xc0),
         AgentFingerprint(Uuid::from_u128(0xf1)),
         AgentTypeName("Relay".to_string()),
         EnvironmentId(Uuid::from_u128(0xe0)),

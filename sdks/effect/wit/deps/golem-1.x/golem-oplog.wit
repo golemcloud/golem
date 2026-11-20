@@ -96,6 +96,8 @@ interface oplog {
     record create-parameters {
         timestamp: datetime,
         agent-id: agent-id,
+        /// The name of the agent's type. Owners without an agent type have none.
+        agent-type-name: option<string>,
         owner-kind: owner-kind,
         agent-mode: agent-mode,
         component-revision: component-revision,
@@ -107,8 +109,10 @@ interface oplog {
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<plugin-installation-description>,
         local-agent-config: list<local-agent-config-entry>,
-        original-phantom-id: option<uuid>,
-        instance-id: uuid
+        instance-id: uuid,
+        /// Whether the agent is a never-live sandbox. A marked agent reports the
+        /// `sandboxed` status.
+        never-live: bool
     }
 
     enum owner-kind {
@@ -827,6 +831,8 @@ interface oplog {
     record raw-create-parameters {
         timestamp: datetime,
         agent-id: agent-id,
+        /// The name of the agent's type. Owners without an agent type have none.
+        agent-type-name: option<string>,
         owner-kind: owner-kind,
         agent-mode: agent-mode,
         component-revision: component-revision,
@@ -838,8 +844,10 @@ interface oplog {
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<environment-plugin-grant-id>,
         local-agent-config: list<raw-local-agent-config-entry>,
-        original-phantom-id: option<uuid>,
-        instance-id: uuid
+        instance-id: uuid,
+        /// Whether the agent is a never-live sandbox. A marked agent reports the
+        /// `sandboxed` status.
+        never-live: bool
     }
 
     record raw-start-parameters {

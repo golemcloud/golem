@@ -2,6 +2,7 @@
  * Host-shaped callers for tests: the values `golem:agent/invocation-context.caller` reports.
  */
 import type * as AgentCommon from "golem:agent/common@2.0.0"
+import { hostAgentIdFor } from "./invocation-metadata.js"
 
 export const issuer = "https://example.test"
 
@@ -34,7 +35,7 @@ export const agentPrincipal = (name: string = "caller-agent"): AgentCommon.Princ
   tag: "agent",
   val: {
     pair: { issuer: "golem", subject: `agent:${name}` },
-    agentId: { componentId: { uuid: uuid(2n) }, agentId: name },
+    agentId: hostAgentIdFor(name),
     agentType: "CallerAgent",
     environmentId: { uuid: uuid(3n) },
   },

@@ -123,6 +123,10 @@ async fn write(conn: &mut TcpStream, data: &[u8]) -> Result<()> {
 
 async fn upgrade(mut conn: TcpStream) -> Result<TcpStream> {
     let request = request(&mut conn).await?;
+    assert!(
+        request.starts_with("GET /v1/runtime/envs/env-id/invoke-agent-session "),
+        "{request}"
+    );
     let key = request
         .lines()
         .filter_map(|line| line.split_once(": "))
@@ -189,7 +193,7 @@ async fn accepted(
     session: &str,
     mappings: Value,
 ) -> Result<()> {
-    send(conn, json!({"type":"invocationAccepted", "agentId":{"componentId":"component", "agentId":"accepted-agent"},
+    send(conn, json!({"type":"invocationAccepted", "agentId":"00000000-0000-8000-8000-000000000abc",
         "attemptId":operation["attemptId"], "idempotencyKey":KEY, "sessionToken":session, "mappings":mappings})).await
 }
 
@@ -722,7 +726,7 @@ async fn recovery_server_unwind_closes_pending_frame_read() {
         conn.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
         conn.set_write_timeout(Some(Duration::from_secs(1)))
             .unwrap();
-        conn.write_all(b"GET / HTTP/1.1\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+        conn.write_all(b"GET /v1/runtime/envs/env-id/invoke-agent-session HTTP/1.1\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
             .unwrap();
         let mut response = Vec::new();
         while !response.ends_with(b"\r\n\r\n") {

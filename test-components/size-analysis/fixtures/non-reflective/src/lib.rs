@@ -1,6 +1,4 @@
-use golem_rust::{
-    agent_definition, agent_implementation, tool_definition, tool_implementation,
-};
+use golem_rust::{agent_definition, agent_implementation, tool_definition, tool_implementation};
 
 #[tool_definition(version = "1.0.0")]
 trait EchoTool {
@@ -31,7 +29,7 @@ impl Caller for CallerImpl {
     }
 
     async fn call(&self, value: String) -> String {
-        EchoClient::get().echo(value).await
+        EchoClient::upsert().echo(value).await
     }
 }
 

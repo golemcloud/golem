@@ -169,43 +169,40 @@ async fn pending_pool_acquire(
     let holder_id = executor
         .start_agent(
             &component.id,
-            agent_id!("WebsocketTest", "monthly-ws-pool-holder"),
+            agent_key!("WebsocketTest", "monthly-ws-pool-holder"),
         )
         .await?;
     let holder = executor
-        .production_active_agent(&OwnedAgentId::new(
-            context.default_environment_id,
-            &holder_id,
-        ))
+        .production_active_agent(&holder_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &holder_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &holder_id.agent_id, OplogIndex::INITIAL).await?;
     let holder_key = IdempotencyKey::fresh();
     let stored_holder_key = executor
-        .external_invocation_key(&holder_id, &holder_key, "connect_and_receive_first")
+        .external_invocation_key(
+            &holder_id.agent_id,
+            &holder_key,
+            "connect_and_receive_first",
+        )
         .await?;
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("WebsocketTest", "monthly-ws-pool-target")
+        agent_key!("WebsocketTest", "monthly-ws-pool-target")
     } else {
-        agent_id!("EphemeralWebsocketTest", "monthly-ws-pool-target")
+        agent_key!("EphemeralWebsocketTest", "monthly-ws-pool-target")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                "connect_and_receive_first",
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        "connect_and_receive_first",
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         holder.all(),
         &owned,
         None,
@@ -214,13 +211,22 @@ async fn pending_pool_acquire(
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            "connect_and_receive_first",
+        ),
     )
     .await?;
     let stored_key = executor
         .external_invocation_key(&id, &key, "connect_and_receive_first")
         .await?;
     let mut peer = Peer::start().await?;
-    let holder_name = agent_id!("WebsocketTest", "monthly-ws-pool-holder");
+    let holder_name = agent_key!("WebsocketTest", "monthly-ws-pool-holder");
     // Start the holder only after fallible target setup; everything after this spawn
     // runs inside the cleanup scope below.
     let mut holder_invocation = tokio::spawn({
@@ -283,7 +289,7 @@ async fn pending_pool_acquire(
         let connect = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 if !starts_named(&entries, CONNECT).is_empty() {
                     let start = connect_start(&entries, 0, 0)?;
                     assert_invocation(&entries, &stored_key, 0)?;
@@ -350,7 +356,7 @@ async fn pending_pool_acquire(
             tokio::pin!(acquire);
             ensure!(futures::poll!(acquire).is_pending(), "STOP: holder lost its slot before explicit eviction");
         }
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(connect_start(&stopped, 0, 0)? == connect);
         assert_invocation(&stopped, &stored_key, 0)?;
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
@@ -377,7 +383,7 @@ async fn pending_pool_acquire(
             target_joined = true;
             ensure!(failed?.is_err());
         }
-        executor.wait_for_status(&id, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
+        executor.wait_for_status(&owned, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
         flush_stopped_usage(&limits, &registry, resource).await?;
         let settled = registry.applied_updates();
         check_accounting(&settled[target_updates_start..], resource, durable, initial.policy_revision + u64::from(resource == Resource::Storage), initial.period)?;
@@ -411,13 +417,13 @@ async fn pending_pool_acquire(
         registry.set_policy(grant);
         applied_refresh(&limits, &registry, context.account_id).await?.await?;
         if durable {
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             let second = peer.handshake().await?;
             ensure!(second.number == 2);
             let repairing = tokio::time::timeout(Duration::from_secs(15), async {
                 loop {
                     executor.commit_oplog(&id).await?;
-                    let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                    let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                     if !starts_named(&entries, RECEIVE).is_empty() {
                         return Ok::<_, anyhow::Error>(entries);
                     }
@@ -432,7 +438,7 @@ async fn pending_pool_acquire(
             target_joined = true;
             let resumed = resumed??;
             ensure!(resumed.into_typed::<String>()? == "recovered");
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(connect_start(&recovered, 1, 1)? == connect);
             assert_settled_history(&recovered)?;
             assert_invocation(&recovered, &stored_key, 1)?;
@@ -455,7 +461,7 @@ async fn pending_pool_acquire(
             let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
             ensure!(noop.into_typed::<String>()? == "ok");
             peer.assert_counts(2, 2)?;
-            let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let replayed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(connect_start(&replayed, 1, 1)? == connect);
             ensure!(count_agent_invocation_pair_since(&replayed, OplogIndex::INITIAL) == (3, 3));
             assert_settled_history(&replayed)?;
@@ -473,7 +479,7 @@ async fn pending_pool_acquire(
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(fresh, response) }).await??;
             ensure!(fresh.into_typed::<String>()? == "fresh");
             peer.assert_counts(3, 3)?;
-            let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (4, 4));
             ensure!(starts_named(&history, CONNECT) == starts_named(&recovered, CONNECT));
             ensure!(starts_named(&history, RECEIVE).len() == 2);
@@ -486,8 +492,8 @@ async fn pending_pool_acquire(
             let retry = tokio::time::timeout(Duration::from_secs(10), executor.invoke_and_await_agent_with_key(&component, &name, &key, "connect_and_receive_first", data_value!(peer.url.clone()))).await?;
             ensure!(retry.is_err(), "failed ephemeral target must not recover");
             peer.assert_counts(1, 1)?;
-            let probe_name = agent_id!("WebsocketTest", "monthly-ws-pool-probe");
-            probe_id = Some(AgentId::from_agent_id(component.id, &probe_name).unwrap());
+            let probe_name = agent_key!("WebsocketTest", "monthly-ws-pool-probe");
+            probe_id = Some(crate::agent::keyed_agent_id(component.environment_id, &probe_name).agent_id);
             let probe_key = IdempotencyKey::fresh();
             let probe = executor.invoke_and_await_agent_with_key(&component, &probe_name, &probe_key, "connect_and_receive_first", data_value!(peer.url.clone()));
             let response = async {
@@ -499,12 +505,12 @@ async fn pending_pool_acquire(
             let (probe, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(probe, response) }).await??;
             ensure!(probe.into_typed::<String>()? == "probe");
             peer.assert_counts(2, 2)?;
-            let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let failed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(connect_start(&failed, 0, 0)? == connect);
             assert_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(!worker.is_loaded().await);
-            executor.wait_for_status(&id, AgentStatus::Failed, Duration::from_secs(10)).await?;
+            executor.wait_for_status(&owned, AgentStatus::Failed, Duration::from_secs(10)).await?;
             info!(?resource, %key, %connect, handshakes = 2, frames = 2, "Ephemeral failure remained terminal; independent Worker used freed slot");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -558,7 +564,7 @@ async fn pending_pool_acquire(
     retire!(
         "target",
         worker,
-        &id,
+        &owned,
         invocation
             .as_ref()
             .is_some_and(|handle| !target_joined && !handle.is_finished())
@@ -566,7 +572,7 @@ async fn pending_pool_acquire(
     if let Some(probe_id) = &probe_id {
         let probe_owned = OwnedAgentId::new(context.default_environment_id, probe_id);
         if let Some(probe) = executor.production_active_agent(&probe_owned).await {
-            retire!("probe", probe.primary(), probe_id, false);
+            retire!("probe", probe.primary(), &probe_owned, false);
         }
     }
     if !holder_joined {

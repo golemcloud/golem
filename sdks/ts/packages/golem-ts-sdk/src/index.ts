@@ -21,7 +21,7 @@ import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0'
 import type { ExtendedCommandBody } from './internal/tool';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { getRawSelfAgentId } from './host/hostapi';
+import { selfAgentTypeName } from './bridge/agent';
 import { AgentInitiator } from './internal/agentInitiator';
 import { encodeMultipart, decodeMultipart, extractBoundary } from './internal/multipart';
 import { normalizeContentType, SnapshotError, validatePartName } from './snapshot';
@@ -54,12 +54,7 @@ export type {
 } from './invocationId';
 export { Datetime } from './datetime';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
-export { ParsedAgentId } from './agentId';
-export type {
-  AgentClientBindOptions,
-  ParsedAgentIdCreateOptions,
-  ParsedAgentIdParts,
-} from './agentId';
+export { AgentId } from './agentId';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
@@ -225,13 +220,14 @@ export type {
   ConfigOverrides,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
-  PhantomClientDetails,
   RemoteAgentError,
+  RemoteAgentIdAccessor,
   RemoteCallErrorCause,
   RemoteCallOptions,
   RemoteClientOptions,
   RemoteClient,
   RemoteClientFactory,
+  RemoteCreateOptions,
 } from './client';
 export {
   golemTool010ToolMiddlewareGuest,
@@ -257,7 +253,11 @@ export {
   getAgentType as getReflectedAgentType,
   getToolType as getReflectedToolType,
 } from './reflection';
-export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
+export type {
+  ReflectedCreateOptions,
+  ReflectedCreateValueOptions,
+  ReflectedInvocation,
+} from './reflection';
 export type { CollectedToolInvocation, StartedToolInvocation } from './bridge/tool';
 export { ToolStreamError } from './internal/tool/startedToolInvocation';
 
@@ -288,7 +288,7 @@ interface SaveSnapshotGuest {
 }
 
 interface LoadSnapshotGuest {
-  load(snapshot: Snapshot): Promise<void>;
+  load(snapshot: Snapshot, constructor: SchemaValueTree): Promise<void>;
 }
 
 async function initialize(agentTypeName: string, input: SchemaValueTree): Promise<void> {
@@ -830,14 +830,20 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
   }
 }
 
-async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promise<void> {
+async function load(
+  snapshot: { payload: Uint8Array; mimeType: string },
+  agentParameters: SchemaValueTree,
+): Promise<void> {
   const bytes = snapshot.payload;
 
   if (initializedAgent) {
     throw `Agent is already initialized in this container`;
   }
 
-  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsedWire();
+  const agentTypeName = selfAgentTypeName();
+  if (agentTypeName === undefined) {
+    throw "GOLEM_AGENT_TYPE is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE";
+  }
   const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
   if (registrationError) {
     // The snapshot WIT interface returns `result<_, string>`, not AgentError.

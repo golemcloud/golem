@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::oplog::fenced_stream::{
-    FencedIndexedStream, StreamLabels, scan_component_streams,
-};
+use crate::services::oplog::fenced_stream::{FencedIndexedStream, StreamLabels, scan_type_streams};
 use crate::services::oplog::multilayer::{
     OplogArchive, OplogArchiveError, OplogArchiveResult, OplogArchiveService,
 };
@@ -28,10 +26,10 @@ use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
-use golem_common::model::environment::EnvironmentId; // used in scan_for_component
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
+use golem_common::model::type_id::TypeId;
+use golem_common::model::{OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
@@ -70,10 +68,9 @@ impl CompressedOplogArchiveService {
 
     /// The level's stream for an agent, asserting no epoch.
     fn stream(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> FencedIndexedStream {
-        let agent_id = owned_agent_id.agent_id();
         FencedIndexedStream::new(
-            agent_id.clone(),
-            CompressedOplogArchive::namespace(agent_id, agent_mode, self.level),
+            owned_agent_id.clone(),
+            CompressedOplogArchive::namespace(owned_agent_id.clone(), agent_mode, self.level),
             LABELS,
             self.indexed_storage.clone(),
             self.retry_config.clone(),
@@ -91,7 +88,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(Arc::new(
             CompressedOplogArchive::opened(
-                owned_agent_id.agent_id(),
+                owned_agent_id.clone(),
                 agent_mode,
                 self.indexed_storage.clone(),
                 self.level,
@@ -143,21 +140,21 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         self.stream(owned_agent_id, agent_mode).exists().await
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         let level = self.level;
-        scan_component_streams(
+        scan_type_streams(
             &self.indexed_storage,
             &self.retry_config,
             LABELS,
             environment_id,
-            component_id,
+            type_id,
             modes,
             cursor,
             count,
@@ -184,7 +181,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
 
 #[derive(Debug)]
 pub struct CompressedOplogArchive {
-    agent_id: AgentId,
+    owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     retry_config: RetryConfig,
@@ -211,21 +208,21 @@ pub struct CompressedOplogArchive {
 impl CompressedOplogArchive {
     /// A handle that asserts no epoch, for reads and for executors without a shard assignment.
     pub fn new(
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         level: usize,
         retry_config: RetryConfig,
     ) -> Self {
         let stream = FencedIndexedStream::new(
-            agent_id.clone(),
-            Self::namespace(agent_id.clone(), agent_mode, level),
+            owned_agent_id.clone(),
+            Self::namespace(owned_agent_id.clone(), agent_mode, level),
             LABELS,
             indexed_storage.clone(),
             retry_config.clone(),
         );
         Self::with_stream(
-            agent_id,
+            owned_agent_id,
             agent_mode,
             indexed_storage,
             level,
@@ -239,7 +236,7 @@ impl CompressedOplogArchive {
     /// write. A newer owner's record refuses the open, and the handle is returned already fenced.
     /// A record that fails for another reason fails the open.
     pub async fn opened(
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         level: usize,
@@ -247,8 +244,8 @@ impl CompressedOplogArchive {
         shard_epoch: Option<ShardEpoch>,
     ) -> OplogArchiveResult<Self> {
         let stream = FencedIndexedStream::opened(
-            agent_id.clone(),
-            Self::namespace(agent_id.clone(), agent_mode, level),
+            owned_agent_id.clone(),
+            Self::namespace(owned_agent_id.clone(), agent_mode, level),
             LABELS,
             indexed_storage.clone(),
             retry_config.clone(),
@@ -259,12 +256,12 @@ impl CompressedOplogArchive {
             OplogArchiveError::of_indexed(
                 &error,
                 format!(
-                    "failed to record the owning epoch of the compressed oplog of {agent_id} at level {level}: {error}"
+                    "failed to record the owning epoch of the compressed oplog of {owned_agent_id} at level {level}: {error}"
                 ),
             )
         })?;
         Ok(Self::with_stream(
-            agent_id,
+            owned_agent_id,
             agent_mode,
             indexed_storage,
             level,
@@ -274,7 +271,7 @@ impl CompressedOplogArchive {
     }
 
     fn with_stream(
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         level: usize,
@@ -282,7 +279,7 @@ impl CompressedOplogArchive {
         stream: FencedIndexedStream,
     ) -> Self {
         Self {
-            agent_id,
+            owned_agent_id,
             agent_mode,
             indexed_storage,
             retry_config,
@@ -293,12 +290,12 @@ impl CompressedOplogArchive {
     }
 
     fn namespace(
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
         level: usize,
     ) -> IndexedStorageNamespace {
         IndexedStorageNamespace::CompressedOpLog {
-            agent_id,
+            owned_agent_id,
             agent_mode,
             level,
         }
@@ -323,7 +320,7 @@ impl CompressedOplogArchive {
                     error.map_details(|error| {
                         format!(
                             "failed to read compressed oplog for worker {} in indexed storage: {error}",
-                            self.agent_id
+                            self.owned_agent_id
                         )
                     }),
                 )
@@ -436,7 +433,7 @@ impl OplogArchive for CompressedOplogArchive {
                 Err(append_error) => {
                     let first_id = sub_chunk.first().unwrap().0;
                     let uncached = Self::new(
-                        self.agent_id.clone(),
+                        self.owned_agent_id.clone(),
                         self.agent_mode,
                         self.indexed_storage.clone(),
                         self.level,
@@ -448,7 +445,7 @@ impl OplogArchive for CompressedOplogArchive {
                         .map_err(|read_error| {
                             OplogError::Maintenance(format!(
                                 "failed to reconcile compressed oplog append for {} after {append_error}: {read_error}",
-                                self.agent_id
+                                self.owned_agent_id
                             ))
                         })?;
                     verify_persisted_entries(
@@ -479,7 +476,7 @@ impl OplogArchive for CompressedOplogArchive {
             return Ok(());
         };
         let uncached = Self::new(
-            self.agent_id.clone(),
+            self.owned_agent_id.clone(),
             self.agent_mode,
             self.indexed_storage.clone(),
             self.level,

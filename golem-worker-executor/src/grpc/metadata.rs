@@ -13,15 +13,16 @@
 // limitations under the License.
 
 use super::{
-    AgentFilter, AgentMetadata, ComponentId, Cursor, EnvironmentId,
-    GetRunningWorkersMetadataRequest, GetWorkersMetadataRequest, HasAll,
-    HasRunningWorkerEnumerationService, HasWorkerEnumerationService, HashMap, Instrument,
-    LastError, OplogErrorKind, ScanCursor, UpdateMode, UsesAllDeps, Worker, WorkerCtx,
-    WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id, golem, info_span,
-    to_protobuf_resource_description,
+    AgentFilter, AgentMetadata, Cursor, EnvironmentId, GetRunningWorkersMetadataRequest,
+    GetWorkersMetadataRequest, HasAll, HasRunningWorkerEnumerationService,
+    HasWorkerEnumerationService, HashMap, Instrument, LastError, OplogErrorKind, ScanCursor,
+    UpdateMode, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
+    extract_owned_agent_id, golem, info_span, to_protobuf_resource_description,
 };
 use crate::model::public_oplog::with_expected_request;
-use crate::services::{HasComponentService, HasOplogService};
+use crate::services::{HasAgentTypesService, HasComponentService, HasOplogService};
+use golem_common::model::agent::{AgentKey, ParsedAgentKey};
+use golem_common::model::type_id::TypeId;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -32,7 +33,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<golem::worker::AgentMetadata, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
-        let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
@@ -53,20 +53,84 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Self::create_proto_metadata(metadata, last_error_and_retry_count)
     }
 
+    /// Resolves a key to the current agent that owns it. It never creates an agent. An agent at
+    /// the ID that the key derives with another key is a collision, not an absent agent, so a
+    /// caller never mistakes it for a free key.
+    pub(super) async fn lookup_agent_internal(
+        &self,
+        request: golem::workerexecutor::v1::LookupAgentRequest,
+    ) -> Result<Option<golem::workerexecutor::v1::LookedUpAgent>, WorkerExecutorError> {
+        Self::validate_auth_ctx(&request.auth_ctx)?;
+        let environment_id: EnvironmentId = request
+            .environment_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "environment_id not found",
+            ))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let component_id = request
+            .component_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "component_id not found",
+            ))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let key: ParsedAgentKey = AgentKey::try_from(
+            request
+                .key
+                .ok_or(WorkerExecutorError::invalid_request("key not found"))?,
+        )
+        .map_err(WorkerExecutorError::invalid_request)?
+        .into();
+        let resolved = crate::worker::target::resolve_key(
+            self.component_service().as_ref(),
+            self.agent_types().as_ref(),
+            environment_id,
+            component_id,
+            key,
+        )
+        .await?;
+        let owned_agent_id = resolved.owned_agent_id;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+
+        let Some(metadata) = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await?
+        else {
+            return Ok(None);
+        };
+        let requested_key = resolved
+            .new_owner
+            .as_ref()
+            .and_then(|owner| owner.canonical_key(metadata.agent_mode));
+        if metadata.canonical_key != requested_key {
+            return Err(WorkerExecutorError::AgentKeyCollision {
+                agent_id: owned_agent_id.agent_id,
+                requested_key: requested_key.unwrap_or_default(),
+            });
+        }
+        Ok(Some(golem::workerexecutor::v1::LookedUpAgent {
+            agent_id: Some(owned_agent_id.agent_id.into()),
+            agent_fingerprint: Some(metadata.fingerprint.0.into()),
+        }))
+    }
+
     pub(super) async fn get_running_workers_metadata_internal(
         &self,
         request: GetRunningWorkersMetadataRequest,
     ) -> Result<Vec<golem::worker::AgentMetadata>, WorkerExecutorError> {
-        let component_id: ComponentId = request
-            .component_id
+        let type_id = TypeId::try_from(request.type_id)
+            .map_err(|_| WorkerExecutorError::invalid_request("Invalid type id"))?;
+        let environment_id: EnvironmentId = request
+            .environment_id
             .and_then(|t| t.try_into().ok())
-            .ok_or(WorkerExecutorError::invalid_request("Invalid component id"))?;
+            .ok_or(WorkerExecutorError::invalid_request(
+                "Invalid environment id",
+            ))?;
 
         let filter = request.filter.map(validated_filter).transpose()?;
 
         let workers = self
             .running_worker_enumeration_service()
-            .get(&component_id, filter)
+            .get(&environment_id, type_id, filter)
             .await?;
 
         let mut result = Vec::new();
@@ -82,10 +146,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: GetWorkersMetadataRequest,
     ) -> Result<(Option<Cursor>, Vec<golem::worker::AgentMetadata>), WorkerExecutorError> {
-        let component_id: ComponentId = request
-            .component_id
-            .and_then(|t| t.try_into().ok())
-            .ok_or(WorkerExecutorError::invalid_request("Invalid component id"))?;
+        let type_id = TypeId::try_from(request.type_id)
+            .map_err(|_| WorkerExecutorError::invalid_request("Invalid type id"))?;
 
         let environment_id: EnvironmentId = request
             .environment_id
@@ -98,7 +160,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .worker_enumeration_service()
             .get(
                 &environment_id,
-                &component_id,
+                type_id,
                 filter,
                 request.cursor.map(ScanCursor::from).unwrap_or_default(),
                 request.count,
@@ -137,7 +199,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     with_expected_request(
                         divergence,
                         &self.oplog_service(),
-                        self.component_service(),
                         &owned_agent_id,
                         agent_mode,
                     )
@@ -182,6 +243,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let mut updates = Vec::new();
 
         let latest_status = metadata.last_known_status;
+        let reported_status = latest_status.reported_status();
+        let underlying_status = latest_status.underlying_status();
         for pending_invocation in &latest_status.pending_invocations {
             if let Some(target_revision) = pending_invocation.manual_update_target_revision {
                 updates.push(golem::worker::UpdateRecord {
@@ -260,6 +323,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(golem::worker::AgentMetadata {
             agent_id: Some(metadata.agent_id.into()),
             owner_kind: metadata.owner_kind.into(),
+            agent_type_name: metadata.agent_type_name.map(|name| name.0),
+            canonical_key: metadata.canonical_key,
+            constructor_parameters: metadata.constructor_parameters,
+            component_id: Some(metadata.component_id.into()),
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             config: metadata
@@ -274,7 +341,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 })?,
             created_by: Some(metadata.created_by.into()),
             component_revision: latest_status.component_revision.into(),
-            status: Into::<golem::worker::AgentStatus>::into(latest_status.status).into(),
+            status: Into::<golem::worker::AgentStatus>::into(reported_status).into(),
+            underlying_status: underlying_status
+                .map(|status| Into::<golem::worker::AgentStatus>::into(status).into()),
             retry_count: last_error_and_retry_count
                 .as_ref()
                 .and_then(|last_error| {

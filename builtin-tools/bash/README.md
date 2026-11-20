@@ -394,7 +394,7 @@ change (`ls`/`stat` already answer this sandbox's one fixed mode by file type; s
 are this sandbox's own fixed, documented answers, not `platform_info`'s real (but WASI-runtime,
 not Linux-shaped) ones: `-s`/`-o` say `Linux`/`GNU/Linux` and `-m` says `wasm32`, matching
 `$OSTYPE=linux-musl` (see [Contract](#contract)); `-n` matches the `hostname` builtin's own answer
-(the `GOLEM_WORKER_NAME` environment variable, falling back to `localhost`); `-r`/`-v` are a
+(the `GOLEM_AGENT_ID` environment variable, falling back to `localhost`); `-r`/`-v` are a
 synthetic modern-kernel-shaped placeholder (`6.1.0`/`#1 SMP`) since no real kernel backs this
 sandbox, and `-p`/`-i` report `unknown`, as real `uname` does on a modern Linux system. `nproc`
 always reports `1`, this sandbox's one logical core. `dd` runs its progress reporting and its
@@ -623,7 +623,7 @@ the revision, and the revision stays the pin.
 | Dependency | Repository | Tag | Revision |
 |---|---|---|---|
 | Brush | `golemcloud/brush` | `golem-v2` | `518bd2f0ad68e3f2ea25beee4eb17e62ce694c1a` |
-| Coreutils | `golemcloud/coreutils` | `golem-v1` | `3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620` |
+| Coreutils | `golemcloud/coreutils` | `golem-v2` | `a90e83807f50171501d5d8f7da29469543b42e83` |
 | sed | `golemcloud/sed` | `golem-v1` | `794cb2bc9b00ba17432fda74f1bc74d0965e46dc` |
 | jaq-json, jaq-core, jaq-std | `golemcloud/jaq` | `golem-v1` | `c26f142e19128acda39f0c6668b38a581193b388` |
 | diffutils (upstream, past the wasip2 build fix) | `uutils/diffutils` | none | `3f7a9a6ff3ee584d1cedbe013ebdebb437ad33b8` |

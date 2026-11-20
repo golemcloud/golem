@@ -32,9 +32,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::agent_id_display::SourceLanguage;
 #[cfg(test)]
-use crate::model::agent::{
-    AgentGetView, AgentMetadataView, AgentsMetadataResponseView, RawAgentId,
-};
+use crate::model::agent::{AgentGetView, AgentMetadataView, AgentsMetadataResponseView};
 #[cfg(test)]
 use golem_common::model::AgentStatus;
 #[cfg(test)]
@@ -333,6 +331,9 @@ impl TextOutput for PublicOplogEntry {
                 }
                 if let Some(parent) = params.parent.as_ref() {
                     logln(format!("{pad}parent:            {}", format_id(parent)));
+                }
+                if params.never_live {
+                    logln(format!("{pad}never live:         {}", format_id(&true)));
                 }
                 logln(format!("{pad}initial active plugins:"));
                 for plugin in &params.initial_active_plugins {
@@ -1590,10 +1591,15 @@ mod tests {
         assert_eq!(json["divergence"]["mismatched"][0], "function-name");
     }
 
-    fn agent_metadata(agent_id: &str) -> AgentMetadataView {
+    fn agent_metadata(agent_key: &str) -> AgentMetadataView {
         AgentMetadataView {
             component_name: ComponentName("shop:cart".to_string()),
-            agent_id: RawAgentId(agent_id.to_string()),
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
+            agent_type: agent_key.split_once('(').map(|(agent_type, _)| {
+                golem_common::model::agent::AgentTypeName(agent_type.to_string())
+            }),
+            agent_key: Some(agent_key.to_string()),
+            fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
             created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
             env: HashMap::new(),
@@ -1601,6 +1607,7 @@ mod tests {
             config: Vec::new(),
             default_config: Vec::new(),
             status: AgentStatus::Running,
+            underlying_status: None,
             component_revision: ComponentRevision::new(1).expect("valid revision"),
             retry_count: 0,
             pending_invocation_count: 0,
@@ -1659,6 +1666,37 @@ mod tests {
         assert!(fields.iter().any(|(name, value)| {
             name == "Last error" && value.contains("snapshot payload is unavailable")
         }));
+    }
+
+    #[test]
+    fn sandboxed_agent_shows_its_replayed_state_in_agent_get_and_list() {
+        let mut agent = agent_metadata(r#"Counter("sandbox")"#);
+        agent.status = AgentStatus::Sandboxed;
+        agent.underlying_status = Some(AgentStatus::Running);
+
+        let table = AgentsMetadataResponseView::format_table_wide(
+            std::slice::from_ref(&agent),
+            120,
+            false,
+            false,
+        );
+        assert!(table.contains("Sandboxed"), "{table}");
+        assert!(!table.contains("Running"), "{table}");
+
+        let fields = AgentGetView::from_metadata(agent, true).fields();
+        assert!(
+            fields.iter().any(|(name, value)| name == "Status"
+                && strip_ansi_escapes::strip_str(value) == "Sandboxed (replayed state: Running)"),
+            "{fields:?}"
+        );
+
+        let fields =
+            AgentGetView::from_metadata(agent_metadata(r#"Counter("live")"#), true).fields();
+        assert!(
+            fields.iter().any(|(name, value)| name == "Status"
+                && strip_ansi_escapes::strip_str(value) == "Running"),
+            "{fields:?}"
+        );
     }
 
     /// Agent id cells carry their own coloring, which only lines up if
@@ -1940,10 +1978,7 @@ mod tests {
             },
             result: Ok(()),
             audit: SecretRevealAudit {
-                calling_agent: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-                    agent_id: "secret-reveal-auditor".to_string(),
-                },
+                calling_agent: golem_common::model::AgentId::from_parts(7, 1),
                 config_key: Some(vec!["database".to_string(), "password".to_string()]),
                 timestamp: SerializableDateTime {
                     seconds: 1_700_000_005,
@@ -1963,7 +1998,7 @@ mod tests {
             &rendered,
             &[
                 &secret_id.to_string(),
-                "secret-reveal-auditor",
+                &golem_common::model::AgentId::from_parts(7, 1).to_string(),
                 "database",
                 "password",
                 "1700000004",

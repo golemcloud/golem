@@ -80,13 +80,6 @@ declare_structs! {
         pub value: crate::schema::TypedSchemaValue
     }
 
-    pub struct AgentCreationRequest {
-        pub name: String,
-        pub env: HashMap<String, String>,
-        #[cfg_attr(feature = "full", oai(default))]
-        pub config: Vec<AgentConfigEntryDto>
-    }
-
     pub struct PendingUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
@@ -135,11 +128,20 @@ declare_structs! {
     pub struct AgentMetadataDto {
         pub agent_id: AgentId,
         pub owner_kind: crate::base_model::agent::OwnerKind,
+        /// The name of the agent's type. Owners without an agent type have none.
+        pub agent_type_name: Option<crate::base_model::agent::AgentTypeName>,
+        /// The canonical key text of a keyed agent. An agent without a key has none.
+        pub canonical_key: Option<String>,
+        /// The canonical constructor parameter text of a component agent, without its type
+        /// name. Agents without a key have it too.
+        pub constructor_parameters: Option<String>,
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
         pub env: HashMap<String, String>,
         pub config: Vec<TypedAgentConfigEntry>,
         pub status: AgentStatus,
+        /// The folded status underneath `status`. Present only when `status` is `Sandboxed`.
+        pub underlying_status: Option<AgentStatus>,
         pub component_revision: ComponentRevision,
         pub retry_count: u32,
         pub pending_invocation_count: u64,

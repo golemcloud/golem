@@ -233,7 +233,7 @@ and prints `NEG_OK`.
 | sqlite-wrong-option | `SqliteClient.make({ filename` → `{ path` | TS2353 |
 | models-old-params | method `input:` → `params:` (old API) | TS2769 |
 | team-call-reflection-value | `Reflection.getAllAgentTypes` called as a function | TS2349 |
-| waits-positional-id | `Mailer.client.get({ orderId })` → `get(orderId)` | TS2345 |
+| waits-positional-id | `Mailer.client.upsert({ orderId })` → `upsert(orderId)` | TS2345 |
 | custom-misspelt-option | `requiresFilesystem` → `requiresFileSystem` | TS2561 |
 | digest-wrong-result | `summarize` `.returns(Schema.String)` → `Schema.Number` | TS2322, TS2345 |
 | publish-object-input | `.crm_find_customer(email)` → `({ email })` (generated clients are positional) | TS2345 |
@@ -357,7 +357,7 @@ with the Golem refund tool spliced after it.
   `yield* HttpRouter.request`; the 404 is `HttpServerResponse.empty({ status: 404 })`; the 200 is
   `HttpRouter.withRawHeaders(HttpServerResponse.stream(csv, { status: 200 }), [header(...), ...])`
   with the same byte-valued `header` helper as TS (the body highlight sits on the `stream(csv, ...)`
-  line). The agent call takes two lines (`yield* Analyst.client.get(...)`, then
+  line). The agent call takes two lines (`yield* Analyst.client.upsert(...)`, then
   `yield* analyst.exportCsv(...)`); the first is highlighted.
 - `artifacts/signin`: `s.principal()` is `Principal.PrincipalSchema` on its own line (highlighted;
   the `input:` line holds the comment); OIDC fields are `caller.val.issuer` / `caller.val.sub`.

@@ -698,6 +698,8 @@ pub enum SerializableP3TcpChunk {
 )]
 pub struct AgentMetadataForGuests {
     pub agent_id: AgentId,
+    pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
+    pub fingerprint: crate::model::AgentFingerprint,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub config: BTreeMap<String, String>,
@@ -1011,6 +1013,9 @@ pub enum SerializableRpcError {
     },
     RemoteAgentError {
         error: Box<crate::model::agent::AgentError>,
+    },
+    Conflict {
+        details: String,
     },
 }
 

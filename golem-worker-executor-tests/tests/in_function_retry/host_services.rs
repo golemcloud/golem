@@ -17,7 +17,7 @@ use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
@@ -117,7 +117,7 @@ async fn keyvalue_get_retries_inline_on_transient_failure(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "in-function-retry-get-1");
+    let agent_id = agent_key!("KeyValue", "in-function-retry-get-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -204,7 +204,7 @@ async fn keyvalue_set_retries_inline_when_idempotent(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "in-function-retry-set-1");
+    let agent_id = agent_key!("KeyValue", "in-function-retry-set-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -295,7 +295,7 @@ async fn blobstore_get_data_retries_inline_on_transient_failure(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "in-function-retry-get-data-1");
+    let agent_id = agent_key!("BlobStore", "in-function-retry-get-data-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -381,7 +381,7 @@ async fn blobstore_mutation_retries_receive_identical_inputs(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "blob-mutation-retry-inputs");
+    let agent_id = agent_key!("BlobStore", "blob-mutation-retry-inputs");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -472,7 +472,7 @@ async fn blobstore_completed_mutation_replay_does_not_call_storage(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "blob-completed-write-replay");
+    let agent_id = agent_key!("BlobStore", "blob-completed-write-replay");
     executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -575,7 +575,7 @@ async fn blobstore_quota_rejection_is_guest_visible_and_not_rechecked_on_replay(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "blob-quota-rejection-replay");
+    let agent_id = agent_key!("BlobStore", "blob-quota-rejection-replay");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -671,7 +671,7 @@ async fn blobstore_accepted_write_counts_once_across_retry_and_replay(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "blob-quota-accepted-retry-replay");
+    let agent_id = agent_key!("BlobStore", "blob-quota-accepted-retry-replay");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -780,7 +780,7 @@ async fn blobstore_incomplete_write_replay_resumes_with_original_input(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "blob-incomplete-write-replay");
+    let agent_id = agent_key!("BlobStore", "blob-incomplete-write-replay");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -888,7 +888,7 @@ async fn in_function_retry_falls_back_to_trap_when_delay_exceeds_threshold(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "in-function-retry-trap-fallback-1");
+    let agent_id = agent_key!("KeyValue", "in-function-retry-trap-fallback-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -992,7 +992,7 @@ async fn in_function_retry_transitions_from_inline_to_trap_based(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("KeyValue", "in-function-retry-mixed-1");
+    let agent_id = agent_key!("KeyValue", "in-function-retry-mixed-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1082,7 +1082,7 @@ async fn async_rpc_inline_retry_on_transient_remote_error(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcCaller", "in-function-retry-rpc-1");
+    let agent_id = agent_key!("RpcCaller", "in-function-retry-rpc-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;

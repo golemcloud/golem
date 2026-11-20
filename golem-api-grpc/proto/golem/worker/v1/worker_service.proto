@@ -55,7 +55,8 @@ service WorkerService {
 
 message LaunchNewWorkerRequest {
   golem.component.ComponentId componentId = 1;
-  string name = 2;
+  // The type and constructor parameters of the agent to create.
+  golem.worker.AgentKey constructor = 2;
   map<string, string> env = 3;
   repeated AgentConfigEntryDto config = 4;
   bool ignore_already_existing = 5;
@@ -63,12 +64,15 @@ message LaunchNewWorkerRequest {
   optional golem.worker.InvocationContext context = 7;
   reserved 8;
   reserved "principal";
-  golem.component.Caller caller = 12;
+  golem.component.Caller caller = 13;
   optional string method_name = 9;
   // Used only by PrepareWorker for the first creation attempt of an ephemeral RPC target: the
-  // owner key of the demanding invocation, which a KnownFresh phantom is checked against.
+  // owner key of the demanding invocation, which a KnownFresh instance is checked against.
   optional golem.worker.IdempotencyKey idempotency_key = 10;
   golem.worker.InvocationFreshnessDisposition freshness_disposition = 11;
+  // Unset: the keyed agent of `constructor`. Set: an agent without a key at this
+  // pre-allocated ID.
+  optional golem.worker.AgentId unkeyed_id = 12;
 }
 
 message LaunchNewWorkerResponse {
@@ -88,6 +92,7 @@ message CompletePromiseRequest {
   golem.worker.AgentId agentId = 1;
   golem.worker.CompleteParameters completeParameters = 2;
   golem.auth.AuthCtx auth_ctx = 3;
+  golem.common.EnvironmentId environment_id = 4;
 }
 
 message CompletePromiseResponse {
@@ -102,10 +107,10 @@ message ForkWorkerRequest {
   golem.worker.AgentId target_agent_id = 2;
   uint64 oplog_index_cutoff = 3;
   golem.auth.AuthCtx auth_ctx = 4;
-  // The caller of the fork target's create request.
   reserved 5;
   reserved "principal";
-  golem.component.Caller caller = 6;
+  golem.common.EnvironmentId environment_id = 6;
+  golem.component.Caller caller = 7;
 }
 
 message ForkWorkerResponse {
@@ -119,6 +124,7 @@ message ResumeWorkerRequest {
   golem.worker.AgentId agentId = 1;
   optional bool force = 2;
   golem.auth.AuthCtx auth_ctx = 3;
+  golem.common.EnvironmentId environment_id = 4;
 }
 
 message ResumeWorkerResponse {
@@ -134,6 +140,7 @@ message UpdateWorkerRequest {
   golem.worker.UpdateMode mode = 3;
   golem.auth.AuthCtx auth_ctx = 4;
   bool disable_wakeup = 5;
+  golem.common.EnvironmentId environment_id = 6;
 }
 
 message UpdateWorkerResponse {
@@ -152,6 +159,7 @@ message RevertWorkerRequest {
   golem.common.RevertWorkerTarget target = 2;
   golem.auth.AuthCtx auth_ctx = 3;
   optional golem.common.ResolvedRevert resolved_revert = 4;
+  golem.common.EnvironmentId environment_id = 5;
 }
 
 message RevertWorkerResponse {
@@ -162,7 +170,9 @@ message RevertWorkerResponse {
 }
 
 message InvokeAgentRequest {
-  golem.worker.AgentId agent_id = 1;
+  // A key target upserts the keyed agent. An ID target reaches an existing agent, or,
+  // with `constructor`, creates the agent at that pre-allocated ID when it is missing.
+  golem.worker.AgentTarget target = 1;
   optional string method_name = 2;
   optional golem.schema.SchemaValue method_parameters = 3;
   golem.worker.AgentInvocationMode mode = 4;
@@ -172,8 +182,7 @@ message InvokeAgentRequest {
   golem.auth.AuthCtx auth_ctx = 8;
   reserved 9;
   reserved "principal";
-  golem.component.Caller caller = 16;
-  optional golem.common.EnvironmentId environment_id = 10;
+  golem.common.EnvironmentId environment_id = 10;
   InvocationFreshnessDisposition freshness_disposition = 11;
   repeated golem.worker.AgentConfigEntryDto config = 12;
   optional golem.worker.EncodedScopeCard scope_card = 13;
@@ -181,6 +190,13 @@ message InvokeAgentRequest {
   // The incarnation the caller expects. A missing agent or another incarnation fails as not
   // found before anything is enqueued.
   optional golem.common.UUID expected_callee_fingerprint = 15;
+  // Only with an ID target: the type and constructor parameters of the agent to create
+  // at that ID, such as an ephemeral instance or an agent without a key.
+  optional golem.worker.AgentKey constructor = 16;
+  // The component that implements the agent type. Required when the request may create the
+  // agent: a key target, or an ID target with `constructor`.
+  optional golem.component.ComponentId component_id = 17;
+  golem.component.Caller caller = 18;
 }
 
 enum InvocationFreshnessDisposition {
@@ -205,8 +221,8 @@ message InvokeAgentSuccess {
   // Per-instance agent fingerprint (UUID) of the agent that produced this
   // invocation result.
   optional golem.common.UUID agent_fingerprint = 6;
-  // Final invocation target. For ephemeral agents this contains the generated
-  // one-shot phantom ID and can be used by observation and control APIs.
+  // Final invocation target. For ephemeral agents this is the ID of the instance
+  // that ran the invocation, for observation and control APIs.
   optional golem.worker.AgentId agent_id = 7;
   // Final invocation key. Together with agent_id this identifies the logical
   // invocation across retries and asynchronous result lookup.
@@ -218,6 +234,7 @@ message CancelInvocationRequest {
   golem.common.UUID idempotency_key = 2;
   golem.auth.AuthCtx auth_ctx = 3;
   optional golem.worker.ScheduledInvocationCancellation scheduled = 4;
+  golem.common.EnvironmentId environment_id = 5;
 }
 
 message CancelInvocationResponse {
@@ -272,6 +289,8 @@ message ProcessOplogEntriesRequest {
   uint64 first_entry_index = 8;
   repeated golem.worker.RawOplogEntry entries = 9;
   golem.auth.AuthCtx auth_ctx = 10;
+  // The component of the oplog processor. It creates the processor when it is missing.
+  golem.component.ComponentId component_id = 11;
 }
 
 message ProcessOplogEntriesResponse {

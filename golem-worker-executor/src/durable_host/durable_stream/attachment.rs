@@ -602,7 +602,7 @@ impl DurableStreamStore {
             .collect::<Vec<_>>();
         open_streams.sort_by_key(|(stream_id, _, _)| *stream_id);
         let environment_id = self.environment_id;
-        let producer = self.producer.clone();
+        let producer = self.producer;
         let producer_fingerprint = self.producer_fingerprint;
         context.begin_durable_effect();
         let entries = self
@@ -797,7 +797,7 @@ impl DurableStreamStore {
             key.attachment_id,
             key.stream_id,
             key.consumer_environment_id,
-            key.consumer.clone(),
+            key.consumer,
         )])
         .await?
         .attachment_views()

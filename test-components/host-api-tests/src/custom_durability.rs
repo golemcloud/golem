@@ -432,8 +432,8 @@ impl CustomDurabilityImpl {
                     !get_self_metadata()
                         .expect("self metadata access should be allowed")
                         .agent_id
-                        .agent_id
-                        .is_empty()
+                        .uuid
+                        .is_nil()
                 );
                 if probe_first {
                     perform_request("probe", payload.clone());

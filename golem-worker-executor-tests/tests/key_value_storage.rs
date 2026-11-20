@@ -16,9 +16,8 @@ use crate::WorkerExecutorTestDependencies;
 use async_trait::async_trait;
 use golem_common::config::DbPostgresConfig;
 use golem_common::config::RedisConfig;
-use golem_common::model::component::ComponentId;
+use golem_common::model::AgentFingerprint;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::redis::RedisPool;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::components::redis::Redis;
@@ -354,10 +353,7 @@ struct Namespaces {
 fn ns() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::Worker {
-            agent_id: Arc::new(AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "test".to_string(),
-            }),
+            owned_agent_id: crate::fresh_owned_agent_id(),
         },
         ns2: KeyValueStorageNamespace::UserDefined {
             environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
@@ -374,10 +370,7 @@ fn ns2() -> Namespaces {
             bucket: "test-bucket".into(),
         },
         ns2: KeyValueStorageNamespace::Worker {
-            agent_id: Arc::new(AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "test".to_string(),
-            }),
+            owned_agent_id: crate::fresh_owned_agent_id(),
         },
     }
 }
@@ -388,10 +381,7 @@ fn ns2() -> Namespaces {
 fn ns3() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::AgentStatus {
-            agent_id: Arc::new(AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "test".to_string(),
-            }),
+            owned_agent_id: crate::fresh_owned_agent_id(),
             fingerprint: AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000001")),
         },
         ns2: KeyValueStorageNamespace::UserDefined {
@@ -405,10 +395,7 @@ fn ns3() -> Namespaces {
 fn ns4() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::AgentInvocationResultIndex {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "test".to_string(),
-            },
+            owned_agent_id: crate::fresh_owned_agent_id(),
             fingerprint: AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000001")),
         },
         ns2: KeyValueStorageNamespace::UserDefined {
@@ -567,17 +554,14 @@ async fn get_all_returns_namespace_snapshot(
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
 ) {
     let kvs = kvs.get_key_value_storage().await;
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "test".to_string(),
-    };
+    let agent_id = crate::fresh_owned_agent_id();
     let other_agent_id = agent_id.clone();
     let ns = KeyValueStorageNamespace::AgentStatus {
-        agent_id: Arc::new(agent_id),
+        owned_agent_id: agent_id,
         fingerprint: AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000001")),
     };
     let other_ns = KeyValueStorageNamespace::AgentStatus {
-        agent_id: Arc::new(other_agent_id),
+        owned_agent_id: other_agent_id,
         fingerprint: AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000002")),
     };
 
@@ -613,20 +597,17 @@ async fn agent_invocation_result_index_is_separate_from_agent_status(
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
 ) {
     let kvs = kvs.get_key_value_storage().await;
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "test".to_string(),
-    };
+    let agent_id = crate::fresh_owned_agent_id();
     let status_ns = KeyValueStorageNamespace::AgentStatus {
-        agent_id: std::sync::Arc::new(agent_id.clone()),
+        owned_agent_id: agent_id.clone(),
         fingerprint: AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000001")),
     };
     let result_index_ns = KeyValueStorageNamespace::AgentInvocationResultIndex {
-        agent_id: agent_id.clone(),
+        owned_agent_id: agent_id.clone(),
         fingerprint: AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000001")),
     };
     let next_result_index_ns = KeyValueStorageNamespace::AgentInvocationResultIndex {
-        agent_id,
+        owned_agent_id: agent_id,
         fingerprint: AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000002")),
     };
 
@@ -702,10 +683,7 @@ async fn set_if_not_exists(
 
 fn cas_namespace() -> KeyValueStorageNamespace {
     KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: Uuid::new_v4().to_string(),
-        },
+        owned_agent_id: crate::fresh_owned_agent_id(),
         fingerprint: AgentFingerprint::new(),
     }
 }
@@ -957,12 +935,9 @@ async fn compare_and_delete_flat_key_contract(
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
 ) {
     let kvs = kvs.get_key_value_storage().await;
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: Uuid::new_v4().to_string(),
-    };
+    let agent_id = crate::fresh_owned_agent_id();
     let namespace = KeyValueStorageNamespace::Worker {
-        agent_id: Arc::new(agent_id),
+        owned_agent_id: agent_id,
     };
     let key = format!("flat-cas-delete:{}", Uuid::new_v4());
     let expiry = Duration::from_secs(60);
@@ -1060,19 +1035,16 @@ async fn set_with_expiry_contract(
     if kvs.observes_expiry() {
         assert_eq!(after_expiry, None);
 
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: Uuid::new_v4().to_string(),
-        };
+        let agent_id = crate::fresh_owned_agent_id();
         let fingerprint = AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000001"));
-        let physical_hash_key = format!("agent-status:{}:{fingerprint}", agent_id.to_redis_key());
+        let physical_hash_key = format!("agent-status:{}:{fingerprint}", agent_id.storage_key());
         storage
             .set(
                 "test",
                 "api",
                 "entity",
                 KeyValueStorageNamespace::Worker {
-                    agent_id: Arc::new(agent_id.clone()),
+                    owned_agent_id: agent_id.clone(),
                 },
                 &physical_hash_key,
                 b"wrong-type",
@@ -1086,7 +1058,7 @@ async fn set_with_expiry_contract(
                     "api",
                     "entity",
                     KeyValueStorageNamespace::AgentStatus {
-                        agent_id: Arc::new(agent_id),
+                        owned_agent_id: agent_id,
                         fingerprint,
                     },
                     "field",

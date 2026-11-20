@@ -25,6 +25,7 @@ import "golem/worker/worker_id.proto";
 service RegistryService {
   // auth api
   rpc AuthenticateToken (AuthenticateTokenRequest) returns (AuthenticateTokenResponse);
+  rpc AuthorizeEnvironment (AuthorizeEnvironmentRequest) returns (AuthorizeEnvironmentResponse);
 
   // installation api
   rpc GetGolemIssuer (GetGolemIssuerRequest) returns (GetGolemIssuerResponse);
@@ -51,6 +52,12 @@ service RegistryService {
   rpc ResolveMcpImport (ResolveMcpImportRequest) returns (ResolveMcpImportResponse);
   rpc ResolveAgentTypeByNames(ResolveAgentTypeByNamesRequest)
       returns (ResolveAgentTypeByNamesResponse);
+  // Resolves the type ID in an agent ID's tag. It also resolves types that are no longer deployed.
+  rpc ResolveTypeId (ResolveTypeIdRequest) returns (ResolveTypeIdResponse);
+  // Resolves retained names, including declarations on previous implementing components.
+  rpc ResolveAgentTypeName (ResolveAgentTypeNameRequest) returns (ResolveAgentTypeNameResponse);
+  // Resolves an agent type of the environment's current deployment by name.
+  rpc GetDeployedAgentType (GetDeployedAgentTypeRequest) returns (GetDeployedAgentTypeResponse);
 
   // current deployment agents/routes
   rpc GetActiveRoutesForDomain (GetActiveRoutesForDomainRequest) returns (GetActiveRoutesForDomainResponse);
@@ -71,6 +78,18 @@ service RegistryService {
   // registry invalidation stream — multiplexed event types
   rpc SubscribeRegistryInvalidations(SubscribeRegistryInvalidationsRequest)
       returns (stream RegistryInvalidationEvent);
+}
+
+message AuthorizeEnvironmentRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
+}
+
+message AuthorizeEnvironmentResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    RegistryServiceError error = 2;
+  }
 }
 
 message AuthenticateTokenRequest {
@@ -435,6 +454,71 @@ message ResolveAgentTypeByNamesSuccessResponse {
   uint64 deployment_revision = 3;
   // Present only when request.deployment_revision is not set.
   optional uint64 current_deployment_revision = 4;
+}
+
+message ResolveAgentTypeNameRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  string agent_type_name = 2;
+}
+
+message ResolveAgentTypeNameResponse {
+  oneof result {
+    ResolveAgentTypeNameSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveAgentTypeNameSuccessResponse {
+  // Latest declaration for each historical implementing component, newest deployment first.
+  repeated RegisteredAgentType agent_types = 1;
+}
+
+message ResolveTypeIdRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  uint32 type_id = 2;
+}
+
+message ResolveTypeIdResponse {
+  oneof result {
+    ResolveTypeIdSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveTypeIdSuccessResponse {
+  // Absent when the environment never assigned the type ID.
+  optional ResolvedTypeId resolved = 1;
+}
+
+enum TypeIdKind {
+  TYPE_ID_KIND_UNSPECIFIED = 0;
+  TYPE_ID_KIND_AGENT_TYPE = 1;
+  TYPE_ID_KIND_TOOL = 2;
+}
+
+message ResolvedTypeId {
+  TypeIdKind kind = 1;
+  string name = 2;
+  // The component that implements the agent type in the current deployment. Absent when
+  // the type is not deployed, and always absent for a tool.
+  optional golem.registry.RegisteredAgentTypeImplementer implemented_by = 3;
+}
+
+message GetDeployedAgentTypeRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  string agent_type_name = 2;
+}
+
+message GetDeployedAgentTypeResponse {
+  oneof result {
+    GetDeployedAgentTypeSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetDeployedAgentTypeSuccessResponse {
+  // Absent when the current deployment has no agent type of that name.
+  optional golem.registry.RegisteredAgentType agent_type = 1;
 }
 
 message GetActiveRoutesForDomainRequest {

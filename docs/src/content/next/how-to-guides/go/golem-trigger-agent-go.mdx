@@ -8,14 +8,14 @@ Both `golem` and `golem-cli` can be used — every command below works with eith
 
 ## Steps
 
-1. **Identify the agent** by its type name and constructor parameters (`CounterAgent("my-counter")`).
+1. **Identify the agent** by its key — type name and constructor parameters (`CounterAgent("my-counter")`) — or by its agent ID (`CounterAgent[<agent-id>]`).
 2. **Pick the method** to enqueue (e.g. `increment`, `add`).
 3. **Run `golem agent invoke --trigger`** — the CLI returns as soon as the invocation is accepted.
 
 ## Usage
 
 ```shell
-golem agent invoke --trigger <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
+golem agent invoke --trigger <AGENT_ADDRESS> <FUNCTION_NAME> [ARGUMENTS...]
 ```
 
 ## When to Use Trigger
@@ -75,7 +75,7 @@ golem agent invoke --trigger -i 'increment-2026-01-15' 'CounterAgent("my-counter
 
 Pass one Go literal per exported field of the method's input struct, in declaration order. Skip `golem.Principal` fields; do not supply a principal value or placeholder. Do not wrap all fields in a JSON object. A method whose input is `golem.Unit` takes no arguments, not `'{}'`. `--format json` controls output only. Load [`golem-invoke-agent-go`](/next/how-to-guides/go/golem-invoke-agent-go) for the string fallback and the different HTTP body rules. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
 
-Agent ID parameters and method arguments use Go syntax, read against the agent's schema:
+Key parameters and method arguments use Go syntax, read against the agent's schema:
 
 - Strings `"my-counter"`, runes `'x'`, integers `5`, floats `2.5`, booleans `true` / `false`.
 - Each exported field of a Go input struct is one positional parameter, named in lowerCamelCase with each initialism as one word (`AmountCents` → `amountCents`, `UserID` → `userId`, `APIKey` → `apiKey`).
@@ -104,4 +104,4 @@ golem agent invoke --trigger 'MyAgent("user-123")' sendEmail '{to: "alice@exampl
 | [`golem-invoke-agent-go`](/next/how-to-guides/go/golem-invoke-agent-go) | Synchronous invocation that waits for the result |
 | [`golem-schedule-agent-go`](/next/how-to-guides/go/golem-schedule-agent-go) | Combine `--trigger` with `--schedule-at` for future execution |
 | [`golem-fire-and-forget-go`](/next/how-to-guides/go/golem-fire-and-forget-go) | Fire-and-forget invocation from *agent code* (`Trigger`) |
-| [`golem-create-agent-instance-go`](/next/how-to-guides/go/golem-create-agent-instance-go) | Pre-create an agent instance (`golem agent new`) |
+| [`golem-create-agent-instance-go`](/next/how-to-guides/go/golem-create-agent-instance-go) | Pre-create an agent instance (`golem agent create`) |

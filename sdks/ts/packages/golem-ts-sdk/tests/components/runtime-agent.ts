@@ -30,7 +30,7 @@ counter.implement({
   init: () => ({}),
   methods: {
     scalar: ({ value }) => value + 1,
-    remote: ({ value }) => counter.client.get({}).scalar({ value }),
+    remote: ({ value }) => counter.client.upsert({}).scalar({ value }),
     principalRef: ({ who }) => who,
     unitResult: ({ result }) => result,
     configured() {

@@ -14,6 +14,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { schemaValueToWit, v } from '../src/internal/schema-model';
+import { selectSelfAgent } from './selfAgentTestSupport';
 
 const idInput = schemaValueToWit(v.record([]));
 const anonymous = { tag: 'anonymous' };
@@ -46,8 +47,7 @@ async function setup() {
         },
       },
     });
-  (globalThis as { currentAgentId?: string }).currentAgentId =
-    `EnvelopeAgent(${JSON.stringify(idInput)})`;
+  selectSelfAgent('EnvelopeAgent');
   return { sdk, loaded };
 }
 
@@ -59,7 +59,7 @@ describe('the 2.0 snapshot envelope', () => {
     await sdk.loadSnapshot.load({
       payload: new Uint8Array([3, ...new TextEncoder().encode('{"count":4}')]),
       mimeType: 'application/octet-stream',
-    });
+    }, idInput);
     const saved = await sdk.saveSnapshot.save();
     expect(saved.payload[0]).toBe(3);
     expect(new TextDecoder().decode(saved.payload.slice(1))).toBe('{"count":4}');
@@ -82,8 +82,7 @@ describe('the 2.0 snapshot envelope', () => {
           methods: {},
         })
         .implement({ init: () => ({ count: 1 }), methods: {} });
-      (globalThis as { currentAgentId?: string }).currentAgentId =
-        `EnvelopeJson(${JSON.stringify(idInput)})`;
+      selectSelfAgent('EnvelopeJson');
       await sdk.golemAgent200Guest.initialize('EnvelopeJson', idInput);
       return sdk.saveSnapshot.save();
     }
@@ -99,7 +98,7 @@ describe('each 1.6 envelope version still loads and drops its principal', () => 
     await sdk.loadSnapshot.load({
       payload: new Uint8Array([1, ...state]),
       mimeType: 'application/octet-stream',
-    });
+    }, idInput);
     expect(new TextDecoder().decode(loaded[0])).toBe('{"count":1}');
 
     const { sdk: second, loaded: secondLoaded } = await setup();
@@ -110,7 +109,7 @@ describe('each 1.6 envelope version still loads and drops its principal', () => 
     await second.loadSnapshot.load({
       payload: new Uint8Array([...header, ...principalJson, ...state]),
       mimeType: 'application/octet-stream',
-    });
+    }, idInput);
     expect(new TextDecoder().decode(secondLoaded[0])).toBe('{"count":1}');
   });
 
@@ -124,7 +123,7 @@ describe('each 1.6 envelope version still loads and drops its principal', () => 
       sdk.loadSnapshot.load({
         payload: new Uint8Array([...header, ...bad, 1]),
         mimeType: 'application/octet-stream',
-      }),
+      }, idInput),
     ).rejects.toBeDefined();
   });
 });

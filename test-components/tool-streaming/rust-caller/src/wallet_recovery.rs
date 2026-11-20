@@ -1,11 +1,9 @@
 use golem_rust::agentic::Config;
 use golem_rust::bindings::golem::agent::host;
 use golem_rust::golem_schema::CardId;
-use golem_rust::{ComponentId, ConfigSchema, agent_definition, agent_implementation};
+use golem_rust::{AgentId, ConfigSchema, agent_definition, agent_implementation};
 use raw_permissions::golem::permissions::{types, wallet};
-use wallet_mutation_tool_guest_client::{
-    GolemCoreCardId, GolemCoreComponentId, WalletMutationClient,
-};
+use wallet_mutation_tool_guest_client::{GolemCoreAgentId, GolemCoreCardId, WalletMutationClient};
 
 /// Raw `golem:permissions` calls through this component's own bindings: the
 /// tests name wallet cards by id, which the typed `golem_rust::permissions`
@@ -46,12 +44,7 @@ pub struct WalletRecoveryConfig {
 #[agent_definition(snapshotting = "enabled")]
 pub trait WalletRecoveryProbe {
     fn new(name: String, #[agent_config] config: Config<WalletRecoveryConfig>) -> Self;
-    async fn change(
-        &self,
-        card: CardId,
-        component: ComponentId,
-        target: String,
-    ) -> (bool, u64, bool, bool);
+    async fn change(&self, card: CardId, target: Option<AgentId>) -> (bool, u64, bool, bool);
     fn observe(&self, card: CardId) -> (bool, u64, bool, bool);
 }
 
@@ -63,19 +56,11 @@ impl WalletRecoveryProbe for WalletRecoveryProbeImpl {
         Self
     }
 
-    async fn change(
-        &self,
-        card: CardId,
-        component: ComponentId,
-        target: String,
-    ) -> (bool, u64, bool, bool) {
+    async fn change(&self, card: CardId, target: Option<AgentId>) -> (bool, u64, bool, bool) {
         WalletMutationClient::default()
             .change(
                 GolemCoreCardId { uuid: card.uuid },
-                GolemCoreComponentId {
-                    uuid: component.uuid,
-                },
-                target,
+                target.map(|target| GolemCoreAgentId { uuid: target.uuid }),
             )
             .await
             .expect("wallet mutation tool completes")

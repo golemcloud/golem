@@ -1,5 +1,7 @@
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, read_only};
 use serde::{Deserialize, Serialize};
+
+use crate::busy_loop;
 
 /// State that the core initializer derives from host inputs. Language runtimes do this for real
 /// (Go seeds its scheduler's PRNG from `random_get` during `_initialize`); this state stands in
@@ -24,11 +26,30 @@ fn initialize_snapshot_clock() {
     use std::hash::{BuildHasher, Hasher};
     let mut hasher = std::hash::RandomState::new().build_hasher();
     hasher.write_u32(0x5eed);
+    let environment = std::env::vars().collect::<Vec<_>>();
+    // Discovery runs without an agent ID. Its stdout must stay out of the package digest output.
+    // The print is here, after the environment read. A separate constructor for it ran before the
+    // agent registrations, so the recorded initializer block started with `get-environment` and
+    // not with `insecure_seed`, the order that the snapshot-assisted update tests expect.
+    if !environment.iter().any(|(name, _)| name == "GOLEM_AGENT_ID") {
+        println!("agent-counters discovery stdout");
+    }
+    // A language runtime may also make a durable call that is not a read while it initializes.
+    if environment
+        .iter()
+        .any(|(name, _)| name == INITIALIZER_WRITE_VARIABLE)
+    {
+        std::hint::black_box(golem_rust::generate_idempotency_key());
+    }
     let _ = INITIALIZER_STATE.set(InitializerState {
         seed_hash: hasher.finish(),
-        environment_size: std::env::vars().count() as u32,
+        environment_size: environment.len() as u32,
     });
 }
+
+/// When an agent's environment holds this variable, the core initializer also generates an
+/// idempotency key, a durable call that is not a read.
+const INITIALIZER_WRITE_VARIABLE: &str = "INITIALIZER_GENERATES_IDEMPOTENCY_KEY";
 
 fn initializer_state() -> &'static InitializerState {
     INITIALIZER_STATE
@@ -58,6 +79,10 @@ trait SnapshotCounter {
     fn initializer_seed_hash(&self) -> u64;
     /// The number of environment variables that the core initializer read.
     fn initializer_environment_size(&self) -> u32;
+    /// Whether the core initializer derived `expected` from its random seed. It reads the clock
+    /// only when it did not, so a replay whose initializer got another seed asks for a durable
+    /// call that the recorded invocation did not make.
+    fn check_initializer_seed(&self, expected: u64) -> bool;
 }
 
 struct SnapshotCounterImpl {
@@ -92,19 +117,24 @@ impl SnapshotCounter for SnapshotCounterImpl {
         initializer_environment_size()
     }
 
+    fn check_initializer_seed(&self, expected: u64) -> bool {
+        if initializer_seed_hash() == expected {
+            true
+        } else {
+            std::hint::black_box(std::time::Instant::now());
+            false
+        }
+    }
+
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
-        Ok(self.count.to_le_bytes().to_vec())
+        Ok(count_bytes(self.count))
     }
 
     async fn load_snapshot(
         bytes: Vec<u8>,
         context: golem_rust::agentic::SnapshotRestoreContext,
     ) -> Result<Self, String> {
-        let count = if bytes.len() == 4 {
-            u32::from_le_bytes(bytes.try_into().unwrap())
-        } else {
-            return Err(format!("Invalid snapshot size: {}", bytes.len()));
-        };
+        let count = count_of(bytes)?;
         let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
             .map_err(|e| e.to_string())?;
         let id = parameters.take::<String>().map_err(|e| e.to_string())?;
@@ -113,11 +143,142 @@ impl SnapshotCounter for SnapshotCounterImpl {
     }
 }
 
+/// A durable counter that snapshots every 10 invocations whatever the executor policy is, so
+/// density benchmarks can size their replay work around a fixed snapshot interval.
+#[agent_definition(snapshotting = "every(10)")]
+trait PeriodicSnapshotCounter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+    fn busy_for(&mut self, millis: u32) -> u32;
+    fn oplog_heavy(&mut self, entries: u32) -> u32;
+    fn get(&self) -> u32;
+    fn was_recovered_from_snapshot(&self) -> bool;
+}
+
+struct PeriodicSnapshotCounterImpl {
+    count: u32,
+    _id: String,
+    recovered_from_snapshot: bool,
+}
+
+#[agent_implementation]
+impl PeriodicSnapshotCounter for PeriodicSnapshotCounterImpl {
+    fn new(id: String) -> Self {
+        Self {
+            _id: id,
+            count: 0,
+            recovered_from_snapshot: false,
+        }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    fn busy_for(&mut self, millis: u32) -> u32 {
+        let _ = busy_loop(millis);
+        self.count += 1;
+        self.count
+    }
+
+    fn oplog_heavy(&mut self, entries: u32) -> u32 {
+        for _ in 0..entries {
+            let mut buf = [0u8; 4];
+            wstd::rand::get_random_bytes(&mut buf);
+            self.count = self.count.wrapping_add(u32::from_le_bytes(buf));
+        }
+        self.count
+    }
+
+    fn get(&self) -> u32 {
+        self.count
+    }
+
+    fn was_recovered_from_snapshot(&self) -> bool {
+        self.recovered_from_snapshot
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(count_bytes(self.count))
+    }
+
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let count = count_of(bytes)?;
+        let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+            .map_err(|e| e.to_string())?;
+        let id = parameters.take::<String>().map_err(|e| e.to_string())?;
+        parameters.finish().map_err(|e| e.to_string())?;
+        Ok(Self {
+            count,
+            _id: id,
+            recovered_from_snapshot: true,
+        })
+    }
+}
+
+/// The application snapshot of a counter: the count in four little-endian bytes.
+fn count_bytes(count: u32) -> Vec<u8> {
+    count.to_le_bytes().to_vec()
+}
+
+/// The count of an application snapshot that [`count_bytes`] made.
+fn count_of(bytes: Vec<u8>) -> Result<u32, String> {
+    bytes
+        .try_into()
+        .map(u32::from_le_bytes)
+        .map_err(|bytes: Vec<u8>| format!("Invalid snapshot size: {}", bytes.len()))
+}
+
+/// An ephemeral counter with snapshot hooks. An ephemeral agent cannot enable snapshots in its
+/// definition; the hooks run only if the executor takes a snapshot of the agent.
+#[agent_definition(ephemeral)]
+trait EphemeralSnapshotCounter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+}
+
+struct EphemeralSnapshotCounterImpl {
+    count: u32,
+}
+
+#[agent_implementation]
+impl EphemeralSnapshotCounter for EphemeralSnapshotCounterImpl {
+    fn new(_id: String) -> Self {
+        Self { count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(count_bytes(self.count))
+    }
+
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            count: count_of(bytes)?,
+        })
+    }
+}
+
 #[agent_definition(snapshotting = "enabled")]
 trait JsonSnapshotCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
     fn get(&self) -> u32;
+    /// The state the core initializer derived from its random seed.
+    fn initializer_seed_hash(&self) -> u64;
+    #[read_only(cache = "no_cache")]
+    fn peek(&self) -> u32;
 }
 
 #[derive(Serialize, Deserialize)]
@@ -139,6 +300,14 @@ impl JsonSnapshotCounter for JsonSnapshotCounterImpl {
     }
 
     fn get(&self) -> u32 {
+        self.count
+    }
+
+    fn initializer_seed_hash(&self) -> u64 {
+        initializer_seed_hash()
+    }
+
+    fn peek(&self) -> u32 {
         self.count
     }
 }

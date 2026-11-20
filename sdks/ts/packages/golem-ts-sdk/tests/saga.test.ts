@@ -9,7 +9,7 @@ const boundary = vi.hoisted(() => ({
   time: 0n,
 }));
 vi.mock('../src/host/hostapi', () => ({
-  getSelfMetadata: () => ({ agentId: { componentId: 'component', agentId: 'agent' } }),
+  getSelfMetadata: () => ({ environmentId: 'environment', agentId: 'agent' }),
 }));
 vi.mock('golem:api/retry@1.5.0', () => ({
   resolveRetryPolicy: boundary.resolve,
@@ -115,13 +115,13 @@ describe('sagas', () => {
           },
         ],
       ];
-      expect(boundary.resolve).toHaveBeenCalledWith('saga', 'urn:worker:component/agent', props);
+      expect(boundary.resolve).toHaveBeenCalledWith('saga', 'urn:agent:environment/agent', props);
       expect(boundary.next).toHaveBeenCalledWith(
         undefined,
         new Uint8Array(),
         7_000_000n,
         'saga',
-        'urn:worker:component/agent',
+        'urn:agent:environment/agent',
         props,
       );
     });

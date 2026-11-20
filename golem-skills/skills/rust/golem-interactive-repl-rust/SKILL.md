@@ -15,12 +15,12 @@ The `golem repl` command starts an interactive REPL for testing and scripting ag
 golem repl
 ```
 
-Starts a TypeScript REPL with all agent client classes preconfigured in the global scope — including your Rust agents. You can get or create agent instances, invoke methods, and see logs streamed during invocations, all with full type safety.
+Starts a TypeScript REPL with all agent client classes preconfigured in the global scope — including your Rust agents. You can address keyed agents with `upsert`, create agents with `create`, connect to agents by ID with `getById`, invoke methods, and see logs streamed during invocations, all with full type safety.
 
 ### Example: Invoking a Rust counter agent from the TypeScript REPL
 
 ```typescript
-const c1 = await CounterAgent.get("c1")
+const c1 = CounterAgent.upsert("c1")
 await c1.increment()
 await c1.increment()
 const value = await c1.getValue()
@@ -51,7 +51,7 @@ Run the script after creating it, unless the user explicitly asked not to.
 ### Example script (`test.ts`)
 
 ```typescript
-const c2 = await CounterAgent.get("c2")
+const c2 = CounterAgent.upsert("c2")
 await c2.increment()
 await c2.increment()
 ```

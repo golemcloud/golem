@@ -124,6 +124,7 @@ async fn store_zeta_component(
             metadata: Blob::new(metadata),
             object_store_key: String::new(),
             binary_hash: SqlBlake3Hash::empty(),
+            package_metadata: None,
         },
         Vec::new(),
     )

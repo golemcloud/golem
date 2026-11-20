@@ -23,10 +23,11 @@
 //! to stderr (see `Context::new`) and these structured payloads are
 //! emitted on stdout so that automation can rely on a stable schema.
 
-use crate::model::agent::{AgentActionError, RawAgentId};
+use crate::model::agent::AgentActionError;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::masking::Masked;
 use crate::model::text_format::*;
+use golem_common::model::AgentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -35,7 +36,7 @@ use std::path::PathBuf;
 #[serde(rename_all = "camelCase")]
 pub struct AgentDeleteView {
     pub deleted: bool,
-    pub agent_id: String,
+    pub agent_id: AgentId,
 }
 
 impl Masked for AgentDeleteView {}
@@ -60,7 +61,7 @@ impl StructuredOutput for AgentDeleteView {
 #[serde(rename_all = "camelCase")]
 pub struct AgentFileContentsResult {
     pub saved: bool,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub path: String,
     pub output_path: PathBuf,
     pub bytes: usize,
@@ -77,7 +78,7 @@ impl StructuredOutput for AgentFileContentsResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentInterruptResult {
     pub interrupted: bool,
-    pub agent_id: String,
+    pub agent_id: AgentId,
 }
 
 impl NoTextOutput for AgentInterruptResult {}
@@ -91,7 +92,7 @@ impl StructuredOutput for AgentInterruptResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentResumeResult {
     pub resumed: bool,
-    pub agent_id: String,
+    pub agent_id: AgentId,
 }
 
 impl NoTextOutput for AgentResumeResult {}
@@ -105,7 +106,7 @@ impl StructuredOutput for AgentResumeResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentSimulateCrashResult {
     pub simulated: bool,
-    pub agent_id: String,
+    pub agent_id: AgentId,
 }
 
 impl NoTextOutput for AgentSimulateCrashResult {}
@@ -119,7 +120,7 @@ impl StructuredOutput for AgentSimulateCrashResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentRevertResult {
     pub reverted: bool,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_oplog_index: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,7 +138,7 @@ impl StructuredOutput for AgentRevertResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentCancelInvocationResult {
     pub canceled: bool,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub idempotency_key: String,
 }
 
@@ -179,7 +180,11 @@ impl StructuredOutput for AgentRedeployResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentRedeploymentMeta {
     pub component_name: ComponentName,
-    pub agent_id: RawAgentId,
+    /// The ID of the deleted agent.
+    pub agent_id: AgentId,
+    /// The ID of the recreated agent: the same ID for a keyed agent, a new ID for an agent
+    /// without a key.
+    pub recreated_agent_id: AgentId,
     pub from_revision: ComponentRevision,
     pub revision: ComponentRevision,
 }
@@ -242,14 +247,14 @@ impl StructuredOutput for AgentDeleteAllView {
 #[serde(rename_all = "camelCase")]
 pub struct AgentDeletionMeta {
     pub component_name: ComponentName,
-    pub agent_id: RawAgentId,
+    pub agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPluginToggleResult {
     pub activated: bool,
-    pub agent_id: String,
+    pub agent_id: AgentId,
     pub plugin: String,
     pub priority: i32,
 }

@@ -64,11 +64,11 @@ async fn completion_and_history(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("Networking", "p2-input-completion-history");
+    let name = agent_key!("Networking", "p2-input-completion-history");
     let id = executor.start_agent(&component.id, name.clone()).await?;
-    wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id.clone())
         .await
         .unwrap()
         .primary();
@@ -100,7 +100,7 @@ async fn completion_and_history(
     })));
     let result = async {
         let (mut peer, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
-        let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
+        let (selected, release) = executor.gate_next_invocation_outcome_append(&id.agent_id).await;
         peer.write_all(b"x").await?;
         if matches!(operation, Operation::Splice) {
             let mut echoed = [0];
@@ -108,7 +108,7 @@ async fn completion_and_history(
             ensure!(echoed == *b"x");
         }
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        executor.commit_oplog(&id).await?;
+        executor.commit_oplog(&id.agent_id).await?;
         let connect_start = completed_setup(&executor.get_oplog(&id, OplogIndex::INITIAL).await?)?;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
@@ -182,7 +182,7 @@ async fn completion_and_history(
     finish_input_test(
         result,
         &executor,
-        &id,
+        &id.agent_id,
         &worker,
         &mut invocation,
         &mut refresh,

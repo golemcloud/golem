@@ -3,7 +3,7 @@ description: 'Setup Node, pnpm, and the shared WASM component toolchain'
 inputs:
   node-version:
     description: 'Node.js version to install'
-    default: 'lts/*'
+    default: '24'
   pnpm-version:
     description: 'pnpm version to install'
     default: '10.17.1'

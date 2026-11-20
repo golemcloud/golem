@@ -15,139 +15,191 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-func TestConstructSequenceAndFailures(t *testing.T) {
-	for _, phantom := range []witTypes.Option[types.Uuid]{witTypes.None[types.Uuid](), witTypes.Some(types.Uuid{HighBits: 1, LowBits: 2})} {
-		for _, failAt := range []string{"", "construct", "connect"} {
-			t.Run(failAt+"/phantom="+map[bool]string{true: "some", false: "none"}[phantom.IsSome()], func(t *testing.T) {
-				ctor := types.SchemaValueTree{Root: 3}
-				config := []common.TypedAgentConfigValue{{}}
-				var calls []string
-				o := operations{
-					construct: func(name string, value types.SchemaValueTree, p witTypes.Option[types.Uuid]) witTypes.Result[string, common.AgentError] {
-						calls = append(calls, "construct")
-						if name != "Counter" || !reflect.DeepEqual(value, ctor) || p != phantom {
-							t.Fatal("construction arguments changed")
-						}
-						if failAt == "construct" {
-							return witTypes.Err[string](common.MakeAgentErrorInvalidInput("bad constructor"))
-						}
-						return witTypes.Ok[string, common.AgentError]("host-resolved-id")
-					},
-					connect: func(name string, value types.SchemaValueTree, p witTypes.Option[types.Uuid], cfg []common.TypedAgentConfigValue) witTypes.Result[*host.WasmRpc, host.RpcError] {
-						calls = append(calls, "connect")
-						if name != "Counter" || !reflect.DeepEqual(value, ctor) || p != phantom || !reflect.DeepEqual(cfg, config) {
-							t.Fatal("connection arguments changed")
-						}
-						if failAt == "connect" {
-							return witTypes.Err[*host.WasmRpc](host.MakeRpcErrorDenied("denied"))
-						}
-						return witTypes.Ok[*host.WasmRpc, host.RpcError](nil)
-					},
+var (
+	testCtor = types.SchemaValueTree{Root: 3}
+	testID   = types.AgentId{Uuid: types.Uuid{HighBits: 0x0000000700008000, LowBits: 0x8000000000000004}}
+)
+
+func typeOfCounter(id types.AgentId) witTypes.Option[string] {
+	if id == testID {
+		return witTypes.Some("Counter")
+	}
+	return witTypes.None[string]()
+}
+
+func TestUpsertCallsTheHostUpsertAndLeavesTheIDToTheHost(t *testing.T) {
+	rpc := &host.WasmRpc{}
+	var calls []string
+	o := operations{
+		upsert: func(name string, ctor types.SchemaValueTree) witTypes.Result[*host.WasmRpc, host.RpcError] {
+			calls = append(calls, "upsert")
+			if name != "Counter" || !reflect.DeepEqual(ctor, testCtor) {
+				t.Fatal("upsert arguments changed")
+			}
+			return witTypes.Ok[*host.WasmRpc, host.RpcError](rpc)
+		},
+		agentID: func(got *host.WasmRpc) witTypes.Result[types.AgentId, host.RpcError] {
+			calls = append(calls, "agent-id")
+			if got != rpc {
+				t.Fatal("asked another client for its ID")
+			}
+			return witTypes.Ok[types.AgentId, host.RpcError](testID)
+		},
+	}
+	conn, failure := o.upsertClient("Counter", testCtor)
+	if failure != nil || conn.RPC != rpc || conn.TypeName != "Counter" || conn.AgentID.IsSome() {
+		t.Fatalf("connection = %+v, failure = %+v", conn, failure)
+	}
+	id, failure := o.connectionID(conn)
+	if failure != nil || id != testID || !reflect.DeepEqual(calls, []string{"upsert", "agent-id"}) {
+		t.Fatalf("id = %+v, failure = %+v, calls = %v", id, failure, calls)
+	}
+}
+
+func TestUpsertAndAgentIDFailuresKeepTheRPCError(t *testing.T) {
+	o := operations{
+		upsert: func(string, types.SchemaValueTree) witTypes.Result[*host.WasmRpc, host.RpcError] {
+			return witTypes.Err[*host.WasmRpc](host.MakeRpcErrorConflict("key has another agent"))
+		},
+		agentID: func(*host.WasmRpc) witTypes.Result[types.AgentId, host.RpcError] {
+			return witTypes.Err[types.AgentId](host.MakeRpcErrorDenied("no view"))
+		},
+	}
+	if _, failure := o.upsertClient("Counter", testCtor); failure == nil || failure.Stage != RPCStage ||
+		failure.TypeName != "Counter" || failure.RPCError.Conflict() != "key has another agent" {
+		t.Fatalf("upsert failure = %+v", failure)
+	}
+	conn := Connection{TypeName: "Counter", AgentID: witTypes.None[types.AgentId](), RPC: &host.WasmRpc{}}
+	if _, failure := o.connectionID(conn); failure == nil || failure.RPCError.Denied() != "no view" {
+		t.Fatalf("agent-id failure = %+v", failure)
+	}
+}
+
+func TestCreatePassesKeyedConfigAndEnvAndKeepsTheIssuedID(t *testing.T) {
+	for _, keyed := range []bool{false, true} {
+		options := host.CreateOptions{
+			Keyed:       keyed,
+			AgentConfig: []common.TypedAgentConfigValue{{Path: []string{"greeting"}}},
+			Env:         []witTypes.Tuple2[string, string]{{F0: "MODE", F1: "test"}},
+		}
+		rpc := &host.WasmRpc{}
+		o := operations{
+			create: func(name string, ctor types.SchemaValueTree, got host.CreateOptions) witTypes.Result[host.Created, host.RpcError] {
+				if name != "Counter" || !reflect.DeepEqual(ctor, testCtor) || !reflect.DeepEqual(got, options) {
+					t.Fatalf("create arguments = %q %+v %+v", name, ctor, got)
 				}
-				got, failure := o.constructClient("Counter", ctor, phantom, config)
-				switch failAt {
-				case "construct":
-					if failure == nil || failure.Stage != ConstructStage || failure.TypeName != "Counter" || failure.AgentError.InvalidInput() != "bad constructor" {
-						t.Fatal("lost construction failure")
-					}
-					if !reflect.DeepEqual(calls, []string{"construct"}) {
-						t.Fatal("connected after construction failed")
-					}
-				case "connect":
-					if failure == nil || failure.Stage != ConnectStage || failure.TypeName != "Counter" || failure.RPCError.Denied() != "denied" {
-						t.Fatal("lost connection failure")
-					}
-				default:
-					if failure != nil || got.AgentID != "host-resolved-id" || got.TypeName != "Counter" || got.PhantomID != phantom {
-						t.Fatal("lost host identity")
-					}
-				}
-				if failAt != "construct" && !reflect.DeepEqual(calls, []string{"construct", "connect"}) {
-					t.Fatal("incorrect host call order")
-				}
-			})
+				return witTypes.Ok[host.Created, host.RpcError](host.Created{Client: rpc, AgentId: testID})
+			},
+			agentID: func(*host.WasmRpc) witTypes.Result[types.AgentId, host.RpcError] {
+				t.Fatal("a created client asked the host for its ID")
+				panic("unreachable")
+			},
+		}
+		conn, failure := o.createClient("Counter", testCtor, options)
+		if failure != nil || conn.RPC != rpc || conn.AgentID != witTypes.Some(testID) {
+			t.Fatalf("keyed=%v: connection = %+v, failure = %+v", keyed, conn, failure)
+		}
+		if id, failure := o.connectionID(conn); failure != nil || id != testID {
+			t.Fatalf("keyed=%v: id = %+v, failure = %+v", keyed, id, failure)
 		}
 	}
 }
 
-func TestConnectSequenceAndFailures(t *testing.T) {
-	for _, failAt := range []string{"", "parse", "connect"} {
-		t.Run(failAt, func(t *testing.T) {
-			parsed := Parsed{TypeName: "Counter", Constructor: types.TypedSchemaValue{Value: types.SchemaValueTree{Root: 7}}, PhantomID: witTypes.Some(types.Uuid{HighBits: 4, LowBits: 5})}
-			var calls []string
-			o := operations{
-				parse: func(agentID string) witTypes.Result[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]], common.AgentError] {
-					calls = append(calls, "parse")
-					if agentID != "existing-id" {
-						t.Fatal("parse input changed")
-					}
-					if failAt == "parse" {
-						return witTypes.Err[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]]](common.MakeAgentErrorInvalidAgentId("bad id"))
-					}
-					return witTypes.Ok[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]], common.AgentError](witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]]{F0: parsed.TypeName, F1: parsed.Constructor, F2: parsed.PhantomID})
-				},
-				connect: func(name string, value types.SchemaValueTree, p witTypes.Option[types.Uuid], cfg []common.TypedAgentConfigValue) witTypes.Result[*host.WasmRpc, host.RpcError] {
-					calls = append(calls, "connect")
-					if name != parsed.TypeName || !reflect.DeepEqual(value, parsed.Constructor.Value) || p != parsed.PhantomID || cfg != nil {
-						t.Fatal("parsed target changed")
-					}
-					if failAt == "connect" {
-						return witTypes.Err[*host.WasmRpc](host.MakeRpcErrorNotFound("missing"))
-					}
-					return witTypes.Ok[*host.WasmRpc, host.RpcError](nil)
-				},
+func TestKeyedCreateConflictIsTheRPCError(t *testing.T) {
+	o := operations{create: func(string, types.SchemaValueTree, host.CreateOptions) witTypes.Result[host.Created, host.RpcError] {
+		return witTypes.Err[host.Created](host.MakeRpcErrorConflict("the key is current"))
+	}}
+	_, failure := o.createClient("Counter", testCtor, host.CreateOptions{Keyed: true})
+	if failure == nil || failure.TypeName != "Counter" || failure.RPCError.Tag() != host.RpcErrorConflict ||
+		failure.RPCError.Conflict() != "the key is current" {
+		t.Fatalf("failure = %+v", failure)
+	}
+}
+
+func TestGetByIDPassesTheTypeAndIDAndKeepsNotFound(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		rpc := &host.WasmRpc{}
+		o := operations{getByID: func(name string, id types.AgentId) witTypes.Result[*host.WasmRpc, host.RpcError] {
+			if name != "Counter" || id != testID {
+				t.Fatalf("get-by-id arguments = %q %+v", name, id)
 			}
-			got, failure := o.connectID("existing-id")
-			switch failAt {
-			case "parse":
-				if failure == nil || failure.Stage != ParseStage || failure.AgentError.InvalidAgentId() != "bad id" {
-					t.Fatal("lost parse failure")
-				}
-				if !reflect.DeepEqual(calls, []string{"parse"}) {
-					t.Fatal("connected after parse failed")
-				}
-			case "connect":
-				if failure == nil || failure.Stage != ConnectStage || failure.TypeName != "Counter" || failure.RPCError.NotFound() != "missing" {
-					t.Fatal("lost bind failure")
-				}
-			default:
-				if failure != nil || got.AgentID != "existing-id" || got.TypeName != parsed.TypeName || got.PhantomID != parsed.PhantomID {
-					t.Fatal("lost parsed identity")
-				}
+			if missing {
+				return witTypes.Err[*host.WasmRpc](host.MakeRpcErrorNotFound("no agent of Counter has the ID"))
 			}
-			if failAt != "parse" && !reflect.DeepEqual(calls, []string{"parse", "connect"}) {
-				t.Fatal("bind rendered an existing identity or connected before parsing")
+			return witTypes.Ok[*host.WasmRpc, host.RpcError](rpc)
+		}}
+		conn, failure := o.getClientByID("Counter", testID)
+		if missing {
+			if failure == nil || failure.RPCError.Tag() != host.RpcErrorNotFound {
+				t.Fatalf("failure = %+v", failure)
 			}
-		})
+			continue
+		}
+		if failure != nil || conn.RPC != rpc || conn.AgentID != witTypes.Some(testID) {
+			t.Fatalf("connection = %+v, failure = %+v", conn, failure)
+		}
+	}
+}
+
+func TestGetAnyByIDReadsTheTypeFromTheTag(t *testing.T) {
+	var asked []string
+	o := operations{
+		typeOf: typeOfCounter,
+		getByID: func(name string, _ types.AgentId) witTypes.Result[*host.WasmRpc, host.RpcError] {
+			asked = append(asked, name)
+			return witTypes.Ok[*host.WasmRpc, host.RpcError](&host.WasmRpc{})
+		},
+	}
+	if conn, failure := o.getAnyClientByID(testID); failure != nil || conn.TypeName != "Counter" {
+		t.Fatalf("connection = %+v, failure = %+v", conn, failure)
+	}
+	if _, failure := o.getAnyClientByID(types.AgentId{}); failure == nil || failure.RPCError.Tag() != host.RpcErrorNotFound {
+		t.Fatalf("an unknown tag gave %+v", failure)
+	}
+	if !reflect.DeepEqual(asked, []string{"Counter"}) {
+		t.Fatalf("get-by-id calls = %v", asked)
+	}
+}
+
+func TestLookupNeverConnects(t *testing.T) {
+	for _, found := range []witTypes.Option[types.AgentId]{witTypes.None[types.AgentId](), witTypes.Some(testID)} {
+		o := operations{lookup: func(name string, ctor types.SchemaValueTree) witTypes.Result[witTypes.Option[types.AgentId], host.RpcError] {
+			if name != "Counter" || !reflect.DeepEqual(ctor, testCtor) {
+				t.Fatal("lookup arguments changed")
+			}
+			return witTypes.Ok[witTypes.Option[types.AgentId], host.RpcError](found)
+		}}
+		got, failure := o.lookupID("Counter", testCtor)
+		if failure != nil || got != found {
+			t.Fatalf("lookup = %+v, failure = %+v", got, failure)
+		}
+	}
+	o := operations{lookup: func(string, types.SchemaValueTree) witTypes.Result[witTypes.Option[types.AgentId], host.RpcError] {
+		return witTypes.Err[witTypes.Option[types.AgentId]](host.MakeRpcErrorDenied("denied"))
+	}}
+	if _, failure := o.lookupID("Counter", testCtor); failure == nil || failure.RPCError.Denied() != "denied" {
+		t.Fatalf("failure = %+v", failure)
 	}
 }
 
 func TestSelfBindingPreservesRecordedIdentityAndRefusesWrongTypes(t *testing.T) {
-	for _, failAt := range []string{"", "host", "parse", "type"} {
+	for _, failAt := range []string{"", "host", "type", "undeployed"} {
 		t.Run(failAt, func(t *testing.T) {
 			rpc := &host.WasmRpc{}
-			phantom := witTypes.Some(types.Uuid{HighBits: 17, LowBits: 29})
+			bound := testID
+			if failAt == "undeployed" {
+				bound = types.AgentId{}
+			}
 			drops := 0
 			o := operations{
-				bindSelf: func() witTypes.Result[witTypes.Tuple2[string, *host.WasmRpc], host.RpcError] {
+				bindSelf: func() witTypes.Result[witTypes.Tuple2[types.AgentId, *host.WasmRpc], host.RpcError] {
 					if failAt == "host" {
-						return witTypes.Err[witTypes.Tuple2[string, *host.WasmRpc]](host.MakeRpcErrorDenied("ephemeral owner"))
+						return witTypes.Err[witTypes.Tuple2[types.AgentId, *host.WasmRpc]](host.MakeRpcErrorDenied("ephemeral owner"))
 					}
-					return witTypes.Ok[witTypes.Tuple2[string, *host.WasmRpc], host.RpcError](witTypes.Tuple2[string, *host.WasmRpc]{F0: "recorded-phantom-id", F1: rpc})
+					return witTypes.Ok[witTypes.Tuple2[types.AgentId, *host.WasmRpc], host.RpcError](
+						witTypes.Tuple2[types.AgentId, *host.WasmRpc]{F0: bound, F1: rpc})
 				},
-				parse: func(id string) witTypes.Result[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]], common.AgentError] {
-					if id != "recorded-phantom-id" {
-						t.Fatal("parsed a different identity")
-					}
-					if failAt == "parse" {
-						return witTypes.Err[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]]](common.MakeAgentErrorInvalidAgentId("bad id"))
-					}
-					name := "Counter"
-					if failAt == "type" {
-						name = "Other"
-					}
-					return witTypes.Ok[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]], common.AgentError](witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]]{F0: name, F2: phantom})
-				},
+				typeOf: typeOfCounter,
 				drop: func(got *host.WasmRpc) {
 					if got != rpc {
 						t.Fatal("dropped another resource")
@@ -155,40 +207,30 @@ func TestSelfBindingPreservesRecordedIdentityAndRefusesWrongTypes(t *testing.T) 
 					drops++
 				},
 			}
-			got, failure := o.self("Counter")
+			expected := "Counter"
+			if failAt == "type" {
+				expected = "Other"
+			}
+			got, failure := o.self(expected)
 			switch failAt {
 			case "":
-				if failure != nil || got.AgentID != "recorded-phantom-id" || got.PhantomID != phantom || got.RPC != rpc || drops != 0 {
+				if failure != nil || got.AgentID != witTypes.Some(testID) || got.RPC != rpc || drops != 0 {
 					t.Fatal("lost bound identity or resource")
 				}
 			case "host":
-				if failure == nil || failure.RPCError.Denied() != "ephemeral owner" || drops != 0 {
+				if failure == nil || failure.Stage != RPCStage || failure.RPCError.Denied() != "ephemeral owner" || drops != 0 {
 					t.Fatal("lost host refusal")
 				}
-			case "parse":
-				if failure == nil || failure.AgentError.InvalidAgentId() != "bad id" || drops != 1 {
-					t.Fatal("lost parse error or leaked resource")
-				}
 			case "type":
-				if failure == nil || failure.AgentError.InvalidType() != "self binding expects Counter, identity is Other" || drops != 1 {
+				if failure == nil || failure.Stage != TypeStage ||
+					failure.AgentError.InvalidType() != "self binding expects Other, identity is Counter" || drops != 1 {
 					t.Fatal("lost typed refusal or leaked resource")
+				}
+			case "undeployed":
+				if failure == nil || failure.Stage != TypeStage || drops != 1 {
+					t.Fatal("bound an undeployed type or leaked resource")
 				}
 			}
 		})
-	}
-}
-
-func TestBindUsesParsedTargetAndConfig(t *testing.T) {
-	config := []common.TypedAgentConfigValue{{}}
-	parsed := Parsed{TypeName: "Counter", Constructor: types.TypedSchemaValue{Value: types.SchemaValueTree{Root: 2}}}
-	o := operations{connect: func(name string, value types.SchemaValueTree, p witTypes.Option[types.Uuid], cfg []common.TypedAgentConfigValue) witTypes.Result[*host.WasmRpc, host.RpcError] {
-		if name != parsed.TypeName || !reflect.DeepEqual(value, parsed.Constructor.Value) || p != parsed.PhantomID || !reflect.DeepEqual(cfg, config) {
-			t.Fatal("bind arguments changed")
-		}
-		return witTypes.Ok[*host.WasmRpc, host.RpcError](nil)
-	}}
-	got, failure := o.bind("existing-id", parsed, config)
-	if failure != nil || got.AgentID != "existing-id" {
-		t.Fatal("bind failed")
 	}
 }

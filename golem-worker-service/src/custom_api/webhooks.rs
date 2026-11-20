@@ -20,9 +20,7 @@ use crate::custom_api::ResponseBody;
 use crate::service::worker::WorkerService;
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::schema_type::{BinaryRestrictions, SchemaType};
-use golem_service_base::custom_api::{
-    AgentWebhookId, CompiledSchema, RequestBodySchema, WebhookCallbackBehaviour,
-};
+use golem_service_base::custom_api::{AgentWebhookId, CompiledSchema, RequestBodySchema};
 use golem_service_base::model::auth::AuthCtx;
 use http::StatusCode;
 use std::sync::Arc;
@@ -44,7 +42,6 @@ impl WebhookCallbackHandler {
         &self,
         request: &mut RichRequest,
         resolved_route: &ResolvedRouteEntry,
-        behaviour: &WebhookCallbackBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         let webhook_id_segment = resolved_route.captured_path_parameters.first().ok_or(
             RequestHandlerError::invariant_violated(
@@ -61,7 +58,8 @@ impl WebhookCallbackHandler {
 
         // check that worker-executor signed the webhook id. If this fails it means createWebhook was not called / the webhook was created manually.
         // return 404 as logically the webhook resource does not exist in this case;
-        if !webhook_id.verify_checksum(behaviour.component_id, &self.hmac_key) {
+        let environment_id = resolved_route.route.environment_id;
+        if !webhook_id.verify_checksum(environment_id, &self.hmac_key) {
             tracing::warn!("Received webhook callback with incorrect checksum");
             return Ok(RouteExecutionResult {
                 status: StatusCode::NOT_FOUND,
@@ -70,7 +68,7 @@ impl WebhookCallbackHandler {
             });
         }
 
-        let promise_id = webhook_id.into_promise_id(behaviour.component_id);
+        let promise_id = webhook_id.into_promise_id();
 
         let body = request
             .parse_request_body(&RequestBodySchema::BinaryBody {
@@ -94,7 +92,7 @@ impl WebhookCallbackHandler {
 
         tracing::debug!("Completing promise due to webhook_callback: {promise_id}");
         self.worker_service
-            .complete_promise(promise_id, body_binary, auth_ctx)
+            .complete_promise(environment_id, promise_id, body_binary, auth_ctx)
             .await?;
 
         Ok(RouteExecutionResult {

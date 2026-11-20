@@ -16,7 +16,7 @@ use crate::agentic::EnrichedParameterSchema;
 use crate::agentic::extended_agent_type::ExtendedAgentType;
 use crate::agentic::identity::golem_env_var_not_readable;
 use crate::{
-    AgentId, ComponentId, Uuid,
+    AgentId, Uuid,
     agentic::{ResolvedAgent, agent_initiator::AgentInitiator},
     golem_agentic::{exports::golem::agent::guest::AgentType, golem::agent::common::AgentTypeKind},
 };
@@ -227,26 +227,16 @@ where
     f(agent_instance.as_ref())
 }
 
-/// Returns the ID of the running agent, read from `GOLEM_AGENT_ID` and `GOLEM_COMPONENT_ID`.
+/// Returns the ID of the running agent, read from `GOLEM_AGENT_ID`.
 ///
-/// The agent can read these variables only when its permission card allows
-/// `env(?agent) @ ?agent : read : GOLEM_AGENT_ID` and
-/// `env(?agent) @ ?agent : read : GOLEM_COMPONENT_ID`. It panics with the missing grant otherwise.
+/// The agent can read this variable only when its permission card allows
+/// `env(?agent) @ ?agent : read : GOLEM_AGENT_ID`. It panics with the missing grant otherwise.
 pub fn get_agent_id() -> AgentId {
-    let env_vars: HashMap<String, String> =
-        HashMap::from_iter(wasip3::cli::environment::get_environment());
-    let raw_agent_id = env_vars
-        .get("GOLEM_AGENT_ID")
+    let raw_agent_id = wasip3::cli::environment::get_environment()
+        .into_iter()
+        .find_map(|(key, value)| (key == "GOLEM_AGENT_ID").then_some(value))
         .unwrap_or_else(|| panic!("{}", golem_env_var_not_readable("GOLEM_AGENT_ID")));
-    let raw_component_id = env_vars
-        .get("GOLEM_COMPONENT_ID")
-        .unwrap_or_else(|| panic!("{}", golem_env_var_not_readable("GOLEM_COMPONENT_ID")));
-    AgentId {
-        component_id: ComponentId {
-            uuid: Uuid::parse_str(raw_component_id).expect("Invalid GOLEM_COMPONENT_ID"),
-        },
-        agent_id: raw_agent_id.clone(),
-    }
+    AgentId::new(Uuid::parse_str(&raw_agent_id).expect("Invalid GOLEM_AGENT_ID"))
 }
 
 pub fn get_resolved_agent() -> Option<Rc<ResolvedAgent>> {

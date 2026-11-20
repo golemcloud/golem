@@ -295,8 +295,12 @@ async fn otlp_all_signals_export(
         );
         assert!(
             attribute(&record.resource.attributes, "golem.agent.id")
-                .is_some_and(|id| id.contains("InvocationContextAgent(")),
-            "resource should retain the full agent identity: {record:?}"
+                .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()),
+            "resource should carry the agent ID: {record:?}"
+        );
+        assert_eq!(
+            attribute(&record.resource.attributes, "golem.agent.type"),
+            Some("InvocationContextAgent")
         );
         assert_ne!(
             record.span.status.as_ref().map(|status| status.code),

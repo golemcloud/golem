@@ -196,10 +196,9 @@ test "a failed revoke still moves the card" {
 test "install maps a recipient mismatch and moves the card" {
   fresh_host()
   let (concrete_card, card) = wallet_cards()
-  let target : @permissions.Holder = Agent({
-    component_id: { uuid: { high_bits: 1, low_bits: 2, }, },
-    agent_id: "Target(\"other\")",
-  })
+  let target : @permissions.Holder = Agent(
+    @schema.AgentId::from_uuid(@schema.Uuid::from_bits(1, 2)),
+  )
   let concrete_error = expect_error(() => concrete_card.install(target))
   assert_eq(concrete_error.kind(), "install-recipient-mismatch")
   assert_eq(permission_host_stat(3), 11)

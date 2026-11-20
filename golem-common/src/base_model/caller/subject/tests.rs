@@ -18,7 +18,6 @@ use crate::base_model::agent::AgentTypeName;
 use crate::base_model::caller::{
     AccountAuthentication, AccountPrincipal, AgentPrincipal, Pair, Principal, ToolPrincipal,
 };
-use crate::base_model::component::ComponentId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
 use crate::base_model::{AgentFingerprint, AgentId};
@@ -43,10 +42,7 @@ fn agent(fingerprint: &str) -> AgentPrincipal {
     AgentPrincipal {
         issuer: ISSUER.to_string(),
         agent_id: uuid(AGENT_ID),
-        address: AgentId {
-            component_id: ComponentId(Uuid::from_u128(0x6b1f0c2d)),
-            agent_id: "Analyst(\"a\")".to_string(),
-        },
+        address: AgentId(uuid(AGENT_ID)),
         fingerprint: AgentFingerprint(uuid(fingerprint)),
         agent_type: AgentTypeName("Analyst".to_string()),
         environment_id: EnvironmentId(uuid(ENVIRONMENT)),

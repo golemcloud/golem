@@ -87,7 +87,7 @@ export const ApiAgentImpl = ApiAgent.implement({
 });
 ```
 
-`this.getPrincipal()` returns the initialization principal, also available in `init` via the `InitContext` argument: `init: (ctx) => ({ caller: ctx.principal })`. It is not necessarily the caller of a later invocation. To authorize each call, declare a bare `s.principal()` method input; the host injects the current invocation principal without a caller wire field. See [`golem-http-params-ts`](/next/how-to-guides/ts/golem-http-params-ts). `this.getId()` and `this.getPhantomId()` are also available on every handler's `this`.
+`this.getPrincipal()` returns the initialization principal, also available in `init` via the `InitContext` argument: `init: (ctx) => ({ caller: ctx.principal })`. It is not necessarily the caller of a later invocation. To authorize each call, declare a bare `s.principal()` method input; the host injects the current invocation principal without a caller wire field. See [`golem-http-params-ts`](/next/how-to-guides/ts/golem-http-params-ts). `this.getId()`, which returns the agent's `AgentId`, is also available on every handler's `this`.
 
 ## Deployment Configuration
 

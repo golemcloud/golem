@@ -128,10 +128,11 @@ message CreateParameters {
   uint64 initial_total_linear_memory_size = 10;
   repeated PluginInstallationDescription initial_active_plugins = 11;
   golem.common.EnvironmentId environment_id = 12;
-  optional golem.common.UUID original_phantom_id = 13;
   golem.common.UUID instance_id = 14;
   golem.component.AgentMode agent_mode = 15;
   OwnerKind owner_kind = 16;
+  optional string agent_type_name = 17;
+  bool never_live = 18;
 }
 
 // Identifies a durable call by the oplog index of the record that numbers it and its place among
@@ -578,8 +579,13 @@ message CardHolder {
   oneof holder {
     golem.common.UUID account = 1;
     golem.common.UUID application = 2;
-    AgentId agent = 3;
+    AgentCardHolder agent = 3;
   }
+}
+
+message AgentCardHolder {
+  golem.common.EnvironmentId environment_id = 1;
+  AgentId agent_id = 2;
 }
 
 message CardDerivedParameters {

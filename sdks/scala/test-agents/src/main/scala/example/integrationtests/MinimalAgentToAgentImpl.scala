@@ -40,12 +40,12 @@ final class WorkerImpl(private val shardName: String, private val shardIndex: In
 @agentImplementation()
 final class CoordinatorImpl(@unused id: String) extends Coordinator {
   override def route(shardName: String, shardIndex: Int, input: String): Future[String] = {
-    val worker = WorkerClient.get(shardName, shardIndex)
+    val worker = WorkerClient.upsert(shardName, shardIndex)
     worker.reverse(input)
   }
 
   override def routeTyped(shardName: String, shardIndex: Int, payload: TypedPayload): Future[TypedReply] = {
-    val worker = WorkerClient.get(shardName, shardIndex)
+    val worker = WorkerClient.upsert(shardName, shardIndex)
     worker.handle(payload)
   }
 }

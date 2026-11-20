@@ -326,6 +326,9 @@ pub struct ApplicationContext {
     config: ApplicationConfig,
     application: Application,
     component_metadata: crate::app::component_metadata::ComponentMetadataRegistry,
+    pub(crate) publisher_package: Option<golem_package::PackageIdentity>,
+    pub(crate) installed_components: BTreeMap<ComponentName, golem_package::InstalledComponent>,
+    _package_dir: Option<crate::package::UnpackRoot>,
     calling_working_dir: PathBuf,
     selected_component_names: BTreeSet<ComponentName>,
     builtin_local_url: url::Url,
@@ -349,6 +352,9 @@ impl ApplicationContext {
             component_metadata: crate::app::component_metadata::ComponentMetadataRegistry::new(
                 false,
             ),
+            publisher_package: None,
+            installed_components: BTreeMap::new(),
+            _package_dir: None,
             builtin_local_url: "http://localhost:9881".parse().unwrap(),
             tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps::new(),
         }
@@ -463,8 +469,42 @@ impl ApplicationContext {
         local_server: Option<WithSource<app_raw::LocalServer>>,
         component_presets: ComponentPresetSelector,
         builtin_local_url: url::Url,
-        file_download_client: reqwest::Client,
+        config_dir: &Path,
     ) -> anyhow::Result<Option<ApplicationContext>> {
+        let mut source_mode = source_mode;
+        let (publisher_package, expanded, package_dir) = match &mut source_mode {
+            ApplicationSourceMode::Preloaded(loaded) => {
+                let (publisher_package, pins, lock) = package_pins(loaded)?;
+                if pins.is_empty() {
+                    (publisher_package, Default::default(), None)
+                } else {
+                    let dir = crate::package::UnpackRoot::new(&loaded.app_root_dir)?;
+                    let mut effects = crate::package::LocalEffects {
+                        app_root: &loaded.app_root_dir,
+                        cache_root: config_dir.join("package-cache"),
+                    };
+                    let mut expanded =
+                        golem_package::expand(&pins, &lock, dir.path(), &mut effects).await?;
+                    for installed in expanded.components.values_mut() {
+                        // The lock is a local locator, not the source label sent to the registry.
+                        let source = fs::absolute_lexical_path_from_base_dir(
+                            Path::new(&installed.package_metadata.source),
+                            &loaded.app_root_dir,
+                        );
+                        installed.package_metadata.source =
+                            match source.strip_prefix(&loaded.app_root_dir) {
+                                Ok(relative) => fs::path_to_unix_str(relative)?,
+                                Err(_) => fs::file_name_to_str(&source)?.to_owned(),
+                            };
+                    }
+                    loaded
+                        .raw_apps
+                        .push(package_manifest(dir.path(), &expanded.declarations)?);
+                    (publisher_package, expanded.components, Some(dir))
+                }
+            }
+            _ => (None, Default::default(), None),
+        };
         let Some(app_and_calling_working_dir) = load_app(
             application_name,
             environments,
@@ -475,20 +515,17 @@ impl ApplicationContext {
             return Ok(None);
         };
 
-        let ctx = validated_to_anyhow(
+        let mut ctx = validated_to_anyhow(
             "Failed to load application manifest, see problems above",
-            Self::create_context(
-                app_and_calling_working_dir,
-                config,
-                builtin_local_url,
-                file_download_client,
-            )
-            .await,
+            Self::create_context(app_and_calling_working_dir, config, builtin_local_url).await,
             Some(|mut app_ctx| {
                 app_ctx.loaded_with_warnings = true;
                 app_ctx
             }),
         )?;
+        ctx.publisher_package = publisher_package;
+        ctx.installed_components = expanded;
+        ctx._package_dir = package_dir;
 
         if ctx.config.offline {
             log_action("Using", "offline mode");
@@ -523,7 +560,6 @@ impl ApplicationContext {
         app_and_calling_working_dir: ValidatedResult<(Application, PathBuf)>,
         config: ApplicationConfig,
         builtin_local_url: url::Url,
-        _file_download_client: reqwest::Client,
     ) -> ValidatedResult<ApplicationContext> {
         let tools_with_ensured_common_deps = ToolsWithEnsuredCommonDeps::new();
         app_and_calling_working_dir.map(|(application, calling_working_dir)| {
@@ -535,6 +571,9 @@ impl ApplicationContext {
                 config,
                 application,
                 component_metadata,
+                publisher_package: None,
+                installed_components: BTreeMap::new(),
+                _package_dir: None,
                 calling_working_dir,
                 selected_component_names: BTreeSet::new(),
                 builtin_local_url,
@@ -937,50 +976,95 @@ fn preload_app(
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode, calling_working_dir).map(|loaded_raw_apps| {
         loaded_raw_apps.and_then(|loaded_raw_apps| {
-            let referenced_template_names =
-                Application::referenced_template_names_from_raw_apps(&loaded_raw_apps.raw_apps);
+            ValidatedResult::from_result(package_pins(&loaded_raw_apps)).and_then(|_| {
+                let referenced_template_names =
+                    Application::referenced_template_names_from_raw_apps(&loaded_raw_apps.raw_apps);
 
-            Application::preload_from_raw_apps(loaded_raw_apps.raw_apps.as_slice())
-                .and_then(|application_preload| {
-                    ValidatedResult::from_result(ensure_on_demand_commons(
-                        &application_preload.application_name.value,
-                        &referenced_template_names,
-                        dev_mode,
-                    ))
-                    .map(|on_demand_common_raw_apps| {
-                        (on_demand_common_raw_apps, application_preload)
+                Application::preload_from_raw_apps(loaded_raw_apps.raw_apps.as_slice())
+                    .and_then(|application_preload| {
+                        ValidatedResult::from_result(ensure_on_demand_commons(
+                            &application_preload.application_name.value,
+                            &referenced_template_names,
+                            dev_mode,
+                        ))
+                        .map(|on_demand_common_raw_apps| {
+                            (on_demand_common_raw_apps, application_preload)
+                        })
                     })
-                })
-                .map(|(on_demand_common_raw_apps, application_preload)| {
-                    let resolved_local_server =
-                        application_preload
-                            .local_server
-                            .as_ref()
-                            .map(|local_server| {
-                                ResolvedLocalServer::from_raw_with_source(
-                                    local_server,
-                                    &loaded_raw_apps.app_root_dir,
-                                )
-                            });
-                    let raw_apps = {
-                        let mut raw_apps = loaded_raw_apps.raw_apps;
-                        raw_apps.extend(on_demand_common_raw_apps);
-                        raw_apps
-                    };
+                    .map(|(on_demand_common_raw_apps, application_preload)| {
+                        let resolved_local_server =
+                            application_preload
+                                .local_server
+                                .as_ref()
+                                .map(|local_server| {
+                                    ResolvedLocalServer::from_raw_with_source(
+                                        local_server,
+                                        &loaded_raw_apps.app_root_dir,
+                                    )
+                                });
+                        let raw_apps = {
+                            let mut raw_apps = loaded_raw_apps.raw_apps;
+                            raw_apps.extend(on_demand_common_raw_apps);
+                            raw_apps
+                        };
 
-                    ApplicationPreloadResult {
-                        source_mode: ApplicationSourceMode::Preloaded(LoadedRawApps {
-                            app_root_dir: loaded_raw_apps.app_root_dir,
-                            calling_working_dir: loaded_raw_apps.calling_working_dir,
-                            raw_apps,
-                        }),
-                        loaded_with_warnings: false,
-                        application_preload: Some(application_preload),
-                        resolved_local_server,
-                    }
-                })
+                        ApplicationPreloadResult {
+                            source_mode: ApplicationSourceMode::Preloaded(LoadedRawApps {
+                                app_root_dir: loaded_raw_apps.app_root_dir,
+                                root_manifest: loaded_raw_apps.root_manifest,
+                                calling_working_dir: loaded_raw_apps.calling_working_dir,
+                                raw_apps,
+                            }),
+                            loaded_with_warnings: false,
+                            application_preload: Some(application_preload),
+                            resolved_local_server,
+                        }
+                    })
+            })
         })
     })
+}
+
+fn package_manifest(
+    root: &Path,
+    declarations: &golem_package::Declarations,
+) -> anyhow::Result<app_raw::ApplicationWithSource> {
+    let source = root.join("package-manifest.json");
+    let declarations = serde_json::to_string(declarations)?;
+    std::fs::write(&source, &declarations)?;
+    Ok(app_raw::ApplicationWithSource {
+        source,
+        application: serde_json::from_str(&declarations)?,
+    })
+}
+
+fn package_pins(
+    loaded: &LoadedRawApps,
+) -> anyhow::Result<(
+    Option<golem_package::PackageIdentity>,
+    golem_package::Pins,
+    golem_package::Pins,
+)> {
+    let mut publisher = None;
+    let mut pins = golem_package::Pins::new();
+    for app in &loaded.raw_apps {
+        let raw = &app.application;
+        if app.source == loaded.root_manifest {
+            publisher = raw.package.clone();
+            pins.clone_from(&raw.packages);
+        } else if raw.package.is_some() || !raw.packages.is_empty() {
+            anyhow::bail!(
+                "Package declarations are only allowed in the root manifest, not {}",
+                app.source.display()
+            );
+        }
+    }
+    if let Some(identity) = &publisher {
+        golem_package::validate_identity(identity)?;
+    }
+    let lock = crate::package::load_lock(&loaded.app_root_dir)?;
+    golem_package::check_lock(&pins, &lock)?;
+    Ok((publisher, pins, lock))
 }
 
 fn ensure_on_demand_commons(
@@ -1029,6 +1113,7 @@ fn load_raw_apps(
                             .collect::<ValidatedResult<Vec<_>>>()
                             .map(|raw_apps| LoadedRawApps {
                                 app_root_dir: collected_sources.app_root_dir,
+                                root_manifest: collected_sources.root_manifest,
                                 calling_working_dir: collected_sources.calling_working_dir,
                                 raw_apps,
                             })
@@ -1050,6 +1135,7 @@ fn load_raw_apps(
 
 struct CollectedSources {
     app_root_dir: PathBuf,
+    root_manifest: PathBuf,
     calling_working_dir: PathBuf,
     sources: BTreeSet<PathBuf>,
 }
@@ -1075,7 +1161,7 @@ fn collect_sources_from(
 
     fn collect_by_main_source(
         source: &Path,
-    ) -> Option<ValidatedResult<(BTreeSet<PathBuf>, PathBuf)>> {
+    ) -> Option<ValidatedResult<(BTreeSet<PathBuf>, PathBuf, PathBuf)>> {
         let source_dir =
             fs::parent_or_err(source).expect("Failed to get parent dir for config parent");
 
@@ -1084,6 +1170,7 @@ fn collect_sources_from(
             Some(ValidatedResult::Ok((
                 BTreeSet::from([source.to_path_buf()]),
                 source_dir.to_path_buf(),
+                source.to_path_buf(),
             )))
         } else {
             Some(
@@ -1092,7 +1179,11 @@ fn collect_sources_from(
                 ))
                 .map(|mut sources| {
                     sources.insert(0, source.to_path_buf());
-                    (sources.into_iter().collect(), source_dir.to_path_buf())
+                    (
+                        sources.into_iter().collect(),
+                        source_dir.to_path_buf(),
+                        source.to_path_buf(),
+                    )
                 }),
             )
         }
@@ -1130,6 +1221,7 @@ fn collect_sources_from(
             })
             .map(|sources_and_root_dir| CollectedSources {
                 app_root_dir: sources_and_root_dir.1,
+                root_manifest: sources_and_root_dir.2,
                 calling_working_dir: calling_working_dir.to_path_buf(),
                 sources: sources_and_root_dir.0,
             })
@@ -1186,6 +1278,154 @@ mod tests {
     use super::ApplicationContext;
     use crate::model::app::{Application, ApplicationSourceMode, ResolvedLocalServer};
     use test_r::test;
+
+    #[test]
+    async fn installed_declarations_resolve_like_local_declarations() {
+        use crate::model::app::ComponentPresetSelector;
+        use crate::model::app_raw::ApplicationWithSource;
+        use golem_package::*;
+        use serde_json::json;
+        use std::collections::BTreeMap;
+        use std::fs;
+
+        let app = tempfile::tempdir().unwrap();
+        let unpack = app.path().join("unpack");
+        let mut blobs = BTreeMap::new();
+        let wasm = add_blob(&mut blobs, WASM, vec![0]).digest;
+        let file = add_blob(
+            &mut blobs,
+            INITIAL_FILES,
+            write_tar(&BTreeMap::from([("00000000".into(), b"sample")])).unwrap(),
+        )
+        .digest;
+        let component_name = "sample:shared".parse().unwrap();
+        let agent_name = "SampleAgent".parse().unwrap();
+        let tool_name = "example".parse().unwrap();
+        let middleware_name = "policy".parse().unwrap();
+        let spec = PackageConfig {
+            application: "publisher".into(),
+            package: PackageIdentity { name: "sample".into(), version: "1.0.0".into() },
+            components: BTreeMap::from([(component_name, PackageComponent {
+                wasm: wasm.clone(),
+                metadata: golem_common::model::agent::extraction::ExtractedComponentMetadata {
+                    agent_types: vec![],
+                    tools: vec![],
+                    tool_middlewares: vec![],
+                },
+                config_schema: Default::default(),
+                provision: PackageProvision {
+                    env: BTreeMap::from([("FROM_COMPONENT".into(), "default".into())]),
+                    files: Some(PackageInitialFiles {
+                        layer: file.clone(),
+                        entries: BTreeMap::from([("00000000".into(), PackageInitialFile {
+                            target: serde_json::from_value(json!("/hello.txt")).unwrap(),
+                            permissions: golem_common::model::component::AgentFilePermissions::ReadOnly,
+                        })]),
+                    }),
+                    ..Default::default()
+                },
+                agents: BTreeMap::from([(agent_name, PackageProvision { config: json!({"agentValue": 7}), ..Default::default() })]),
+                tools: BTreeMap::from([(tool_name, PackageProvision { config: json!({"toolValue": true}), ..Default::default() })]),
+                tool_middlewares: BTreeMap::from([(middleware_name, PackageProvision { config: json!({"middlewareValue": "strict"}), ..Default::default() })]),
+            })]),
+        };
+        let (digest, bytes) = pack(&spec, &blobs).unwrap();
+        fs::write(app.path().join("sample.tar"), bytes).unwrap();
+        let pins = Pins::from([(
+            "sample".into(),
+            FilePin {
+                source: "sample.tar".into(),
+                version: "1.0.0".into(),
+                digest,
+            },
+        )]);
+        let mut effects = crate::package::LocalEffects {
+            app_root: app.path(),
+            cache_root: app.path().join("cache"),
+        };
+        let expanded = expand(&pins, &pins, &unpack, &mut effects).await.unwrap();
+        let installed = super::package_manifest(&unpack, &expanded.declarations).unwrap();
+        let local_source = unpack.join("golem.yaml");
+        fs::write(
+            &local_source,
+            format!(
+                r#"
+components:
+  sample:shared:
+    componentWasm: sample/wasm/{}
+    env: {{ FROM_COMPONENT: default }}
+    files:
+      - sourcePath: sample/initial-files/{}/00000000
+        targetPath: /hello.txt
+agents:
+  SampleAgent:
+    config: {{ agentValue: 7 }}
+tools:
+  example:
+    component: sample:shared
+    config: {{ toolValue: true }}
+  middleware:
+    policy:
+      component: sample:shared
+      config: {{ middlewareValue: strict }}
+"#,
+                &wasm[7..],
+                &file[7..]
+            ),
+        )
+        .unwrap();
+        let local = ApplicationWithSource::from_yaml_file(&local_source).unwrap();
+        let root = app.path().join("golem.yaml");
+        fs::write(
+            &root,
+            "app: installer\nenvironments:\n  local: { server: local }\n",
+        )
+        .unwrap();
+        let resolve = |declarations| {
+            let apps = vec![
+                ApplicationWithSource::from_yaml_file(&root).unwrap(),
+                declarations,
+            ];
+            let (preload, _, errors) = Application::preload_from_raw_apps(&apps).into_product();
+            assert!(errors.is_empty(), "{errors:?}");
+            let preload = preload.unwrap();
+            let (app, _, errors) = Application::from_raw_apps(
+                app.path().into(),
+                preload.application_name,
+                preload.environments,
+                preload.local_server,
+                ComponentPresetSelector {
+                    environment: "local".parse().unwrap(),
+                    presets: vec![],
+                },
+                apps,
+            )
+            .into_product();
+            assert!(errors.is_empty(), "{errors:?}");
+            app.unwrap()
+        };
+        let installed = resolve(installed);
+        let local = resolve(local);
+        let component_name: golem_common::model::component::ComponentName =
+            "sample:shared".parse().unwrap();
+        let agent_name: golem_common::model::agent::AgentTypeName = "SampleAgent".parse().unwrap();
+        let snapshot = |app: Application| {
+            let component = app.component(&component_name);
+            let agents = app
+                .resolve_agents(&BTreeMap::from([(
+                    agent_name.clone(),
+                    component_name.clone(),
+                )]))
+                .unwrap();
+            json!({
+                "wasm": component.wasm(), "env": component.env(), "files": component.files(),
+                "agent": agents.agent(&agent_name).unwrap().config(),
+                "tools": app.tool_declarations().iter().map(|(name, decl)| (name, &decl.value)).collect::<BTreeMap<_, _>>(),
+                "middleware": app.tool_middleware_declarations().iter().map(|(name, decl)| (name, &decl.value)).collect::<BTreeMap<_, _>>(),
+            })
+        };
+        assert_eq!(snapshot(installed), snapshot(local));
+    }
 
     #[test]
     fn automatic_manifest_upgrade_applies_before_load_without_changing_cwd() {

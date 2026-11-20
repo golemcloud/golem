@@ -189,12 +189,22 @@ struct Repos {
 }
 
 impl Services {
+    /// `builtin_artifact_shutdown` lets the caller stop built-in artifact resolution and wait
+    /// for it to actually stop before proceeding to drop the owning Tokio runtime, such as when
+    /// a server shutdown signal arrives during startup; see
+    /// [`crate::services::builtin_artifact::BuiltinArtifactShutdown`].
     pub async fn new(
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
         startup_progress: &StartupProgress,
+        builtin_artifact_shutdown: crate::services::builtin_artifact::BuiltinArtifactShutdown,
     ) -> anyhow::Result<Self> {
-        Self::new_inner(config, join_set, Some(startup_progress)).await
+        Self::new_inner(
+            config,
+            join_set,
+            Some((startup_progress, builtin_artifact_shutdown)),
+        )
+        .await
     }
 
     #[doc(hidden)]
@@ -208,7 +218,10 @@ impl Services {
     async fn new_inner(
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
-        component_builtins_startup_progress: Option<&StartupProgress>,
+        component_builtins: Option<(
+            &StartupProgress,
+            crate::services::builtin_artifact::BuiltinArtifactShutdown,
+        )>,
     ) -> anyhow::Result<Self> {
         config.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
@@ -555,11 +568,12 @@ impl Services {
             });
         }
 
-        if let Some(startup_progress) = component_builtins_startup_progress {
+        if let Some((startup_progress, builtin_artifact_shutdown)) = component_builtins {
             let artifact_resolver =
                 crate::services::builtin_artifact::BuiltinArtifactResolver::new(
                     &config.builtin_artifacts,
                     startup_progress.clone(),
+                    builtin_artifact_shutdown,
                 )?;
             crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
                 &config.builtin_plugins,

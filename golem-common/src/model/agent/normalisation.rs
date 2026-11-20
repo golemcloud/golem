@@ -12,26 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Write;
-use uuid::Uuid;
-
-use super::parse_agent_id_parts;
+use super::parse_agent_key_parts;
 use super::structural_format::normalize_structural;
 
-/// Normalizes an agent ID string without requiring component metadata.
+/// Normalizes agent key text without requiring component metadata.
 /// Strips unnecessary whitespace outside string literals.
-pub fn normalize_agent_id_text(s: &str) -> Result<String, String> {
-    let (agent_type_name, param_list, phantom_id_str) = parse_agent_id_parts(s)?;
-
-    let phantom_id = phantom_id_str
-        .map(|id| Uuid::parse_str(id).map_err(|e| format!("Invalid UUID in phantom ID: {e}")))
-        .transpose()?;
-
-    let normalized_params = normalize_structural(param_list);
-
-    let mut result = format!("{agent_type_name}({normalized_params})");
-    if let Some(phantom_id) = phantom_id {
-        let _ = write!(result, "[{phantom_id}]");
-    }
-    Ok(result)
+pub fn normalize_agent_key_text(s: &str) -> Result<String, String> {
+    let (agent_type_name, param_list) = parse_agent_key_parts(s)?;
+    Ok(format!(
+        "{agent_type_name}({})",
+        normalize_structural(param_list)
+    ))
 }

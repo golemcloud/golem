@@ -174,6 +174,7 @@ declare_structs! {
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct AgentCardHolder {
+        pub environment_id: EnvironmentId,
         pub agent_id: AgentId,
     }
 }
@@ -209,12 +210,12 @@ declare_unions! {
 pub type PublicCardHolder = CardHolder;
 
 impl CardHolder {
-    const WALLET_ID_ENCODING_DOMAIN: &'static [u8] = b"golem:permissions:wallet-id:v1\0";
+    const WALLET_ID_ENCODING_DOMAIN: &'static [u8] = b"golem:permissions:wallet-id:v2\0";
 
     /// Encodes the wallet owner using the stable, versioned wallet identity format.
     ///
-    /// UUIDs use RFC 4122 network byte order. Agent IDs encode the component UUID
-    /// followed by the big-endian byte length and UTF-8 bytes of the agent name.
+    /// UUIDs use RFC 4122 network byte order. An agent holder is its environment UUID
+    /// followed by its agent UUID.
     pub fn canonical_wallet_id_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::from(Self::WALLET_ID_ENCODING_DOMAIN);
         match self {
@@ -228,12 +229,8 @@ impl CardHolder {
             }
             Self::Agent(holder) => {
                 bytes.push(2);
-                bytes.extend_from_slice(holder.agent_id.component_id.0.as_bytes());
-                let agent_id = holder.agent_id.agent_id.as_bytes();
-                let length = u64::try_from(agent_id.len())
-                    .expect("agent ID byte length does not fit into u64");
-                bytes.extend_from_slice(&length.to_be_bytes());
-                bytes.extend_from_slice(agent_id);
+                bytes.extend_from_slice(holder.environment_id.0.as_bytes());
+                bytes.extend_from_slice(holder.agent_id.as_uuid().as_bytes());
             }
         }
         bytes

@@ -104,14 +104,14 @@ FaultMatrixFixture.implement({
         const input = Stream.fromIterable(
           seqs(count).map((seq) => record(run, seq)),
         );
-        const client = yield* FaultMatrixFixture.client.get({ name: target });
+        const client = yield* FaultMatrixFixture.client.upsert({ name: target });
         return keep >= count
           ? yield* client.consume({ input })
           : yield* client.consume_then_drop({ input, keep });
       }).pipe(Effect.scoped, Effect.orDie),
     read_remote: ({ target, run, count, pause_after, gate }) =>
       Effect.gen(function* () {
-        const client = yield* FaultMatrixFixture.client.get({ name: target });
+        const client = yield* FaultMatrixFixture.client.upsert({ name: target });
         return yield* collect(
           yield* client.produce({ run, count, pause_after, gate }),
         );

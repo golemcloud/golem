@@ -1,6 +1,6 @@
 ---
 name: golem-agent-reflection-ts
-description: "Composing caller-defined static, discovered, and fully dynamic Golem clients in TypeScript. Use when schemas are caller-owned or discovered at runtime, or a ParsedAgentId must be rebound."
+description: "Composing caller-defined static, discovered, and fully dynamic Golem clients in TypeScript. Use when schemas are caller-owned or discovered at runtime, or an existing AgentId must be bound to a client."
 ---
 
 # Calling Agents with Runtime Reflection (TypeScript)
@@ -8,8 +8,8 @@ description: "Composing caller-defined static, discovered, and fully dynamic Gol
 Normal RPC is the non-reflective baseline: when producer and caller share a
 source definition, use the SDK's ordinary `Target.client` surface. Reflection
 adds caller-defined static clients, discovered clients, and fully dynamic
-clients. These surfaces compose through immutable schema snapshots and durable
-`ParsedAgentId` values.
+clients. These surfaces compose through immutable schema snapshots and typed
+`AgentId` values: opaque UUIDs that Golem issues.
 
 ## Discover Agent Types
 
@@ -63,7 +63,7 @@ Use the reflected type's client factory just like a typed definition factory,
 then select the method by name:
 
 ```typescript
-const counter = counterType.client.get({ name: 'main' });
+const counter = counterType.client.upsert({ name: 'main' });
 const invocation = await counter.method('add').invoke({ by: 5 });
 
 console.log(invocation.value);
@@ -71,16 +71,16 @@ console.log(invocation.metadata.agentId);
 console.log(invocation.metadata.invocationId.toString()); // <agent-id>.<uuid>
 ```
 
-Pass optional creation-time overrides as a second factory argument, with one canonical JSON value per declared path:
+`upsert` addresses the keyed agent of the constructor input and creates it when it is missing; it takes no overrides. To set configuration, create the agent with `create`, with one canonical JSON value per declared path:
 
 ```typescript
-const configured = counterType.client.get(
+const configured = await counterType.client.create(
   { name: 'other' },
-  [{ path: ['threshold'], value: 10 }],
+  { keyed: true, config: [{ path: ['threshold'], value: 10 }], env: { MODE: 'test' } },
 );
 ```
 
-The reflected factory rejects unknown paths, secret fields, and invalid values locally. Required local fields may already have component defaults. The host validates the effective configuration when it creates the worker and supplies secrets. An existing durable worker keeps its original configuration, even if a caller binds its ID with overrides.
+With `keyed: true`, `create` creates the keyed agent and rejects with a `conflict` `RemoteCallError` when it exists; without it, every `create` makes a new agent without a key, with a new agent ID. The reflected factory rejects unknown paths, secret fields, and invalid values locally. Required local fields may already have component defaults. The host validates the effective configuration when it creates the agent and supplies secrets. An existing agent keeps its original configuration.
 
 `invoke` and `invokeJson` return `{ value, metadata }`. `trigger` and `schedule`
 also return identity metadata. Client creation and invocation failures are
@@ -89,51 +89,47 @@ inspect their `cause` without parsing messages.
 
 ## Choose Between Method-Only and Full Clients
 
-`defineAgentClient({ methods })` creates a caller-defined static method-only client. Use it only with an existing durable canonical or phantom `ParsedAgentId`. It performs no discovery, creates no identities, and has no lifecycle mode or declaration-aware config validation.
+`defineAgentClient({ methods })` creates a caller-defined static method-only client. Use it only with an existing durable agent, through `getById(agentId)`. It performs no discovery, creates no agents, and has no lifecycle mode or declaration-aware config validation.
 
-`defineAgentClient({ name, id, methods, mode?, config? })` creates a caller-defined static full client. Use it when the caller owns the complete local definition and needs identity construction plus durable, phantom, or ephemeral factories. It still performs no deployment discovery.
+`defineAgentClient({ name, id, methods, mode?, config? })` creates a caller-defined static full client. Use it when the caller owns the complete local definition and needs the lifecycle factories: `upsert`, `create`, and `getById` for a durable mode, only `upsert` for an ephemeral mode. It still performs no deployment discovery.
 
 ## Bind with a Method-Only Client
 
-Use a method-only client when an existing durable `ParsedAgentId` supplies
-the target name and constructor value:
+Use a method-only client when the ID of an existing durable agent is known.
+`getById` takes the agent type from the type tag of the `AgentId`:
 
 ```typescript
-import { ParsedAgentId, defineAgentClient, method } from '@golemcloud/golem-ts-sdk';
+import { AgentId, defineAgentClient, method } from '@golemcloud/golem-ts-sdk';
 import { z } from 'zod';
 
-const existingAgentId = new ParsedAgentId('CounterAgent("main")');
+const existingAgentId = AgentId.parse(savedAgentIdText);
 const PingClient = defineAgentClient({
   methods: {
     ping: method({ input: {}, returns: z.string() }),
   },
 });
 
-const client = existingAgentId.client(PingClient);
+const client = await PingClient.getById(existingAgentId);
 const result = await client.ping();
 ```
 
 A method-only client contains only `methods`; it cannot declare `name`,
 `id`, `config`, or `mode`. It performs no discovery and uses durable result
-semantics.
+semantics. An ID whose type tag names no deployed agent type, an ephemeral agent
+type, or an unknown agent rejects with a `not-found` `RemoteCallError`.
+`AgentId.parse` checks only the text form and throws a `TypeError` for text that
+is not a UUID.
 
-Method-only callers can pass raw typed configuration entries as the second argument to `existingAgentId.client(PingClient, entries)`. They must supply schema-native values and cannot validate those entries against declarations locally.
-
-## Construct an Agent ID with Caller-Owned Schemas
+## Address Agents with Caller-Owned Schemas
 
 A fully defined client is the caller-defined static option when the target name,
 constructor shape, and methods are known locally but the target implementation
-is not imported. Its `agentId` helper accepts values described by any supported
-Standard Schema library:
+is not imported. Its factories accept constructor values described by any
+supported Standard Schema library:
 
 ```typescript
 import { z } from 'zod';
-import {
-  ParsedAgentId,
-  defineAgentClient,
-  method,
-} from '@golemcloud/golem-ts-sdk';
-import { v } from '@golemcloud/golem-ts-sdk/schema';
+import { defineAgentClient, method } from '@golemcloud/golem-ts-sdk';
 
 const CounterClient = defineAgentClient({
   name: 'CounterAgent',
@@ -143,69 +139,64 @@ const CounterClient = defineAgentClient({
   },
 });
 
-const schemaLibraryId = CounterClient.agentId({ name: 'main' });
-const first = await schemaLibraryId
-  .client(CounterClient)
-  .echo({ message: 'from Zod' });
+const counter = CounterClient.client.upsert({ name: 'main' });
+const first = await counter.echo({ message: 'from Zod' });
 
-const constructorValue = v.record([v.string('main')]);
-const schemaValueId = ParsedAgentId.create({
-  typeName: CounterClient.name,
-  constructorValue,
-});
-const second = await schemaValueId
-  .client(CounterClient)
-  .echo({ message: 'from SchemaValue' });
+const agentId = await counter.agentId();
+const same = await CounterClient.client.getById(agentId);
+const second = await same.echo({ message: 'by ID' });
 ```
 
-The first form validates and packs constructor fields through the caller's
-schema library. The explicit `ParsedAgentId.create` form is for infrastructure that
-already owns a Golem `SchemaValue`; record fields must be in the target
-constructor's declared order. Binding that ID to a fully defined durable client
-checks both the declared agent name and structural conformance to the client's
-local ID schema before creating the client. When runtime metadata is available,
-prefer `agentType.agentId(json)` or pack with `agentType.constructorInput`
-before calling `agentType.agentIdValue(value)`.
+The factories validate and pack constructor fields through the caller's
+schema library before opening RPC. `getById` connects only to an agent of the
+declared agent type; an unknown ID, or the ID of an agent of another type,
+rejects with a `not-found` `RemoteCallError`. For infrastructure that already
+owns a Golem `SchemaValue` for the constructor, use the reflected factory's
+`upsertValue(value)` or `createValue(value, options)`; record fields must be in
+the target constructor's declared order. When runtime metadata is available,
+pack JSON with `agentType.constructorInput.packJson(json)`.
 
 ## Bind a Concrete Agent ID
 
-After an agent exists, resolve the schema registered for that concrete identity
-and bind it fluently:
+After an agent exists, resolve the schema registered for the agent type of its
+ID and bind it:
 
 ```typescript
-import {
-  getAgentTypeByAgentId,
-  ParsedAgentId,
-} from '@golemcloud/golem-ts-sdk';
+import { AgentId, getAgentTypeByAgentId } from '@golemcloud/golem-ts-sdk';
 
-function bindExisting(agentId: ParsedAgentId) {
+async function bindExisting(agentId: AgentId) {
   const reflected = getAgentTypeByAgentId(agentId);
-  if (!reflected) throw new Error('Agent or registered type was not found');
-  return agentId.client(reflected);
+  if (!reflected || reflected.mode !== 'durable') {
+    throw new Error('No deployed durable agent type has the type tag of this ID');
+  }
+  return reflected.client.getById(agentId);
 }
 ```
 
-Lookup by `ParsedAgentId` does not create the agent. It returns `undefined` when the
-identity does not exist, its type cannot be resolved, or the caller cannot view
-it. `agentId.parts()` is the strict local operation when malformed identity text
-must be reported instead of treated as a discovery miss. Use
-`agentId.dynamicClient()` only for lifecycle-free infrastructure that already
-holds schema-native values and intentionally invokes arbitrary method names
-without discovery.
+`getAgentTypeByAgentId` reads the agent type from the type tag of the ID. It
+does not check that the agent exists, and returns `undefined` when no deployed
+agent type has that tag. `getById` never creates the agent: an unknown ID rejects
+with a `not-found` `RemoteCallError`. `AgentId.parse(text)` is the strict local
+operation when malformed ID text must be reported. Use
+`await DynamicAgentClient.getById(agentId)` only for lifecycle-free
+infrastructure that already holds schema-native values and intentionally
+invokes arbitrary method names without discovery.
 
-## Phantom and Ephemeral Agents
+## Agents Without a Key and Ephemeral Agents
 
-Reflected durable types expose the same three constructors as definition
-clients:
+Reflected durable types expose the same factories as definition clients:
+`upsert`, `create`, and `getById`. Without `keyed`, `create` makes a new agent
+without a key; only its ID reaches it again:
 
 ```typescript
-const known = counterType.client.getPhantom({ name: 'main' }, savedPhantomId);
-const { client, agentId, phantomId } = counterType.client.newPhantom({ name: 'main' });
+const created = await counterType.client.create({ name: 'main' });
+const createdId = await created.agentId();
+const again = await counterType.client.getById(createdId);
 ```
 
-For an ephemeral reflected type, `get` is unavailable. `newPhantom` returns the
-logical reflected client directly, and each invocation returns its allocated
-one-shot identity in metadata:
+For an ephemeral reflected type, only `upsert` and `upsertValue` are available;
+`create` and `getById` reject with a `TypeError`, and the client's `agentId()`
+throws one. Each invocation returns its allocated one-shot identity in metadata:
 
 ```typescript
 const requestType = getReflectedAgentType('RequestAgent');
@@ -213,26 +204,22 @@ if (!requestType || requestType.mode !== 'ephemeral') {
   throw new Error('RequestAgent must be ephemeral');
 }
 
-const request = requestType.client.newPhantom({ route: 'summarize' });
-if ('client' in request) throw new Error('unexpected durable phantom wrapper');
+const request = requestType.client.upsert({ route: 'summarize' });
 
 const result = await request.method('run').invoke({ text: 'hello' });
-console.log(result.metadata.agentId, result.metadata.invocationId.toString());
+console.log(result.metadata.agentId.toString(), result.metadata.invocationId.toString());
 ```
 
-`getPhantom` is also available when the caller already holds the phantom ID.
-It does not make a final, already-invoked ephemeral agent ID reusable.
-
-Do not treat an ephemeral proxy as having a reusable final `ParsedAgentId`. A final
-ephemeral identity cannot accept another invocation or be resumed.
+Do not treat an ephemeral client as having a reusable agent ID. A one-shot
+ephemeral instance cannot accept another invocation or be resumed.
 
 ## Validation, Optional Values, and Wide Integers
 
 Validation happens at several boundaries:
 
-- `defineAgentClient` compiles the caller-owned schemas. A full client validates constructor values and declared config overrides before opening RPC; a method-only client cannot validate identity or config declarations it does not own.
+- `defineAgentClient` compiles the caller-owned schemas. A full client validates constructor values and declared config overrides before opening RPC; a method-only client cannot validate constructor or config declarations it does not own.
 - Reflected `packJson`, `validateJson`, and calls apply the complete discovered schema, including restrictions and nested values, before opening RPC. For a tool command, an omitted scalar option, positional with a declared default, or flag takes its declared default, and `command.inputSchema.toJsonSchema()` does not require it.
-- The host authorizes the caller, resolves the environment-scoped identity, validates effective configuration, and checks the deployed input schema.
+- The host authorizes the caller, resolves the agent by its key or ID within the environment, validates effective configuration, and checks the deployed input schema.
 - Awaited typed and reflected calls verify unit/non-unit cardinality and decode the declared result. Catch `RemoteCallError` with `isRemoteCallError(error)` and handle `error.cause` as a tagged value; do not parse messages.
 
 In Normal RPC and caller-defined static inputs, declare optional fields with the schema library, for example `z.string().optional()`, and omit them normally. Reflected JSON accepts either an omitted option record field or an explicit `null` as absent; re-encoding may include the field with `null`. Reflection JSON Schema omits that field from `required`:
@@ -246,7 +233,7 @@ if (!type || !search || type.mode !== 'durable') throw new Error('SearchAgent.se
 
 const checked = search.input.validateJson({ query: 'golem' });
 if (!checked.success) throw new Error(JSON.stringify(checked.issues));
-const result = await type.client.get({ tenant: 'docs' }).method('search').invoke({
+const result = await type.client.upsert({ tenant: 'docs' }).method('search').invoke({
   query: 'golem',
 });
 console.log(result.value);
@@ -265,7 +252,7 @@ import { getReflectedAgentType, isRemoteCallError } from '@golemcloud/golem-ts-s
 
 const type = getReflectedAgentType('CounterAgent');
 if (!type || type.mode !== 'durable') throw new Error('CounterAgent unavailable');
-const client = type.client.get({ name: 'main' });
+const client = type.client.upsert({ name: 'main' });
 const add = client.method('add');
 const abort = new AbortController();
 
@@ -292,6 +279,7 @@ discovery:
 
 ```typescript
 import {
+  DynamicAgentClient,
   getReflectedAgentType,
   isRemoteCallError,
 } from '@golemcloud/golem-ts-sdk';
@@ -307,9 +295,10 @@ async function callDynamically() {
   const inputCheck = method.input.validateValue(input);
   if (!inputCheck.success) throw new Error(JSON.stringify(inputCheck.issues));
 
-  const id = type.agentId({ tenant: 'docs' });
   try {
-    const result = await id.dynamicClient().method(method.name).invokeValue(input);
+    const id = await type.client.upsert({ tenant: 'docs' }).agentId();
+    const dynamic = await DynamicAgentClient.getById(id);
+    const result = await dynamic.method(method.name).invokeValue(input);
     if (!method.output || result.value === undefined) {
       throw new Error('search returned an unexpected unit result');
     }
@@ -335,6 +324,6 @@ every returned stream according to the cleanup rules above.
 |---|---|
 | Target definition and method known in source | `Target.client` |
 | Type or method selected at runtime | `getReflectedAgentType` / `getAllAgentTypes` |
-| Existing concrete identity needs its current schema | `getAgentTypeByAgentId` |
-| Existing identity plus a caller-owned method-only or full client | `agentId.client(clientDefinition)` |
-| Lifecycle-free invocation with schema-native values | `agentId.dynamicClient()` |
+| Existing agent ID needs its current schema | `getAgentTypeByAgentId(agentId)`, then `client.getById(agentId)` |
+| Existing agent ID plus a caller-owned method-only or full client | `await clientDefinition.getById(agentId)` or `await clientDefinition.client.getById(agentId)` |
+| Lifecycle-free invocation with schema-native values | `await DynamicAgentClient.getById(agentId)` |

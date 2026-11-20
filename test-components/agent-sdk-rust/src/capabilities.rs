@@ -22,9 +22,8 @@ use golem_rust::permissions::{
 use golem_rust::quota::QuotaToken;
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
-    ConfigSchema, FromSchema, IntoSchema, ParsedAgentId, SchemaValue, agent_client,
-    agent_definition, agent_implementation, decode_schema_value, encode_schema_graph,
-    encode_schema_value,
+    ConfigSchema, FromSchema, IntoSchema, SchemaValue, agent_client, agent_definition,
+    agent_implementation, decode_schema_value, encode_schema_graph, encode_schema_value,
 };
 
 #[agent_definition]
@@ -202,10 +201,13 @@ impl CapabilityRpcSender for CapabilityRpcSenderImpl {
         };
         let sent_card_id = card.id();
         let quota = QuotaToken::new("capability-rpc", 1);
-        let client = CapabilityRpcReceiverClient::get(receiver_name);
-        let acceptor =
-            CapabilityCardAcceptorClient::bind(&ParsedAgentId::new(client.get_agent_id()))
-                .map_err(|error| format!("{error:?}"))?;
+        let client = CapabilityRpcReceiverClient::upsert(receiver_name);
+        let receiver_agent_id = client
+            .agent_id()
+            .await
+            .map_err(|error| format!("{error:?}"))?;
+        let acceptor = CapabilityCardAcceptorClient::get_by_id(&receiver_agent_id)
+            .map_err(|error| format!("{error:?}"))?;
         let (receiver_secret_id, receiver_got_sent_card, secret, quota, card) = client
             .return_capabilities(self.secret.clone(), quota, card, child)
             .await;

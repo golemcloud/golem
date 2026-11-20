@@ -43,9 +43,9 @@ use golem_common::model::RetryConfig;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, DurableStreamSessionStatus,
     OwnedAgentId, ScanCursor,

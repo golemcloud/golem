@@ -22,7 +22,7 @@ mod tests {
     use golem_common::model::account_usage::BYTE_SECONDS_PER_GB_MONTH;
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
@@ -166,7 +166,7 @@ mod tests {
             )
             .store()
             .await?;
-        let agent = agent_id!("LargeDynamicMemoryAgent", "memory-billing");
+        let agent = agent_key!("LargeDynamicMemoryAgent", "memory-billing");
         let before = memory_gb_seconds(&deps, &user).await?;
         let durable_before = durable_byte_seconds(&deps, &user).await?;
         let worker = user.start_agent(&component.id, agent.clone()).await?;

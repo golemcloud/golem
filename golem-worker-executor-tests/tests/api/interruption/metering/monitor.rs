@@ -80,9 +80,9 @@ async fn silent_tcp_monitor_controls(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent = agent_id!("Networking", "monitor-controls");
+    let agent = agent_key!("Networking", "monitor-controls");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+    let owned = worker.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let (connected_tx, connected_rx) = tokio::sync::oneshot::channel();
@@ -308,9 +308,9 @@ mod retries {
             .component_dep(&context.default_environment_id, host_api_tests)
             .store()
             .await?;
-        let name = agent_id!("Networking", "monthly-controlled-tick");
+        let name = agent_key!("Networking", "monthly-controlled-tick");
         let id = executor.start_agent(&component.id, name.clone()).await?;
-        let owned = OwnedAgentId::new(context.default_environment_id, &id);
+        let owned = id.clone();
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -333,7 +333,7 @@ mod retries {
         }));
         let key = IdempotencyKey::fresh();
         let stored_key = executor
-            .external_invocation_key(&id, &key, "tcp_collect_p3")
+            .external_invocation_key(&id.agent_id, &key, "tcp_collect_p3")
             .await?;
         let invocation = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let executor = executor.clone();
@@ -356,7 +356,7 @@ mod retries {
         // Connection acceptance precedes the guest's receive call. Require its open durable chunk.
         let chunk = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                executor.commit_oplog(&id).await?;
+                executor.commit_oplog(&id.agent_id).await?;
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
                 if let Some(entry) = entries.iter().find(|entry| {
                     matches!(
@@ -371,7 +371,7 @@ mod retries {
             }
         })
         .await??;
-        let original_raw = executor.stored_oplog(&id).await;
+        let original_raw = executor.stored_oplog(&id.agent_id).await;
         let mut raw = worker.raw_interrupt_for_test();
 
         registry.set_policy(available.clone());
@@ -395,7 +395,9 @@ mod retries {
             Err(tokio::sync::oneshot::error::TryRecvError::Empty)
         ));
 
-        let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
+        let (selected, release_outcome) = executor
+            .gate_next_invocation_outcome_append(&id.agent_id)
+            .await;
         let mut exhausted = available.clone();
         exhausted.available_memory_gb_seconds = 0;
         registry.set_policy(exhausted);
@@ -475,7 +477,7 @@ mod retries {
             |entry| !matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == chunk)
         ));
         assert!(oplog.iter().all(|entry| !matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == chunk)));
-        let stopped_raw = executor.stored_oplog(&id).await;
+        let stopped_raw = executor.stored_oplog(&id.agent_id).await;
         assert!(stopped_raw.len() >= original_raw.len());
         assert_eq!(&stopped_raw[..original_raw.len()], original_raw.as_slice());
         server.await?;
@@ -495,7 +497,7 @@ mod retries {
             }
         })
         .await?;
-        let recovered_raw = executor.stored_oplog(&id).await;
+        let recovered_raw = executor.stored_oplog(&id.agent_id).await;
         assert!(recovered_raw.len() >= stopped_raw.len());
         assert_eq!(&recovered_raw[..stopped_raw.len()], stopped_raw.as_slice());
         let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;

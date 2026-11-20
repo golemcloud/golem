@@ -371,14 +371,15 @@ fn native_uuid_maps_to_java_util_uuid_in_external_mode() {
     )
     .unwrap();
 
-    assert!(client.contains("def get(id: _root_.java.util.UUID)"));
+    assert!(client.contains("def upsert(id: _root_.java.util.UUID)"));
+    assert!(client.contains("def getById(agentId: _root_.golem.bridge.runtime.AgentId)"));
     assert!(client.contains(
         "value: _root_.java.util.UUID): _root_.scala.concurrent.Future[_root_.java.util.UUID]"
     ));
     assert!(client.contains("_root_.scala.Option[_root_.java.util.UUID]"));
     assert!(client.contains("_root_.scala.collection.immutable.List[_root_.java.util.UUID]"));
     assert!(client.contains("_root_.golem.bridge.runtime.SchemaValue.UuidValue(id)"));
-    assert!(client.contains("_root_.java.util.UUID.randomUUID()"));
+    assert!(!client.contains("randomUUID()"));
     assert!(!client.contains("golem.bridge.runtime.Uuid"));
     assert!(!client.contains("_root_.golem.Uuid"));
     assert!(
@@ -398,8 +399,8 @@ fn native_uuid_maps_to_java_util_uuid_in_guest_mode() {
     )
     .unwrap();
 
-    assert!(client.contains("def get(id: _root_.java.util.UUID)"));
-    assert!(client.contains("phantom: _root_.java.util.UUID"));
+    assert!(client.contains("def upsert(id: _root_.java.util.UUID)"));
+    assert!(client.contains("def getById(agentId: _root_.golem.AgentId)"));
     assert!(client.contains("_root_.scala.Option[_root_.java.util.UUID]"));
     assert!(client.contains("_root_.scala.collection.immutable.List[_root_.java.util.UUID]"));
     assert!(client.contains("_root_.golem.schema.SchemaValue.UuidValue(id)"));
@@ -532,18 +533,49 @@ class StreamRuntimeTest extends munit.FunSuite {
   }
   test("direct protocol writer preserves optional fields and application config JSON") {
     val config = List(AgentConfigEntry(List("nested", "\"😀"), golem.bridge.runtime.json.Json.parse("""{"zero":-0,"value":null}""").toOption.get))
-    for (phantom <- List(None, Some("phantom\"😀")); schedule <- List(None, Some("2026-01-01T00:00:00Z")); key <- List(None, Some("key\n"))) {
-      val request = AgentInvocationRequest("app", "env", "type", RecordValue(Nil), phantom, config, "method", RecordValue(List(ListValue(List(U8Value(0), U8Value(251))))), "await", schedule, key)
+    val id = AgentId.parse("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d").toOption.get
+    val methodParameters = RecordValue(List(ListValue(List(U8Value(0), U8Value(251)))))
+    val targets = List[(Option[AgentId], Option[SchemaValue], Option[String])](
+      (None, Some(RecordValue(Nil)), None),
+      (Some(id), None, None),
+      (Some(id), None, Some("1a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))
+    )
+    for ((agentId, parameters, fingerprint) <- targets; schedule <- List(None, Some("2026-01-01T00:00:00Z"))) {
+      val request = AgentInvocationRequest(agentId, parameters, "method", methodParameters, "await", schedule, fingerprint)
       val body = BridgeProtocol.renderAgentInvocationRequest(request)
       assertEquals(body, BridgeProtocol.encodeAgentInvocationRequest(request).render)
-      assertEquals(body.contains("\"phantomId\":"), phantom.isDefined)
+      assertEquals(body.contains("\"agentId\":\"0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d\""), agentId.isDefined)
+      assertEquals(body.contains("\"parameters\":"), parameters.isDefined)
+      assertEquals(body.contains("\"expectedFingerprint\":"), fingerprint.isDefined)
       assertEquals(body.contains("\"scheduleAt\":"), schedule.isDefined)
-      assertEquals(body.contains("\"idempotencyKey\":"), key.isDefined)
+      assert(body.contains("\"method\":\"method\""))
       assert(body.contains("\"methodParameters\":{\"kind\":\"record\""))
-      assert(body.contains("\"zero\":-0,\"value\":null"))
-      val create = CreateAgentRequest("app", "env", "type", request.methodParameters, phantom, config)
-      assertEquals(BridgeProtocol.renderCreateAgentRequest(create), BridgeProtocol.encodeCreateAgentRequest(create).render)
     }
+    intercept[IllegalArgumentException](AgentInvocationRequest(None, None, "method", methodParameters, "await", None, None))
+    intercept[IllegalArgumentException](AgentInvocationRequest(Some(id), Some(RecordValue(Nil)), "method", methodParameters, "await", None, None))
+    for (keyed <- List(false, true)) {
+      val create = CreateAgentRequest(methodParameters, config, Map("B" -> "é", "A" -> "1"), keyed)
+      val body = BridgeProtocol.renderCreateAgentRequest(create)
+      assertEquals(body, BridgeProtocol.encodeCreateAgentRequest(create).render)
+      assert(body.contains("\"zero\":-0,\"value\":null"))
+      assert(body.contains("\"env\":{\"A\":\"1\",\"B\":\"é\"}"), body)
+      assert(body.endsWith(s"\"keyed\":$keyed}"), body)
+    }
+    assertEquals(BridgeProtocol.renderAgentKeyRequest(RecordValue(Nil)), """{"parameters":{"kind":"record","value":{"fields":[]}}}""")
+  }
+  test("agent references, metadata and environments decode from the server shapes") {
+    val reference = BridgeProtocol.decodeAgentReference(golem.bridge.runtime.json.Json.parse("""{"agentId":"0A1B2C3D-4E5F-8A6B-9C7D-0E1F2A3B4C5D","agentFingerprint":"f"}""").toOption.get)
+    assertEquals(reference, Right(AgentReference(AgentId("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"), "f")))
+    assert(BridgeProtocol.decodeAgentReference(golem.bridge.runtime.json.Json.parse("""{"agentId":"agent","agentFingerprint":"f"}""").toOption.get).isLeft)
+    assertEquals(BridgeProtocol.decodeAgentMetadata(golem.bridge.runtime.json.Json.parse("""{"agentTypeName":"Counter","fingerprint":"f"}""").toOption.get), Right((Some("Counter"), "f")))
+    assertEquals(BridgeProtocol.decodeTokenAccountId(golem.bridge.runtime.json.Json.parse("""{"accountId":"me"}""").toOption.get), Right("me"))
+    val page = golem.bridge.runtime.json.Json.parse("""{"values":[
+      {"account":{"id":"other"},"application":{"name":"app"},"environment":{"id":"e1","name":"env"}},
+      {"account":{"id":"me"},"application":{"name":"app"},"environment":{"id":"e2","name":"other"}},
+      {"account":{"id":"me"},"application":{"name":"app"},"environment":{"id":"e3","name":"env"}}
+    ]}""").toOption.get
+    assertEquals(BridgeProtocol.decodeVisibleEnvironmentId(page, "me", "app", "env"), Right(Some("e3")))
+    assertEquals(BridgeProtocol.decodeVisibleEnvironmentId(page, "nobody", "app", "env"), Right(None))
   }
   test("buffered JSON rendering preserves escaping, order and nested signed zero") {
     val json = golem.bridge.runtime.json.Json.parse("""{"key\"\\":[-0,{"tab":"\t\n😀","integer":18446744073709551615}],"empty":[],"tail":{}}""").toOption.get
@@ -702,19 +734,22 @@ import golem.bridge.runtime.json.Json
 class StreamRuntimeTest extends munit.FunSuite {
   test("accepted invocation identity is final and stable across resume") {
     val key = "00000000-0000-0000-0000-000000000123"
-    def acceptance(attempt: String = "attempt", component: String = "component", agent: String = "accepted-agent", acceptedKey: String = key): Json =
+    val agentId = "0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"
+    def acceptance(attempt: String = "attempt", agent: Json = Json.string(agentId), acceptedKey: String = key): Json =
       Json.parse(StreamSessionProtocol.message("invocationAccepted", Vector(
         "attemptId" -> Json.string(attempt),
-        "agentId" -> Json.obj("componentId" -> Json.string(component), "agentId" -> Json.string(agent)),
+        "agentId" -> agent,
         "idempotencyKey" -> Json.string(acceptedKey), "sessionToken" -> Json.string("session"), "mappings" -> Json.arr(Vector.empty)))).toOption.get
     val message = acceptance()
     StreamSessionProtocol.validateServerMessage(message)
     val identity = StreamSessionProtocol.acceptanceIdentity(message, "attempt", None)
-    assertEquals(identity, (AgentId("component", "accepted-agent"), key))
+    assertEquals(identity, (AgentId(agentId), key))
     assertEquals(StreamSessionProtocol.acceptanceIdentity(acceptance("resume"), "resume", Some(identity)), identity)
     intercept[BridgeException](StreamSessionProtocol.acceptanceIdentity(message, "wrong", Some(identity)))
-    for (changed <- List(acceptance(component = "other"), acceptance(agent = "other"), acceptance(acceptedKey = "00000000-0000-0000-0000-000000000124")))
+    for (changed <- List(acceptance(agent = Json.string("1a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d")), acceptance(acceptedKey = "00000000-0000-0000-0000-000000000124")))
       intercept[BridgeException](StreamSessionProtocol.acceptanceIdentity(changed, "attempt", Some(identity)))
+    for (malformed <- List(Json.string("accepted-agent"), Json.obj("uuid" -> Json.string(agentId))))
+      intercept[BridgeException](StreamSessionProtocol.acceptanceIdentity(acceptance(agent = malformed), "attempt", None))
     intercept[BridgeException](StreamSessionProtocol.acceptanceIdentity(acceptance(acceptedKey = "not-a-uuid"), "attempt", None))
     val missingOwner = Json.obj(Json.asObject(message).toOption.get.filterNot(_._1 == "agentId"))
     intercept[BridgeException](StreamSessionProtocol.validateServerMessage(missingOwner))
@@ -1121,7 +1156,7 @@ class StreamRuntimeTest extends munit.FunSuite {
   }
 
   test("REST results validate the returned graph before the local expected schema") {
-    val response = Json.parse("""{"agentId":{"componentId":"component","agentId":"agent"},"idempotencyKey":"key","result":{"graph":{"root":{"kind":"u32","value":{}}},"value":{"kind":"u32","value":5}}}""").toOption.get
+    val response = Json.parse("""{"agentId":"0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d","idempotencyKey":"key","result":{"graph":{"root":{"kind":"u32","value":{}}},"value":{"kind":"u32","value":5}}}""").toOption.get
     val decoded = BridgeProtocol.decodeAgentInvocationResult(response).toOption.get.result.get
     assertEquals(decoded, SchemaValue.U32Value(5))
     val expected = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u32","value":{"restrictions":{"min":{"kind":"unsigned","value":10}}}}}""")
@@ -1254,9 +1289,7 @@ class StreamRuntimeTest extends munit.FunSuite {
     val resolved = ResolvedAgent(
       Configuration(GolemServer.Custom("ftp://invalid", "token"), "app", "env", global),
       "AffineInputAgent",
-      SchemaValue.TupleValue(List.empty),
-      None,
-      List.empty,
+      Some(SchemaValue.TupleValue(List.empty)),
       None,
     )
     val invocation = StreamSession.invoke(
@@ -1276,7 +1309,6 @@ class StreamRuntimeTest extends munit.FunSuite {
       codec,
       codec,
       None,
-      List.empty,
     )._1
 
     intercept[Throwable](Await.result(stream.consume(), 1.second))
@@ -1613,10 +1645,23 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
 
     assert!(client_source.contains("object CounterAgentClient"));
     assert!(client_source.contains("trait CounterAgentRemote"));
-    assert!(client_source.contains("def get(name: _root_.scala.Predef.String)"));
+    assert!(
+        client_source.contains("def upsert(name: _root_.scala.Predef.String): CounterAgentRemote")
+    );
     assert!(!client_source.contains("sealed trait UnstructuredText"));
     assert!(client_source.contains("CounterAgentRemote"));
-    assert!(client_source.contains("_root_.golem.runtime.rpc.RemoteAgentClient.resolve"));
+    assert!(client_source.contains(
+        "_root_.golem.runtime.rpc.AgentIdentity.upsert(agentTypeName, constructorPayload)"
+    ));
+    assert!(client_source.contains(
+        "_root_.golem.runtime.rpc.AgentIdentity.create(agentTypeName, constructorPayload, options)"
+    ));
+    assert!(client_source.contains(
+        "def getById(agentId: _root_.golem.AgentId): _root_.scala.concurrent.Future[CounterAgentRemote]"
+    ));
+    assert!(client_source.contains(
+        "def agentId(): _root_.scala.concurrent.Future[_root_.golem.AgentId] = resolved.agentId()"
+    ));
     assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
     assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
@@ -1754,8 +1799,8 @@ fn guest_awaited_calls_take_a_scope_card_and_reserve_its_member_names() {
     }
 }
 
-/// Ephemeral guest agents expose a local metadata-bearing proxy without a fixed
-/// phantom identity, matching the SDK-generated client.
+/// Ephemeral guest agents expose only `upsert`, whose invocations each run on a
+/// new one-shot instance and return its metadata, matching the SDK-generated client.
 #[test]
 fn guest_ephemeral_agent_uses_per_invocation_identity() {
     let pkg = GeneratedPackage::new_with_mode(
@@ -1780,16 +1825,26 @@ fn guest_ephemeral_agent_uses_per_invocation_identity() {
     .unwrap();
 
     assert!(
-        !client_source.contains("def get("),
-        "ephemeral guest agent must not expose get:\n{client_source}"
+        client_source
+            .contains("def upsert(name: _root_.scala.Predef.String): EphemeralAgentRemote ="),
+        "ephemeral guest agent must expose upsert:\n{client_source}"
     );
-    assert!(!client_source.contains("def getPhantom("));
-    assert!(client_source.contains("def newPhantom(name: _root_.scala.Predef.String)"));
-    assert!(client_source.contains("def newPhantomWithConfig("));
-    assert!(client_source.contains("constructorPayload, _root_.scala.None, agentConfig"));
+    assert!(client_source.contains(
+        "_root_.golem.runtime.rpc.AgentIdentity.upsert(agentTypeName, constructorPayload)"
+    ));
+    for absent in [
+        "def create(",
+        "def getById(",
+        "def agentId",
+        "Phantom",
+        "WithConfig",
+    ] {
+        assert!(
+            !client_source.contains(absent),
+            "unexpected {absent}:\n{client_source}"
+        );
+    }
     assert!(!client_source.contains("Future[EphemeralAgentRemote]"));
-    assert!(!client_source.contains("generateIdempotencyKey"));
-    assert!(!client_source.contains("def agentId:"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.InvocationResult[_root_.scala.Unit]"));
     assert!(
         client_source
@@ -1805,7 +1860,7 @@ fn guest_ephemeral_agent_uses_per_invocation_identity() {
 }
 
 #[test]
-fn guest_durable_phantom_constructors_use_replay_safe_identity() {
+fn guest_durable_constructors_use_agent_identity() {
     let pkg = GeneratedPackage::new_with_mode(
         {
             let mut agent_type = agent(
@@ -1827,14 +1882,23 @@ fn guest_durable_phantom_constructors_use_replay_safe_identity() {
     )
     .unwrap();
 
-    assert!(
-        client_source.contains("getPhantom(name, _root_.golem.HostApi.generateIdempotencyKey())")
-    );
-    assert!(
-        client_source.contains("_root_.scala.Some(_root_.golem.HostApi.generateIdempotencyKey())")
-    );
-    assert!(client_source.contains("_root_.scala.Some(phantom)"));
+    for expected in [
+        "def upsert(name: _root_.scala.Predef.String): DurableAgentRemote =",
+        "def create(name: _root_.scala.Predef.String, keyed: _root_.scala.Boolean = false, region: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, env: _root_.scala.Predef.Map[_root_.scala.Predef.String, _root_.scala.Predef.String] = _root_.scala.Predef.Map.empty): _root_.scala.concurrent.Future[DurableAgentRemote] =",
+        "_root_.golem.runtime.rpc.CreateOptions(keyed, agentConfig, env)",
+        "_root_.golem.runtime.rpc.AgentIdentity.create(agentTypeName, constructorPayload, options)",
+        "def getById(agentId: _root_.golem.AgentId): _root_.scala.concurrent.Future[DurableAgentRemote] =",
+        "_root_.golem.runtime.rpc.AgentIdentity.getById(agentTypeName, agentId)",
+        "def agentId(): _root_.scala.concurrent.Future[_root_.golem.AgentId] = resolved.agentId()",
+    ] {
+        assert!(
+            client_source.contains(expected),
+            "missing {expected}:\n{client_source}"
+        );
+    }
+    assert!(!client_source.contains("generateIdempotencyKey"));
     assert!(!client_source.contains("randomUUID()"));
+    assert!(!client_source.contains("Phantom"));
 
     compile_guest_if_enabled(dir.as_path());
 }
@@ -2156,32 +2220,45 @@ fn generates_client_surface() {
 
     // Remote trait + factory.
     assert!(client.contains("trait Agent1Remote {"));
-    assert!(client.contains("def agentId: _root_.golem.bridge.runtime.AgentId"));
+    assert!(client.contains(
+        "def agentId(): _root_.scala.concurrent.Future[_root_.golem.bridge.runtime.AgentId]"
+    ));
+    assert!(client.contains(
+        "def agentId(): _root_.scala.concurrent.Future[_root_.golem.bridge.runtime.AgentId] = _root_.golem.bridge.runtime.Bridge.agentId(resolved)"
+    ));
     assert!(client.contains("val f1: F1RemoteMethod"));
     assert!(client.contains(
         "private def bindRemote(resolved: _root_.golem.bridge.runtime.ResolvedAgent): Agent1Remote"
     ));
 
-    // Durable agent: get / getPhantom / newPhantom, all returning the remote.
-    assert!(client.contains("bindRemote(_root_.golem.bridge.runtime.ResolvedAgent("));
-    assert!(client.contains("def get(person: _root_.golem.bridge.client.agent1.Person"));
-    assert!(
-        client.contains(
-            "phantom: _root_.java.util.UUID): _root_.scala.concurrent.Future[Agent1Remote]"
-        )
-    );
-    assert!(client.contains("def newPhantom("));
-    assert!(client.contains("_root_.java.util.UUID.randomUUID()"));
+    // Durable agent: upsert returns the remote at once; create and getById reach the server.
+    let params = "person: _root_.golem.bridge.client.agent1.Person, description: _root_.scala.Predef.String, photo: _root_.scala.collection.immutable.List[_root_.golem.bridge.runtime.UByte]";
+    assert!(client.contains(&format!("def upsert({params}): Agent1Remote =")));
     assert!(client.contains(
-        "_root_.golem.bridge.runtime.Bridge.createAgent(configuration, agentTypeName, parameters, phantomId,"
+        "bindRemote(_root_.golem.bridge.runtime.ResolvedAgent(_root_.golem.bridge.runtime.Configuration.get, agentTypeName, _root_.scala.Some(constructorParameters(person, description, photo)), _root_.scala.None))"
     ));
+    assert!(client.contains(&format!(
+        "def create({params}, keyed: _root_.scala.Boolean = false, env: _root_.scala.Predef.Map[_root_.scala.Predef.String, _root_.scala.Predef.String] = _root_.scala.Predef.Map.empty): _root_.scala.concurrent.Future[Agent1Remote]"
+    )));
+    assert!(client.contains(
+        "_root_.golem.bridge.runtime.Bridge.createAgent(configuration, agentTypeName, parameters, keyed, agentConfig, env)"
+    ));
+    assert!(client.contains(
+        "def getById(agentId: _root_.golem.bridge.runtime.AgentId): _root_.scala.concurrent.Future[Agent1Remote]"
+    ));
+    assert!(client.contains(
+        "_root_.golem.bridge.runtime.Bridge.getAgent(configuration, agentTypeName, agentId)"
+    ));
+    assert!(!client.contains("Phantom"));
+    assert!(!client.contains("randomUUID()"));
     // Constructor parameters are packed through the named-type codec.
     assert!(client.contains("_root_.golem.bridge.client.agent1.Codecs.encodePerson(person)"));
 }
 
-/// An ephemeral agent exposes only a local, metadata-bearing proxy constructor.
+/// An ephemeral agent exposes only `upsert`, a metadata-bearing proxy that does
+/// not contact the server.
 #[test]
-fn ephemeral_agent_omits_get_constructor() {
+fn ephemeral_agent_has_only_upsert() {
     let pkg = GeneratedPackage::new(agent(
         "EphemeralAgent",
         "scala",
@@ -2197,13 +2274,19 @@ fn ephemeral_agent_omits_get_constructor() {
     .unwrap();
 
     assert!(
-        !client.contains("def get("),
-        "ephemeral agent must not expose get"
+        client.contains("def upsert(name: _root_.scala.Predef.String): EphemeralAgentRemote ="),
+        "ephemeral agent must expose upsert:\n{client}"
     );
-    assert!(!client.contains("def getPhantom("));
-    assert!(client.contains("def newPhantom("));
-    assert!(!client.contains("randomUUID()"));
-    assert!(!client.contains("Bridge.createAgent("));
+    for absent in [
+        "def create(",
+        "def getById(",
+        "def agentId",
+        "Phantom",
+        "randomUUID()",
+        "Bridge.createAgent(",
+    ] {
+        assert!(!client.contains(absent), "unexpected {absent}:\n{client}");
+    }
     assert!(
         client.contains("Future[_root_.golem.bridge.runtime.InvocationResult[_root_.scala.Unit]]")
     );
@@ -2289,7 +2372,8 @@ fn client_surface_handles_reserved_and_keyword_names() {
         vec![
             field("configuration", SchemaType::string()),
             field("agentTypeName", SchemaType::string()),
-            field("phantom", SchemaType::string()),
+            field("keyed", SchemaType::string()),
+            field("env", SchemaType::string()),
             field("type", SchemaType::string()),
         ],
         vec![
@@ -2348,7 +2432,8 @@ fn client_surface_handles_reserved_and_keyword_names() {
     // Constructor parameters colliding with internal names are renamed too.
     assert!(client.contains("configuration_2: _root_.scala.Predef.String"));
     assert!(client.contains("agentTypeName_2: _root_.scala.Predef.String"));
-    assert!(client.contains("phantom_2: _root_.scala.Predef.String"));
+    assert!(client.contains("keyed_2: _root_.scala.Predef.String"));
+    assert!(client.contains("env_2: _root_.scala.Predef.String"));
 
     // Keyword parameters are backtick-escaped in both contexts.
     assert!(client.contains("`type`: _root_.scala.Predef.String"));
@@ -2662,12 +2747,10 @@ fn multimodal_input_and_output_compiles() {
     compile_guest_if_enabled(guest.package_dir().as_path());
 }
 
-/// A durable agent that declares local config overrides gets the
-/// `getWithConfig` / `getPhantomWithConfig` / `newPhantomWithConfig`
-/// constructor variants (mirroring the Scala SDK's RPC clients), each taking an
-/// `Option[T] = None` per declared override and building the
-/// `List[AgentConfigEntry]` from the supplied values. The plain constructors
-/// pass an empty config list, and the result compiles.
+/// A durable agent that declares local config overrides takes them in
+/// `create` (mirroring the Scala SDK's RPC clients), one `Option[T] = None` per
+/// declared override after `keyed`, and builds the `List[AgentConfigEntry]`
+/// from the supplied values. The result compiles.
 #[test]
 fn local_config_overrides_compile() {
     let pkg = GeneratedPackage::new({
@@ -2692,16 +2775,11 @@ fn local_config_overrides_compile() {
     .unwrap();
 
     // Config override parameters: one `Option[T] = None` per declared override,
-    // camelCased from the config path, after the constructor parameters.
+    // camelCased from the config path, between `keyed` and `env`.
     assert!(client.contains(
-        "def getWithConfig(name: _root_.scala.Predef.String, dbHost: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, maxRetries: _root_.scala.Option[_root_.golem.bridge.runtime.UInt] = _root_.scala.None): _root_.scala.concurrent.Future[ConfigAgentRemote]"
+        "def create(name: _root_.scala.Predef.String, keyed: _root_.scala.Boolean = false, dbHost: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, maxRetries: _root_.scala.Option[_root_.golem.bridge.runtime.UInt] = _root_.scala.None, env: _root_.scala.Predef.Map[_root_.scala.Predef.String, _root_.scala.Predef.String] = _root_.scala.Predef.Map.empty): _root_.scala.concurrent.Future[ConfigAgentRemote]"
     ));
-    assert!(client.contains(
-        "def getPhantomWithConfig(name: _root_.scala.Predef.String, phantom: _root_.java.util.UUID, dbHost: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, maxRetries: _root_.scala.Option[_root_.golem.bridge.runtime.UInt] = _root_.scala.None): _root_.scala.concurrent.Future[ConfigAgentRemote]"
-    ));
-    assert!(client.contains(
-        "def newPhantomWithConfig(name: _root_.scala.Predef.String, dbHost: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, maxRetries: _root_.scala.Option[_root_.golem.bridge.runtime.UInt] = _root_.scala.None): _root_.scala.concurrent.Future[ConfigAgentRemote]"
-    ));
+    assert!(client.contains("def upsert(name: _root_.scala.Predef.String): ConfigAgentRemote ="));
 
     // Supplied overrides build `AgentConfigEntry` values keyed by the path.
     assert!(client.contains(
@@ -2711,18 +2789,17 @@ fn local_config_overrides_compile() {
         "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"max-retries\"), _root_.golem.bridge.runtime.PublicValueCodec"
     ));
 
-    // The plain constructors pass an empty config list.
     assert!(client.contains(
-        "_root_.golem.bridge.runtime.Bridge.createAgent(configuration, agentTypeName, parameters, phantomId, _root_.scala.collection.immutable.List()).map"
+        "_root_.golem.bridge.runtime.Bridge.createAgent(configuration, agentTypeName, parameters, keyed, agentConfig, env).map"
     ));
+    assert!(!client.contains("WithConfig"));
 
     compile(pkg.package_dir().as_path());
 }
 
-/// An ephemeral agent with local config overrides omits the parameter-
-/// addressable `getWithConfig` (it has no `get`) but still exposes the phantom
-/// config constructor; and a durable agent without config declarations emits no
-/// `…WithConfig` variants at all.
+/// An ephemeral agent with local config overrides has no `create`, so it takes
+/// no config overrides; and the `create` of a durable agent without config
+/// declarations takes only `keyed` and `env` after its parameters.
 #[test]
 fn config_override_constructors_respect_mode_and_absence() {
     let ephemeral = GeneratedPackage::new({
@@ -2742,14 +2819,11 @@ fn config_override_constructors_respect_mode_and_absence() {
     ))
     .unwrap();
     assert!(
-        !ephemeral_client.contains("def getWithConfig("),
-        "ephemeral agent must not expose getWithConfig"
+        !ephemeral_client.contains("def create("),
+        "ephemeral agent must not expose create:\n{ephemeral_client}"
     );
-    assert!(!ephemeral_client.contains("def getPhantomWithConfig("));
-    assert!(ephemeral_client.contains("def newPhantomWithConfig("));
-    assert!(
-        ephemeral_client.contains("parameters, _root_.scala.None, agentConfig, _root_.scala.None")
-    );
+    assert!(!ephemeral_client.contains("dbHost"));
+    assert!(!ephemeral_client.contains("AgentConfigEntry"));
 
     let no_config = GeneratedPackage::new(agent(
         "PlainAgent",
@@ -2766,8 +2840,11 @@ fn config_override_constructors_respect_mode_and_absence() {
     )
     .unwrap();
     assert!(
-        !no_config_client.contains("WithConfig"),
-        "an agent without config declarations must not emit any WithConfig variant"
+        no_config_client.contains("def create(name: _root_.scala.Predef.String, keyed: _root_.scala.Boolean = false, env: _root_.scala.Predef.Map[_root_.scala.Predef.String, _root_.scala.Predef.String] = _root_.scala.Predef.Map.empty)"),
+        "an agent without config declarations takes only keyed and env in create:\n{no_config_client}"
+    );
+    assert!(
+        no_config_client.contains("val agentConfig = _root_.scala.collection.immutable.List()")
     );
 }
 

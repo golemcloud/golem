@@ -218,7 +218,7 @@ async fn audit_1_deployed_records_exact_success_error_stream_and_owner_summaries
         &[("summary-contract", sink_url.as_str())],
     )
     .await?;
-    let agent_id = agent_id!("ToolStreamingCaller", "gol40-k1-audit-summary");
+    let agent_id = agent_key!("ToolStreamingCaller", "gol40-k1-audit-summary");
     let sensitive_input = b"gol40-k1-stream-payload-must-not-be-recorded".to_vec();
     let success: StreamEvidence = fixture
         .executor
@@ -254,10 +254,11 @@ async fn audit_1_deployed_records_exact_success_error_stream_and_owner_summaries
     assert_eq!(success_record["toolName"], "streaming");
     assert_eq!(success_record["commandPath"], serde_json::json!(["run"]));
     assert_eq!(success_record["principal"]["kind"], "anonymous");
-    assert!(
-        success_record["owner"]["agentId"]
-            .as_str()
-            .is_some_and(|owner| owner.contains("gol40-k1-audit-summary"))
+    assert_eq!(
+        success_record["owner"]["agentId"],
+        crate::agent::keyed_agent_id(fixture.caller_component.environment_id, &agent_id)
+            .agent_id
+            .to_string()
     );
     assert_eq!(success_record["stdout"]["declared"], true);
     assert_eq!(success_record["stdout"]["chunks"], 7);
@@ -348,7 +349,7 @@ async fn audit_2_deployed_duplicate_occurrences_use_distinct_keys_and_pass_opaqu
         Some(fixture.deployment.clone()),
     );
 
-    let agent_id = agent_id!("ToolSecretCaller", "gol40-k1-audit-secret");
+    let agent_id = agent_key!("ToolSecretCaller", "gol40-k1-audit-secret");
     let evidence = fixture
         .executor
         .invoke_and_await_agent(
@@ -433,7 +434,7 @@ async fn audit_3_crash_after_sink_commit_retries_same_key_deduplicates_and_repla
         agent_type,
         tool_name,
     } = fixture;
-    let agent_id = agent_id!("ToolStreamingCaller", "gol40-k1-audit-crash");
+    let agent_id = agent_key!("ToolStreamingCaller", "gol40-k1-audit-crash");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;

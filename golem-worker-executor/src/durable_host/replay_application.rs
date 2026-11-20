@@ -415,9 +415,6 @@ pub(super) fn apply<Ctx: WorkerCtx>(
         _ => &[],
     };
     ctx.clear_invocation_scope_if_roots_include(revoked);
-    if let ReplayEvent::ForkReplayed { new_phantom_id } = &prepared.event {
-        ctx.state.current_phantom_id = Some(*new_phantom_id);
-    }
     if prepared.finalized_update {
         ctx.state.automatic_update_unsettled = false;
     }

@@ -80,16 +80,17 @@ fn metadata_redaction_redacts_the_capabilities_in_the_divergence_of_a_failed_upd
     use crate::model::{AgentStatus, Timestamp};
 
     let mut metadata = AgentMetadataDto {
-        agent_id: AgentId {
-            component_id: crate::model::component::ComponentId::new(),
-            agent_id: "agent".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 1),
         owner_kind: OwnerKind::ComponentAgent,
+        agent_type_name: Some(crate::model::agent::AgentTypeName("Agent".to_string())),
+        canonical_key: Some("Agent()".to_string()),
+        constructor_parameters: Some("()".to_string()),
         environment_id: crate::model::environment::EnvironmentId::new(),
         created_by: crate::model::account::AccountId::new(),
         env: Default::default(),
         config: vec![],
         status: AgentStatus::Idle,
+        underlying_status: None,
         component_revision: ComponentRevision::INITIAL,
         retry_count: 0,
         pending_invocation_count: 0,

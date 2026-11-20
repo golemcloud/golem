@@ -131,8 +131,8 @@ its application directory, the command can automatically build and deploy it bef
 
 ## Effect CLI Value Syntax
 
-Effect components report TypeScript as their source language, so agent IDs and method arguments
-use **TypeScript syntax** even though their contracts use Effect Schema:
+Effect components report TypeScript as their source language, so constructor values in agent keys and method
+arguments use **TypeScript syntax** even though their contracts use Effect Schema:
 
 - Field names use `camelCase`.
 - Options use the raw value or `undefined`.
