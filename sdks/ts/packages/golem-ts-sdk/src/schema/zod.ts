@@ -72,6 +72,8 @@ function numberRestrictions(schema: any): NumericRestrictions | undefined {
   };
 }
 import { registerSchemaWalker } from './adapter';
+import { nativeConfigDefault } from './configDefault';
+import { buildConfigUnionCodec } from './union';
 
 interface NormalizedDef {
   kind: string;
@@ -195,7 +197,7 @@ function leaf(
   return { graph: { defs: new Map(), root }, toValue, fromValue };
 }
 
-const zodWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
+const zodWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
   const {
     kind,
     inner,
@@ -210,6 +212,14 @@ const zodWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
     literalValues,
     getter,
   } = normalize(schema);
+
+  if (context?.config && ['default', 'prefault', 'catch', 'effects', 'pipe'].includes(kind)) {
+    if (kind === 'default')
+      nativeConfigDefault((schema as any)._zod?.def ?? (schema as any)._def, 'defaultValue');
+    throw new TypeError(
+      `Cannot extract Zod ${kind} as static config; use s.default(schema, JSON data)`,
+    );
+  }
 
   if (kind === 'lazy') {
     // `z.lazy(() => S)` defers to its (stable) inner schema. Recursion is handled
@@ -455,6 +465,7 @@ const zodWalker: SchemaWalker = (schema, recurse): SchemaCodec => {
         const lit = litSchema ? normalize(litSchema).literalValues?.[0] : undefined;
         if (lit !== undefined) discToIndex.set(lit, i);
       });
+      if (context?.config) return buildConfigUnionCodec(optCodecs, disc, [...discToIndex.keys()]);
       return {
         graph: { defs, root: t.variant(cases) },
         toValue: (value) => {

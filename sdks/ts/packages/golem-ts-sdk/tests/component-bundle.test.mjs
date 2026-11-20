@@ -818,15 +818,16 @@ describe('component exports', () => {
       }),
       getConfigValue(path, graph) {
         expect(graph.typeNodes.length).toBeGreaterThan(0);
-        if (path.join('.') === 'group.title')
+        if (path.join('.') === 'group')
           return title === undefined
             ? { valueNodes: [{ tag: 'option-value', val: undefined }], root: 0 }
             : {
                 valueNodes: [
                   { tag: 'string-value', val: title },
-                  { tag: 'option-value', val: 0 },
+                  { tag: 'record-value', val: [0] },
+                  { tag: 'option-value', val: 1 },
                 ],
-                root: 1,
+                root: 2,
               };
         expect(path).toEqual(['key']);
         configReads++;

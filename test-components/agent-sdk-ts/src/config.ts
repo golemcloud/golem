@@ -7,8 +7,127 @@ import {
   createPromise,
   Uuid,
   isRemoteCallError,
+  type AgentId,
 } from '@golemcloud/golem-ts-sdk';
 import type { PromiseId } from 'golem:api/host@1.5.0';
+
+export const StaticDefaultsAgent = defineAgent({
+  name: 'StaticDefaultsAgent',
+  id: { name: z.string() },
+  config: {
+    settings: s.default(z.object({ label: z.string(), count: s.u32() }), {
+      label: 'code-default',
+      count: 31,
+    }),
+    choice: s.default(
+      s.union([
+        {
+          tag: 'Text',
+          schema: z.string(),
+          discriminator: { tag: 'prefix', val: 'selected:' },
+        },
+        {
+          tag: 'Other',
+          schema: z.string(),
+          discriminator: { tag: 'prefix', val: 'other:' },
+        },
+      ]),
+      'selected:value',
+    ),
+    slots: s.default(s.tuple([s.option(s.s32()), s.option(s.s32()), z.string()]), [
+      null,
+      7,
+      'retained',
+    ]),
+    omitted: z.string().optional(),
+  },
+  methods: {
+    read: method({ input: {}, returns: z.string() }),
+    constructorRead: method({ input: {}, returns: z.string() }),
+    readNativeOverrides: method({
+      input: { name: z.string(), label: z.string(), limit: s.u32() },
+      returns: z.string(),
+    }),
+  },
+});
+
+export const StaticDefaultsAgentImpl = StaticDefaultsAgent.implement({
+  init: ({ config }) => {
+    const choice = config.choice;
+    return {
+      nativeIds: new Map<string, AgentId>(),
+      initial: {
+        settings: config.settings,
+        choice: { [choice.startsWith('selected:') ? 'Text' : 'Other']: choice },
+        slots: config.slots,
+        omitted: config.omitted ?? null,
+      },
+    };
+  },
+  methods: {
+    constructorRead() {
+      return JSON.stringify(this.initial);
+    },
+    read() {
+      const choice = this.config.choice;
+      return JSON.stringify({
+        settings: this.config.settings,
+        choice: { [choice.startsWith('selected:') ? 'Text' : 'Other']: choice },
+        slots: this.config.slots,
+        omitted: this.config.omitted ?? null,
+      });
+    },
+    async readNativeOverrides({ name, label, limit }) {
+      const existing = this.nativeIds.get(name);
+      const client = existing
+        ? await NativeConfigAgent.client.getById(existing)
+        : await NativeConfigAgent.client.create(
+            { name },
+            {
+              config: {
+                max_chars: limit,
+                display_record: { display_name: label },
+              },
+            },
+          );
+      this.nativeIds.set(name, await client.agentId());
+      return client.read();
+    },
+  },
+});
+
+export const NativeConfigAgent = defineAgent({
+  name: 'NativeConfigAgent',
+  id: { name: z.string() },
+  config: {
+    max_chars: s.u32(),
+    display_record: z.object({ display_name: z.string() }),
+  },
+  methods: { read: method({ input: {}, returns: z.string() }) },
+});
+
+export const NativeConfigAgentImpl = NativeConfigAgent.implement({
+  init: ({ config }) => ({
+    initial: {
+      max_chars: config.max_chars,
+      display_record: config.display_record,
+    },
+    reads: 0,
+  }),
+  methods: {
+    read() {
+      this.reads += 1;
+      return JSON.stringify({
+        initial: this.initial,
+        current: {
+          max_chars: this.config.max_chars,
+          display_record: this.config.display_record,
+        },
+        reads: this.reads,
+      });
+    },
+  },
+});
 
 // A `PromiseId` is a nested host record carrying bigints and a UUID; declare
 // it as an explicit Standard Schema so it can be returned / accepted by a
@@ -264,7 +383,10 @@ export const NestedRequiredGroupConfigAgentImpl = NestedRequiredGroupConfigAgent
       const config = this.config;
       return JSON.stringify({
         outer: config.outer
-          ? { required: config.outer.required, inner: { a: config.outer.inner.a } }
+          ? {
+              required: config.outer.required,
+              inner: { a: config.outer.inner.a },
+            }
           : undefined,
       });
     },
@@ -294,7 +416,9 @@ export const RpcLocalConfigAgentImpl = RpcLocalConfigAgent.implement({
       const config = this.config;
       // Override `foo`, and `nested.a` only when it is actually set (omitting an
       // undefined leaf leaves the callee's manifest value in place).
-      const overrides: { foo: number; nested?: { a: boolean } } = { foo: config.foo };
+      const overrides: { foo: number; nested?: { a: boolean } } = {
+        foo: config.foo,
+      };
       if (config.nested_a !== undefined) {
         overrides.nested = { a: config.nested_a };
       }

@@ -33,19 +33,22 @@ import { SchemaCodec } from './codec';
 
 // Deterministic, process-stable `type-id` allocation keyed on the recursive
 // node's identity. The SAME recursive type therefore always maps to the SAME id
-// across the independent compiles of an agent's constructor / method / config
+// across independent compiles within one projection (invocation or config)
 // roots, so the agent-level `mergeGraphDefs` deduplicates one shared recursive
 // definition instead of raising a spurious conflict on two ids for one type; two
 // DIFFERENT recursive types get two ids and never collide. Monotonic (never
 // random / time-based) so it is reproducible within a process run.
 let idCounter = 0;
 const globalIds = new WeakMap<object, TypeId>();
+const configIds = new WeakMap<object, TypeId>();
 
-function stableTypeId(key: object): TypeId {
-  let id = globalIds.get(key);
+function stableTypeId(key: object, config: boolean): TypeId {
+  // Config record names can differ from invocation names for the same source schema.
+  const ids = config ? configIds : globalIds;
+  let id = ids.get(key);
   if (id === undefined) {
     id = `rec:${idCounter++}`;
-    globalIds.set(key, id);
+    ids.set(key, id);
   }
   return id;
 }
@@ -70,6 +73,8 @@ interface CompileEntry {
 export class RecursionRegistry {
   private readonly entries = new Map<object, CompileEntry>();
 
+  constructor(readonly config = false) {}
+
   /**
    * Compile `key`'s body via `build`, detecting recursion by `key` identity.
    *
@@ -90,7 +95,7 @@ export class RecursionRegistry {
       return existing.ref;
     }
 
-    const typeId = stableTypeId(key);
+    const typeId = stableTypeId(key, this.config);
     const entry: CompileEntry = {
       typeId,
       refRequested: false,

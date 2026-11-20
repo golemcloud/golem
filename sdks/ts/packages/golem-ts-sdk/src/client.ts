@@ -32,7 +32,7 @@ import {
   schemaValueFromWit,
 } from './internal/schema-model';
 import type { SchemaGraph, SchemaType, SchemaValue } from './internal/schema-model';
-import { compileConfig, ConfigDeclaration } from './config';
+import { compileConfigTree, ConfigGroupNode } from './config';
 import type { AgentId } from './agentId';
 import { compileSchema } from './schema/adapter';
 import { SchemaCodec, SchemaValueWriter, SchemaValueReader } from './schema/codec';
@@ -244,10 +244,7 @@ export interface EphemeralRemoteClientFactory<Id extends IdRecord, Methods exten
    * Create a logical client; each invocation runs on a new one-shot instance whose identity the
    * invocation returns. Host failures throw a {@link RemoteCallError}.
    */
-  upsert(
-    id: InferRecord<Id>,
-    options?: RemoteClientOptions,
-  ): RemoteClient<Methods, 'ephemeral'>;
+  upsert(id: InferRecord<Id>, options?: RemoteClientOptions): RemoteClient<Methods, 'ephemeral'>;
 }
 
 export type FullAgentClientFactory<
@@ -402,24 +399,6 @@ function assertValueMatchesType(value: SchemaValue, type: SchemaType, graph: Sch
   }
 }
 
-/** Walk a nested object by path; `present` is false if any segment is missing. */
-function getAtPath(
-  obj: Record<string, unknown>,
-  path: string[],
-): { present: boolean; value?: unknown } {
-  let cur: unknown = obj;
-  for (const seg of path) {
-    if (cur === null || typeof cur !== 'object') {
-      throw new Error(`Expected object while traversing config path ${path.join('.')}`);
-    }
-    if (!Object.prototype.hasOwnProperty.call(cur, seg)) {
-      return { present: false };
-    }
-    cur = (cur as Record<string, unknown>)[seg];
-  }
-  return { present: true, value: cur };
-}
-
 /**
  * Encode config overrides (a nested object mirroring the agent's config shape)
  * into the `TypedAgentConfigValue[]` a remote `WasmRpc` accepts. Only `local`
@@ -427,50 +406,42 @@ function getAtPath(
  * leaf over RPC is rejected (secrets are provisioned host-side).
  */
 function encodeConfigOverrides(
-  declarations: ConfigDeclaration[],
+  tree: ConfigGroupNode,
   overrides: Record<string, unknown>,
 ): AgentConfigEntry[] {
-  const paths = declarations.map((decl) => decl.path);
-  const checkPaths = (value: unknown, prefix: string[]): void => {
+  const out: AgentConfigEntry[] = [];
+  const walk = (group: ConfigGroupNode, value: unknown, prefix: string[]): void => {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
       throw new TypeError(`Expected object at config path '${prefix.join('.')}'`);
     }
-    for (const [key, child] of Object.entries(value)) {
-      const path = [...prefix, key];
-      if (
-        paths.some(
-          (declared) =>
-            declared.length === path.length && declared.every((part, i) => part === path[i]),
-        )
-      ) {
-        continue;
+    const children = new Map(
+      group.children.map((node) => [node.kind === 'group' ? node.name : node.decl.name, node]),
+    );
+    for (const key of Object.keys(value)) {
+      if (!children.has(key)) {
+        throw new TypeError(`Unknown config path '${[...prefix, key].join('.')}'`);
       }
-      if (
-        !paths.some(
-          (declared) =>
-            declared.length > path.length && path.every((part, i) => declared[i] === part),
-        )
-      ) {
-        throw new TypeError(`Unknown config path '${path.join('.')}'`);
+    }
+    for (const [name, node] of children) {
+      if (!Object.prototype.hasOwnProperty.call(value, name)) continue;
+      const child = (value as Record<string, unknown>)[name];
+      if (node.kind === 'group') {
+        walk(node, child, [...prefix, name]);
+      } else {
+        const decl = node.decl;
+        if (decl.source === 'secret') {
+          throw new Error(
+            `Cannot override secret config field '${decl.path.join('.')}' over RPC; secrets are provisioned host-side.`,
+          );
+        }
+        out.push({
+          path: [...decl.path],
+          value: { graph: decl.graph, value: decl.codec.toValue(child) },
+        });
       }
-      checkPaths(child, path);
     }
   };
-  checkPaths(overrides, []);
-  const out: AgentConfigEntry[] = [];
-  for (const decl of declarations) {
-    const found = getAtPath(overrides, decl.path);
-    if (!found.present) continue;
-    if (decl.source === 'secret') {
-      throw new Error(
-        `Cannot override secret config field '${decl.path.join('.')}' over RPC; secrets are provisioned host-side.`,
-      );
-    }
-    out.push({
-      path: [...decl.path],
-      value: { graph: decl.graph, value: decl.codec.toValue(found.value) },
-    });
-  }
+  walk(tree, overrides, []);
   return out;
 }
 
@@ -644,10 +615,9 @@ export function buildAgentClientSurface<
   }));
   const methodCodecs = compileRemoteMethods(def.methods);
 
-  const configDecls: ConfigDeclaration[] = compileConfig(def.config);
+  const configTree = compileConfigTree(def.config);
 
-  const encodeId = (id: InferRecord<Id>) =>
-    encodeRecord(idCodecs, id as Record<string, unknown>);
+  const encodeId = (id: InferRecord<Id>) => encodeRecord(idCodecs, id as Record<string, unknown>);
 
   const upsert = (id: InferRecord<Id>, options?: RemoteClientOptions) =>
     createRemoteClient<Methods, Mode>(
@@ -668,7 +638,7 @@ export function buildAgentClientSurface<
       upsert: (id, options) => upsert(id, options) as RemoteClient<Methods>,
       create: async (id, options = {}) => {
         const config = options.config
-          ? encodeConfigOverrides(configDecls, options.config as Record<string, unknown>)
+          ? encodeConfigOverrides(configTree, options.config as Record<string, unknown>)
           : [];
         const remote = await createRemoteAgent(def.name, encodeId(id), {
           keyed: options.keyed ?? false,
