@@ -174,7 +174,7 @@ impl<'r, 'a> Walker<'r, 'a> {
         if has_id(&ids.agent_id)
             && let Ok(agent_id) = AgentId::from_value(value)
         {
-            return ReportNode::Agent(agent_reference(self.ctx, &agent_id));
+            return self.agent_node(&agent_id);
         }
         if has_id(&ids.schema_value) {
             return match SchemaValue::from_value(value) {
@@ -753,6 +753,16 @@ impl<'r, 'a> Walker<'r, 'a> {
 
     /// A string leaf: a `str` token, or the text itself for error text with
     /// `--keep-error-text`.
+    /// An agent ID in clear when Golem issued it. Another UUID in an agent ID position, which a
+    /// guest can write, for example as the target of a failed RPC lookup, stays a token.
+    pub fn agent_node(&self, agent_id: &AgentId) -> ReportNode {
+        if agent_id.is_issued() {
+            ReportNode::Agent(agent_reference(agent_id))
+        } else {
+            self.str_leaf(&agent_id.to_string(), Region::Customer)
+        }
+    }
+
     pub fn str_leaf(&self, text: &str, region: Region) -> ReportNode {
         if region == Region::Error && self.ctx.keep().error_text {
             ReportNode::Str(StrNode {
