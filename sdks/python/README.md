@@ -9,6 +9,63 @@ prepared runtime:
   pre-initialization imports. It registers the component's exports, imports
   the application's entry modules and finalizes the agent registry.
   Discovery constructs no agents.
+- `tests`: native tests of agent declarations and dispatch.
+
+## Agents
+
+```python
+from golem import agent, method
+
+
+@agent
+class Counter:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.value = 0
+
+    @method
+    def increment(self, amount: int) -> int:
+        self.value += amount
+        return self.value
+```
+
+`@agent` declares an agent type with the class name. The ordinary `__init__`
+is the constructor, and its parameters are the constructor parameters.
+`@method` declares a method with the function name. Other methods are not
+exported. An instance hosts one agent, which keeps its object state between
+calls.
+
+The decorators only record the declarations. After pre-initialization imports
+every entry module, the SDK resolves the annotations and checks the
+declarations. One invalid declaration or more fails the build, and the error
+names each one with its file and line.
+
+Parameters and results have these types:
+
+| Python  | Schema type                                   |
+|---------|-----------------------------------------------|
+| `bool`  | `bool`                                        |
+| `int`   | `s64`; a value outside its range is an error  |
+| `float` | `f64`                                         |
+| `str`   | `string`                                      |
+| `bytes` | `binary`                                      |
+| `None`  | no result (methods only)                      |
+
+`bool` is not an `int`, and `int` is not a `float`, in either direction.
+
+The SDK checks the arguments of a call against the declaration before the
+constructor or the method runs. Invalid arguments fail with `invalid-input`
+and change nothing. An exception from user code fails the call with a
+`custom-error` that names the exception. A result of the wrong type also fails
+the call with a `custom-error`, but only after the method ran: its effects
+stay. A second `initialize` fails and keeps the agent.
+
+Run the native tests with CPython 3.14:
+
+```shell
+cd sdks/python
+python3.14 -B -m unittest discover -s tests
+```
 
 ## Prepared assets
 
@@ -30,7 +87,11 @@ cargo test -p golem-python-assembler
 
 ## Current limits
 
-- Applications declare no agents yet. Discovery returns an empty list.
+- Methods are synchronous. Async methods, compound types, default, variadic
+  and keyword-only parameters and an agent `config` fail the build with a
+  named error.
+- `@agent` and `@method` take no options yet. Docstrings are not exported as
+  descriptions, and agents have no HTTP mounts or declared errors.
 - Third-party packages and native extensions in applications are not
   supported.
 - Pre-initialization output is limited to 64 KiB each for stdout and stderr.
