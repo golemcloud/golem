@@ -316,7 +316,7 @@ pub(crate) fn build_durable_streaming_request(
             .ok_or_else(invalid)?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
-        let _: AgentId = origin
+        let origin_callee: AgentId = origin
             .callee
             .clone()
             .ok_or_else(invalid)?
@@ -332,10 +332,14 @@ pub(crate) fn build_durable_streaming_request(
             .ok_or_else(invalid)?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
-        // The calling code is the agent that made the call, or a tool that this agent hosts.
+        // The calling code is the agent that made the call, or a tool that this agent hosts. A
+        // tool principal names no host, so the origin must name that agent as its callee: the
+        // origin and the parent then name the same agent.
         let internal = match &caller.immediate {
             Principal::Agent(agent) => agent.address == parent,
-            Principal::Tool(tool) => tool.environment_id == origin_environment_id,
+            Principal::Tool(tool) => {
+                tool.environment_id == origin_environment_id && origin_callee == parent
+            }
             _ => false,
         };
         if fingerprint.is_nil() || origin.idempotency_key.is_none() || !internal {

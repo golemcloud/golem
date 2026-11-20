@@ -630,7 +630,8 @@ fn durable_rpc_origin_accepts_a_tool_of_its_environment_as_the_immediate_caller(
             tool_name: ToolName::try_from("report").unwrap(),
         })
     };
-    let build = |immediate: Principal| {
+    let build_from = |request: &golem_api_grpc::proto::golem::worker::InvocationStart,
+                      immediate: Principal| {
         let mut request = request.clone();
         request.caller = Some(
             Caller {
@@ -652,6 +653,7 @@ fn durable_rpc_origin_accepts_a_tool_of_its_environment_as_the_immediate_caller(
             8,
         )
     };
+    let build = |immediate: Principal| build_from(&request, immediate);
 
     assert!(build(crate::test_callers::agent_principal(parent.clone())).is_ok());
     assert!(build(tool_of(origin_environment)).is_ok());
@@ -670,6 +672,38 @@ fn durable_rpc_origin_accepts_a_tool_of_its_environment_as_the_immediate_caller(
         ("anonymous", Principal::Anonymous),
     ] {
         assert!(build(immediate).is_err(), "{case} was accepted");
+    }
+
+    // A tool principal names no host, so the origin ties the tool to the agent that sends the
+    // call: a request whose parent or origin callee names another agent is refused.
+    let mut other_parent = request.clone();
+    other_parent
+        .context
+        .as_mut()
+        .unwrap()
+        .parent
+        .as_mut()
+        .unwrap()
+        .name
+        .push_str("-different");
+    let mut other_callee = request.clone();
+    other_callee
+        .origin_invocation
+        .as_mut()
+        .unwrap()
+        .callee
+        .as_mut()
+        .unwrap()
+        .name
+        .push_str("-different");
+    for (case, changed) in [
+        ("the parent names another agent", &other_parent),
+        ("the origin names another agent", &other_callee),
+    ] {
+        assert!(
+            build_from(changed, tool_of(origin_environment)).is_err(),
+            "a tool caller was accepted when {case}"
+        );
     }
 }
 
