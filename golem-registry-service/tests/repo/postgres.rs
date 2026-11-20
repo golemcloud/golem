@@ -264,7 +264,7 @@ async fn make_deps(pool: PostgresPool, routing_test_pool: PostgresPool) -> Deps 
             pool.clone(),
         )),
         account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::logged(pool.clone())),
-        plan_storage_repo: std::sync::Arc::new(DbPlanStorageRepo::new(pool.clone())),
+        plan_storage_repo: std::sync::Arc::new(DbPlanStorageRepo::logged(pool.clone())),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(pool.clone())),
         installation_repo: Box::new(DbInstallationRepo::logged(pool.clone())),
