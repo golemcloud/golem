@@ -25294,6 +25294,10 @@ components:
           type: string
         layerDigest:
           type: string
+        toolGuestNames:
+          type: object
+          additionalProperties:
+            type: string
       required:
       - source
       - packageDigest

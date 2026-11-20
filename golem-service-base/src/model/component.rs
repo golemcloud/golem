@@ -21,6 +21,7 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use std::collections::BTreeMap;
 use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
@@ -120,6 +121,21 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             .wasm_hash
             .ok_or("Missing wasm hash field")?
             .try_into()?;
+        let package_metadata = value
+            .package_metadata
+            .map(|metadata| {
+                Ok::<_, String>(ComponentPackageMetadata {
+                    source: metadata.source,
+                    package_digest: metadata.package_digest,
+                    layer_digest: metadata.layer_digest,
+                    tool_guest_names: metadata
+                        .tool_guest_names
+                        .into_iter()
+                        .map(|(local, guest)| Ok((local.parse()?, guest.parse()?)))
+                        .collect::<Result<BTreeMap<_, _>, String>>()?,
+                })
+            })
+            .transpose()?;
 
         Ok(Self {
             id,
@@ -135,7 +151,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             metadata,
             created_at,
             wasm_hash,
-            package_metadata: None,
+            package_metadata,
             hash,
             object_store_key: value.object_store_key,
         })
@@ -164,6 +180,18 @@ impl TryFrom<Component> for golem_api_grpc::proto::golem::component::Component {
             wasm_hash: Some(value.wasm_hash.into()),
             hash: Some(value.hash.into()),
             object_store_key: value.object_store_key,
+            package_metadata: value.package_metadata.map(|metadata| {
+                golem_api_grpc::proto::golem::component::ComponentPackageMetadata {
+                    source: metadata.source,
+                    package_digest: metadata.package_digest,
+                    layer_digest: metadata.layer_digest,
+                    tool_guest_names: metadata
+                        .tool_guest_names
+                        .into_iter()
+                        .map(|(local, guest)| (local.to_string(), guest.to_string()))
+                        .collect(),
+                }
+            }),
         })
     }
 }

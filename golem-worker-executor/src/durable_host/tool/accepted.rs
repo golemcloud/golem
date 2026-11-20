@@ -1333,7 +1333,7 @@ where
         }
     };
     let sidecar = ToolSidecarInvocation {
-        tool_name: tool_name.to_string(),
+        tool_name,
         position,
         command_path: descriptor.command_path.clone(),
         input,

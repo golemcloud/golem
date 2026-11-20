@@ -205,7 +205,9 @@ async fn expansion_verifies_cache_and_materializes_ordinary_declarations() {
         source: Some(bytes.clone()),
         ..Default::default()
     };
-    let expanded = expand(&pins, &pins, root, &mut effects).await.unwrap();
+    let expanded = expand(&pins, &pins, &BTreeMap::new(), root, &mut effects)
+        .await
+        .unwrap();
     assert_eq!(effects.cache[&digest], bytes);
     assert!(effects.source.is_none());
     let declaration = serde_json::to_value(expanded.declarations).unwrap();
@@ -217,17 +219,96 @@ async fn expansion_verifies_cache_and_materializes_ordinary_declarations() {
         assert_eq!(effects.files[path], [byte]);
     }
     effects.files.clear();
-    assert!(expand(&pins, &pins, root, &mut effects).await.is_ok());
+    assert!(
+        expand(&pins, &pins, &BTreeMap::new(), root, &mut effects)
+            .await
+            .is_ok()
+    );
     effects.files.clear();
     effects.deny_source = true;
     assert!(
-        expand(&pins, &pins, root, &mut effects)
+        expand(&pins, &pins, &BTreeMap::new(), root, &mut effects)
             .await
             .unwrap_err()
             .to_string()
             .contains("Source denied")
     );
     assert!(effects.files.is_empty());
+}
+
+#[test]
+async fn expansion_keeps_only_the_selected_tool_in_declarations_and_metadata() {
+    let (mut spec, blobs) = sample();
+    for component in spec.components.values_mut() {
+        let name = component.metadata.tools[0].name().unwrap().parse().unwrap();
+        component.tools.insert(name, PackageProvision::default());
+    }
+    let (digest, bytes) = pack(&spec, &blobs).unwrap();
+    let pins = Pins::from([(
+        "example".into(),
+        FilePin {
+            source: "one.tar".into(),
+            version: "1.2.3".into(),
+            digest,
+        },
+    )]);
+    for (selected, local) in [("first-tool", None), ("second-tool", Some("local-tool"))] {
+        let mut effects = MemoryEffects {
+            source: Some(bytes.clone()),
+            ..Default::default()
+        };
+        let selectors = BTreeMap::from([(
+            "example".into(),
+            vec![ToolSelection {
+                published: Some(selected.parse().unwrap()),
+                local: local.unwrap_or(selected).parse().unwrap(),
+            }],
+        )]);
+        let expanded = expand(&pins, &pins, &selectors, Path::new("unpack"), &mut effects)
+            .await
+            .unwrap();
+        let names = expanded
+            .components
+            .values()
+            .flat_map(|component| {
+                component
+                    .metadata
+                    .tools
+                    .iter()
+                    .map(|tool| tool.name().unwrap())
+            })
+            .collect::<Vec<_>>();
+        let effective_name = local.unwrap_or(selected);
+        assert_eq!(names, [effective_name]);
+        let alias_names = expanded
+            .components
+            .values()
+            .flat_map(|component| {
+                component
+                    .package_metadata
+                    .tool_guest_names
+                    .iter()
+                    .map(|(local, guest)| (local.as_str(), guest.as_str()))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            alias_names,
+            local
+                .map(|local| (local, selected))
+                .into_iter()
+                .collect::<Vec<_>>()
+        );
+        let declared = serde_json::to_value(expanded.declarations).unwrap();
+        assert_eq!(
+            declared["tools"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [effective_name]
+        );
+    }
 }
 
 #[test]

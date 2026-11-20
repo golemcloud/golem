@@ -34,6 +34,17 @@ impl ComponentCommandHandler {
     pub(crate) async fn pack_application(&self) -> anyhow::Result<(String, Vec<u8>)> {
         let mut app_ctx = self.ctx.app_context_lock_mut().await?;
         let app_ctx = app_ctx.some_or_err_mut()?;
+        ensure!(
+            !app_ctx.has_development_packages,
+            "Cannot pack an application with development path packages"
+        );
+        ensure!(
+            app_ctx
+                .installed_components
+                .values()
+                .all(|component| component.package_metadata.tool_guest_names.is_empty()),
+            "Cannot pack a component with renamed installed tools"
+        );
         let app = app_ctx.application();
         let mut config = PackageConfig {
             application: app.application_name().to_string(),
