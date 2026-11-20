@@ -205,7 +205,11 @@ pub trait GolemHostApi {
     /// Fails when the search has not ended after `max_batches` batches.
     fn continue_kept_oplog_search(&self, max_batches: u64) -> Result<Vec<u64>, String>;
     fn read_oplog_result(&self, agent_id: AgentId) -> Result<(), String>;
-    fn search_oplog_result(&self, agent_id: AgentId, query: String) -> Result<(), String>;
+    fn search_oplog_result(
+        &mut self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<u64>>, String>;
     /// Enriches a forged raw failed update at `entry_index` of the agent's own oplog, whose
     /// divergence names `divergence_index` with an expected host call of unknown request.
     fn enrich_forged_failed_update_result(
@@ -930,11 +934,15 @@ impl GolemHostApi for GolemHostApiImpl {
             .map_err(|error| format!("{error:?}"))
     }
 
-    fn search_oplog_result(&self, agent_id: AgentId, query: String) -> Result<(), String> {
-        SearchOplog::new(wire_agent_id(agent_id), &query)
-            .get_next()
-            .map(|_| ())
-            .map_err(|error| format!("{error:?}"))
+    fn search_oplog_result(
+        &mut self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<u64>>, String> {
+        let search = SearchOplog::new(wire_agent_id(agent_id), &query);
+        let batch = search.get_next().map_err(|error| format!("{error:?}"))?;
+        self.kept_search = Some(search);
+        Ok(batch.map(|entries| entries.into_iter().map(|(index, _)| index).collect()))
     }
 
     fn enrich_forged_failed_update_result(
