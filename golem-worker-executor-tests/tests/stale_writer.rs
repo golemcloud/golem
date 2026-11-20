@@ -208,7 +208,7 @@ async fn stale_writer_takeover(
     assert_eq!(
         old.stored_oplog(&worker_id).await,
         before,
-        "retirement must append neither a completion nor a status/restart hint"
+        "the fence must keep the stored oplog unchanged through retirement"
     );
     assert_eq!(
         storage_calls.calls("update_status"),
