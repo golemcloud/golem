@@ -2358,7 +2358,7 @@ async fn no_blob_call_of_a_save_starts_after_it_answered() {
         )
         .await;
     let at_the_answer = storage.calls().len();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(eventually(|| store.work_in_flight() == 0).await);
 
     assert_eq!(storage.calls().len(), at_the_answer);
 }
@@ -2694,7 +2694,6 @@ async fn a_save_whose_first_pack_lands_after_the_backup_failed(
     let storage = scripted_first_pack(inner.clone(), first, |_, _| Script::Pass);
     let store = store(storage.clone(), runs_policy(Duration::from_secs(20), 3));
     let scope = new_scope();
-    let started = std::time::Instant::now();
 
     let saved = store
         .save(
@@ -2710,11 +2709,7 @@ async fn a_save_whose_first_pack_lands_after_the_backup_failed(
         return None;
     }
     store.delete_all(&scope, &Unlimited).await.unwrap();
-    tokio::time::sleep(
-        (started + Duration::from_secs(17)).saturating_duration_since(std::time::Instant::now())
-            + Duration::from_secs(1),
-    )
-    .await;
+    assert!(polled_until(REACH_LIMIT, || storage.landed() == 1).await);
     Some((saved, blobs(&*inner, scope.namespace(), "").await))
 }
 
@@ -3390,7 +3385,7 @@ async fn a_save_whose_backup_fails_with_a_pack_write_in_flight_answers_after_the
         .await;
     let sent_before_the_answer = wrote_a_pack(&storage);
     store.delete_all(&scope, &Unlimited).await.unwrap();
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(eventually(|| storage.landed() == 1).await);
 
     assert!(sent_before_the_answer);
     assert_eq!(
@@ -3424,7 +3419,7 @@ async fn a_save_whose_lost_publish_try_lands_after_a_later_try_answers_only_afte
         .await;
     let sent_before_the_answer = calls_of(&storage, "publish");
     store.delete_all(&scope, &Unlimited).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(eventually(|| storage.landed() == 1).await);
 
     assert!(saved.is_ok(), "{saved:?}");
     assert_eq!(sent_before_the_answer, 2);

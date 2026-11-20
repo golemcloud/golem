@@ -156,11 +156,11 @@ impl SchedulerStorage for DuplicateWakes {
 
 /// Holds every scheduler claim until released, and observes acknowledgement of the invocation wake.
 #[derive(Debug)]
-struct PausedScheduler {
-    inner: Arc<dyn SchedulerStorage + Send + Sync>,
-    release: tokio_util::sync::CancellationToken,
-    invocation_wake: Mutex<Option<ScheduleId>>,
-    acknowledged: Arc<tokio::sync::Notify>,
+pub(crate) struct PausedScheduler {
+    pub(crate) inner: Arc<dyn SchedulerStorage + Send + Sync>,
+    pub(crate) release: tokio_util::sync::CancellationToken,
+    pub(crate) invocation_wake: Mutex<Option<ScheduleId>>,
+    pub(crate) acknowledged: Arc<tokio::sync::Notify>,
 }
 
 #[async_trait]
