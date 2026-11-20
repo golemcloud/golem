@@ -1,0 +1,21 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/2.0.0-dev.1/golem.schema.json
+manifestVersion: 2.0.0
+app: yq
+
+componentTemplates:
+  yq-go:
+    templates: go
+    customCommands:
+      copy:
+        - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../yq.wasm"
+
+components:
+  golem:yq:
+    dir: "."
+    templates: yq-go
+
+environments:
+  local:
+    server: local
+    componentPresets: release
