@@ -20,6 +20,24 @@ use std::path::PathBuf;
 // limitations under the License.
 
 pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> {
+    let _package_registry = match mode {
+        CleanMode::All => crate::package::clean_roots(ctx.application().app_root_dir())?,
+        CleanMode::SelectedComponentsOnly => None,
+    };
+    let package_namespace = ctx
+        .application()
+        .app_root_dir()
+        .join(crate::model::app::TEMP_DIR)
+        .join("package-unpack");
+    let delete = |context: &str, path: &std::path::Path| -> anyhow::Result<()> {
+        let path = fs::absolute_lexical_path_from_base_dir(path, ctx.application().app_root_dir());
+        anyhow::ensure!(
+            !package_namespace.exists()
+                || (!path.starts_with(&package_namespace) && !package_namespace.starts_with(&path)),
+            "Clean targets must not delete the package preparation registry or leased outputs"
+        );
+        fs::delete_logged(context, &path)
+    };
     {
         log_action("Cleaning", "components");
         let _indent = LogIndent::new();
@@ -73,7 +91,7 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
         };
 
         for (context, path) in paths {
-            fs::delete_logged(context, &path)?;
+            delete(context, &path)?;
         }
     }
 
@@ -83,13 +101,25 @@ pub fn clean_app(ctx: &BuildContext<'_>, mode: CleanMode) -> anyhow::Result<()> 
             let _indent = LogIndent::new();
 
             for clean in ctx.application().common_clean() {
-                fs::delete_logged("common clean target", &clean.source.join(&clean.value))?;
+                delete("common clean target", &clean.source.join(&clean.value))?;
             }
 
             log_action("Cleaning", "application build dir");
             let _indent = LogIndent::new();
 
-            fs::delete_logged("temp dir", ctx.application().temp_dir())?;
+            let temp = ctx
+                .application()
+                .app_root_dir()
+                .join(ctx.application().temp_dir());
+            if temp.try_exists()? {
+                // The stable registry must not be replaced while a preparer waits on its lock.
+                for entry in std::fs::read_dir(&temp)? {
+                    let entry = entry?;
+                    if entry.file_name() != "package-unpack" {
+                        delete("temp dir entry", &entry.path())?;
+                    }
+                }
+            }
         }
         CleanMode::SelectedComponentsOnly => {
             // NOP

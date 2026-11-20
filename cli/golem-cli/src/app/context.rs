@@ -16,7 +16,7 @@ use crate::app::build::build_app;
 use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
 use crate::app::error::{AppValidationError, CustomCommandError, format_warns};
-use crate::app::manifest_upgrade::plan_manifest_upgrade_steps;
+use crate::app::manifest_upgrade::{ManifestUpgradeStep, plan_manifest_upgrade_steps};
 use crate::app::manifest_version::validate_manifest_versions;
 use crate::app::template::AppTemplateRepo;
 use crate::command_handler::ResolvedToolMiddlewareGrants;
@@ -49,7 +49,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails;
 use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
@@ -76,16 +76,37 @@ pub enum ResolvedEnvironmentTool<'a> {
     Mcp(&'a golem_client::model::McpResolvedTool),
 }
 
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum BuildMetadataRequired {
-    #[error("Remote tool '{0}' is not granted to the selected environment")]
-    Tool(golem_common::model::tool::ToolName),
-    #[error("Tool middleware '{0}' has no environment release grant")]
-    Middleware(golem_common::model::tool_middleware::ToolMiddlewareName),
-    #[error(
-        "Environment tool dependency '{0}' was not found among the selected environment's ambient tools or MCP imports"
-    )]
-    EnvironmentTool(golem_common::model::tool::ToolName),
+impl ResolvedEnvironmentTools {
+    pub fn tool(
+        &self,
+        name: &golem_common::model::tool::ToolName,
+    ) -> anyhow::Result<ResolvedEnvironmentTool<'_>> {
+        if let Some(tool) = self.ambient_tools.iter().find(|tool| tool.name == *name) {
+            return Ok(ResolvedEnvironmentTool::Ambient(tool));
+        }
+        if let Some(tool) = self
+            .mcp_tools
+            .iter()
+            .find(|tool| tool.definition.name() == Some(name.as_str()))
+        {
+            return Ok(ResolvedEnvironmentTool::Mcp(tool));
+        }
+        if let Some(diagnostic) = self
+            .mcp_diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.canonical_name == name.as_str())
+        {
+            bail!(
+                "Environment tool '{name}' was rejected by MCP import {} (upstream '{}'): {}",
+                diagnostic.import_index,
+                diagnostic.upstream_name,
+                diagnostic.reason
+            );
+        }
+        bail!(
+            "Environment tool dependency '{name}' was not found among the selected environment's ambient tools or MCP imports"
+        )
+    }
 }
 
 pub struct BuildContext<'a> {
@@ -150,7 +171,7 @@ impl<'a> BuildContext<'a> {
         self.resolved_tool_middleware_grants
             .and_then(|grants| grants.get(&reference))
             .map(|grant| grant.release.definition.clone())
-            .ok_or_else(|| BuildMetadataRequired::Middleware(name.clone()).into())
+            .ok_or_else(|| anyhow!("Tool middleware '{name}' has no resolved build preparation"))
     }
 
     pub fn with_environment_tools(mut self, tools: &'a ResolvedEnvironmentTools) -> Self {
@@ -178,25 +199,11 @@ impl<'a> BuildContext<'a> {
         &self,
         name: &golem_common::model::tool::ToolName,
     ) -> anyhow::Result<ResolvedEnvironmentTool<'_>> {
-        if let Some(tool) = self.ambient_tools().iter().find(|tool| tool.name == *name) {
-            return Ok(ResolvedEnvironmentTool::Ambient(tool));
-        }
-        if let Some(tool) = self
-            .mcp_tools()
-            .iter()
-            .find(|tool| tool.definition.name() == Some(name.as_str()))
-        {
-            return Ok(ResolvedEnvironmentTool::Mcp(tool));
-        }
-        if let Some(diagnostic) = self.environment_tool_diagnostic(name) {
-            bail!(
-                "Environment tool '{name}' was rejected by MCP import {} (upstream '{}'): {}",
-                diagnostic.import_index,
-                diagnostic.upstream_name,
-                diagnostic.reason
-            );
-        }
-        Err(BuildMetadataRequired::EnvironmentTool(name.clone()).into())
+        self.environment_tools
+            .ok_or_else(|| {
+                anyhow!("Environment tool dependency '{name}' has no resolved build preparation")
+            })?
+            .tool(name)
     }
 
     pub fn environment_tool_diagnostic(
@@ -272,7 +279,7 @@ impl<'a> BuildContext<'a> {
 }
 
 pub struct ToolsWithEnsuredCommonDeps {
-    tools_with_ensured_common_deps: tokio::sync::RwLock<HashSet<String>>,
+    tools_with_ensured_common_deps: tokio::sync::RwLock<HashMap<String, bool>>,
 }
 
 impl Default for ToolsWithEnsuredCommonDeps {
@@ -284,30 +291,28 @@ impl Default for ToolsWithEnsuredCommonDeps {
 impl ToolsWithEnsuredCommonDeps {
     pub fn new() -> ToolsWithEnsuredCommonDeps {
         ToolsWithEnsuredCommonDeps {
-            tools_with_ensured_common_deps: tokio::sync::RwLock::new(HashSet::new()),
+            tools_with_ensured_common_deps: tokio::sync::RwLock::new(HashMap::new()),
         }
     }
 
     pub async fn ensure_common_deps_for_tool_once(
         &self,
         tool: &str,
-        ensure: impl AsyncFnOnce() -> anyhow::Result<()>,
-    ) -> anyhow::Result<()> {
-        if self
-            .tools_with_ensured_common_deps
-            .read()
-            .await
-            .contains(tool)
-        {
-            return Ok(());
+        ensure: impl AsyncFnOnce() -> anyhow::Result<bool>,
+    ) -> anyhow::Result<bool> {
+        if let Some(changed) = self.tools_with_ensured_common_deps.read().await.get(tool) {
+            return Ok(*changed);
         }
 
         let mut lock = self.tools_with_ensured_common_deps.write().await;
+        if let Some(changed) = lock.get(tool) {
+            return Ok(*changed);
+        }
 
         let result = ensure().await;
 
-        if result.is_ok() {
-            lock.insert(tool.to_string());
+        if let Ok(changed) = &result {
+            lock.insert(tool.to_string(), *changed);
         }
 
         result
@@ -319,6 +324,32 @@ pub struct ApplicationPreloadResult {
     pub loaded_with_warnings: bool,
     pub application_preload: Option<ApplicationPreload>,
     pub resolved_local_server: Option<ResolvedLocalServer>,
+    pub load_plan: ApplicationLoadPlan,
+}
+
+#[derive(Default)]
+pub struct ApplicationLoadPlan {
+    upgrades: Vec<ManifestUpgradeStep>,
+    commons: Vec<(
+        crate::app::template::AppTemplateCommonOnDemand,
+        ApplicationName,
+        PathBuf,
+        PathBuf,
+    )>,
+}
+
+impl ApplicationLoadPlan {
+    pub fn is_empty(&self) -> bool {
+        self.upgrades.is_empty() && self.commons.is_empty()
+    }
+
+    pub fn apply(&self, yes: bool) -> anyhow::Result<()> {
+        ApplicationContext::apply_manifest_upgrades(&self.upgrades, yes)?;
+        for (template, name, app_dir, target_dir) in &self.commons {
+            template.generate(name, app_dir, target_dir)?;
+        }
+        Ok(())
+    }
 }
 
 pub struct ApplicationContext {
@@ -328,7 +359,8 @@ pub struct ApplicationContext {
     component_metadata: crate::app::component_metadata::ComponentMetadataRegistry,
     pub(crate) publisher_package: Option<golem_package::PackageIdentity>,
     pub(crate) installed_components: BTreeMap<ComponentName, golem_package::InstalledComponent>,
-    _package_dir: Option<crate::package::UnpackRoot>,
+    pub(crate) package_preparation: Option<crate::package::PackagePreparation>,
+    pub(crate) prepared_packages: Option<std::sync::Arc<crate::package::PreparedPackages>>,
     calling_working_dir: PathBuf,
     selected_component_names: BTreeSet<ComponentName>,
     builtin_local_url: url::Url,
@@ -354,7 +386,8 @@ impl ApplicationContext {
             ),
             publisher_package: None,
             installed_components: BTreeMap::new(),
-            _package_dir: None,
+            package_preparation: None,
+            prepared_packages: None,
             builtin_local_url: "http://localhost:9881".parse().unwrap(),
             tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps::new(),
         }
@@ -396,6 +429,10 @@ impl ApplicationContext {
             None,
         )?;
         let steps = plan_manifest_upgrade_steps(&collected_sources.sources)?;
+        Self::apply_manifest_upgrades(&steps, yes)
+    }
+
+    fn apply_manifest_upgrades(steps: &[ManifestUpgradeStep], yes: bool) -> anyhow::Result<()> {
         if steps.is_empty() {
             return Ok(());
         }
@@ -404,7 +441,7 @@ impl ApplicationContext {
         logln("");
         log_action("Planned", "automatic application manifest upgrade changes");
         let _indent = DecoratedIndent::new_primary(Format::Text);
-        for step in &steps {
+        for step in steps {
             logln(format!(
                 "- {} {}",
                 "update".green(),
@@ -421,10 +458,18 @@ impl ApplicationContext {
             bail!(NonSuccessfulExit);
         }
 
+        // Check all originals after confirmation, before the first write.
+        for step in steps {
+            anyhow::ensure!(
+                fs::read_to_string(&step.path)? == step.current,
+                "Manifest {} changed after inspection; run the build again",
+                step.path.display()
+            );
+        }
         logln("");
         log_action("Applying", "application manifest upgrades");
         let _indent = LogIndent::new();
-        for step in &steps {
+        for step in steps {
             log_action(
                 "Updating",
                 format!("{}", step.path.display().to_string().log_color_highlight()),
@@ -440,10 +485,23 @@ impl ApplicationContext {
         source_mode: ApplicationSourceMode,
         calling_working_dir: &Path,
         dev_mode: bool,
+        defer_writes: bool,
     ) -> anyhow::Result<ApplicationPreloadResult> {
         let _output = LogOutput::new(Output::None);
 
-        match preload_app(source_mode, calling_working_dir, dev_mode) {
+        let mut load_plan = ApplicationLoadPlan::default();
+        let source_mode = if defer_writes {
+            prospective_application_source(source_mode, calling_working_dir, &mut load_plan)?
+        } else {
+            source_mode
+        };
+        match preload_app(
+            source_mode,
+            calling_working_dir,
+            dev_mode,
+            defer_writes,
+            load_plan,
+        ) {
             Some(environments) => validated_to_anyhow(
                 "Failed to load application manifest environments, see problems above",
                 environments,
@@ -457,6 +515,7 @@ impl ApplicationContext {
                 loaded_with_warnings: false,
                 application_preload: None,
                 resolved_local_server: None,
+                load_plan: ApplicationLoadPlan::default(),
             }),
         }
     }
@@ -470,21 +529,25 @@ impl ApplicationContext {
         component_presets: ComponentPresetSelector,
         builtin_local_url: url::Url,
         config_dir: &Path,
+        inspect_packages: bool,
     ) -> anyhow::Result<Option<ApplicationContext>> {
         let mut source_mode = source_mode;
-        let (publisher_package, expanded, package_dir) = match &mut source_mode {
-            ApplicationSourceMode::Preloaded(loaded) => {
+        let (publisher_package, expanded, package_preparation) = match &mut source_mode {
+            ApplicationSourceMode::Preloaded(loaded) if inspect_packages => {
                 let (publisher_package, pins, lock) = package_pins(loaded)?;
+                golem_package::check_lock(&pins, &lock)?;
                 if pins.is_empty() {
                     (publisher_package, Default::default(), None)
                 } else {
-                    let dir = crate::package::UnpackRoot::new(&loaded.app_root_dir)?;
-                    let mut effects = crate::package::LocalEffects {
-                        app_root: &loaded.app_root_dir,
-                        cache_root: config_dir.join("package-cache"),
-                    };
-                    let mut expanded =
-                        golem_package::expand(&pins, &lock, dir.path(), &mut effects).await?;
+                    let plan = crate::package::PackagePreparation::inspect(
+                        &loaded.app_root_dir,
+                        config_dir.join("package-cache"),
+                        &loaded.root_manifest,
+                        &pins,
+                        &lock,
+                    )
+                    .await?;
+                    let mut expanded = plan.inspection.bind(&plan.root);
                     for installed in expanded.components.values_mut() {
                         // The lock is a local locator, not the source label sent to the registry.
                         let source = fs::absolute_lexical_path_from_base_dir(
@@ -499,8 +562,8 @@ impl ApplicationContext {
                     }
                     loaded
                         .raw_apps
-                        .push(package_manifest(dir.path(), &expanded.declarations)?);
-                    (publisher_package, expanded.components, Some(dir))
+                        .push(package_manifest(&plan.root, &expanded.declarations)?);
+                    (publisher_package, expanded.components, Some(plan))
                 }
             }
             _ => (None, Default::default(), None),
@@ -525,7 +588,12 @@ impl ApplicationContext {
         )?;
         ctx.publisher_package = publisher_package;
         ctx.installed_components = expanded;
-        ctx._package_dir = package_dir;
+        ctx.package_preparation = package_preparation;
+        for (name, installed) in &ctx.installed_components {
+            ctx.component_metadata
+                .add_cached_component_metadata(name, installed.metadata.clone())
+                .await?;
+        }
 
         if ctx.config.offline {
             log_action("Using", "offline mode");
@@ -573,7 +641,8 @@ impl ApplicationContext {
                 component_metadata,
                 publisher_package: None,
                 installed_components: BTreeMap::new(),
-                _package_dir: None,
+                package_preparation: None,
+                prepared_packages: None,
                 calling_working_dir,
                 selected_component_names: BTreeSet::new(),
                 builtin_local_url,
@@ -717,18 +786,25 @@ impl ApplicationContext {
     pub async fn build(
         &self,
         build_config: &BuildConfig,
-        resolved_tool_grants: &ResolvedToolGrants,
-        resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
-        environment_tools: Option<&ResolvedEnvironmentTools>,
-    ) -> anyhow::Result<()> {
+        plan: &crate::app::build::plan::BuildPlan,
+        execution: &mut crate::app::build::BuildExecution,
+    ) -> anyhow::Result<crate::app::build::BuildAdvance> {
+        let resolved_tool_grants = execution.resolved_tool_grants.clone();
+        let resolved_tool_middleware_grants = execution.resolved_middleware_grants.clone();
+        let environment_tools = execution.environment_tools.clone();
         let ctx =
-            BuildContext::new_with_resolved_tool_grants(self, build_config, resolved_tool_grants)
-                .with_tool_middleware_grants(resolved_tool_middleware_grants);
-        match environment_tools {
+            BuildContext::new_with_resolved_tool_grants(self, build_config, &resolved_tool_grants)
+                .with_tool_middleware_grants(&resolved_tool_middleware_grants);
+        match environment_tools.as_ref() {
             Some(environment_tools) => {
-                build_app(&ctx.with_environment_tools(environment_tools)).await
+                build_app(
+                    &ctx.with_environment_tools(environment_tools),
+                    plan,
+                    execution,
+                )
+                .await
             }
-            None => build_app(&ctx).await,
+            None => build_app(&ctx, plan, execution).await,
         }
     }
 
@@ -973,6 +1049,8 @@ fn preload_app(
     source_mode: ApplicationSourceMode,
     calling_working_dir: &Path,
     dev_mode: bool,
+    defer_writes: bool,
+    mut load_plan: ApplicationLoadPlan,
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode, calling_working_dir).map(|loaded_raw_apps| {
         loaded_raw_apps.and_then(|loaded_raw_apps| {
@@ -986,6 +1064,8 @@ fn preload_app(
                             &application_preload.application_name.value,
                             &referenced_template_names,
                             dev_mode,
+                            defer_writes,
+                            &mut load_plan,
                         ))
                         .map(|on_demand_common_raw_apps| {
                             (on_demand_common_raw_apps, application_preload)
@@ -1018,6 +1098,7 @@ fn preload_app(
                             loaded_with_warnings: false,
                             application_preload: Some(application_preload),
                             resolved_local_server,
+                            load_plan,
                         }
                     })
             })
@@ -1030,11 +1111,10 @@ fn package_manifest(
     declarations: &golem_package::Declarations,
 ) -> anyhow::Result<app_raw::ApplicationWithSource> {
     let source = root.join("package-manifest.json");
-    let declarations = serde_json::to_string(declarations)?;
-    std::fs::write(&source, &declarations)?;
     Ok(app_raw::ApplicationWithSource {
         source,
-        application: serde_json::from_str(&declarations)?,
+        application: serde_json::from_value(serde_json::to_value(declarations)?)?,
+        package_source: true,
     })
 }
 
@@ -1063,7 +1143,6 @@ fn package_pins(
         golem_package::validate_identity(identity)?;
     }
     let lock = crate::package::load_lock(&loaded.app_root_dir)?;
-    golem_package::check_lock(&pins, &lock)?;
     Ok((publisher, pins, lock))
 }
 
@@ -1071,6 +1150,8 @@ fn ensure_on_demand_commons(
     application_name: &ApplicationName,
     referenced_template_names: &BTreeSet<String>,
     dev_mode: bool,
+    defer_writes: bool,
+    load_plan: &mut ApplicationLoadPlan,
 ) -> anyhow::Result<Vec<app_raw::ApplicationWithSource>> {
     let app_template_repo = AppTemplateRepo::get(dev_mode)?;
 
@@ -1080,8 +1161,32 @@ fn ensure_on_demand_commons(
         if let Some(template) = app_template_repo.common_on_demand_template(language)? {
             let app_dir = std::env::current_dir()?;
             let target_dir = Application::on_demand_common_dir_for_language(template.0.language);
-            template.generate(application_name, &app_dir, &target_dir)?;
             let golem_yaml_path = target_dir.join("golem.yaml");
+            if defer_writes {
+                if template.is_up_to_date(application_name, &target_dir)? {
+                    if golem_yaml_path.exists() {
+                        on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_file(
+                            &golem_yaml_path,
+                        )?);
+                    }
+                    continue;
+                }
+                let rendered = template.render(application_name, &app_dir, &target_dir)?;
+                if let Some(yaml) = rendered.get(&golem_yaml_path) {
+                    on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_string(
+                        golem_yaml_path,
+                        yaml,
+                    )?);
+                }
+                load_plan.commons.push((
+                    template.clone(),
+                    application_name.clone(),
+                    app_dir,
+                    target_dir,
+                ));
+                continue;
+            }
+            template.generate(application_name, &app_dir, &target_dir)?;
             if golem_yaml_path.exists() {
                 on_demand_raw_apps.push(app_raw::ApplicationWithSource::from_yaml_file(
                     &golem_yaml_path,
@@ -1091,6 +1196,51 @@ fn ensure_on_demand_commons(
     }
 
     Ok(on_demand_raw_apps)
+}
+
+fn prospective_application_source(
+    source_mode: ApplicationSourceMode,
+    calling_working_dir: &Path,
+    load_plan: &mut ApplicationLoadPlan,
+) -> anyhow::Result<ApplicationSourceMode> {
+    let root = match &source_mode {
+        ApplicationSourceMode::Automatic => None,
+        ApplicationSourceMode::ByRootManifest(root) => Some(root.as_path()),
+        ApplicationSourceMode::Preloaded(_) | ApplicationSourceMode::None => {
+            return Ok(source_mode);
+        }
+    };
+    let Some(collected) = collect_sources_and_switch_to_app_root(calling_working_dir, root) else {
+        return Ok(ApplicationSourceMode::None);
+    };
+    let collected =
+        validated_to_anyhow("Failed to collect application manifests", collected, None)?;
+    load_plan.upgrades = plan_manifest_upgrade_steps(&collected.sources)?;
+    if load_plan.upgrades.is_empty() {
+        validated_to_anyhow(
+            "Invalid manifest versions",
+            validate_manifest_versions(&collected.sources),
+            None,
+        )?;
+    }
+    let raw_apps = collected
+        .sources
+        .iter()
+        .map(
+            |source| match load_plan.upgrades.iter().find(|step| &step.path == source) {
+                Some(step) => {
+                    app_raw::ApplicationWithSource::from_yaml_string(source.clone(), &step.new)
+                }
+                None => app_raw::ApplicationWithSource::from_yaml_file(source),
+            },
+        )
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(ApplicationSourceMode::Preloaded(LoadedRawApps {
+        app_root_dir: collected.app_root_dir,
+        root_manifest: collected.root_manifest,
+        calling_working_dir: collected.calling_working_dir,
+        raw_apps,
+    }))
 }
 
 fn load_raw_apps(
@@ -1406,6 +1556,11 @@ tools:
         };
         let installed = resolve(installed);
         let local = resolve(local);
+        assert_eq!(
+            installed.all_sources(),
+            &std::collections::BTreeSet::from([root.clone()])
+        );
+        assert!(local.all_sources().contains(&local_source));
         let component_name: golem_common::model::component::ComponentName =
             "sample:shared".parse().unwrap();
         let agent_name: golem_common::model::agent::AgentTypeName = "SampleAgent".parse().unwrap();

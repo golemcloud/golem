@@ -75,12 +75,14 @@ pub struct TaskResult {
     pub cli_version: String,
     pub hash_hex: String,
     pub success: bool,
+    pub outputs: Vec<PathBuf>,
 }
 
 #[derive(Serialize)]
 pub struct ResolvedExternalCommandMarkerHash<'a> {
     pub build_dir: &'a Path,
     pub command: &'a app_raw::ExternalCommand,
+    pub npm_dependencies: Option<(String, Option<String>)>,
 }
 
 #[derive(Serialize)]
@@ -157,11 +159,15 @@ impl TaskResultMarkerHashSource for ResolvedExternalCommandMarkerHash<'_> {
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(Some(serde_json::to_string(&(
-            self.build_dir,
-            &self.command.command,
-            &self.command.targets,
-        ))?))
+        let targets = self
+            .command
+            .targets
+            .iter()
+            .map(|target| {
+                fs::absolute_lexical_path_from_base_dir(Path::new(target), self.build_dir)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        Ok(Some(serde_json::to_string(&targets)?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -181,7 +187,12 @@ impl TaskResultMarkerHashSource for GenerateQuickJSCrateCommandMarkerHash<'_> {
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(
+            &fs::absolute_lexical_path_from_base_dir(
+                Path::new(&self.command.generate_quickjs_crate),
+                self.build_dir,
+            ),
+        )?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -201,7 +212,12 @@ impl TaskResultMarkerHashSource for GenerateQuickJSDTSCommandMarkerHash<'_> {
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(
+            &fs::absolute_lexical_path_from_base_dir(
+                Path::new(&self.command.generate_quickjs_dts),
+                self.build_dir,
+            ),
+        )?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -221,7 +237,9 @@ impl TaskResultMarkerHashSource for InjectToPrebuiltQuickJsCommandMarkerHash<'_>
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(
+            &fs::absolute_lexical_path_from_base_dir(Path::new(&self.command.into), self.build_dir),
+        )?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -241,7 +259,9 @@ impl TaskResultMarkerHashSource for PreinitializeJsCommandMarkerHash<'_> {
     }
 
     fn id(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
+        Ok(Some(serde_json::to_string(
+            &fs::absolute_lexical_path_from_base_dir(Path::new(&self.command.into), self.build_dir),
+        )?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
@@ -449,10 +469,20 @@ pub struct TaskResultMarker {
     marker_file_path: PathBuf,
     hash_hex: String,
     previous_result: Option<TaskResult>,
+    output_directory: Option<PathBuf>,
 }
 
 impl TaskResultMarker {
     pub fn new<T: TaskResultMarkerHashSource>(dir: &Path, task: T) -> anyhow::Result<Self> {
+        let marker = Self::inspect(dir, task)?;
+        if marker.marker_file_path.exists() && !marker.is_up_to_date() {
+            fs::remove(&marker.marker_file_path)?;
+        }
+        Ok(marker)
+    }
+
+    /// Reads freshness without invalidating an existing marker.
+    pub fn inspect<T: TaskResultMarkerHashSource>(dir: &Path, task: T) -> anyhow::Result<Self> {
         let (hash_input, hash_hex) = match task.source()? {
             HashFromString(hash_input) => {
                 let mut hasher = blake3::Hasher::new();
@@ -469,23 +499,33 @@ impl TaskResultMarker {
             }
         };
 
-        let (marker_file_path, marker_file_exists, previous_result) =
+        let (marker_file_path, _marker_file_exists, previous_result) =
             Self::load_previous_result(dir, &id_hash_hex)?;
 
-        let task_result_marker = Self {
+        Ok(Self {
             kind: T::kind(),
             id,
             hash_input,
             marker_file_path,
             hash_hex,
             previous_result,
-        };
+            output_directory: None,
+        })
+    }
 
-        if marker_file_exists && !task_result_marker.is_up_to_date() {
-            fs::remove(&task_result_marker.marker_file_path)?;
-        }
+    pub fn track_outputs(mut self, directory: PathBuf) -> Self {
+        self.output_directory = Some(directory);
+        self
+    }
 
-        Ok(task_result_marker)
+    pub fn tracked_outputs(&self) -> Option<Vec<PathBuf>> {
+        self.output_directory.as_ref().map(|root| {
+            self.previous_result
+                .iter()
+                .flat_map(|result| &result.outputs)
+                .map(|path| root.join(path))
+                .collect()
+        })
     }
 
     pub fn get_hash<T: TaskResultMarkerHashSource>(
@@ -547,7 +587,16 @@ impl TaskResultMarker {
     pub fn is_up_to_date(&self) -> bool {
         match &self.previous_result {
             Some(previous_result) => {
-                previous_result.hash_hex == self.hash_hex && previous_result.success
+                previous_result.hash_hex == self.hash_hex
+                    && previous_result.success
+                    && self.output_directory.as_ref().is_none_or(|root| {
+                        !previous_result.outputs.is_empty()
+                            && previous_result.outputs.iter().all(|path| {
+                                path.components()
+                                    .all(|part| matches!(part, std::path::Component::Normal(_)))
+                                    && root.join(path).is_file()
+                            })
+                    })
             }
             None => false,
         }
@@ -562,6 +611,21 @@ impl TaskResultMarker {
     }
 
     fn save_marker_file(self, success: bool) -> anyhow::Result<()> {
+        let mut outputs = Vec::new();
+        if success && let Some(root) = &self.output_directory {
+            for entry in walkdir::WalkDir::new(root) {
+                let entry = entry?;
+                if entry.file_type().is_file() {
+                    outputs.push(entry.path().strip_prefix(root)?.to_path_buf());
+                }
+            }
+            outputs.sort();
+            anyhow::ensure!(
+                !outputs.is_empty(),
+                "The task produced no files in {}",
+                root.display()
+            );
+        }
         fs::write_str(
             &self.marker_file_path,
             &serde_json::to_string_pretty(&TaskResult {
@@ -574,6 +638,7 @@ impl TaskResultMarker {
                 cli_version: crate::version().to_string(),
                 hash_hex: self.hash_hex,
                 success,
+                outputs,
             })?,
         )
     }
@@ -625,6 +690,7 @@ mod tests {
                 ResolvedExternalCommandMarkerHash {
                     build_dir: Path::new("component"),
                     command,
+                    npm_dependencies: None,
                 },
             )
             .unwrap()
@@ -664,6 +730,7 @@ mod tests {
 
         let invalidated = marker();
         assert!(!invalidated.is_up_to_date());
+        assert!(!path.exists());
         invalidated.success().unwrap();
         assert!(marker().is_up_to_date());
     }

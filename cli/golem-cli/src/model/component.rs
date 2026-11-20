@@ -274,8 +274,7 @@ pub struct AgentTypeManifestProvisionConfig {
     pub env: BTreeMap<String, String>,
     pub config: Vec<AgentConfigEntryDto>,
     pub initial_card: Option<ParsedInitialPermissionCard>,
-    pub files_source: PathBuf,
-    pub files: Vec<app_raw::InitialComponentFile>,
+    pub files: Vec<crate::model::app::ProvisionFile>,
     pub plugins: Vec<app_raw::PluginInstallation>,
 }
 
@@ -289,10 +288,10 @@ impl AgentTypeManifestProvisionConfig {
             .files
             .iter()
             .map(|f| {
-                let archive_path = ArchiveFilePath(f.target_path.clone());
+                let archive_path = ArchiveFilePath(f.file.target_path.clone());
                 let options = AgentFileOptions {
-                    target_path: AgentFilePath(f.target_path.clone()),
-                    permissions: f.permissions.unwrap_or(AgentFilePermissions::ReadOnly),
+                    target_path: AgentFilePath(f.file.target_path.clone()),
+                    permissions: f.file.permissions.unwrap_or(AgentFilePermissions::ReadOnly),
                 };
                 (archive_path, options)
             })
@@ -316,7 +315,7 @@ impl AgentTypeManifestProvisionConfig {
 
 pub fn resolve_initial_permission(
     initial_card: Option<ParsedInitialPermissionCard>,
-    files: &[app_raw::InitialComponentFile],
+    files: &[crate::model::app::ProvisionFile],
     context: &RecipientMonomorphizationContext,
 ) -> AgentTypeInitialPermissions {
     let mut permissions = initial_card
@@ -328,6 +327,7 @@ pub fn resolve_initial_permission(
         });
     let recipient = initial_permission_recipient(context).render();
     for file in files {
+        let file = &file.file;
         let path = file.target_path.as_abs_str();
         let descendants = if path == "/" {
             "/**".to_string()
@@ -556,7 +556,7 @@ pub struct PendingRemoteInitialFile {
 pub struct ToolManifestProvisionConfig {
     pub config: golem_common::model::json::NormalizedJsonValue,
     pub env: BTreeMap<String, String>,
-    pub files: Vec<crate::model::app::ToolProvisionFile>,
+    pub files: Vec<crate::model::app::ProvisionFile>,
     pub plugins: Vec<app_raw::PluginInstallation>,
 }
 
@@ -991,10 +991,13 @@ mod tests {
     fn initial_files_add_matching_filesystem_permissions() {
         let context = test_context();
         let config = AgentTypeManifestProvisionConfig {
-            files: vec![app_raw::InitialComponentFile {
-                source_path: "assets".to_string(),
-                target_path: CanonicalFilePath::from_abs_str("/assets").unwrap(),
-                permissions: Some(AgentFilePermissions::ReadWrite),
+            files: vec![crate::model::app::ProvisionFile {
+                source: "golem.yaml".into(),
+                file: app_raw::InitialComponentFile {
+                    source_path: "assets".to_string(),
+                    target_path: CanonicalFilePath::from_abs_str("/assets").unwrap(),
+                    permissions: Some(AgentFilePermissions::ReadWrite),
+                },
             }],
             ..Default::default()
         };

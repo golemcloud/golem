@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::ApplicationContext;
+use crate::app::context::{ApplicationContext, ApplicationLoadPlan};
 use crate::app::template::AppTemplateRepo;
 use crate::client::{GolemClients, new_raw_reqwest_client, wait_for_server_startup};
 use crate::command::GolemCliGlobalFlags;
@@ -109,6 +109,7 @@ pub struct Context {
     // Lazy initialized
     golem_clients: tokio::sync::OnceCell<GolemClients>,
     selected_context_logging: std::sync::OnceLock<()>,
+    application_load_plan: tokio::sync::Mutex<Option<ApplicationLoadPlan>>,
 
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
@@ -158,10 +159,13 @@ impl Drop for CancellationCleanup {
 
 impl Context {
     pub async fn new(
-        global_flags: GolemCliGlobalFlags,
+        mut global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
         allow_manifest_upgrades: bool,
     ) -> anyhow::Result<Self> {
+        if let Some(path) = &mut global_flags.app_manifest_path {
+            *path = crate::fs::absolute_lexical_path(path)?;
+        }
         if matches!(
             global_flags.environment,
             Some(EnvironmentReference::Environment { .. })
@@ -216,6 +220,7 @@ impl Context {
             app_source_mode,
             &crate::fs::current_dir_lexical()?,
             global_flags.dev_mode,
+            !allow_manifest_upgrades && log_output_for_help.is_none(),
         )?;
 
         if preloaded_app.loaded_with_warnings
@@ -438,6 +443,7 @@ impl Context {
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,
             selected_context_logging: std::sync::OnceLock::new(),
+            application_load_plan: tokio::sync::Mutex::new(Some(preloaded_app.load_plan)),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 yes,
                 SHOULD_COLORIZE.should_colorize(),
@@ -481,6 +487,7 @@ impl Context {
                     self.manifest_discovery.clone(),
                     search_dir,
                     self.dev_mode,
+                    false,
                 )?
                 .source_mode
             }
@@ -518,6 +525,7 @@ impl Context {
             file_download_client: self.file_download_client.clone(),
             golem_clients: tokio::sync::OnceCell::new(),
             selected_context_logging: std::sync::OnceLock::new(),
+            application_load_plan: tokio::sync::Mutex::new(None),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 self.yes,
                 self.should_colorize,
@@ -530,6 +538,58 @@ impl Context {
 
     pub fn config_dir(&self) -> &Path {
         &self.config_dir
+    }
+
+    pub async fn has_pending_application_changes(&self) -> bool {
+        self.application_load_plan
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|plan| !plan.is_empty())
+    }
+
+    pub async fn apply_application_load_plan(&self) -> anyhow::Result<()> {
+        let mut pending = self.application_load_plan.lock().await;
+        if let Some(plan) = pending.as_ref() {
+            plan.apply(self.yes)?;
+            *pending = None;
+        }
+        Ok(())
+    }
+
+    pub async fn reload_application(&self) -> anyhow::Result<()> {
+        let Some(config) = &self.app_context_config else {
+            return Ok(());
+        };
+        let mut state = self.app_context_state.write().await;
+        let selected = state.some_or_err()?.selected_component_names().clone();
+        let preloaded = ApplicationContext::preload_application(
+            ApplicationContextConfig::app_source_mode_from_flags(
+                config.disable_app_manifest_discovery,
+                config.app_manifest_path.as_deref(),
+            ),
+            state.some_or_err()?.application().app_root_dir(),
+            config.dev_mode,
+            false,
+        )?;
+        let preload = preloaded.application_preload.ok_or_else(|| {
+            anyhow!("Application manifest disappeared during project preparation")
+        })?;
+        let reloaded_config = ApplicationContextConfig {
+            application_name: preload.application_name,
+            environments: preload.environments,
+            local_server: preload.local_server,
+            ..config.clone()
+        };
+        state.app_source_mode = Some(preloaded.source_mode);
+        state.app_context = None;
+        state.init(&Some(reloaded_config), &self.config_dir).await?;
+        state.some_or_err_mut()?.select_components(
+            &crate::model::app::ApplicationComponentSelectMode::Explicit(
+                selected.into_iter().collect(),
+            ),
+        )?;
+        Ok(())
     }
 
     pub async fn repl_history_file(&self, language: ReplLanguage) -> anyhow::Result<PathBuf> {
@@ -812,6 +872,18 @@ impl Context {
         }
     }
 
+    pub(crate) async fn initialize_for_clean(&self) {
+        let mut state = self.app_context_state.write().await;
+        state.app_context = None;
+        state.omit_package_inspection = true;
+    }
+
+    pub(crate) async fn finish_clean(&self) {
+        let mut state = self.app_context_state.write().await;
+        state.app_context = None;
+        state.omit_package_inspection = false;
+    }
+
     pub async fn app_context_lock(
         &self,
     ) -> tokio::sync::RwLockReadGuard<'_, ApplicationContextState> {
@@ -1004,9 +1076,7 @@ impl ResolvedServerConfig {
 
 #[derive(Clone)]
 struct ApplicationContextConfig {
-    #[allow(unused)]
     app_manifest_path: Option<PathBuf>,
-    #[allow(unused)]
     disable_app_manifest_discovery: bool,
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, Environment>,
@@ -1071,6 +1141,7 @@ pub struct ApplicationContextState {
     should_colorize: bool,
     app_source_mode: Option<ApplicationSourceMode>,
     pub silent_init: bool,
+    omit_package_inspection: bool,
 
     app_context: Option<Result<Option<ApplicationContext>, Arc<anyhow::Error>>>,
 }
@@ -1082,6 +1153,7 @@ impl ApplicationContextState {
             should_colorize,
             app_source_mode: Some(source_mode),
             silent_init: false,
+            omit_package_inspection: false,
             app_context: None,
         }
     }
@@ -1116,8 +1188,9 @@ impl ApplicationContextState {
         self.app_context = Some(
             ApplicationContext::new(
                 self.app_source_mode
-                    .take()
-                    .expect("ApplicationContextState.app_source_mode is not set"),
+                    .as_ref()
+                    .expect("ApplicationContextState.app_source_mode is not set")
+                    .clone(),
                 app_config,
                 config.application_name.clone(),
                 config.environments.clone(),
@@ -1125,6 +1198,7 @@ impl ApplicationContextState {
                 config.component_presets.clone(),
                 config.builtin_local_url.clone(),
                 config_dir,
+                !self.omit_package_inspection,
             )
             .await
             .map_err(Arc::new),

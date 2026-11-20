@@ -215,6 +215,32 @@ impl AppTemplateCommon {
 pub struct AppTemplateCommonOnDemand(pub AppTemplate);
 
 impl AppTemplateCommonOnDemand {
+    pub fn is_up_to_date(
+        &self,
+        application_name: &ApplicationName,
+        target_path: &Path,
+    ) -> anyhow::Result<bool> {
+        Ok(
+            super::generator::on_demand_common_marker(&self.0, application_name, target_path)?
+                .is_some_and(|marker| marker.is_up_to_date()),
+        )
+    }
+
+    pub fn render(
+        &self,
+        application_name: &ApplicationName,
+        application_dir: &Path,
+        target_path: &Path,
+    ) -> anyhow::Result<InMemoryFs> {
+        super::generator::render_on_demand_commons_by_template(
+            &self.0,
+            application_name,
+            application_dir,
+            target_path,
+            InMemoryFs::new(),
+        )
+    }
+
     pub fn generate(
         &self,
         application_name: &ApplicationName,

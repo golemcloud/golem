@@ -209,7 +209,8 @@ pub(crate) async fn plan_explicit_manifest_guest_bridge_generation_for_component
     })
 }
 
-pub(crate) async fn plan_dependency_guest_bridge_generation_for_components_lenient(
+#[cfg(test)]
+async fn plan_dependency_guest_bridge_generation_for_components_lenient(
     ctx: &BuildContext<'_>,
     source_component_names: &[ComponentName],
     selection_scope_component_names: &[ComponentName],
@@ -651,7 +652,7 @@ fn collect_remote_tool_manifest_targets_for_entry(
         }
         let grant = ctx
             .release_grant_by_name(name)
-            .ok_or_else(|| crate::app::context::BuildMetadataRequired::Tool(name.clone()))?;
+            .with_context(|| format!("Remote tool '{name}' has no resolved build preparation"))?;
         targets.push(BridgeSdkTarget {
             source: BridgeSdkTargetSource::RemoteRelease {
                 release_id: grant.release.id,
@@ -913,7 +914,6 @@ async fn collect_dependency_guest_bridge_targets(
     source_component_names: &[ComponentName],
     selection_scope_component_names: &[ComponentName],
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
-    let mut targets = Vec::new();
     let mut extracted = BTreeMap::new();
 
     for component_name in source_component_names {
@@ -924,7 +924,27 @@ async fn collect_dependency_guest_bridge_targets(
             );
         }
     }
-    for (component_name, metadata) in &extracted {
+    let available_sources = extracted.keys().cloned().collect::<Vec<_>>();
+    extracted.extend(ctx.extracted_metadata.lock().unwrap().clone());
+    resolve_dependency_guest_bridge_inputs(
+        ctx,
+        &available_sources,
+        selection_scope_component_names,
+        &extracted,
+    )
+}
+
+pub(super) fn resolve_dependency_guest_bridge_inputs(
+    ctx: &BuildContext<'_>,
+    source_component_names: &[ComponentName],
+    selection_scope_component_names: &[ComponentName],
+    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
+) -> anyhow::Result<Vec<BridgeSdkTarget>> {
+    let mut targets = Vec::new();
+    for component_name in source_component_names {
+        let Some(metadata) = extracted.get(component_name) else {
+            continue;
+        };
         validate_no_ambient_tool_collisions(ctx, component_name, &metadata.tools)?;
         collect_dependency_agent_bridge_targets(
             ctx,
@@ -1001,9 +1021,9 @@ async fn collect_dependency_guest_bridge_targets(
         else {
             unreachable!()
         };
-        let grant = ctx
-            .release_grant_by_name(tool_name)
-            .ok_or_else(|| crate::app::context::BuildMetadataRequired::Tool(tool_name.clone()))?;
+        let grant = ctx.release_grant_by_name(tool_name).with_context(|| {
+            format!("Remote tool '{tool_name}' has no resolved build preparation")
+        })?;
         for target_language in dependency_guest_bridge_target_languages(
             ctx,
             &dependency,
@@ -1073,8 +1093,7 @@ async fn collect_dependency_guest_bridge_targets(
         }
     }
 
-    extracted.extend(ctx.extracted_metadata.lock().unwrap().clone());
-    present_guest_tool_targets(ctx, targets, &extracted)
+    present_guest_tool_targets(ctx, targets, extracted)
 }
 
 fn present_guest_tool_targets(
@@ -1364,8 +1383,8 @@ pub(crate) fn validate_dependency_tool_bridge_presentations(
             BridgeSdkTargetSource::RemoteRelease { .. } => (
                 crate::model::app::SubjectSource::RemoteRelease,
                 ctx.release_grant_by_name(&tool_name)
-                    .ok_or_else(|| {
-                        crate::app::context::BuildMetadataRequired::Tool(tool_name.clone())
+                    .with_context(|| {
+                        format!("Remote tool '{tool_name}' has no resolved build preparation")
                     })?
                     .release
                     .definition
@@ -1778,6 +1797,7 @@ async fn gen_bridge_sdk_target(
             bridge_mode: target.bridge_mode,
             rust_config: target.rust_config.clone(),
         })?
+        .with_output_inventory(output_dir.as_std_path().to_path_buf())
         .with_sources(|| vec![&freshness_source])
         .with_targets(|| vec![&output_dir])
         .run_async_or_skip(

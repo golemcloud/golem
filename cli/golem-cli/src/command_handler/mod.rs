@@ -327,11 +327,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     component_name,
                     build: build_args,
                 } => {
-                    ctx.allow_manifest_upgrades = build_args.step.is_empty()
-                        || build_args
-                            .step
-                            .iter()
-                            .any(|step| *step != crate::model::app::AppBuildStep::Check);
+                    ctx.allow_manifest_upgrades = false;
                     ctx.get_or_init()
                         .await?
                         .app_handler()
@@ -339,22 +335,24 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .await
                 }
                 GolemCliSubcommand::Install { file } => {
-                    crate::package::install(&ctx.global_flags, &file)
+                    ctx.allow_manifest_upgrades = false;
+                    let flags = ctx.global_flags.clone();
+                    ctx.get_or_init()
+                        .await?
+                        .app_handler()
+                        .cmd_install(&flags, &file)
                 }
                 GolemCliSubcommand::Package {
                     subcommand: crate::command::PackageSubcommand::Pack { output },
                 } => {
-                    let ctx = ctx.get_or_init().await?;
-                    let (digest, bytes) = ctx.component_handler().pack_application().await?;
-                    crate::package::write_package(&output, &bytes)?;
-                    ctx.log_handler()
-                        .log_output(crate::package::PackageDigest { digest })
+                    ctx.get_or_init()
+                        .await?
+                        .app_handler()
+                        .cmd_pack(output)
+                        .await
                 }
                 GolemCliSubcommand::Publish { dry_run: _ } => {
-                    let ctx = ctx.get_or_init().await?;
-                    let (digest, _) = ctx.component_handler().pack_application().await?;
-                    ctx.log_handler()
-                        .log_output(crate::package::PackageDigest { digest })
+                    ctx.get_or_init().await?.app_handler().cmd_publish().await
                 }
                 GolemCliSubcommand::GenerateBridge {
                     language,

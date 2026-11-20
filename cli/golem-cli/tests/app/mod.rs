@@ -35,6 +35,7 @@ mod go_mcp_import;
 mod go_native_tool;
 mod go_principal;
 mod go_tools;
+mod incremental_build;
 mod initial_cards;
 mod mcp_import;
 mod mcp_oauth;
@@ -2066,7 +2067,7 @@ fn print_server_log_tail(server_log: &Path) {
     }
 }
 
-fn test_binary_profile() -> String {
+pub(super) fn test_binary_profile() -> String {
     match std::env::var(GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR) {
         Ok(profile) if profile.trim().is_empty() => "debug".to_string(),
         Ok(profile)
@@ -2084,7 +2085,7 @@ fn test_binary_profile() -> String {
     }
 }
 
-fn test_binary_path(profile: &str, binary_name: &str) -> PathBuf {
+pub(super) fn test_binary_path(profile: &str, binary_name: &str) -> PathBuf {
     if let Ok(current_exe) = std::env::current_exe()
         && let Some(dir) = current_exe.parent()
     {

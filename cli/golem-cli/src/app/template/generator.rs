@@ -147,7 +147,7 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
     application_name: &ApplicationName,
     application_dir: &Path,
     target_path: &Path,
-    mut target: T,
+    target: T,
 ) -> anyhow::Result<T::Output> {
     if !template.metadata.is_common_on_demand() {
         bail!(
@@ -156,7 +156,34 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
         );
     }
 
-    let marker = template
+    let marker = on_demand_common_marker(template, application_name, target_path)?;
+    if marker.as_ref().is_some_and(TaskResultMarker::is_up_to_date) {
+        return Ok(target.finish());
+    }
+
+    fs::remove(target_path)?;
+
+    let output = render_on_demand_commons_by_template(
+        template,
+        application_name,
+        application_dir,
+        target_path,
+        target,
+    )?;
+
+    if let Some(marker) = marker {
+        marker.success()?;
+    }
+
+    Ok(output)
+}
+
+pub(super) fn on_demand_common_marker(
+    template: &AppTemplate,
+    application_name: &ApplicationName,
+    target_path: &Path,
+) -> anyhow::Result<Option<TaskResultMarker>> {
+    template
         .content_hash
         .as_deref()
         .map(|content_hash| {
@@ -164,20 +191,29 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
                 blake3::hash(format!("{content_hash}\0{}", application_name.0).as_bytes())
                     .to_hex()
                     .to_string();
-            TaskResultMarker::new(
+            TaskResultMarker::inspect(
                 &target_path.join(".golem-task-results"),
                 OnDemandCommonTemplateMarkerHash {
                     content_hash: &content_hash,
                 },
             )
         })
-        .transpose()?;
-    if marker.as_ref().is_some_and(TaskResultMarker::is_up_to_date) {
-        return Ok(target.finish());
+        .transpose()
+}
+
+pub fn render_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
+    template: &AppTemplate,
+    application_name: &ApplicationName,
+    application_dir: &Path,
+    target_path: &Path,
+    mut target: T,
+) -> anyhow::Result<T::Output> {
+    if !template.metadata.is_common_on_demand() {
+        bail!(
+            "Template {} is not a common on demand template",
+            template.name
+        );
     }
-
-    fs::remove(target_path)?;
-
     generate_root_directory(
         &mut target,
         &GeneratorContext {
@@ -189,11 +225,6 @@ pub fn generate_on_demand_commons_by_template<T: TemplateGeneratorTargetFs>(
             target_path,
         },
     )?;
-
-    if let Some(marker) = marker {
-        marker.success()?;
-    }
-
     Ok(target.finish())
 }
 
@@ -805,9 +836,18 @@ mod tests {
             )
             .unwrap()
         };
+        let name = golem_common::base_model::application::ApplicationName("generated-app".into());
+        let rendered = template.render(&name, dir.path(), &target).unwrap();
+        assert!(
+            !target.exists(),
+            "rendering must not create the common directory or its marker"
+        );
+        assert!(!template.is_up_to_date(&name, &target).unwrap());
         generate("generated-app");
         let manifest = target.join("golem.yaml");
         let generated = std::fs::read_to_string(&manifest).unwrap();
+        assert_eq!(rendered.get(&manifest), Some(generated.as_str()));
+        assert!(template.is_up_to_date(&name, &target).unwrap());
         assert!(generated.contains("/build/generated-app/"));
         std::fs::write(&manifest, "cached output").unwrap();
         generate("generated-app");
@@ -822,9 +862,13 @@ mod tests {
         let mut marker: TaskResult =
             serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).unwrap();
         marker.cli_version = format!("{}-other", crate::version());
-        std::fs::write(marker_path, serde_json::to_string(&marker).unwrap()).unwrap();
+        let stale_marker = serde_json::to_string(&marker).unwrap();
+        std::fs::write(&marker_path, &stale_marker).unwrap();
+        assert!(!template.is_up_to_date(&name, &target).unwrap());
+        assert_eq!(std::fs::read_to_string(&marker_path).unwrap(), stale_marker);
         generate("generated-app");
         assert_eq!(std::fs::read_to_string(&manifest).unwrap(), generated);
+        assert!(template.is_up_to_date(&name, &target).unwrap());
         generate("renamed-app");
         let renamed = std::fs::read_to_string(&manifest).unwrap();
         assert!(renamed.contains("/build/renamed-app/"));
