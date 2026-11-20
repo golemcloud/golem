@@ -3080,6 +3080,50 @@ pub async fn agent_oplog_length(
         .await?)
 }
 
+/// Calls `check` every 200 ms until it gives `true`. After `timeout`, the wait fails with an
+/// error that names `what`.
+pub async fn wait_until<F, Fut>(
+    timeout: Duration,
+    what: impl std::fmt::Display,
+    check: F,
+) -> anyhow::Result<()>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<bool>>,
+{
+    use futures::{StreamExt, TryStreamExt};
+    let check = &check;
+    let done = futures::stream::iter(std::iter::repeat(()))
+        .then(move |()| async move {
+            let done = check().await?;
+            if !done {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            anyhow::Ok(done)
+        })
+        .try_skip_while(|done| futures::future::ok(!done));
+    futures::pin_mut!(done);
+    tokio::time::timeout(timeout, done.try_next())
+        .await
+        .map_err(|_| anyhow!("timed out waiting until {what}"))?
+        .map(|_| ())
+}
+
+/// Waits until the primary oplog of the agent is empty, so its whole history, `Create` included,
+/// is in the archive.
+pub async fn wait_until_archived(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    wait_until(
+        Duration::from_secs(60),
+        format!("the oplog of {owned_agent_id} is archived"),
+        || async { Ok(agent_oplog_length(deps, context, owned_agent_id).await? == 0) },
+    )
+    .await
+}
+
 fn apply_sqlite_storage_config(
     config: &mut GolemConfig,
     deps: &WorkerExecutorTestDependencies,

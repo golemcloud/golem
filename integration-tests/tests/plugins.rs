@@ -226,7 +226,7 @@ async fn start_callback_server_gated() -> (
 /// Finds all workers running on a given plugin component via worker enumeration.
 /// Returns their WorkerIds so they can be crashed individually.
 async fn find_plugin_workers(
-    user: &(impl TestDsl + Send + Sync + ?Sized),
+    user: &(impl TestDsl + Send + ?Sized),
     plugin_component_id: &ComponentId,
 ) -> Vec<golem_common::model::AgentId> {
     let mut all_workers = Vec::new();
@@ -252,7 +252,7 @@ async fn find_plugin_workers(
 
 /// Crashes the user worker and all discovered plugin workers via simulated_crash.
 async fn crash_user_and_plugin_workers(
-    user: &(impl TestDsl + Send + Sync + ?Sized),
+    user: &(impl TestDsl + Send + ?Sized),
     user_worker_id: &golem_common::model::AgentId,
     plugin_component_id: &ComponentId,
 ) {
@@ -345,7 +345,7 @@ async fn wait_for_invocations(
 /// in the worker's oplog. On timeout, prints both the oplog completion count and the current
 /// callback count for diagnostics.
 async fn wait_for_oplog_completions(
-    user: &(impl TestDsl + Send + Sync + ?Sized),
+    user: &(impl TestDsl + Send + ?Sized),
     worker_id: &golem_common::model::AgentId,
     expected_count: usize,
     timeout: Duration,

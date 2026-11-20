@@ -1302,7 +1302,7 @@ mod tests {
     }
 
     async fn wait_for_oplog_completions(
-        user: &(impl TestDsl + Send + Sync + ?Sized),
+        user: &(impl TestDsl + Send + ?Sized),
         worker_id: &golem_common::model::AgentId,
         expected_count: usize,
         timeout: Duration,

@@ -53,7 +53,7 @@ use golem_common::model::component::{
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
-use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
+use golem_common::model::oplog::{OplogRange, PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::{AgentFilter, IdempotencyKey, InvocationRequestKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
@@ -100,6 +100,76 @@ fn invocation_agent_id(
 }
 
 impl TestWorkerExecutor {
+    /// Reads the page of `range` that starts at `cursor`: with `query`, a search page, else an
+    /// oplog page. A response without a result gives `None`.
+    async fn read_oplog_page(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        range: OplogRange,
+        cursor: Option<golem_api_grpc::proto::golem::worker::OplogCursor>,
+        query: Option<&str>,
+    ) -> anyhow::Result<
+        Option<(
+            Vec<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
+            Option<golem_api_grpc::proto::golem::worker::OplogCursor>,
+        )>,
+    > {
+        match query {
+            None => {
+                let response = self
+                    .client
+                    .clone()
+                    .get_oplog(workerexecutor::v1::GetOplogRequest {
+                        agent_id: Some(agent_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
+                        from_oplog_index: range.start().into(),
+                        to_oplog_index: range.end().map(Into::into),
+                        cursor,
+                        count: 100,
+                        auth_ctx: Some(self.auth_ctx().into()),
+                    })
+                    .await?
+                    .into_inner();
+                match response.result {
+                    Some(get_oplog_response::Result::Success(page)) => {
+                        Ok(Some((page.entries, page.next)))
+                    }
+                    Some(get_oplog_response::Result::Failure(error)) => {
+                        Err(anyhow!("Failed to get oplog: {error:?}"))
+                    }
+                    None => Ok(None),
+                }
+            }
+            Some(query) => {
+                let response = self
+                    .client
+                    .clone()
+                    .search_oplog(SearchOplogRequest {
+                        agent_id: Some(agent_id.clone().into()),
+                        environment_id: Some(environment_id.into()),
+                        from_oplog_index: Some(range.start().into()),
+                        to_oplog_index: range.end().map(Into::into),
+                        cursor,
+                        count: 100,
+                        query: query.to_string(),
+                        auth_ctx: Some(self.auth_ctx().into()),
+                    })
+                    .await?
+                    .into_inner();
+                match response.result {
+                    Some(search_oplog_response::Result::Success(page)) => {
+                        Ok(Some((page.entries, page.next)))
+                    }
+                    Some(search_oplog_response::Result::Failure(error)) => {
+                        Err(anyhow!("Failed to search oplog: {error:?}"))
+                    }
+                    None => Ok(None),
+                }
+            }
+        }
+    }
+
     /// Converts the entries of an oplog page, and reads each entry that the page omitted in
     /// full. Tests then see the full oplog, like `golem agent oplog` without `--omit-payloads`.
     async fn full_oplog_entries(
@@ -772,105 +842,37 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, ?from, ?to, ?query))]
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, ?range, ?query))]
     async fn read_oplog(
         &self,
         agent_id: &AgentId,
-        from: Option<OplogIndex>,
-        to: Option<OplogIndex>,
+        range: OplogRange,
         query: Option<&str>,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        let latest_version = self
+        let environment_id = self
             .get_latest_component_revision(&agent_id.component_id)
-            .await?;
-        let environment_id = latest_version.environment_id;
+            .await?
+            .environment_id;
 
-        let mut result = Vec::new();
-        let mut cursor = None;
-        loop {
-            let (entries, next) = match query {
-                None => {
-                    let response = self
-                        .client
-                        .clone()
-                        .get_oplog(workerexecutor::v1::GetOplogRequest {
-                            agent_id: Some(agent_id.clone().into()),
-                            environment_id: Some(environment_id.into()),
-                            from_oplog_index: from.unwrap_or(OplogIndex::INITIAL).into(),
-                            to_oplog_index: to.map(Into::into),
-                            cursor,
-                            count: 100,
-                            auth_ctx: Some(self.auth_ctx().into()),
-                        })
-                        .await?
-                        .into_inner();
-                    match response.result {
-                        Some(get_oplog_response::Result::Success(page)) => {
-                            (page.entries, page.next)
-                        }
-                        Some(get_oplog_response::Result::Failure(error)) => {
-                            return Err(anyhow!("Failed to get oplog: {error:?}"));
-                        }
-                        None => break,
-                    }
-                }
-                Some(query) => {
-                    let response = self
-                        .client
-                        .clone()
-                        .search_oplog(SearchOplogRequest {
-                            agent_id: Some(agent_id.clone().into()),
-                            environment_id: Some(environment_id.into()),
-                            from_oplog_index: from.map(Into::into),
-                            to_oplog_index: to.map(Into::into),
-                            cursor,
-                            count: 100,
-                            query: query.to_string(),
-                            auth_ctx: Some(self.auth_ctx().into()),
-                        })
-                        .await?
-                        .into_inner();
-                    match response.result {
-                        Some(search_oplog_response::Result::Success(page)) => {
-                            (page.entries, page.next)
-                        }
-                        Some(search_oplog_response::Result::Failure(error)) => {
-                            return Err(anyhow!("Failed to search oplog: {error:?}"));
-                        }
-                        None => break,
-                    }
-                }
+        let pages = futures::stream::try_unfold(Some(None), |cursor| async move {
+            let Some(cursor) = cursor else {
+                return Ok(None);
             };
-            result.extend(
-                self.full_oplog_entries(agent_id, environment_id, entries)
-                    .await?,
-            );
-            match next {
-                Some(next) => cursor = Some(next),
-                None => break,
-            }
-        }
-
-        Ok(result)
+            let Some((entries, next)) = self
+                .read_oplog_page(agent_id, environment_id, range, cursor, query)
+                .await?
+            else {
+                return Ok(None);
+            };
+            let entries = self
+                .full_oplog_entries(agent_id, environment_id, entries)
+                .await?;
+            anyhow::Ok(Some((entries, next.map(Some))))
+        });
+        futures::TryStreamExt::try_concat(futures::StreamExt::boxed(pages)).await
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, query))]
-    async fn get_oplog(
-        &self,
-        agent_id: &AgentId,
-        from: OplogIndex,
-    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        self.read_oplog(agent_id, Some(from), None, None).await
-    }
-
-    async fn search_oplog(
-        &self,
-        agent_id: &AgentId,
-        query: &str,
-    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        self.read_oplog(agent_id, None, None, Some(query)).await
-    }
-
     async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)

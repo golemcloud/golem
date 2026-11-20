@@ -46,9 +46,9 @@ use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, agent_oplog_length, archived_oplog_chunks,
-    scheduler_sqlite_storage_config, start_with_oplog_config, start_with_overrides,
-    truncate_archived_oplog_chunk,
+    WorkerExecutorTestDependencies, archived_oplog_chunks, scheduler_sqlite_storage_config,
+    start_with_oplog_config, start_with_overrides, truncate_archived_oplog_chunk,
+    wait_until_archived,
 };
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -103,24 +103,6 @@ fn assert_fails_with_the_decode_error<T: std::fmt::Debug>(
             && error.contains("Input ended unexpectedly"),
         "the failure does not name the agent, the archive layer and the decode error: {error}"
     );
-}
-
-/// Waits until the primary oplog of the agent is empty, so its whole history, `Create` included,
-/// is in the archive.
-async fn wait_until_archived(
-    deps: &WorkerExecutorTestDependencies,
-    context: &TestContext,
-    owned_agent_id: &OwnedAgentId,
-) -> anyhow::Result<()> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    while agent_oplog_length(deps, context, owned_agent_id).await? > 0 {
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "the oplog of {owned_agent_id} was not archived"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    Ok(())
 }
 
 #[test]

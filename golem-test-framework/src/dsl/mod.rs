@@ -51,7 +51,7 @@ use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, Dep
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
-use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_common::model::oplog::{OplogRange, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::{AgentFilter, AgentStatus, IdempotencyKey, OplogIndex, ScanCursor};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -210,7 +210,7 @@ impl AgentResult {
 
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
-pub trait TestDsl {
+pub trait TestDsl: Sync {
     type WorkerError: std::error::Error + Sync + Send + 'static;
 
     fn redis(&self) -> Arc<dyn Redis>;
@@ -518,16 +518,14 @@ pub trait TestDsl {
 
     async fn revert(&self, agent_id: &AgentId, target: RevertWorkerTarget) -> anyhow::Result<()>;
 
-    /// Reads the oplog entries from `from` to `to` that match `query`, in full and in index order.
-    /// The read follows the cursor of each page to the end of the range, so neither the page size
-    /// nor the scan budget of a search page limits it. Without `from`, the read starts at the
-    /// first entry; without `to`, it goes to the end of the oplog; without `query`, it returns
-    /// every entry.
+    /// Reads the oplog entries of `range` that match `query`, in full and in index order. The
+    /// read follows the cursor of each page to the end of the range, so neither the page size nor
+    /// the scan budget of a search page limits it. Without `query`, the read returns every entry
+    /// of the range.
     async fn read_oplog(
         &self,
         agent_id: &AgentId,
-        from: Option<OplogIndex>,
-        to: Option<OplogIndex>,
+        range: OplogRange,
         query: Option<&str>,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
@@ -535,7 +533,10 @@ pub trait TestDsl {
         &self,
         agent_id: &AgentId,
         from: OplogIndex,
-    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        let range = OplogRange::new(Some(from), None)?;
+        self.read_oplog(agent_id, range, None).await
+    }
 
     async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64>;
 
@@ -543,7 +544,10 @@ pub trait TestDsl {
         &self,
         agent_id: &AgentId,
         query: &str,
-    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        self.read_oplog(agent_id, OplogRange::ALL, Some(query))
+            .await
+    }
 
     async fn check_oplog_is_queryable(&self, agent_id: &AgentId) -> crate::Result<()> {
         let entries = self.get_oplog(agent_id, OplogIndex::INITIAL).await?;

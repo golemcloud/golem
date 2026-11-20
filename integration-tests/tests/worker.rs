@@ -29,7 +29,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{OplogIndex, OplogRange, PublicOplogEntry};
 use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, IdempotencyScope,
     InvocationRequestKey, PromiseId, ScanCursor, StringFilterComparator,
@@ -1576,18 +1576,31 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
     assert_eq!(result2.len(), 3, "imported-function");
     assert_eq!(result3.len(), 2, "id:G1001 OR id:G1000");
 
+    // The agent is idle, so its oplog moves to the archive (archive_interval=2s +
+    // scheduler process_interval<=2s; 8s is a comfortable margin).
+    tokio::time::sleep(Duration::from_secs(8)).await;
+
     // A query combines with a range: only the matches in the range are returned.
     let (first, second) = (result1[0].oplog_index, result1[1].oplog_index);
-    let before_second = OplogIndex::from_u64(second.as_u64() - 1);
-    let in_range = user
-        .read_oplog(&agent_id, Some(first), Some(before_second), Some("G1002"))
+    let last = OplogIndex::from_u64(user.get_oplog_last_index(&agent_id).await?);
+    let range = |from: OplogIndex, to: OplogIndex| OplogRange::new(Some(from), Some(to)).unwrap();
+    let from_after_the_first_match = user
+        .read_oplog(&agent_id, range(first.next(), last), Some("G1002"))
         .await?;
-    assert_eq!(in_range, vec![result1[0].clone()]);
-    let range = user
-        .read_oplog(&agent_id, Some(first), Some(second), None)
+    assert_eq!(from_after_the_first_match, vec![result1[1].clone()]);
+    let to_before_the_second_match = user
+        .read_oplog(
+            &agent_id,
+            range(first, OplogIndex::from_u64(second.as_u64() - 1)),
+            Some("G1002"),
+        )
+        .await?;
+    assert_eq!(to_before_the_second_match, vec![result1[0].clone()]);
+    let between_the_matches = user
+        .read_oplog(&agent_id, range(first, second), None)
         .await?;
     assert_eq!(
-        range
+        between_the_matches
             .iter()
             .map(|entry| entry.oplog_index.as_u64())
             .collect::<Vec<_>>(),
