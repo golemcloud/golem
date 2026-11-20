@@ -37,6 +37,9 @@ impl ComponentCommandHandler {
         let app = app_ctx.application();
         let mut config = PackageConfig {
             application: app.application_name().to_string(),
+            package: app_ctx.publisher_package.clone().context(
+                "Declare package: { name, version } in the root golem.yaml before packing",
+            )?,
             components: BTreeMap::new(),
         };
         let mut stage = PackageStage {

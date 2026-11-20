@@ -699,6 +699,11 @@ pub enum GolemCliSubcommand {
         #[command(subcommand)]
         subcommand: PackageSubcommand,
     },
+    /// Install and pin a local package archive without running its code
+    Install {
+        /// Path to the package archive
+        file: PathBuf,
+    },
     /// Preview a package's OCI manifest digest without contacting a server
     Publish {
         /// Compute the digest locally without saving an archive or publishing it
