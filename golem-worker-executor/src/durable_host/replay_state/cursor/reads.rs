@@ -233,6 +233,7 @@ impl CursorTx<'_> {
                         )),
                         actual: ReplayStep::invocation_end(),
                         mismatched: Vec::new(),
+                        replay_start: None,
                     }));
                 }
 
@@ -347,6 +348,7 @@ impl CursorTx<'_> {
                     )),
                     actual: ReplayStep::invocation_end(),
                     mismatched: Vec::new(),
+                    replay_start: None,
                 }));
             }
 
@@ -416,6 +418,7 @@ impl CursorTx<'_> {
                     )),
                     actual: ReplayStep::invocation_end(),
                     mismatched: Vec::new(),
+                    replay_start: None,
                 }));
             }
             (PositionalReader::Ordinary, HeadOwner::EntityBody(owner)) => owner,
@@ -592,6 +595,7 @@ impl ReplayState {
                 self.cursor.replay_target(),
             )),
             mismatched: Vec::new(),
+            replay_start: None,
         })
     }
 
@@ -1285,6 +1289,7 @@ impl ReplayState {
                             expected: ReplayStep::described(format!("{oplog_entry:?}")),
                             actual: ReplayStep::invocation_end(),
                             mismatched: Vec::new(),
+                            replay_start: None,
                         }));
                     }
                 }

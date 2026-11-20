@@ -148,6 +148,22 @@ message ReplayDivergence {
   ReplayStep expected = 2;
   ReplayStep actual = 3;
   repeated StartIdentityField mismatched = 4;
+  optional ReplayStart replay_start = 5;
+}
+
+// Where a recovery replay started.
+message ReplayStart {
+  oneof start {
+    // The oplog index of the loaded snapshot.
+    uint64 snapshot = 1;
+    // A replay without a snapshot, after the recovery rejected these snapshots.
+    ReplayFullStart full_replay = 2;
+  }
+}
+
+// A replay without a snapshot.
+message ReplayFullStart {
+  repeated uint64 rejected_snapshots = 1;
 }
 
 // One step of a replay.
