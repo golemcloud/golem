@@ -536,7 +536,7 @@ impl Artifact for MatrixArtifactImpl {
                 .rev()
                 .collect::<Vec<_>>()
                 .join("|"),
-            principal: matrix_principal(&principal),
+            principal: matrix_principal(context.caller().immediate()),
             owner_agent_id: metadata.agent_id.uuid.to_string(),
         })
     }
