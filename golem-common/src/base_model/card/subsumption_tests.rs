@@ -2475,11 +2475,28 @@ fn a_lookup_matches_grants_of_its_host_whatever_their_ports() {
             .authorize(&lookup("db.test"))
             .unwrap()
     );
-    assert!(
-        surface("*", Some("db.test:5432"))
-            .authorize(&lookup("db.test"))
-            .unwrap()
-    );
+    for denial in ["db.test:0-65535", "db.test:1-65535", "*.test:1-65535"] {
+        assert!(
+            !surface("*", Some(denial))
+                .authorize(&lookup("db.test"))
+                .unwrap(),
+            "{denial}"
+        );
+    }
+    for denial in [
+        "db.test:5432",
+        "db.test:2-65535",
+        "db.test:1-65534",
+        "other.test",
+        "*.other",
+    ] {
+        assert!(
+            surface("*", Some(denial))
+                .authorize(&lookup("db.test"))
+                .unwrap(),
+            "{denial}"
+        );
+    }
     // HTTP targets keep their port.
     let PermissionTarget::Network(http) =
         network_target::network_target("db.test", Some(443)).unwrap()

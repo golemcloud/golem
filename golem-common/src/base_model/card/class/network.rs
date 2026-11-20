@@ -93,7 +93,7 @@ pub enum NetworkResourcePattern {
     /// it. A lookup reveals addresses and opens no connection, so a grant matches it when the
     /// grant's host matches, whatever ports the grant names; a connect to the looked-up address
     /// is still checked against the ports. A denial covers it only when the denial covers every
-    /// port, as for a lookup the ports are unknown.
+    /// port that a connect can use (1 to 65535), as for a lookup the ports are unknown.
     Lookup {
         host: String,
     },
@@ -159,7 +159,8 @@ impl NetworkResourcePattern {
                             .any(|name| host_pattern_subsumes(host, name)))
             }
             (Self::HostPort { host, ports }, Self::Lookup { host: target }) => {
-                *ports == PortPattern::Any && host_pattern_subsumes(host, target)
+                ports.subsumes(&PortPattern::range(1, u16::MAX))
+                    && host_pattern_subsumes(host, target)
             }
             _ => self.subsumes(other),
         }
