@@ -916,7 +916,18 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     use prost::Message;
     use uuid::Uuid;
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_local_resume(deps, &context, true).await?;
+    // The executors write no status baseline, so the start after the restart folds the whole
+    // oplog.
+    let without_status_baseline = || TestExecutorOverrides {
+        configure: Some(Arc::new(
+            |config: &mut golem_worker_executor::services::golem_config::GolemConfig| {
+                config.agent_status_checkpoint.enabled = false;
+            },
+        )),
+        ..Default::default()
+    };
+    let executor =
+        start_with_resume_checkpoint(deps, &context, true, None, without_status_baseline()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, component)
         .store()
@@ -1232,7 +1243,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     assert_eq!(admitted_before_restart.len(), 1);
     executor.remove_cached_status(&source).await?;
     drop(executor);
-    let executor = start_with_local_resume(deps, &context, false).await?;
+    let executor = start_with_local_resume_and(deps, &context, without_status_baseline()).await?;
     let mut retry = request.clone();
     retry.max_forks_per_session = 0;
     retry.max_forks_per_second = 0;

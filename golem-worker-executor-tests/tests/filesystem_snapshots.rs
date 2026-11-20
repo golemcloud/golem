@@ -684,7 +684,10 @@ impl Records {
 }
 
 /// Calls `check` until it gives a value, for at most `limit`.
-async fn eventually<T, Check, Checking>(limit: Duration, check: Check) -> anyhow::Result<T>
+pub(crate) async fn eventually<T, Check, Checking>(
+    limit: Duration,
+    check: Check,
+) -> anyhow::Result<T>
 where
     Check: Fn() -> Checking,
     Checking: std::future::Future<Output = anyhow::Result<Option<T>>>,
