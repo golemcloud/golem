@@ -18,7 +18,8 @@ LOCAL_RUN_DIR="${GOLEM_DIR}/local-run"
 
 # Wipe the executor's indexed storage along with the shard manager's state: the oplog epochs it
 # records were minted by that state and are ahead of everything a fresh one mints.
-rm -rf "${LOCAL_RUN_DIR}/data/shard-manager" "${LOCAL_RUN_DIR}/data/worker-executor"
+rm -rf "${LOCAL_RUN_DIR}/data/shard-manager" "${LOCAL_RUN_DIR}/data/worker-executor" "${LOCAL_RUN_DIR}/data/kv-store"
+rm -f "${LOCAL_RUN_DIR}/data/scheduler.db" "${LOCAL_RUN_DIR}/data/scheduler.db-wal" "${LOCAL_RUN_DIR}/data/scheduler.db-shm"
 mkdir -pv "${LOCAL_RUN_DIR}/data/redis" "${LOCAL_RUN_DIR}/data/shard-manager" "${LOCAL_RUN_DIR}/data/worker-executor" "${LOCAL_RUN_DIR}/logs"
 
 # start redis
@@ -44,6 +45,7 @@ if ! kill -0 "${redis_pid}" >/dev/null 2>&1; then
 fi
 
 export RUST_BACKTRACE=1
+export GOLEM__DATA_DIR="${LOCAL_RUN_DIR}/data"
 
 export GOLEM__LOGGING__FILE_DIR="${GOLEM__LOGGING__FILE_DIR:=${LOCAL_RUN_DIR}/logs}"
 export GOLEM__LOGGING__FILE__ANSI="${GOLEM__LOGGING__FILE__ANSI:=true}"

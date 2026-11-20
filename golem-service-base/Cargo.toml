@@ -117,6 +117,7 @@ wasmtime-wasi = { workspace = true, optional = true }
 assert2.workspace = true
 aws-runtime = { workspace = true }
 criterion = { workspace = true }
+figment = { workspace = true, features = ["test"] }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rcgen = { workspace = true, features = ["pem"] }

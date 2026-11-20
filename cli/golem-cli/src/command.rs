@@ -3378,7 +3378,7 @@ pub mod server {
         pub config: Option<PathBuf>,
 
         /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
-        /// Overrides worker_executor.memory.system_memory_override and
+        /// Overrides advanced.worker_executor.memory.system_memory_override and
         /// localServer.systemMemoryOverride. The executor reserves 20% for host overhead. This is
         /// not a hard RSS limit.
         #[clap(long, value_parser = golem_common::config::byte_size::parse_positive)]

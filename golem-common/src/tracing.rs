@@ -984,6 +984,44 @@ pub(crate) mod test {
     use test_r::test;
 
     #[test]
+    fn tracing_env_overrides_use_surface_and_server_advanced_settings() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.set_env("GOLEM__LOGGING__STDOUT__ENABLED", false);
+            jail.set_env("GOLEM__LOGGING__STDERR__ENABLED", true);
+            jail.set_env("GOLEM__OTLP__ENABLED", true);
+            jail.set_env("GOLEM__OTLP__HOST", "surface-collector");
+            jail.set_env("GOLEM__OTLP__PORT", 7321);
+            jail.set_env("GOLEM__OTLP__SERVICE_NAME", "surface-service");
+            let mut base = super::TracingConfig::local_dev("retained-base");
+            base.file_truncate = false;
+
+            let config = base.clone().with_env_overrides();
+            assert!(!config.stdout.enabled);
+            assert!(config.stderr.enabled);
+            assert!(config.otlp.enabled);
+            assert_eq!(config.otlp.host, "surface-collector");
+            assert_eq!(config.otlp.port, 7321);
+            assert_eq!(config.otlp.service_name, "surface-service");
+            assert_eq!(config.file_name.as_deref(), Some("retained-base.log"));
+            assert!(!config.file_truncate);
+
+            jail.set_env("GOLEM_ADVANCED__SERVER__TRACING__OTLP__PORT", 8456);
+            jail.set_env(
+                "GOLEM_ADVANCED__WORKER_SERVICE__TRACING__OTLP__HOST",
+                "must-not-reach-server",
+            );
+            let config = base.with_env_overrides();
+            assert_eq!(config.otlp.port, 8456);
+            assert_eq!(config.otlp.host, "surface-collector");
+            assert!(!config.stdout.enabled);
+            assert!(config.stderr.enabled);
+            assert!(!config.file_truncate);
+            Ok(())
+        });
+    }
+
+    #[test]
     fn propagation_without_export_preserves_parent_with_logging_disabled() {
         use opentelemetry::propagation::TextMapPropagator;
         use opentelemetry::trace::TraceContextExt;

@@ -4828,6 +4828,7 @@ dependencies = [
  "clap",
  "colored",
  "comfy-table",
+ "figment",
  "futures",
  "golem-api-grpc",
  "golem-client",

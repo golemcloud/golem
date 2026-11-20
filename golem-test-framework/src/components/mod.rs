@@ -550,3 +550,97 @@ pub(crate) fn new_reqwest_client_with_tracing() -> reqwest_middleware::ClientWit
 /// and every worker service and executor asks the registry for it, so that the principals of
 /// agents and accounts are the same in all of them.
 pub const TEST_GOLEM_ISSUER: &str = "https://issuer.golem-test.example";
+
+#[cfg(test)]
+mod tests {
+    use super::EnvVarBuilder;
+    use test_r::test;
+    use tracing::Level;
+
+    #[test]
+    fn service_environment_forwards_supported_inputs_and_applies_overrides() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            [
+                ("GOLEM__LOGGING__FILE_NAME", "forwarded.log"),
+                ("GOLEM__LOGGING__STDOUT__ANSI", "true"),
+                ("GOLEM__LOGGING__STDOUT__ENABLED", "false"),
+                ("GOLEM__LOGGING__STDOUT__JSON", "false"),
+                ("GOLEM__LOGGING__STDOUT__JSON_FLATTEN", "true"),
+                ("GOLEM__LOGGING__STDOUT__JSON_FLATTEN_SPAN", "true"),
+                ("GOLEM__LOGGING__STDOUT__JSON_SOURCE_LOCATION", "false"),
+                ("GOLEM__OTLP__ENABLED", "false"),
+                ("GOLEM__OTLP__HOST", "inherited-collector"),
+                ("GOLEM__OTLP__PORT", "7321"),
+                ("GOLEM__OTLP__SERVICE_NAME", "inherited-service"),
+                (
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__OPLOG__MAX_OPERATIONS",
+                    "79",
+                ),
+                ("GOLEM__LOGGING_OTHER", "excluded"),
+                ("GOLEM__OTLP_OTHER", "excluded"),
+                ("GOLEM_ADVANCED__WORKER_EXECUTOR__OPLOG_OTHER", "excluded"),
+                (
+                    "GOLEM_ADVANCED__WORKER_SERVICE__OPLOG__MAX_OPERATIONS",
+                    "excluded",
+                ),
+                ("GOLEM__DATA_DIR", "excluded"),
+            ]
+            .into_iter()
+            .for_each(|(name, value)| jail.set_env(name, value));
+
+            let inherited = EnvVarBuilder::golem_service(Level::WARN)
+                .with_optional_otlp("requested-service", false)
+                .build();
+            [
+                ("GOLEM__LOGGING__FILE_NAME", "forwarded.log"),
+                ("GOLEM__LOGGING__STDOUT__ANSI", "false"),
+                ("GOLEM__LOGGING__STDOUT__ENABLED", "true"),
+                ("GOLEM__LOGGING__STDOUT__JSON", "true"),
+                ("GOLEM__LOGGING__STDOUT__JSON_FLATTEN", "false"),
+                ("GOLEM__LOGGING__STDOUT__JSON_FLATTEN_SPAN", "false"),
+                ("GOLEM__LOGGING__STDOUT__JSON_SOURCE_LOCATION", "true"),
+                ("GOLEM__OTLP__ENABLED", "false"),
+                ("GOLEM__OTLP__HOST", "inherited-collector"),
+                ("GOLEM__OTLP__PORT", "7321"),
+                ("GOLEM__OTLP__SERVICE_NAME", "inherited-service"),
+                (
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__OPLOG__MAX_OPERATIONS",
+                    "79",
+                ),
+            ]
+            .into_iter()
+            .for_each(|(name, value)| {
+                assert_eq!(
+                    inherited.get(name).map(String::as_str),
+                    Some(value),
+                    "{name}"
+                );
+            });
+            [
+                "GOLEM__LOGGING_OTHER",
+                "GOLEM__OTLP_OTHER",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__OPLOG_OTHER",
+                "GOLEM_ADVANCED__WORKER_SERVICE__OPLOG__MAX_OPERATIONS",
+                "GOLEM__DATA_DIR",
+            ]
+            .into_iter()
+            .for_each(|name| assert!(!inherited.contains_key(name), "{name}"));
+
+            let enabled = EnvVarBuilder::golem_service(Level::WARN)
+                .with_optional_otlp("requested-service", true)
+                .build();
+            [
+                ("GOLEM__OTLP__ENABLED", "true"),
+                ("GOLEM__OTLP__HOST", "localhost"),
+                ("GOLEM__OTLP__PORT", "4318"),
+                ("GOLEM__OTLP__SERVICE_NAME", "requested-service"),
+            ]
+            .into_iter()
+            .for_each(|(name, value)| {
+                assert_eq!(enabled.get(name).map(String::as_str), Some(value), "{name}");
+            });
+            Ok(())
+        });
+    }
+}

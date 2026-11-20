@@ -129,5 +129,5 @@ Leave out the `[mounts]` section and the Litestream variables: the state is in P
 ## Fixed cluster
 
 <Callout type="warning">
-  A [fixed cluster](/next/deploy/cluster) on Fly.io is not supported yet. The private network is IPv6-only, so every service needs `GOLEM_ADVANCED__SERVER__BIND_ADDRESS=::`, and each executor needs `GOLEM_ADVANCED__SERVER__GRPC__ADVERTISED_IP` set to its `FLY_PRIVATE_IP`.
+  A [fixed cluster](/next/deploy/cluster) on Fly.io is not supported yet. The private network is IPv6-only, so each standalone service needs `GOLEM_ADVANCED__<SERVICE>__BIND_ADDRESS=::`. Replace `<SERVICE>` with `REGISTRY_SERVICE`, `SHARD_MANAGER`, `WORKER_SERVICE`, `WORKER_EXECUTOR`, or `COMPONENT_COMPILATION_SERVICE` for that service. Each executor also needs `GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__ADVERTISED_IP` set to its `FLY_PRIVATE_IP`.
 </Callout>

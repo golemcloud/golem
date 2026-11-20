@@ -872,7 +872,7 @@ fn load_server_config_on(
         Err(err) if err.missing() => default_data_dir()?,
         Err(err) => return Err(err).context("Failed to load the server configuration"),
     };
-    let common = layers[settings_start..settings_end]
+    let common_input = layers[settings_start..settings_end]
         .iter()
         .fold(Figment::new(), |common, layer| {
             let mut layer = layer.clone();
@@ -882,19 +882,21 @@ fn load_server_config_on(
         .merge(Serialized::default("data_dir", &data_dir));
     let common = Layer::read(
         Metadata::named("the self-host settings"),
-        self_host::server(&common)?,
+        self_host::server(&common_input)?,
     )?;
-    let advanced = layers[settings_start..settings_end]
-        .iter()
-        .map(|layer| {
+    let (_, advanced) = layers[settings_start..settings_end].iter().try_fold(
+        (common_input, Vec::new()),
+        |(lower, mut projected), layer| {
             let mut advanced = layer.clone();
             advanced.dict.retain(|key, _| key == "advanced");
-            Layer::read(
+            let advanced = Figment::from(advanced);
+            projected.push(Layer::read(
                 layer.metadata.clone(),
-                self_host::server(&Figment::from(advanced))?,
-            )
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+                self_host::server_advanced(&advanced, &lower)?,
+            )?);
+            Ok::<_, anyhow::Error>((lower.merge(advanced), projected))
+        },
+    )?;
     layers.splice(
         settings_start..settings_end,
         std::iter::once(common).chain(advanced),
@@ -1455,6 +1457,180 @@ mod tests {
     }
 
     #[test]
+    fn etcd_tls_survives_advanced_variant_selection_in_both_loaders() {
+        [false, true].into_iter().for_each(|selection_in_env| {
+            Jail::expect_with(|jail| {
+                jail.create_dir("config")?;
+                let tls = r#"
+                    [etcd.tls]
+                    ca_cert_file = "/certs/etcd-ca.pem"
+                    client_cert_file = "/certs/etcd-client.pem"
+                    client_key_file = "/certs/etcd-client.key"
+                    server_name = "etcd.internal"
+                "#;
+                let selection = r#"
+                    [advanced.shard_manager.persistence]
+                    type = "Etcd"
+                    [advanced.shard_manager.persistence.config]
+                    endpoints = ["https://etcd.internal:2379"]
+                    username = "etcd-user"
+                "#;
+                let settings = format!(
+                    "state_store = \"postgres\"\n{}",
+                    if selection_in_env { tls } else { selection }
+                );
+                if selection_in_env {
+                    jail.set_env("GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__TYPE", "Etcd");
+                    jail.set_env(
+                        "GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__ENDPOINTS",
+                        r#"["https://etcd.internal:2379"]"#,
+                    );
+                    jail.set_env(
+                        "GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__USERNAME",
+                        "etcd-user",
+                    );
+                } else {
+                    jail.set_env("GOLEM__ETCD__TLS__CA_CERT_FILE", "/certs/etcd-ca.pem");
+                    jail.set_env(
+                        "GOLEM__ETCD__TLS__CLIENT_CERT_FILE",
+                        "/certs/etcd-client.pem",
+                    );
+                    jail.set_env(
+                        "GOLEM__ETCD__TLS__CLIENT_KEY_FILE",
+                        "/certs/etcd-client.key",
+                    );
+                    jail.set_env("GOLEM__ETCD__TLS__SERVER_NAME", "etcd.internal");
+                }
+                jail.create_file("settings.toml", &settings)?;
+                jail.create_file("config/shard-manager.toml", &settings)?;
+                let standalone = golem_shard_manager::config::make_config_loader().load()?;
+                let embedded = load(
+                    None,
+                    &RunArgs {
+                        config: Some("settings.toml".into()),
+                        ..run_args_with_data_dir("/data")
+                    },
+                )
+                .unwrap();
+                [&standalone.persistence, &embedded.shard_manager.persistence]
+                    .into_iter()
+                    .for_each(|persistence| {
+                        let PersistenceConfig::Etcd(etcd) = persistence else {
+                            panic!("expected etcd persistence")
+                        };
+                        assert_eq!(etcd.username.as_deref(), Some("etcd-user"));
+                        let tls = etcd.tls.as_ref().expect("supported etcd TLS must survive");
+                        assert_eq!(
+                            tls.ca_cert_file.as_deref(),
+                            Some(Path::new("/certs/etcd-ca.pem"))
+                        );
+                        assert_eq!(
+                            tls.client_cert_file.as_deref(),
+                            Some(Path::new("/certs/etcd-client.pem"))
+                        );
+                        assert_eq!(
+                            tls.client_key_file.as_deref(),
+                            Some(Path::new("/certs/etcd-client.key"))
+                        );
+                        assert_eq!(tls.server_name.as_deref(), Some("etcd.internal"));
+                    });
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
+    fn repeated_etcd_selection_keeps_lower_advanced_tls_overrides() {
+        Jail::expect_with(|jail| {
+            jail.create_dir("config")?;
+            let settings = r#"
+                [etcd.tls]
+                server_name = "supported.internal"
+                [advanced.shard_manager.persistence]
+                type = "Etcd"
+                [advanced.shard_manager.persistence.config]
+                endpoints = ["https://etcd.internal:2379"]
+                [advanced.shard_manager.persistence.config.tls]
+                server_name = "advanced.internal"
+            "#;
+            jail.set_env("GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__TYPE", "Etcd");
+            jail.create_file("settings.toml", settings)?;
+            jail.create_file("config/shard-manager.toml", settings)?;
+            let standalone = golem_shard_manager::config::make_config_loader().load()?;
+            let embedded = load(
+                None,
+                &RunArgs {
+                    config: Some("settings.toml".into()),
+                    ..run_args_with_data_dir("/data")
+                },
+            )
+            .unwrap();
+            [&standalone.persistence, &embedded.shard_manager.persistence]
+                .into_iter()
+                .for_each(|persistence| {
+                    let PersistenceConfig::Etcd(etcd) = persistence else {
+                        panic!("expected etcd persistence")
+                    };
+                    assert_eq!(
+                        etcd.tls.as_ref().unwrap().server_name.as_deref(),
+                        Some("advanced.internal")
+                    );
+                });
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn snapshot_retention_survives_advanced_enablement_in_both_loaders() {
+        [false, true].into_iter().for_each(|selection_in_env| {
+            Jail::expect_with(|jail| {
+                jail.create_dir("config")?;
+                let settings = if selection_in_env {
+                    jail.set_env(
+                        "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_SNAPSHOTS__TYPE",
+                        "Enabled",
+                    );
+                    "retained_update_snapshots = 7"
+                } else {
+                    jail.set_env("GOLEM__RETAINED_UPDATE_SNAPSHOTS", "7");
+                    r#"
+                        [advanced.worker_executor.filesystem_snapshots]
+                        type = "Enabled"
+                    "#
+                };
+                jail.set_env(
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY",
+                    "2a".repeat(64),
+                );
+                jail.create_file("settings.toml", settings)?;
+                jail.create_file("config/worker-executor.toml", settings)?;
+                let standalone =
+                    golem_worker_executor::services::golem_config::make_config_loader().load()?;
+                let embedded = load(
+                    None,
+                    &RunArgs {
+                        config: Some("settings.toml".into()),
+                        ..run_args_with_data_dir("/data")
+                    },
+                )
+                .unwrap();
+                [
+                    &standalone.filesystem_snapshots,
+                    &embedded.worker_executor.filesystem_snapshots,
+                ]
+                .into_iter()
+                .for_each(|snapshots| {
+                    let FilesystemSnapshotsConfig::Enabled(store) = snapshots else {
+                        panic!("expected enabled snapshots")
+                    };
+                    assert_eq!(store.uploads().retained_update_snapshots().get(), 7);
+                });
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
     fn self_host_settings_reach_embedded_and_standalone_services() {
         Jail::expect_with(|jail| {
             jail.create_dir("config")?;
@@ -1490,6 +1666,7 @@ mod tests {
                 cert_file = "/certs/service.pem"
                 key_file = "/certs/service.key"
                 ca_cert_file = "/certs/ca.pem"
+                server_name = "grpc.internal"
                 [filesystem_snapshots]
                 type = "Enabled"
             "#;
@@ -1527,24 +1704,86 @@ mod tests {
             let compilation =
                 golem_component_compilation_service::config::make_config_loader().load()?;
             [
-                serde_json::to_value(&embedded.registry_service).unwrap(),
-                serde_json::to_value(&registry).unwrap(),
-                serde_json::to_value(&embedded.shard_manager).unwrap(),
-                serde_json::to_value(&shard).unwrap(),
-                serde_json::to_value(&embedded.worker_service).unwrap(),
-                serde_json::to_value(&worker).unwrap(),
-                serde_json::to_value(&embedded.worker_executor).unwrap(),
-                serde_json::to_value(&executor).unwrap(),
-                serde_json::to_value(&embedded.component_compilation_service).unwrap(),
-                serde_json::to_value(&compilation).unwrap(),
+                (
+                    [
+                        serde_json::to_value(&embedded.registry_service).unwrap(),
+                        serde_json::to_value(&registry).unwrap(),
+                    ],
+                    &["/component_compilation/config/tls"][..],
+                ),
+                (
+                    [
+                        serde_json::to_value(&embedded.shard_manager).unwrap(),
+                        serde_json::to_value(&shard).unwrap(),
+                    ],
+                    &["/registry_service/tls", "/worker_executors/tls"][..],
+                ),
+                (
+                    [
+                        serde_json::to_value(&embedded.worker_service).unwrap(),
+                        serde_json::to_value(&worker).unwrap(),
+                    ],
+                    &[
+                        "/registry_service/tls",
+                        "/worker_executor/tls",
+                        "/shard_manager/tls",
+                    ][..],
+                ),
+                (
+                    [
+                        serde_json::to_value(&embedded.worker_executor).unwrap(),
+                        serde_json::to_value(&executor).unwrap(),
+                    ],
+                    &[
+                        "/registry_service/tls",
+                        "/shard_manager/tls",
+                        "/public_worker_api/tls",
+                    ][..],
+                ),
+                (
+                    [
+                        serde_json::to_value(&embedded.component_compilation_service).unwrap(),
+                        serde_json::to_value(&compilation).unwrap(),
+                    ],
+                    &["/compile_worker/tls"][..],
+                ),
             ]
             .into_iter()
-            .for_each(|service| {
-                assert_eq!(service["grpc"]["tls"]["type"], "Enabled");
-                assert_eq!(
-                    service["grpc"]["tls"]["config"]["server_cert_file"],
-                    "/certs/service.pem"
-                );
+            .for_each(|(services, clients)| {
+                services.into_iter().for_each(|service| {
+                    assert_eq!(
+                        service["grpc"]["tls"],
+                        serde_json::json!({
+                            "type": "Enabled",
+                            "config": {
+                                "server_cert": null,
+                                "server_cert_file": "/certs/service.pem",
+                                "server_key": null,
+                                "server_key_file": "/certs/service.key",
+                                "client_ca_cert": null,
+                                "client_ca_cert_file": "/certs/ca.pem",
+                            },
+                        })
+                    );
+                    clients.iter().for_each(|path| {
+                        assert_eq!(
+                            service.pointer(path).unwrap(),
+                            &serde_json::json!({
+                                "type": "Enabled",
+                                "config": {
+                                    "client_cert": null,
+                                    "client_cert_file": "/certs/service.pem",
+                                    "client_key": null,
+                                    "client_key_file": "/certs/service.key",
+                                    "server_ca_cert": null,
+                                    "server_ca_cert_file": "/certs/ca.pem",
+                                    "server_domain_name": "grpc.internal",
+                                },
+                            }),
+                            "{path}"
+                        );
+                    });
+                });
             });
             [
                 serde_json::to_value(&embedded.registry_service.db).unwrap(),

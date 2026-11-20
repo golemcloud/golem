@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    BodyLengthError, ContentRange, RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage, cut_range,
-    parse_content_range, ranged_object_size, read_body,
+    BodyLengthError, ContentRange, RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage,
+    check_bucket_access, cut_range, parse_content_range, ranged_object_size, read_body,
 };
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::replayable_stream::ReplayableStream;
@@ -27,9 +27,12 @@ use anyhow::anyhow;
 use aws_runtime::retries::classifiers::{THROTTLING_ERRORS, TRANSIENT_ERRORS};
 use aws_sdk_s3::config::http::{HttpRequest, HttpResponse};
 use aws_sdk_s3::config::retry::RetryConfig;
+use aws_sdk_s3::config::timeout::TimeoutConfig;
 use aws_sdk_s3::config::{
     BehaviorVersion, Credentials, Region, RequestChecksumCalculation, StalledStreamProtectionConfig,
 };
+use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::operation::head_bucket::HeadBucketError;
 use aws_sdk_s3::primitives::SdkBody;
 use aws_smithy_runtime_api::client::http::{
     HttpConnector, HttpConnectorFuture, SharedHttpConnector, http_client_fn,
@@ -118,7 +121,7 @@ impl SentRequest {
 /// set, the body is one frame, and a read of that frame adds 1 to it. Else, when `frame_bytes` is
 /// set, the body is frames of that number of bytes, and the last frame can be shorter, as a body
 /// from S3 comes in many frames. Else, the body is one frame. When `transport_error` is set, the
-/// transport gives that error and no response.
+/// transport gives that error and no response. When `pending` is set, the transport never finishes.
 struct Answer {
     status: u16,
     content_range: Option<&'static str>,
@@ -128,6 +131,7 @@ struct Answer {
     frame_bytes: Option<usize>,
     body: String,
     transport_error: Option<ConnectorError>,
+    pending: bool,
 }
 
 impl Answer {
@@ -141,6 +145,7 @@ impl Answer {
             frame_bytes: None,
             body: body.into(),
             transport_error: None,
+            pending: false,
         }
     }
 
@@ -158,6 +163,13 @@ impl Answer {
     fn transport_error(error: ConnectorError) -> Self {
         Self {
             transport_error: Some(error),
+            ..Self::new(0, "")
+        }
+    }
+
+    fn pending() -> Self {
+        Self {
+            pending: true,
             ..Self::new(0, "")
         }
     }
@@ -268,7 +280,12 @@ impl HttpConnector for ScriptedTransport {
             requests.push(sent.clone());
             requests.len() - 1
         };
-        HttpConnectorFuture::ready((self.script)(&sent, earlier).into_response())
+        let answer = (self.script)(&sent, earlier);
+        if answer.pending {
+            HttpConnectorFuture::new(std::future::pending())
+        } else {
+            HttpConnectorFuture::ready(answer.into_response())
+        }
     }
 }
 
@@ -309,6 +326,7 @@ fn scripted_storage_with(
         .force_path_style(true)
         .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
         .retry_config(sdk_retries)
+        .timeout_config(TimeoutConfig::disabled())
         .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .http_client(http_client_fn(move |_, _| connector.clone()))
         .build();
@@ -325,6 +343,212 @@ fn scripted_storage_with(
 
 fn sent(requests: &SentRequests) -> Vec<SentRequest> {
     requests.lock().unwrap().clone()
+}
+
+fn constructor_config(jail: &mut figment::Jail) -> S3BlobStorageConfig {
+    jail.clear_env();
+    jail.create_file("credentials", "").unwrap();
+    jail.create_file("aws-config", "").unwrap();
+    jail.set_env(
+        "AWS_SHARED_CREDENTIALS_FILE",
+        jail.directory().join("credentials").display(),
+    );
+    jail.set_env(
+        "AWS_CONFIG_FILE",
+        jail.directory().join("aws-config").display(),
+    );
+    jail.set_env("AWS_EC2_METADATA_DISABLED", true);
+    S3BlobStorageConfig {
+        region: "us-east-1".to_string(),
+        object_prefix: "objects-not-the-startup-bucket".to_string(),
+        aws_endpoint_url: Some("abcde://nota#url".to_string()),
+        aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
+            "constructor-fixture",
+            "constructor-fixture",
+            "constructor-fixture",
+        )),
+        aws_path_style: Some(true),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn startup_constructor_rejects_a_shared_bucket_layout() {
+    figment::Jail::expect_with(|jail| {
+        let mut config = constructor_config(jail);
+        config.namespace_prefixes = false;
+        config.compilation_cache_bucket = "duplicate-constructor-bucket".to_string();
+        config.custom_data_bucket = "duplicate-constructor-bucket".to_string();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let error = runtime.block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                S3BlobStorage::new(config, "constructor-probe-only"),
+            )
+            .await
+            .expect("the constructor watchdog expired")
+            .expect_err("a shared bucket layout must fail")
+        });
+        assert_eq!(
+            error.to_string(),
+            "blob_storage.config.compilation_cache_bucket and blob_storage.config.custom_data_bucket both name the bucket \"duplicate-constructor-bucket\": give each of them its own bucket, or enable blob_storage.config.namespace_prefixes"
+        );
+        Ok(())
+    });
+}
+
+#[test]
+fn startup_constructor_propagates_the_selected_bucket_check_failure() {
+    figment::Jail::expect_with(|jail| {
+        let config = constructor_config(jail);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let error = runtime.block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                S3BlobStorage::new(config, "constructor-probe-only"),
+            )
+            .await
+            .expect("the constructor watchdog expired")
+            .expect_err("the invalid endpoint must fail")
+        });
+        assert_eq!(
+            error.to_string(),
+            "S3 startup check failed for bucket constructor-probe-only"
+        );
+        match error.downcast_ref::<SdkError<HeadBucketError>>() {
+            Some(SdkError::DispatchFailure(failure)) => assert!(failure.is_other()),
+            other => panic!("expected an endpoint resolution failure, got {other:?}"),
+        }
+        assert_eq!(
+            error.root_cause().to_string(),
+            "Custom endpoint `abcde://nota#url` was not a valid URI"
+        );
+        Ok(())
+    });
+}
+
+#[test]
+#[timeout("5s")]
+async fn startup_access_check_sends_one_bucket_root_head() {
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+
+    check_bucket_access(&storage.client, "startup-probe-only")
+        .await
+        .unwrap();
+
+    let requests = sent(&requests);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "HEAD");
+    assert_eq!(requests[0].uri, "http://s3.test/startup-probe-only/");
+}
+
+#[test]
+#[timeout("5s")]
+async fn startup_access_check_retains_a_service_refusal() {
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(403, ""));
+
+    let error = check_bucket_access(&storage.client, "startup-probe-only")
+        .await
+        .unwrap_err();
+
+    let sdk_error = error
+        .downcast_ref::<SdkError<HeadBucketError>>()
+        .expect("the original HEAD error must remain in the chain");
+    match sdk_error {
+        SdkError::ServiceError(failure) => assert_eq!(failure.raw().status().as_u16(), 403),
+        other => panic!("expected a service refusal, got {other:?}"),
+    }
+    assert!(error.to_string().contains("startup-probe-only"));
+    let requests = sent(&requests);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "HEAD");
+    assert_eq!(requests[0].uri, "http://s3.test/startup-probe-only/");
+}
+
+#[test]
+#[timeout("5s")]
+async fn startup_access_check_retains_a_transport_failure() {
+    let (storage, requests) = scripted_storage("", |_, _| {
+        Answer::transport_error(ConnectorError::io(Box::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "selected bucket transport refusal",
+        ))))
+    });
+
+    let error = check_bucket_access(&storage.client, "startup-probe-only")
+        .await
+        .unwrap_err();
+
+    let sdk_error = error
+        .downcast_ref::<SdkError<HeadBucketError>>()
+        .expect("the original HEAD error must remain in the chain");
+    assert!(matches!(sdk_error, SdkError::DispatchFailure(_)));
+    let cause = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .expect("the original transport cause must remain in the chain");
+    assert_eq!(cause.kind(), std::io::ErrorKind::ConnectionRefused);
+    assert_eq!(cause.to_string(), "selected bucket transport refusal");
+    assert!(error.to_string().contains("startup-probe-only"));
+    let requests = sent(&requests);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "HEAD");
+    assert_eq!(requests[0].uri, "http://s3.test/startup-probe-only/");
+}
+
+#[test]
+fn startup_access_check_times_out_at_ten_seconds() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap();
+
+    runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let arrived = Arc::new(tokio::sync::Notify::new());
+            let notify = arrived.clone();
+            let (storage, requests) = scripted_storage("", move |_, _| {
+                notify.notify_one();
+                Answer::pending()
+            });
+            let started = tokio::time::Instant::now();
+            let check = check_bucket_access(&storage.client, "startup-probe-only");
+            tokio::pin!(check);
+
+            tokio::select! {
+                result = &mut check => panic!("check finished before request arrival: {result:?}"),
+                _ = arrived.notified() => {}
+            }
+            let recorded = sent(&requests);
+            assert_eq!(recorded.len(), 1);
+            assert_eq!(recorded[0].method, "HEAD");
+            assert_eq!(recorded[0].uri, "http://s3.test/startup-probe-only/");
+
+            tokio::select! {
+                result = &mut check => panic!("check finished before ten seconds: {result:?}"),
+                _ = tokio::time::advance(Duration::from_secs(9)) => {}
+            }
+            assert!(futures::poll!(check.as_mut()).is_pending());
+            tokio::time::advance(Duration::from_secs(1)).await;
+            let error = check.await.unwrap_err();
+
+            assert_eq!(started.elapsed(), Duration::from_secs(10));
+            error
+                .downcast_ref::<tokio::time::error::Elapsed>()
+                .expect("the access-check deadline must retain the Tokio cause");
+            assert!(error.to_string().contains("startup-probe-only"));
+            assert_eq!(sent(&requests).len(), 1);
+        })
+        .await
+        .expect("the whole-scenario watchdog expired");
+    });
 }
 
 /// Gives the path of the URI of each request, without the endpoint and the query. The path style

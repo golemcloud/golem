@@ -13,7 +13,7 @@ x-aliases:
       GOLEM__ETCD__TLS__CA_CERT_FILE: /etc/etcd-tls/ca.pem
       GOLEM__ETCD__TLS__CLIENT_CERT_FILE: /etc/etcd-tls/client.pem
       GOLEM__ETCD__TLS__CLIENT_KEY_FILE: /etc/etcd-tls/client-key.pem
-      GOLEM__POSTGRES__USERNAME: golem-shard-manager
+      GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__USERNAME: golem-shard-manager
       GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__PASSWORD_FILE: /run/secrets/etcd-password
     volumes:
       - ./etcd-tls:/etc/etcd-tls:ro
