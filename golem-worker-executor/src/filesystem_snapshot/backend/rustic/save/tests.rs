@@ -2337,15 +2337,19 @@ async fn no_blob_call_of_a_save_starts_after_it_answered() {
     let Some(tree) = large_tree_with_an_unreadable_file(16 << 20) else {
         return;
     };
-    let storage =
-        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let calls = calls.clone();
+        move |op_label, path| {
+            calls.fetch_add(1, Ordering::SeqCst);
             if op_label == "write" && path.starts_with("data") {
                 Script::HangThenLand(Duration::from_millis(500))
             } else {
                 Script::Pass
             }
-        });
-    let store = store(storage.clone(), runs_policy(Duration::from_secs(2), 1));
+        }
+    });
+    let mut store = store(storage.clone(), runs_policy(Duration::from_secs(2), 1));
 
     let _ = store
         .save(
@@ -2358,9 +2362,20 @@ async fn no_blob_call_of_a_save_starts_after_it_answered() {
         )
         .await;
     let at_the_answer = storage.calls().len();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    drop(storage);
+    // Keep the store alive: exclusivity excludes strong and weak capabilities without cancelling
+    // late work or preventing a weak storage owner from upgrading while it still exists.
+    tokio::time::timeout(LIMIT, async {
+        while !Arc::get_mut(&mut store)
+            .is_some_and(|store| Arc::get_mut(&mut store.storage).is_some())
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("save retained a store or storage capability after its answer");
 
-    assert_eq!(storage.calls().len(), at_the_answer);
+    assert_eq!(calls.load(Ordering::SeqCst), at_the_answer);
 }
 
 #[test]
