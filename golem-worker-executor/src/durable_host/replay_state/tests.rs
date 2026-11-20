@@ -15090,6 +15090,7 @@ fn wallet_test_component(
         ),
         created_at: chrono::Utc::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: "wallet-prefixes".to_string(),
     }
 }

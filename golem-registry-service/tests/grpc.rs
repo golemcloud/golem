@@ -241,6 +241,7 @@ async fn component_grpc_metadata_retains_deleted_revisions_and_tombstones() {
                 )),
                 object_store_key: "missing-binary".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![],
         )

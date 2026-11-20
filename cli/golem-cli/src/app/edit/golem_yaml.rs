@@ -33,6 +33,118 @@ static YAML_LANGUAGE_SERVER_SCHEMA_REF: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
+/// Change only the three pin values or insert a new entry at a mapping boundary.
+pub(crate) fn set_package_pin(
+    source: &str,
+    name: &str,
+    pin: &golem_package::FilePin,
+) -> anyhow::Result<String> {
+    fn mapping(node: Node<'_>) -> anyhow::Result<Node<'_>> {
+        if matches!(node.kind(), "flow_mapping" | "block_mapping") {
+            return Ok(node);
+        }
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor)
+            .find(|child| matches!(child.kind(), "flow_mapping" | "block_mapping"))
+            .ok_or_else(|| anyhow!("Expected an explicit YAML mapping for package pins"))
+    }
+    fn pairs(node: Node<'_>) -> Vec<Node<'_>> {
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor)
+            .filter(|n| matches!(n.kind(), "flow_pair" | "block_mapping_pair"))
+            .collect()
+    }
+    let tree = parse_yaml(source)?;
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    let document = root
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "document")
+        .ok_or_else(|| anyhow!("Missing YAML document"))?;
+    let mut cursor = document.walk();
+    let root = document
+        .named_children(&mut cursor)
+        .find_map(|node| mapping(node).ok())
+        .ok_or_else(|| anyhow!("Missing root YAML mapping"))?;
+    let find = |node, key: &str| {
+        pairs(node).into_iter().find(|pair| {
+            pair.child_by_field_name("key").is_some_and(|k| {
+                serde_yaml::from_str::<String>(&source[k.byte_range()]).is_ok_and(|k| k == key)
+            })
+        })
+    };
+    let add = |map: Node<'_>, key: &str, value: &str| -> anyhow::Result<TextEdit> {
+        let pairs = pairs(map);
+        if map.kind() == "flow_mapping" {
+            // Insert before the first key so trailing commas and comments stay intact.
+            let (offset, suffix) = pairs
+                .first()
+                .map_or((map.end_byte() - 1, ""), |pair| (pair.start_byte(), ", "));
+            return Ok(TextEdit::new(
+                offset,
+                offset,
+                format!("{key}: {value}{suffix}"),
+            ));
+        }
+        let first = pairs
+            .first()
+            .ok_or_else(|| anyhow!("Empty block mapping"))?;
+        let offset = first.start_byte();
+        let eol = if source.contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        let indent = " ".repeat(first.start_position().column);
+        Ok(TextEdit::new(
+            offset,
+            offset,
+            format!("{key}: {value}{eol}{indent}"),
+        ))
+    };
+    let edit = match find(root, "packages") {
+        None => vec![add(
+            root,
+            "packages",
+            &format!("{{{name}: {}}}", serde_json::to_string(pin)?),
+        )?],
+        Some(pair) => {
+            let map = mapping(
+                pair.child_by_field_name("value")
+                    .ok_or_else(|| anyhow!("Missing packages map"))?,
+            )?;
+            match find(map, name) {
+                None => vec![add(map, name, &serde_json::to_string(pin)?)?],
+                Some(entry) => {
+                    let entry = mapping(
+                        entry
+                            .child_by_field_name("value")
+                            .ok_or_else(|| anyhow!("Missing package pin"))?,
+                    )?;
+                    [
+                        ("source", &pin.source),
+                        ("version", &pin.version),
+                        ("digest", &pin.digest),
+                    ]
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let node = find(entry, key)
+                            .and_then(|pair| pair.child_by_field_name("value"))
+                            .ok_or_else(|| anyhow!("Missing pin field {key}"))?;
+                        Ok(TextEdit::new(
+                            node.start_byte(),
+                            node.end_byte(),
+                            serde_json::to_string(value)?,
+                        ))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                }
+            }
+        }
+    };
+    apply_edits(source, edit)
+}
+
 pub fn split_documents(
     source: &str,
     split_root_keys: &[&str],
@@ -725,4 +837,30 @@ fn line_indent_at(source: &str, pos: usize) -> String {
         .chars()
         .take_while(|ch| *ch == ' ')
         .collect()
+}
+
+#[cfg(test)]
+mod package_pin_tests {
+    use super::set_package_pin;
+    use golem_package::FilePin;
+    use test_r::test;
+
+    #[test]
+    fn updates_block_and_flow_pins_without_touching_comments_or_line_endings() {
+        let pin = FilePin {
+            source: "new.tar".into(),
+            version: "2.0.0".into(),
+            digest: "sha256:new".into(),
+        };
+        for original in [
+            "# Package pins\r\npackages:\r\n  sample:\r\n    source: old.tar # source\r\n    version: 1.0.0 # version\r\n    digest: sha256:old # digest\r\n",
+            "packages: {sample: {source: old.tar, # source\n  version: 1.0.0, digest: sha256:old}} # pins\n",
+        ] {
+            let expected = original
+                .replace("old.tar", "\"new.tar\"")
+                .replace("1.0.0", "\"2.0.0\"")
+                .replace("sha256:old", "\"sha256:new\"");
+            assert_eq!(set_package_pin(original, "sample", &pin).unwrap(), expected);
+        }
+    }
 }

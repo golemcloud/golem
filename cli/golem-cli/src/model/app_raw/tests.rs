@@ -1721,6 +1721,8 @@ fn arb_application_model_v3() -> BoxedStrategy<Application> {
             )| Application {
                 manifest_version,
                 app,
+                package: None,
+                packages: Default::default(),
                 includes,
                 component_templates,
                 components,

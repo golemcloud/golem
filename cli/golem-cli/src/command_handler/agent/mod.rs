@@ -4603,6 +4603,7 @@ mod tests {
             component_name: ComponentName("counter:main".to_string()),
             hash: Default::default(),
             wasm_hash: Default::default(),
+            package_metadata: None,
             application_id: ApplicationId(uuid::Uuid::nil()),
             account_id: AccountId(uuid::Uuid::nil()),
             component_size: 0,

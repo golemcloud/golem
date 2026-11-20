@@ -1054,6 +1054,7 @@ fn component_metadata_displays_tools_middlewares_and_files() {
         component_name: sample.component_name.clone(),
         hash: Default::default(),
         wasm_hash: Default::default(),
+        package_metadata: None,
         application_id: golem_common::model::application::ApplicationId(uuid::Uuid::nil()),
         account_id: golem_common::model::account::AccountId(uuid::Uuid::nil()),
         component_size: sample.component_size,
@@ -1566,6 +1567,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            package_metadata: None,
             agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
@@ -1583,6 +1585,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            package_metadata: None,
             agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
@@ -6610,6 +6613,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: current_component_hash,
+                    package_metadata: None,
                     agent_types: BTreeMap::from_iter([(
                         "agent".to_string(),
                         golem_common::model::diff::HashOf::form_value(sample_agent_type_schema(
@@ -6655,6 +6659,11 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: new_component_hash,
+                    package_metadata: Some(golem_common::model::component::ComponentPackageMetadata {
+                        source: "./fixture.tar".into(),
+                        package_digest: format!("sha256:{}", "12".repeat(32)),
+                        layer_digest: format!("sha256:{}", "34".repeat(32)),
+                    }),
                     agent_types: BTreeMap::from_iter([
                         (
                             "agent".to_string(),

@@ -351,6 +351,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .create_component(
                 &environment_id.0,
                 &ComponentCreation {
+                    package_metadata: None,
                     component_name,
                     config_schema: Default::default(),
                     component_provision_config: Default::default(),
@@ -450,6 +451,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .update_component(
                 &component_id.0,
                 &ComponentUpdate {
+                    package_metadata: None,
                     current_revision: previous_revision,
                     config_schema: None,
                     component_provision_config: None,

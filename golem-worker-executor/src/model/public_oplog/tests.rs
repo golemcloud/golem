@@ -671,6 +671,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         ),
         created_at: chrono::Utc::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: String::new(),
     }));
     let owner = OwnedAgentId::new(environment_id, &AgentId::from_parts(7, 1));
@@ -865,6 +866,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         ),
         created_at: chrono::Utc::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: String::new(),
     }));
     let oplog_service = Arc::new(
