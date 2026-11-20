@@ -19,6 +19,10 @@
 //! verified for each principal. It holds no credential, and a user's claims only when the reader
 //! asked for them and may read the oplog ([`ClaimVisibility::Shown`]).
 
+mod claims;
+
+pub use claims::PublicClaims;
+
 use super::{AccountAuthentication, Caller, Kind, Pair, Principal, TokenProvenance};
 use crate::base_model::account::AccountId;
 use crate::base_model::environment::EnvironmentId;
@@ -106,9 +110,7 @@ impl PublicPrincipal {
             Principal::User(user) => Self::User(PublicUserPrincipal {
                 pair: user.pair.clone(),
                 authenticated_at: user.authenticated_at,
-                claims: claims
-                    .is_shown()
-                    .then(|| public_claims(user.claims.as_json())),
+                claims: claims.is_shown().then(|| PublicClaims::from(&user.claims)),
             }),
             Principal::Account(account) => Self::Account(PublicAccountPrincipal {
                 pair: account.pair(),
@@ -152,7 +154,7 @@ impl PublicPrincipal {
     }
 
     /// The user's claims, when the principal is a user and the claims are shown.
-    pub fn claims(&self) -> Option<&serde_json::Value> {
+    pub fn claims(&self) -> Option<&PublicClaims> {
         match self {
             Self::User(user) => user.claims.as_ref(),
             _ => None,
@@ -171,12 +173,6 @@ impl Display for PublicPrincipal {
     }
 }
 
-/// The claims as a JSON value. A JSON value cannot hold a number beyond the range of an `f64`, so
-/// a claim set with such a number shows as its JSON text instead.
-fn public_claims(json: &str) -> serde_json::Value {
-    serde_json::from_str(json).unwrap_or_else(|_| serde_json::Value::String(json.to_string()))
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
@@ -188,7 +184,7 @@ pub struct PublicUserPrincipal {
     /// absent otherwise.
     #[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub claims: Option<serde_json::Value>,
+    pub claims: Option<PublicClaims>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

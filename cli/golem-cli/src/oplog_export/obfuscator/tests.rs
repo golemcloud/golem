@@ -3533,7 +3533,12 @@ fn marker_user_caller() -> golem_common::model::caller::PublicCaller {
         original: PublicPrincipal::User(PublicUserPrincipal {
             pair: Pair::new("https://MARKER.example", "MARKER-user"),
             authenticated_at: "2027-01-15T10:00:00Z".parse().unwrap(),
-            claims: Some(serde_json::json!({"email": "MARKER@mail.example", "sub": "MARKER"})),
+            claims: Some(
+                golem_common::model::caller::PublicClaims::from_json(
+                    r#"{"email":"MARKER@mail.example","sub":"MARKER"}"#.to_string(),
+                )
+                .unwrap(),
+            ),
         }),
         immediate: PublicPrincipal::Agent(PublicAgentPrincipal {
             pair: Pair::new("https://MARKER.example", "agent:MARKER"),

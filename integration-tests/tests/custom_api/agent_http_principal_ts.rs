@@ -330,7 +330,7 @@ async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
     assert!(!callers.is_empty());
     for caller in &callers {
         for role in [&caller.original, &caller.immediate] {
-            assert_eq!(role.claims().unwrap()["sub"], "bob", "{caller:?}");
+            assert_eq!(role.claims().unwrap().to_value().unwrap()["sub"], "bob", "{caller:?}");
         }
     }
 
@@ -440,7 +440,7 @@ async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
     assert!(!callers.is_empty());
     for caller in &callers {
         assert_eq!(
-            caller.original.claims().unwrap()["sub"],
+            caller.original.claims().unwrap().to_value().unwrap()["sub"],
             "bob",
             "{caller:?}"
         );

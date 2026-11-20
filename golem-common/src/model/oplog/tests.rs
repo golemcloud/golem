@@ -16,7 +16,8 @@ use crate::base_model::caller::test_support::{
     every_principal, original_claims_json, sample_caller, user_principal,
 };
 use crate::base_model::caller::{
-    Caller, ClaimVisibility, Claims, Pair, Principal, PublicCaller, UserPrincipal,
+    Caller, ClaimVisibility, Claims, Pair, Principal, PublicCaller, PublicClaims, PublicPrincipal,
+    UserPrincipal,
 };
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::card::{
@@ -1589,16 +1590,19 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
         };
         invocation.caller = caller;
 
+        // The poem form goes through `serde_json::Value`, which writes the claims again. The
+        // forms are equal as JSON values, but not as text.
+        let as_value = |entry: &PublicOplogEntry| serde_json::to_value(entry).unwrap();
         let poem_json = entry.to_json_string();
         let from_poem: PublicOplogEntry = serde_json::from_str(&poem_json).unwrap();
-        assert_eq!(entry, from_poem);
+        assert_eq!(as_value(&entry), as_value(&from_poem));
 
         let serde_json = serde_json::to_string(&entry).unwrap();
         let from_serde = <PublicOplogEntry as poem_openapi::types::ParseFromJSON>::parse_from_json(
             Some(serde_json::from_str(&serde_json).unwrap()),
         )
         .unwrap();
-        assert_eq!(entry, from_serde);
+        assert_eq!(as_value(&entry), as_value(&from_serde));
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&poem_json).unwrap(),
             serde_json::from_str::<serde_json::Value>(&serde_json).unwrap()
@@ -3932,17 +3936,22 @@ fn public_invocation_caller_round_trips_protobuf() {
     assert!(PublicAgentInvocation::try_from(without_caller).is_err());
 }
 
-/// A claim set may hold a number that no `f64` holds. The executor sends the shown claims of such
-/// a user to the worker service, and the entry must decode there.
-#[test]
-fn public_entry_with_claims_beyond_f64_decodes_from_protobuf() {
-    let user = Principal::User(UserPrincipal {
-        pair: Pair::new("https://idp.example/", "user-1"),
-        claims: Claims::from_json(r#"{"sub":"user-1","n":1e400}"#.to_string()).unwrap(),
-        authenticated_at: Timestamp::from(1_000),
-    });
-    let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
-    let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+/// The claim sets that a `serde_json::Value` cannot keep: a number beyond `f64`, a nesting depth
+/// beyond the limit of 128, and an integer that an `f64` rounds.
+fn claim_sets_beyond_serde_json_value() -> Vec<String> {
+    vec![
+        r#"{"sub":"bob","n":1e400}"#.to_string(),
+        format!(
+            r#"{{"sub":"bob","deep":{}1{}}}"#,
+            "[".repeat(130),
+            "]".repeat(130)
+        ),
+        r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
+    ]
+}
+
+fn started_entry_with_caller(caller: PublicCaller) -> PublicOplogEntry {
+    PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::from(2_000),
         invocation: public_invocations_with_caller(caller)
             .into_iter()
@@ -3955,13 +3964,80 @@ fn public_entry_with_claims_beyond_f64_decodes_from_protobuf() {
             },
             scope_card_id: None,
         },
-    });
+    })
+}
 
-    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
-    let bytes = prost::Message::encode_to_vec(&proto);
-    let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
-        prost::Message::decode(bytes.as_slice()).unwrap();
-    assert_eq!(PublicOplogEntry::try_from(proto), Ok(entry));
+/// The public form shows the claims exactly as Golem received them, as a JSON object. It does so
+/// in the public model, in the JSON text of the REST response, and across protobuf.
+#[test]
+fn public_entry_shows_the_original_claims_text_everywhere() {
+    for claims_text in claim_sets_beyond_serde_json_value() {
+        let user = Principal::User(UserPrincipal {
+            pair: Pair::new("https://idp.example/", "user-1"),
+            claims: Claims::from_json(claims_text.clone()).unwrap(),
+            authenticated_at: Timestamp::from(1_000),
+        });
+        let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
+
+        // The public model.
+        let PublicPrincipal::User(public_user) = &caller.original else {
+            panic!("expected a user");
+        };
+        assert_eq!(
+            public_user.claims.as_ref().map(PublicClaims::as_json),
+            Some(claims_text.as_str())
+        );
+
+        // The JSON text of the REST response.
+        let entry = started_entry_with_caller(caller);
+        let json = serde_json::to_string(&entry).unwrap();
+        let expected = format!(r#""claims":{claims_text}"#);
+        assert!(
+            json.contains(&expected),
+            "the JSON must hold {expected}, but it is {json}"
+        );
+        let decoded: PublicClaims = serde_json::from_str(&claims_text).unwrap();
+        assert_eq!(decoded.as_json(), claims_text);
+
+        // Protobuf, with a real encode and decode in between.
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            entry.clone().try_into().unwrap();
+        let bytes = prost::Message::encode_to_vec(&proto);
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            prost::Message::decode(bytes.as_slice()).unwrap();
+        let back = PublicOplogEntry::try_from(proto).unwrap();
+        assert_eq!(back, entry);
+        assert!(
+            serde_json::to_string(&back).unwrap().contains(&expected),
+            "the claims text changed in protobuf"
+        );
+    }
+}
+
+/// A reader decodes an entry from its JSON text, also through the internally tagged enums that
+/// buffer the claims before they are read.
+#[test]
+fn public_entry_with_claims_decodes_from_json_text() {
+    let user = Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", "user-1"),
+        claims: Claims::from_json(r#"{"groups":["a"],"sub":"bob"}"#.to_string()).unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
+    let entry = started_entry_with_caller(caller);
+    let json = serde_json::to_string(&entry).unwrap();
+    let decoded: PublicOplogEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded, entry);
+}
+
+/// Claims on the wire must be one JSON object.
+#[test]
+fn public_claims_refuse_anything_but_a_json_object() {
+    for text in ["[1]", "\"x\"", "1", "null", "{", ""] {
+        assert!(PublicClaims::from_json(text.to_string()).is_err(), "{text}");
+    }
+    assert!(serde_json::from_str::<PublicClaims>("[1]").is_err());
+    assert!(serde_json::from_str::<PublicClaims>("\"{}\"").is_err());
 }
 
 #[test]

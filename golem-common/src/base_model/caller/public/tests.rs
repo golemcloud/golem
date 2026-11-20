@@ -76,8 +76,8 @@ fn public_caller_keeps_both_roles_and_tokens_and_hides_claims() {
 
     let shown = PublicCaller::new(&caller, ClaimVisibility::Shown);
     assert_eq!(
-        shown.original.claims(),
-        Some(&serde_json::from_str::<serde_json::Value>(CLAIMS_JSON).unwrap())
+        shown.original.claims().map(PublicClaims::as_json),
+        Some(CLAIMS_JSON)
     );
     assert_eq!(shown.immediate, hidden.immediate);
     assert_eq!(shown.tokens, hidden.tokens);

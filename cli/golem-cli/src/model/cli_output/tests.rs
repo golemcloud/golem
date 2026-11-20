@@ -1825,6 +1825,60 @@ fn cli_output_schema_accepts_every_sample_oplog_entry() {
 }
 
 #[test]
+fn rest_json_of_oplog_entries_equals_their_serde_json() {
+    use golem_common::model::oplog::{
+        OmittedOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
+        PublicOplogPageEntry,
+    };
+    use poem_openapi::types::ToJSON;
+
+    let entries = sample_public_oplog_entries();
+    assert!(!entries.is_empty());
+    for (index, entry) in entries.into_iter().enumerate() {
+        let entry_type = entry.entry_type();
+        let bare = serde_json::to_value(&entry).unwrap();
+        assert_eq!(
+            Some(bare),
+            entry.to_json(),
+            "bare {entry_type} entry differs"
+        );
+
+        let with_index = PublicOplogEntryWithIndex {
+            oplog_index: golem_common::model::oplog::OplogIndex::from_u64(index as u64 + 1),
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry,
+        };
+        let serde_form = serde_json::to_value(&with_index).unwrap();
+        assert_eq!(
+            Some(serde_form),
+            with_index.to_json(),
+            "indexed {entry_type} entry differs"
+        );
+
+        let page_entry = PublicOplogPageEntry::Included(with_index);
+        let serde_form = serde_json::to_value(&page_entry).unwrap();
+        assert_eq!(
+            Some(serde_form),
+            page_entry.to_json(),
+            "page {entry_type} entry differs"
+        );
+    }
+
+    let omitted = PublicOplogPageEntry::Omitted(OmittedOplogEntry {
+        oplog_index: golem_common::model::oplog::OplogIndex::from_u64(9),
+        attribution: PublicOplogEntryAttribution::agent(),
+        timestamp: golem_common::model::Timestamp::from(1_700_000_000_123u64),
+        entry_type: "Start".to_string(),
+        size: 123,
+        component_revision: golem_common::model::component::ComponentRevision::new(3).unwrap(),
+    });
+    assert_eq!(
+        Some(serde_json::to_value(&omitted).unwrap()),
+        omitted.to_json()
+    );
+}
+
+#[test]
 fn cli_output_schema_rejects_invalid_tool_definition() {
     let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     let output = to_structured_output_value(crate::model::component::ComponentGetView(
@@ -2596,7 +2650,12 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             original: PublicPrincipal::User(PublicUserPrincipal {
                 pair: Pair::new("http://test-idp.com", "bob"),
                 authenticated_at: timestamp(),
-                claims: Some(serde_json::json!({"sub": "bob", "groups": ["auditors"]})),
+                claims: Some(
+                    golem_common::model::caller::PublicClaims::from_json(
+                        r#"{"sub":"bob","groups":["auditors"]}"#.to_string(),
+                    )
+                    .unwrap(),
+                ),
             }),
             immediate: PublicPrincipal::Agent(PublicAgentPrincipal {
                 pair: Pair::new("https://golem.example", "agent:relay"),

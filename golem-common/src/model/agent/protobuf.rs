@@ -16,7 +16,7 @@ use crate::base_model::agent::AgentTypeName;
 use crate::base_model::caller::{
     AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, ClaimVisibility, Claims, Pair,
     Principal, PrincipalRef, PublicAccountPrincipal, PublicAgentPrincipal, PublicCaller,
-    PublicPrincipal, PublicTokenProvenance, PublicToolPrincipal, PublicUserPrincipal,
+    PublicClaims, PublicPrincipal, PublicTokenProvenance, PublicToolPrincipal, PublicUserPrincipal,
     TokenProvenance, ToolPrincipal, UserPrincipal,
 };
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -937,21 +937,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::PublicUserPrincipal> for P
     fn try_from(
         value: golem_api_grpc::proto::golem::component::PublicUserPrincipal,
     ) -> Result<Self, Self::Error> {
-        let claims = match value.claims {
-            Some(claims) => {
-                let claims: serde_json::Value = serde_json::from_str(&claims)
-                    .map_err(|error| format!("Invalid field: claims: {error}"))?;
-                // A claim set with a number that no `f64` holds shows as its JSON text, a string.
-                if !claims.is_object() && !claims.is_string() {
-                    return Err(
-                        "Invalid field: claims: the claim set must be a JSON object or its text"
-                            .into(),
-                    );
-                }
-                Some(claims)
-            }
-            None => None,
-        };
+        let claims = value
+            .claims
+            .map(PublicClaims::from_json)
+            .transpose()
+            .map_err(|error| format!("Invalid field: claims: {error}"))?;
         Ok(Self {
             pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
             authenticated_at: authenticated_at_from_protobuf(
@@ -969,7 +959,7 @@ impl From<PublicUserPrincipal> for golem_api_grpc::proto::golem::component::Publ
         Self {
             pair: Some(value.pair.into()),
             authenticated_at: Some(value.authenticated_at.into()),
-            claims: value.claims.map(|claims| claims.to_string()),
+            claims: value.claims.map(|claims| claims.as_json().to_string()),
         }
     }
 }

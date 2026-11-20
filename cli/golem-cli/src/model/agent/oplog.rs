@@ -1580,7 +1580,7 @@ mod tests {
         Timestamp::from(0)
     }
 
-    fn bob(claims: Option<serde_json::Value>) -> PublicPrincipal {
+    fn bob(claims: Option<golem_common::model::caller::PublicClaims>) -> PublicPrincipal {
         PublicPrincipal::User(PublicUserPrincipal {
             pair: Pair::new("http://test-idp.com", "bob"),
             authenticated_at: Timestamp::from(0),
@@ -2239,7 +2239,10 @@ mod tests {
 
     #[test]
     fn caller_claims_render_only_when_the_entry_holds_them() {
-        let claims = serde_json::json!({"email": "bob@mail.example", "sub": "bob"});
+        let claims = golem_common::model::caller::PublicClaims::from_json(
+            r#"{"email":"bob@mail.example","sub":"bob"}"#.to_string(),
+        )
+        .unwrap();
 
         // An entry caller: both roles are the same user, so the claims show once.
         let entry_caller = PublicCaller {

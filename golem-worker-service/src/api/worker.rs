@@ -42,6 +42,7 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
 use golem_service_base::model::component::Component;
 use golem_service_base::model::*;
+use golem_service_base::poem::SerdeJson;
 use poem::Body;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem_openapi::param::{Path, Query};
@@ -646,7 +647,7 @@ impl WorkerApi {
         query: Query<Option<String>>,
         include: Query<Option<OplogInclude>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<GetOplogResponse>> {
+    ) -> Result<SerdeJson<GetOplogResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let agent_id = self
@@ -680,7 +681,7 @@ impl WorkerApi {
         query: Option<String>,
         claims: ClaimVisibility,
         auth: AuthCtx,
-    ) -> Result<Json<GetOplogResponse>> {
+    ) -> Result<SerdeJson<GetOplogResponse>> {
         let mut response = match (from, query) {
             (Some(_), Some(_)) => {
                 return Err(ApiEndpointError::bad_request(
@@ -720,7 +721,7 @@ impl WorkerApi {
             }
         }
 
-        Ok(Json(response))
+        Ok(SerdeJson(response))
     }
 
     /// Get one oplog entry of a worker
@@ -743,7 +744,7 @@ impl WorkerApi {
         component_revision: Query<Option<ComponentRevision>>,
         include: Query<Option<OplogInclude>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<PublicOplogEntryWithIndex>> {
+    ) -> Result<SerdeJson<PublicOplogEntryWithIndex>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let agent_id = self
@@ -777,13 +778,13 @@ impl WorkerApi {
         component_revision: Option<ComponentRevision>,
         claims: ClaimVisibility,
         auth: AuthCtx,
-    ) -> Result<Json<PublicOplogEntryWithIndex>> {
+    ) -> Result<SerdeJson<PublicOplogEntryWithIndex>> {
         let mut entry = self
             .worker_service
             .get_oplog_entry(&agent_id, oplog_index, component_revision, claims, auth)
             .await?;
         entry.entry.redact_host_managed_values_for_external();
-        Ok(Json(entry))
+        Ok(SerdeJson(entry))
     }
 
     /// List files in a worker
