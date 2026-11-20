@@ -574,6 +574,9 @@ fn write_middleware(ctx: &TestContext, effect_port: u16) {
 }
 
 fn write_native_middleware(ctx: &TestContext) {
+    let manifest_path = ctx.cwd_path_join("middleware/Cargo.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    fs::write_str(&manifest_path, format!("{manifest}\n[workspace]\n")).unwrap();
     fs::write_str(
         ctx.cwd_path_join("middleware/src/counter_agent.rs"),
         indoc! {r#"
