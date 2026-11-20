@@ -338,6 +338,8 @@ pub(super) fn default_execution_status(
 enum PausePoint {
     /// Before the archive append reaches the storage.
     Append,
+    /// Before only the first archive append reaches the storage; later appends pass through.
+    FirstAppend,
     /// After the append landed, before the transfer verifies it and trims its source.
     Verify,
 }
@@ -456,10 +458,15 @@ impl BlockingArchive {
     /// Waits for the release when `point` is where this archive pauses, announcing the first
     /// arrival.
     async fn hold(&self, point: PausePoint) {
-        if point != self.pause_at {
+        let first_append = self.pause_at == PausePoint::FirstAppend;
+        if point != self.pause_at && !(first_append && point == PausePoint::Append) {
             return;
         }
-        if let Some(sender) = self.paused.lock().await.take() {
+        let sender = self.paused.lock().await.take();
+        if first_append && sender.is_none() {
+            return;
+        }
+        if let Some(sender) = sender {
             let _ = sender.send(());
         }
         self.release.notified().await;
@@ -5850,7 +5857,7 @@ async fn external_payload_indeterminate_append_survives_cold_takeover(_tracing: 
             input: SchemaValue::List {
                 elements: (0..513).map(|i| SchemaValue::U8((i % 251) as u8)).collect(),
             },
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         };
         let payload = old.upload_payload_owned(value.clone()).await.unwrap();
@@ -5930,7 +5937,7 @@ async fn late_archive_publication_survives_cold_reopen_and_retry(_tracing: &Trac
     let archive_service = blob_archive(indexed.clone(), blobs.clone(), 1);
     let (_, owned, metadata) = archive_open_agent("cold-late-publication");
     let archive = archive_service
-        .open_fresh(&owned, AgentMode::Durable, None)
+        .open_fresh(&owned, AgentMode::Durable, Some(ShardEpoch(5)))
         .await
         .unwrap();
     let expected = transfer_test_entries();
@@ -5987,6 +5994,71 @@ async fn late_archive_publication_survives_cold_reopen_and_retry(_tracing: &Trac
 
 #[test]
 #[test_r::timeout("30s")]
+async fn late_archive_publication_after_cold_takeover_is_fenced(_tracing: &Tracing) {
+    let indexed = Arc::new(ReadCountingIndexedStorage::new());
+    let blobs: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
+    let (_, owned, metadata) = archive_open_agent("cold-late-publication-after-takeover");
+    let old = blob_archive(indexed.clone(), blobs.clone(), 1)
+        .open_fresh(&owned, AgentMode::Durable, Some(ShardEpoch(5)))
+        .await
+        .unwrap();
+    let expected = transfer_test_entries();
+    let entries = expected.clone().into_iter().collect::<Vec<_>>();
+    indexed.inject_append_failure(InjectedAppendFailure::HeldThenIndeterminate);
+    assert!(old.append(&entries).await.is_err());
+    assert_eq!(indexed.held_appends.lock().unwrap().len(), 1);
+
+    // This independent owner records its epoch before the old manifest request arrives.
+    let cold_archive_service = Arc::new(blob_archive(indexed.clone(), blobs.clone(), 1));
+    let new_owner = cold_archive_service
+        .open(&owned, AgentMode::Durable, Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+    let landed = indexed.land_held_appends().await;
+    assert!(
+        matches!(landed, Err(IndexedStorageError::Fenced { .. })),
+        "the epoch-5 manifest must not land after epoch-6 takeover: {landed:?}"
+    );
+    assert_eq!(new_owner.length().await.unwrap(), 0);
+    assert!(
+        new_owner
+            .read_source(OplogIndex::INITIAL, 2)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        old.append(&entries).await,
+        Err(OplogError::Fenced(_))
+    ));
+
+    new_owner.append(&entries).await.unwrap();
+    new_owner.append(&entries).await.unwrap();
+    assert_eq!(new_owner.length().await.unwrap(), 1);
+    let cold_service = cold_ambiguity_service(indexed, blobs, Some(cold_archive_service)).await;
+    let cold = cold_service
+        .open(
+            &mut cold_service.lock_lifecycle(&owned.agent_id).await,
+            &owned,
+            AgentMode::Durable,
+            None,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(6)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cold.current_oplog_index().await, OplogIndex::from_u64(2));
+    assert_eq!(
+        cold.read_exact(OplogIndex::INITIAL, 2).await.unwrap(),
+        expected
+    );
+    assert_eq!(cold.length().await.unwrap(), 1);
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn deferred_writer_failure_shutdown_preserves_cold_committed_prefix(_tracing: &Tracing) {
     let indexed = Arc::new(ReadCountingIndexedStorage::new());
     let blobs = Arc::new(InMemoryBlobStorage::new());
@@ -6024,7 +6096,7 @@ async fn deferred_writer_failure_shutdown_preserves_cold_committed_prefix(_traci
             1,
             immediate_archive_retry_config(1),
         )),
-        pause_at: PausePoint::Append,
+        pause_at: PausePoint::FirstAppend,
         paused: Arc::new(Mutex::new(Some(paused_tx))),
         release: release.clone(),
         append_finished: Arc::new(Notify::new()),
@@ -6097,8 +6169,8 @@ async fn deferred_writer_failure_shutdown_preserves_cold_committed_prefix(_traci
             .unwrap()
             .is_empty()
     );
-    // Deferred acknowledges handoff, not persistence. Failed and queued batches may be absent,
-    // but a later observation must never land beyond the failed batch or replace the prefix.
+    // Deferred acknowledges handoff, not persistence. The before-write failure leaves the failed
+    // and queued batches absent; a later observation must not skip that gap or replace the prefix.
     let next = OplogEntry::grow_memory(113).rounded();
     assert_eq!(cold.add(next.clone()).await.unwrap(), failed);
     cold.commit(CommitLevel::Always).await.unwrap();
