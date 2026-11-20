@@ -40,6 +40,7 @@ use golem_registry_service::repo::environment_tool_middleware_grant::{
     DbEnvironmentToolMiddlewareGrantRepo, EnvironmentToolMiddlewareGrantRepo,
 };
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
+use golem_registry_service::repo::installation::DbInstallationRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
 use golem_registry_service::repo::model::component::ComponentRevisionRecord;
@@ -246,6 +247,7 @@ async fn make_deps(pool: PostgresPool, routing_test_pool: PostgresPool) -> Deps 
         )),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(pool.clone())),
+        installation_repo: Box::new(DbInstallationRepo::logged(pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
         environment_repo: std::sync::Arc::new(DbEnvironmentRepo::logged(pool.clone())),
         blob_storage: std::sync::Arc::new(
@@ -325,6 +327,11 @@ async fn test_runtime_card_creation_rejects_system_cards(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
     crate::repo::common::test_runtime_card_creation_rejects_system_cards(deps).await;
+}
+
+#[test]
+async fn test_installation_golem_issuer_is_stored_once(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_installation_golem_issuer_is_stored_once(deps).await;
 }
 
 #[test]
@@ -1024,6 +1031,7 @@ async fn test_tool_depublication_waits_for_grant_eligibility_lock(db: &PostgresD
                 )),
                 object_store_key: String::new(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             Vec::new(),
         )

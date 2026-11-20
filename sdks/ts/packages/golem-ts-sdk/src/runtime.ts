@@ -26,7 +26,6 @@ import {
   AgentType,
   InputSchema,
   OutputSchema,
-  Principal as HostPrincipal,
   Snapshotting,
 } from 'golem:agent/common@2.0.0';
 import { Result } from 'golem:agent/host@2.0.0';
@@ -37,6 +36,7 @@ import {
   mergeGraphDefs,
   resolveShapeType,
   SchemaGraph,
+  SchemaType,
   schemaShapesMatch,
   schemaValueFromWit,
   schemaValueToWit,
@@ -45,10 +45,11 @@ import {
 import { AgentClassName } from './agentClassName';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { getRawSelfAgentId } from './host/hostapi';
+import { getSelfAgentId } from './host/hostapi';
 import { createCustomError, invalidInput, invalidMethod } from './internal/agentError';
-import { sdkPrincipalFromHost } from './principal';
-import { ParsedAgentId } from './agentId';
+import type { InvocationContext } from './caller';
+import { assertNotLiveValue } from './liveValues';
+import type { AgentId } from './agentId';
 import { isSqliteResource, restoreDatabases, takeDatabases } from './internal/databaseSnapshot';
 import { MultipartPart } from './internal/multipart';
 import type { SnapshotTransport } from './internal/resolvedAgent';
@@ -93,7 +94,7 @@ import {
   CachePolicy,
 } from 'golem:agent/common@2.0.0';
 
-const reservedStateFields = new Set(['config', 'getId', 'getPhantomId', 'getPrincipal']);
+const reservedStateFields = new Set(['config', 'getId']);
 
 /**
  * Resolve a method's `readOnly` option to the WIT `read-only-config`, or
@@ -103,7 +104,6 @@ const reservedStateFields = new Set(['config', 'getId', 'getPhantomId', 'getPrin
  */
 function resolveReadOnly(
   readOnly: boolean | ReadOnlyOption | undefined,
-  usesPrincipal: boolean,
 ): ReadOnlyConfig | undefined {
   if (!readOnly) return undefined;
   const opt: ReadOnlyOption = readOnly === true ? {} : readOnly;
@@ -116,7 +116,7 @@ function resolveReadOnly(
   } else {
     cachePolicy = { tag: 'ttl', val: cache.ttlNanos };
   }
-  return { cachePolicy, usesPrincipal };
+  return { cachePolicy };
 }
 
 /** A named parameter and its compiled codec, in declaration order. */
@@ -141,12 +141,12 @@ export interface AgentRuntime {
   name: string;
   className: AgentClassName;
   agentType: AgentType;
-  readId(input: SchemaValueTree, principal: HostPrincipal): Record<string, unknown>;
+  readId(input: SchemaValueTree): Record<string, unknown>;
   runtimeMethods: Map<
     string,
     {
       hasInput: boolean;
-      read(input: SchemaValueTree, principal: HostPrincipal): unknown;
+      read(input: SchemaValueTree): unknown;
       write(value: unknown): Promise<SchemaValueTree | undefined>;
     }
   >;
@@ -302,12 +302,10 @@ export function registerAgentType(
 
 function compileNamedInputReader(
   codecs: NamedCodec[],
-): (input: SchemaValueTree, principal: HostPrincipal) => Record<string, unknown> {
-  const expected = codecs.filter((c) => c.codec.autoInjected !== 'principal').length;
-  const direct = codecs.every(
-    (c) => c.codec.autoInjected === 'principal' || c.codec.invocationDirect,
-  );
-  return (input, principal) => {
+): (input: SchemaValueTree) => Record<string, unknown> {
+  const expected = codecs.length;
+  const direct = codecs.every((c) => c.codec.invocationDirect);
+  return (input) => {
     // Unexpected resources retain the ordinary lifting and cleanup boundary.
     if (
       direct &&
@@ -328,9 +326,7 @@ function compileNamedInputReader(
         return Object.fromEntries(
           codecs.map(({ name, codec }) => [
             name,
-            codec.autoInjected === 'principal'
-              ? sdkPrincipalFromHost(principal)
-              : codec.invocationDirect!.read(reader, fields[index++]),
+            codec.invocationDirect!.read(reader, fields[index++]),
           ]),
         );
       });
@@ -340,12 +336,7 @@ function compileNamedInputReader(
       throw new TypeError(`expected a record with ${expected} user-supplied fields`);
     let index = 0;
     return Object.fromEntries(
-      codecs.map(({ name, codec }) => [
-        name,
-        codec.autoInjected === 'principal'
-          ? sdkPrincipalFromHost(principal)
-          : codec.fromValue(value.fields[index++]),
-      ]),
+      codecs.map(({ name, codec }) => [name, codec.fromValue(value.fields[index++])]),
     );
   };
 }
@@ -500,7 +491,60 @@ function validateHttpConsistency(
       for (const h of ep.headerVars) {
         assertEndpointVar(name, mc.name, h.variableName, 'header', inputNames, mountVars);
       }
+      const explicitQuery = new Set(ep.queryVars.map((q) => q.variableName));
+      const bound = new Set([
+        ...pathVariableNames(ep.pathSuffix),
+        ...explicitQuery,
+        ...ep.headerVars.map((h) => h.variableName),
+      ]);
+      const implicitQuery =
+        ep.httpMethod.tag === 'method' && ['get', 'head', 'delete'].includes(ep.httpMethod.val.tag);
+      for (const input of mc.inputCodecs) {
+        if (!explicitQuery.has(input.name) && !(implicitQuery && !bound.has(input.name))) continue;
+        // Stream resource slots are classified by the registry's route compiler.
+        const shape = resolveShapeType(input.codec.graph, input.codec.graph.root);
+        if (!explicitQuery.has(input.name) && shape?.tag === 'stream') continue;
+        if (!isQueryShape(input.codec.graph, input.codec.graph.root)) {
+          throw new Error(
+            `Agent "${name}" method "${mc.name}" input "${input.name}" cannot bind from query: expected a scalar, scalar list, scalar map, or outer option`,
+          );
+        }
+      }
     }
+  }
+}
+
+function isQueryShape(graph: SchemaGraph, type: SchemaType, collections = true): boolean {
+  const shape = resolveShapeType(graph, type);
+  if (!shape) return false;
+  switch (shape.tag) {
+    case 'bool':
+    case 's8':
+    case 's16':
+    case 's32':
+    case 's64':
+    case 'u8':
+    case 'u16':
+    case 'u32':
+    case 'u64':
+    case 'f32':
+    case 'f64':
+    case 'char':
+    case 'string':
+    case 'enum':
+      return true;
+    case 'option':
+      return collections && isQueryShape(graph, shape.element);
+    case 'list':
+      return collections && isQueryShape(graph, shape.element, false);
+    case 'map':
+      return (
+        collections &&
+        isQueryShape(graph, shape.key, false) &&
+        isQueryShape(graph, shape.value, false)
+      );
+    default:
+      return false;
   }
 }
 
@@ -538,17 +582,13 @@ function assembleAgentType(
 
   const encoder = new GraphEncoder(mergeGraphDefs(graphs));
 
-  // A bare `s.principal()` parameter is auto-injected from the caller (the host
-  // supplies the `Principal`, so it carries NO wire field); every other parameter
-  // is user-supplied. Matches the base SDK's `auto-injected(principal)` source.
+  // Every parameter is supplied by the caller. The invocation context reaches a handler
+  // out of band and is not part of the input schema.
   const encodeInput = (codecs: NamedCodec[]): InputSchema => ({
     tag: 'parameters',
     val: codecs.map((c) => ({
       name: c.name,
-      source:
-        c.codec.autoInjected === 'principal'
-          ? { tag: 'auto-injected', val: 'principal' }
-          : { tag: 'user-supplied' },
+      source: { tag: 'user-supplied' },
       schema: encoder.encodeType(c.codec.graph.root),
       metadata: emptyMetadata(),
     })),
@@ -594,7 +634,6 @@ function assembleAgentType(
         if (
           mc.inputCodecs.length !== 1 ||
           mc.inputCodecs[0].name !== 'request' ||
-          mc.inputCodecs[0].codec.autoInjected !== undefined ||
           mc.output.tag !== 'single' ||
           !schemaShapesMatch(
             mc.inputCodecs[0].codec.graph,
@@ -651,7 +690,6 @@ function assembleAgentType(
       captures.length !== idCodecs.length ||
       idCodecs.some(
         (c) =>
-          c.codec.autoInjected !== undefined ||
           captures.filter((v) => v === c.name).length !== 1 ||
           ![
             'string',
@@ -689,10 +727,7 @@ function assembleAgentType(
       description: mc.meta.description ?? '',
       promptHint: mc.meta.promptHint,
       httpEndpoint: mc.httpEndpoints,
-      readOnly: resolveReadOnly(
-        mc.meta.readOnly,
-        mc.inputCodecs.some(({ codec }) => codec.autoInjected === 'principal'),
-      ),
+      readOnly: resolveReadOnly(mc.meta.readOnly),
       inputSchema: encodeInput(mc.inputCodecs),
       outputSchema,
     });
@@ -741,7 +776,7 @@ function assembleAgentType(
 class ResolvedAgentImpl {
   constructor(
     private readonly reg: AgentRuntime,
-    /** The handler `this`: state fields + `getId`/`getPhantomId` helpers. */
+    /** The handler `this`: state fields and the `getId` helper. */
     private readonly instance: Record<string, unknown>,
     private readonly methods: Record<string, (...args: unknown[]) => unknown>,
     /** Optional user-supplied snapshot serializer (`implement({ snapshot })`). */
@@ -757,14 +792,14 @@ class ResolvedAgentImpl {
     return this.reg.agentType;
   }
 
-  getId(): ParsedAgentId {
-    return getRawSelfAgentId();
+  getId(): AgentId {
+    return getSelfAgentId();
   }
 
   async invoke(
     methodName: string,
     methodArgs: SchemaValueTree,
-    principal: HostPrincipal,
+    ctx: InvocationContext,
   ): Promise<Result<SchemaValueTree | undefined, AgentError>> {
     const mc = this.reg.runtimeMethods.get(methodName);
     if (!mc) {
@@ -783,7 +818,7 @@ class ResolvedAgentImpl {
 
     let args: unknown;
     try {
-      args = await mc.read(methodArgs, principal);
+      args = await mc.read(methodArgs);
     } catch (e) {
       return {
         tag: 'err',
@@ -795,14 +830,13 @@ class ResolvedAgentImpl {
 
     let result: unknown;
     try {
-      result = !mc.hasInput
-        ? await handler.call(this.instance)
-        : await handler.call(this.instance, args);
+      result = await handler.call(this.instance, mc.hasInput ? args : {}, ctx);
     } catch (e) {
       return { tag: 'err', val: createCustomError(errorMessage(e)) };
     }
 
     try {
+      assertNotLiveValue(result);
       return { tag: 'ok', val: await mc.write(result) };
     } catch (e) {
       return {
@@ -817,7 +851,7 @@ class ResolvedAgentImpl {
   //  - typed  (`snapshotting: { state }`): JSON of ONLY the schema-validated state
   //           fields of `this`, plus a `db:<field>` part per in-memory SQLite
   //           database and the location of each file-backed database.
-  // The principal/version envelope is added by the guest (`src/index.ts`).
+  // The version envelope is added by the guest (`src/index.ts`).
   async saveSnapshot(): Promise<SnapshotTransport> {
     if (this.reg.multipartSnapshotSchema) {
       const saved = await this.customSnapshot!.save!.call(this.instance);
@@ -919,6 +953,17 @@ async function validateSnapshotState(
   return restored;
 }
 
+/** Adds the invocation's `caller` to a context record without reading it before it is used. */
+function withCaller<T extends object>(
+  ctx: InvocationContext,
+  fields: T,
+): T & Pick<InvocationContext, 'caller'> {
+  return Object.defineProperty({ ...fields }, 'caller', {
+    enumerable: true,
+    get: () => ctx.caller,
+  }) as T & Pick<InvocationContext, 'caller'>;
+}
+
 /** Register the agent's initiator. On `initiate`, decode id, run `init`, wire handlers. */
 export function registerAgentInitiator(
   reg: AgentRuntime,
@@ -935,16 +980,13 @@ export function registerAgentInitiator(
   }
   const resolveContext = (
     constructorInput: SchemaValueTree | { readonly tag: 'record'; readonly fields: readonly [] },
-    principal: HostPrincipal,
   ):
     | { tag: 'err'; val: AgentError }
     | {
         tag: 'ok';
         val: {
           idRecord: Record<string, unknown>;
-          agentId: ParsedAgentId;
-          phantomId: ReturnType<ParsedAgentId['parsedWire']>[2];
-          sdkPrincipal: ReturnType<typeof sdkPrincipalFromHost>;
+          agentId: AgentId;
           config: ReturnType<typeof buildConfigAccessor>;
         };
       } => {
@@ -954,7 +996,7 @@ export function registerAgentInitiator(
         'valueNodes' in constructorInput
           ? constructorInput
           : { valueNodes: [{ tag: 'record-value' as const, val: [] }], root: 0 };
-      idRecord = reg.readId(wireInput, principal);
+      idRecord = reg.readId(wireInput);
     } catch (e) {
       return {
         tag: 'err',
@@ -964,17 +1006,7 @@ export function registerAgentInitiator(
       };
     }
 
-    const agentId = getRawSelfAgentId();
-    if (!agentId.value.startsWith(reg.name)) {
-      return {
-        tag: 'err',
-        val: createCustomError(
-          `Expected the container name to start with "${reg.name}", got "${agentId.value}"`,
-        ),
-      };
-    }
-    const [, , phantomId] = agentId.parsedWire();
-    const sdkPrincipal = sdkPrincipalFromHost(principal);
+    const agentId = getSelfAgentId();
 
     // Fresh-reading config accessor; shared by `init` (via context) and the
     // handler `this`. Each getter re-fetches on access (config may change
@@ -983,7 +1015,7 @@ export function registerAgentInitiator(
 
     return {
       tag: 'ok',
-      val: { idRecord, agentId, phantomId, sdkPrincipal, config },
+      val: { idRecord, agentId, config },
     };
   };
 
@@ -991,7 +1023,7 @@ export function registerAgentInitiator(
     state: object,
     context: Extract<ReturnType<typeof resolveContext>, { tag: 'ok' }>['val'],
   ): ResolvedAgentImpl => {
-    const { sdkPrincipal, config } = context;
+    const { config } = context;
     const instance: Record<string, unknown> = { ...(state as Record<string, unknown>) };
     for (const key of Object.keys(instance)) {
       if (reservedStateFields.has(key)) {
@@ -1001,9 +1033,7 @@ export function registerAgentInitiator(
         );
       }
     }
-    instance.getId = getRawSelfAgentId;
-    instance.getPhantomId = () => getRawSelfAgentId().parsedWire()[2];
-    instance.getPrincipal = () => sdkPrincipal;
+    instance.getId = getSelfAgentId;
     instance.config = config;
     return new ResolvedAgentImpl(
       reg,
@@ -1014,22 +1044,20 @@ export function registerAgentInitiator(
   };
 
   AgentInitiatorRegistry.register(reg.className, {
-    async initiate(constructorInput: SchemaValueTree, principal: HostPrincipal) {
-      const resolved = resolveContext(constructorInput, principal);
+    async initiate(constructorInput: SchemaValueTree, ctx: InvocationContext) {
+      const resolved = resolveContext(constructorInput);
       if (resolved.tag === 'err') return resolved;
-      const { idRecord, phantomId, sdkPrincipal, config } = resolved.val;
+      const { idRecord, config } = resolved.val;
 
       // `init` may be synchronous or async (return a Promise); awaiting a plain
       // value is a no-op, so both forms work. The guest `initialize`/load-snapshot
       // paths await the initiate result.
       let state: object;
       try {
-        state = await impl.init({
+        state = await impl.init(withCaller(ctx, {
           id: idRecord as never,
-          principal: sdkPrincipal,
-          phantomId,
           config,
-        });
+        }));
         return {
           tag: 'ok',
           val: complete(state, resolved.val) as never,
@@ -1041,10 +1069,10 @@ export function registerAgentInitiator(
         };
       }
     },
-    async loadSnapshot(constructorInput, principal, bytes, mimeType, databases, parts = new Map()) {
-      const resolved = resolveContext(constructorInput, principal);
+    async loadSnapshot(constructorInput, ctx, bytes, mimeType, databases, parts = new Map()) {
+      const resolved = resolveContext(constructorInput);
       if (resolved.tag === 'err') return resolved;
-      const { idRecord, phantomId, sdkPrincipal, config } = resolved.val;
+      const { idRecord, config } = resolved.val;
       let state: object;
       try {
         if (reg.multipartSnapshotSchema) {
@@ -1068,13 +1096,11 @@ export function registerAgentInitiator(
           ).load;
           state = await load(
             { state: savedState, parts },
-            {
+            withCaller(ctx, {
               id: idRecord as never,
               agentId: resolved.val.agentId,
-              principal: sdkPrincipal,
-              phantomId,
               config,
-            },
+            }),
           );
         } else {
           if (parts.size > 0) {
@@ -1088,13 +1114,11 @@ export function registerAgentInitiator(
               AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>['snapshot']
             >;
             const load = snapshot.load;
-            state = await load(bytes, {
+            state = await load(bytes, withCaller(ctx, {
               id: idRecord as never,
               agentId: resolved.val.agentId,
-              principal: sdkPrincipal,
-              phantomId,
               config,
-            });
+            }));
           } else if (reg.snapshotStateSchema) {
             state = await validateSnapshotState(
               reg.snapshotStateSchema,

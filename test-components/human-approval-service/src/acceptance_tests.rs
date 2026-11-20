@@ -210,15 +210,15 @@ fn request(request_id: u128, promise_oplog_idx: u64) -> ApprovalRequest {
     ApprovalRequest {
         request_id: Uuid::from_u128(request_id),
         owner: ApprovalOwner {
-            component_id: Uuid::from_u128(0x4b34),
-            agent_name: format!("k4-owner-{request_id}"),
+            environment_id: Uuid::from_u128(0x4b34),
+            agent_id: Uuid::from_u128(0x4b36_0000 + request_id),
         },
         promise_oplog_idx,
         promise_fingerprint: Uuid::from_u128(0x4b35),
         policy: "production-change".to_string(),
         tool_name: "matrix-core".to_string(),
         command_path: vec!["artifact".to_string(), "inspect".to_string()],
-        principal: "oidc".to_string(),
+        principal: "user".to_string(),
     }
 }
 
@@ -315,12 +315,12 @@ async fn approval_1_request_identity_auth_state_and_late_decision_contract() {
 async fn approval_1_rejects_unrecognized_principal_kinds() {
     let harness = Harness::start().await;
     let mut request = request(2, 42);
-    request.principal = "oidc:forged-subject".to_string();
+    request.principal = "user:forged-subject".to_string();
 
     assert_eq!(
         harness.register(&request, REQUEST_TOKEN).await.status(),
         StatusCode::UNPROCESSABLE_ENTITY,
-        "principal must be one of anonymous, oidc, agent, or golem-user"
+        "principal must be one of anonymous, user, account, agent, or tool"
     );
 }
 
@@ -431,8 +431,8 @@ async fn approval_3_decisions_require_auth_and_exact_owner() {
         .bearer_auth(DECISION_TOKEN)
         .json(&json!({
             "owner": {
-                "componentId": Uuid::from_u128(0xBAD),
-                "agentName": request.owner.agent_name,
+                "environmentId": Uuid::from_u128(0xBAD),
+                "agentId": request.owner.agent_id,
             },
             "state": "denied",
             "decidedBy": "operator",

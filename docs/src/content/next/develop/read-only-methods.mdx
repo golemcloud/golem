@@ -63,8 +63,7 @@ instance does not. `ttl(d)` entries additionally expire by time. `no-cache` neve
 
 ## Per-principal caching
 
-By default a read-only result is **shared across all callers** — the cache key is `(method, input)` and HTTP
-responses are marked `Cache-Control: public` (CDN-friendly).
+By default a read-only result is **shared across all callers** in the executor: the cache key is `(method, input)`.
 
 When the result depends on *who* is calling (for example, an authorization-scoped view), add a `Principal`
 parameter to the method and enable per-principal caching:
@@ -92,8 +91,8 @@ parameter to the method and enable per-principal caching:
 </Tabs>
 
 With per-principal caching enabled, the calling principal becomes part of the cache key, so each principal gets
-its own cached entry, and HTTP responses switch to `Cache-Control: private`. The response's `Vary` header names
-the configured authentication header and any request headers bound as method inputs.
+its own cached entry. This does not determine HTTP cache visibility; see [HTTP cache headers](#http-cache-headers)
+for the separate response privacy rules.
 
 The `Principal` parameter is marked as auto-injected in the method's input schema. The runtime supplies it;
 callers do not pass it.
@@ -407,27 +406,33 @@ also reject it earlier.
 
 When a read-only method is mapped to an HTTP `GET` or `HEAD` endpoint (see
 [Exposing agents over HTTP](/next/develop/http)), Golem emits cache-friendly response headers derived from the
-cache policy and whether the method is principal-dependent:
+cache policy. For anonymous requests, successful responses use these defaults:
 
 | Cache policy | Response headers |
 |---|---|
 | `no-cache` | `Cache-Control: no-store` |
-| `until-write` | `Cache-Control: <visibility>, no-cache` + an opaque `ETag` |
-| `ttl(d)` | `Cache-Control: <visibility>, max-age=<d>` + an opaque `ETag` |
+| `until-write` | `Cache-Control: public, no-cache` + an opaque `ETag` |
+| `ttl(d)` | `Cache-Control: public, max-age=<d>` + an opaque `ETag` |
 
-Where `<visibility>` is `private` when the method is principal-dependent, and `public` otherwise. `Vary` always
-names request headers bound as inputs; for principal-dependent methods it also names the configured authentication
-header.
+The TTL is floored to whole seconds. Authenticated requests receive `Cache-Control: private, no-cache`,
+even for TTL methods. An existing `no-store` policy remains stronger: authenticated responses then receive
+`Cache-Control: private, no-store`. Responses that issue credentials also receive `private, no-store`.
+Response headers cannot weaken these privacy requirements.
+
+HTTP privacy depends on request authentication, not on whether the method uses the principal. Principal usage
+still determines the executor's cache key. Anonymous responses vary on `Authorization`, `Cookie` and
+`Golem-Token`. Golem also merges header-bound method parameters and any configured session header into `Vary`.
 
 A request that repeats the returned ETag in `If-None-Match` is revalidated cheaply. If it still matches the
 agent's current agent-instance fingerprint and oplog position, Golem returns `304 Not Modified` without executing
 the agent method or loading its WebAssembly instance.
 
-A response a CDN or browser sees for a `public`, `until-write` method therefore looks like:
+A response a CDN or browser sees for an anonymous request to an `until-write` method therefore looks like:
 
 ```http
 HTTP/1.1 200 OK
 Cache-Control: public, no-cache
+Vary: Authorization, Cookie, Golem-Token
 ETag: "<opaque-etag>"
 Content-Type: application/json
 
@@ -442,10 +447,12 @@ If-None-Match: "<opaque-etag>"
 
 HTTP/1.1 304 Not Modified
 Cache-Control: public, no-cache
+Vary: Authorization, Cookie, Golem-Token
 ETag: "<opaque-etag>"
 ```
 
 <Callout type="warning">
-  Read-only methods bound to non-`GET`/`HEAD` verbs are allowed, but they do not get cache headers — caching a
-  `POST`/`PUT`/`DELETE` response is not meaningful. Deployment validation emits a warning for each such binding.
+  Read-only methods bound to non-`GET`/`HEAD` verbs are allowed, but they do not get read-only freshness or ETag
+  headers. The authentication and credential privacy requirements still apply. Deployment validation emits a
+  warning for each such binding.
 </Callout>

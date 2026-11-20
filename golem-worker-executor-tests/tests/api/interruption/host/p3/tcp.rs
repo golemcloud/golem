@@ -75,8 +75,8 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
     });
 
     let agent_id = match agent_type {
-        "Networking" => agent_id!("Networking", format!("monthly-memory-silent-tcp-{durable}")),
-        "EphemeralNetworking" => agent_id!(
+        "Networking" => agent_key!("Networking", format!("monthly-memory-silent-tcp-{durable}")),
+        "EphemeralNetworking" => agent_key!(
             "EphemeralNetworking",
             format!("monthly-memory-silent-tcp-{durable}")
         ),
@@ -87,21 +87,18 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
-        wait_for_invocation_pair(&executor, &worker_id, OplogIndex::INITIAL).await?;
+        wait_for_invocation_pair(&executor, &worker_id.agent_id, OplogIndex::INITIAL).await?;
         let before_invocation = executor.oplog_max_index(&worker_id).await?;
         (worker_id, Some(before_invocation))
     } else {
-        let finalized_agent_id = agent_id
-            .clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+        (
+            crate::agent::ephemeral_agent_id(
                 &executor,
+                component.environment_id,
+                &agent_id,
                 &invocation_key,
                 "tcp_collect_p3",
-            ))
-            .map_err(|error| anyhow!("invalid ephemeral invocation identity: {error}"))?;
-        (
-            AgentId::from_agent_id(component.id, &finalized_agent_id)
-                .map_err(|error| anyhow!("invalid ephemeral agent id: {error}"))?,
+            ),
             None,
         )
     };
@@ -127,7 +124,7 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
     let invocation_boundary = before_invocation.unwrap_or(OplogIndex::INITIAL);
     let (receive_start, chunk_start) = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            if executor.commit_oplog(&worker_id).await.is_err() {
+            if executor.commit_oplog(&worker_id.agent_id).await.is_err() {
                 tokio::task::yield_now().await;
                 continue;
             }
@@ -228,7 +225,7 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
         let before_invocation =
             before_invocation.expect("durable invocation has an oplog boundary");
         let before_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        let committed_prefix = executor.stored_oplog(&worker_id).await;
+        let committed_prefix = executor.stored_oplog(&worker_id.agent_id).await;
         assert_eq!(
             count_agent_invocation_pair_since(&before_resume, before_invocation),
             (1, 0),
@@ -301,7 +298,7 @@ async fn memory_quota_exhaustion_interrupts_silent_tcp(
             .await?;
 
         let after_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        let raw_after_resume = executor.stored_oplog(&worker_id).await;
+        let raw_after_resume = executor.stored_oplog(&worker_id.agent_id).await;
         assert!(raw_after_resume.len() >= committed_prefix.len());
         assert_eq!(
             &raw_after_resume[..committed_prefix.len()],
@@ -480,7 +477,7 @@ async fn idle_tcp_reader_collection_does_not_create_a_receive_chunk(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let agent = agent_id!("TcpGc", format!("idle-reader-{early}"), early);
+        let agent = agent_key!("TcpGc", format!("idle-reader-{early}"), early);
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
         let gate: golem_common::model::PromiseId = executor
             .invoke_and_await_agent(&component, &agent, "prepare", data_value!())
@@ -520,7 +517,7 @@ async fn idle_tcp_reader_collection_does_not_create_a_receive_chunk(
             .await?;
         let before = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                executor.commit_oplog(&worker).await?;
+                executor.commit_oplog(&worker.agent_id).await?;
                 let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
                 if history.iter().any(|entry| {
                     matches!(&entry.entry,
@@ -550,7 +547,7 @@ async fn idle_tcp_reader_collection_does_not_create_a_receive_chunk(
         assert_eq!(chunks(&before).len(), 1, "endpoint disposal is not a read");
         executor
             .interrupt_loaded_worker(
-                &worker,
+                &worker.agent_id,
                 golem_service_base::error::worker_executor::InterruptKind::Suspend(
                     golem_common::model::Timestamp::now_utc(),
                 ),
@@ -562,7 +559,9 @@ async fn idle_tcp_reader_collection_does_not_create_a_receive_chunk(
         tokio::time::timeout(Duration::from_secs(30), peer).await???;
         drop(executor);
         let executor = start_with_overrides(deps, &context, overrides).await?;
-        executor.complete_promise(&gate, vec![]).await?;
+        executor
+            .complete_promise(&executor.context.default_environment_id, &gate, vec![])
+            .await?;
         let observed: (bool, String) = executor
             .invoke_and_await_agent(&component, &agent, "inspect", data_value!())
             .await?
@@ -595,7 +594,7 @@ async fn partial_tcp_receive_preserves_completed_read_and_reports_session_loss(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("Networking", "partial-tcp-receive-session-loss");
+    let agent = agent_key!("Networking", "partial-tcp-receive-session-loss");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
@@ -618,7 +617,7 @@ async fn partial_tcp_receive_preserves_completed_read_and_reports_session_loss(
         .await?;
     let chunks = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            executor.commit_oplog(&worker).await?;
+            executor.commit_oplog(&worker.agent_id).await?;
             let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
             let chunks = history
                 .iter()
@@ -647,10 +646,10 @@ async fn partial_tcp_receive_preserves_completed_read_and_reports_session_loss(
         }
     })
     .await??;
-    let prefix = executor.stored_oplog(&worker).await;
+    let prefix = executor.stored_oplog(&worker.agent_id).await;
     executor
         .interrupt_loaded_worker(
-            &worker,
+            &worker.agent_id,
             golem_service_base::error::worker_executor::InterruptKind::Suspend(
                 golem_common::model::Timestamp::now_utc(),
             ),
@@ -675,7 +674,7 @@ async fn partial_tcp_receive_preserves_completed_read_and_reports_session_loss(
         .into_typed()?;
     assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
     let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-    let recorded = executor.stored_oplog(&worker).await;
+    let recorded = executor.stored_oplog(&worker.agent_id).await;
     assert_eq!(&recorded[..prefix.len()], prefix.as_slice());
     let replayed_chunks = history
         .iter()

@@ -12,16 +12,15 @@ mod load;
 mod read;
 mod session;
 
-use super::call_agent::{CallAgentHandler, resolve_phantom_id};
+use super::call_agent::{CallAgentHandler, route_agent_binding, validate_query_parameters};
 use super::error::RequestHandlerError;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RouteExecutionResult};
 use crate::config::DurableStreamsConfig;
-use crate::service::worker::{WorkerService, WorkerServiceError};
+use crate::service::worker::{AgentBinding, RoutedTarget, WorkerService, WorkerServiceError};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ReadStreamSlotRequest, ReadStreamSlotSuccess,
 };
-use golem_common::model::agent::{AgentMode, ephemeral_invocation_phantom_id};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_session_public::{
@@ -139,6 +138,13 @@ impl DurableStreamsHandler {
         if !method_allowed && !inspect_tombstone {
             return Ok(method_not_allowed(&allow));
         }
+        let controls: &[&str] =
+            if suffix.slot.is_some() && request.underlying.method() == Method::GET {
+                &["offset", "cursor", "live"]
+            } else {
+                &[]
+            };
+        validate_query_parameters(request, behaviour, controls)?;
         let expiry_policy = if matches!(request.underlying.method(), &Method::PUT | &Method::POST) {
             match expiry::parse_expiry_policy(request) {
                 Ok(policy) => policy,
@@ -180,55 +186,60 @@ impl DurableStreamsHandler {
         {
             return Ok(response(StatusCode::NOT_FOUND));
         }
-        let root_phantom = resolve_phantom_id(
-            request,
-            route,
-            &behaviour.phantom_selection,
-            |phantom| {
-                phantom.then(|| {
-                    let session = suffix.session.as_deref().unwrap_or_default();
-                    if behaviour.agent_mode == AgentMode::Ephemeral {
-                        let prepared = golem_common::model::invocation_id::InvocationRequestKey::RouteSession {
-                            scope: route_scope(route),
-                            key: IdempotencyKey::new(session.to_owned()),
-                        };
-                        ephemeral_invocation_phantom_id(&prepared.owner_key(&behaviour.method_name))
-                    } else {
-                        stable_phantom(session)
+        let scope = route_scope(route);
+        let session_name = suffix.session.clone().unwrap_or_default();
+        let binding =
+            route_agent_binding(request, route, &behaviour.phantom_selection, |phantom| {
+                if phantom {
+                    AgentBinding::StreamSession {
+                        route_scope: scope.clone(),
+                        session: session_name.clone(),
                     }
-                })
-            },
-        )?;
-        let root_agent_id = CallAgentHandler::build_agent_id(
+                } else {
+                    AgentBinding::Constructor
+                }
+            })?;
+        let constructor = CallAgentHandler::route_constructor(
             route,
-            behaviour.component_id,
             &behaviour.agent_type,
             &behaviour.constructor_input,
             &behaviour.constructor_parameters,
-            root_phantom,
         )?;
-        let agent_id = match suffix.fork.as_deref() {
-            Some(fork) => CallAgentHandler::build_agent_id(
-                route,
-                behaviour.component_id,
-                &behaviour.agent_type,
-                &behaviour.constructor_input,
-                &behaviour.constructor_parameters,
-                Some(fork::fork_phantom_id(
-                    &root_agent_id,
-                    &route_scope(route),
-                    fork,
-                )),
-            )?,
-            None => root_agent_id.clone(),
+        let request_key = golem_common::model::invocation_id::InvocationRequestKey::RouteSession {
+            scope: scope.clone(),
+            key: IdempotencyKey::new(session_name),
         };
+        let (root, _, _) = self
+            .worker_service
+            .bound_invocation_target(
+                behaviour.component_id,
+                &constructor,
+                binding,
+                &request_key,
+                &behaviour.method_name,
+                &AuthCtx::System,
+            )
+            .await?;
+        let target = match suffix.fork.as_deref() {
+            Some(fork) => RoutedTarget::existing(
+                AgentId::durable_stream_fork(
+                    route.route.environment_id,
+                    root.agent_id,
+                    &scope,
+                    fork,
+                ),
+                root.agent_type.clone(),
+            ),
+            None => root.clone(),
+        };
+        let agent_id = target.agent_id;
         match (request.underlying.method(), suffix.session, suffix.slot) {
             (&Method::PUT, Some(session), Some(slot)) if suffix.fork.is_some() => {
                 self.fork(
                     request,
                     route,
                     behaviour,
-                    &root_agent_id,
+                    &root.agent_id,
                     &agent_id,
                     suffix.fork.as_deref().unwrap(),
                     &session,
@@ -244,7 +255,7 @@ impl DurableStreamsHandler {
                     request,
                     route,
                     behaviour,
-                    &agent_id,
+                    &target,
                     &session,
                     &slot,
                     suffix.fork.is_none(),
@@ -258,15 +269,8 @@ impl DurableStreamsHandler {
                 self.delete(route, &agent_id, session, slot).await
             }
             (&Method::PUT, Some(session), None) if generated_session => {
-                self.create_generated(
-                    request,
-                    route,
-                    behaviour,
-                    &agent_id,
-                    &session,
-                    expiry_policy,
-                )
-                .await
+                self.create_generated(request, route, behaviour, &target, &session, expiry_policy)
+                    .await
             }
             (&Method::PUT, Some(session), slot) => {
                 if suffix.fork.is_some() {
@@ -276,7 +280,7 @@ impl DurableStreamsHandler {
                     request,
                     route,
                     behaviour,
-                    &agent_id,
+                    &target,
                     &session,
                     slot.as_deref(),
                     expiry_policy,
@@ -339,7 +343,7 @@ impl DurableStreamsHandler {
             .read_stream_slot(
                 agent_id,
                 ReadStreamSlotRequest {
-                    agent_id: Some(agent_id.clone().into()),
+                    agent_id: Some((*agent_id).into()),
                     environment_id: Some(route.route.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
                     route_scope: route_scope(route),
@@ -397,6 +401,9 @@ pub(super) fn error_response(
         | RequestHandlerError::BodyIsNotValidJson { .. }
         | RequestHandlerError::JsonBodyParsingFailed { .. }
         | RequestHandlerError::ValueParsingFailed { .. }
+        | RequestHandlerError::ParameterParsingFailed { .. }
+        | RequestHandlerError::InvalidParameter { .. }
+        | RequestHandlerError::UnknownQueryParameter { .. }
         | RequestHandlerError::MissingValue { .. }
         | RequestHandlerError::TooManyValues { .. }
         | RequestHandlerError::HeaderIsNotAscii { .. } => StatusCode::BAD_REQUEST,
@@ -570,26 +577,18 @@ fn resource_url(
 ) -> Result<String, RequestHandlerError> {
     let mut url = canonical_selector_path(path, route, behaviour)?;
     if let PhantomSelection::Query { name, .. } = &behaviour.phantom_selection
-        && let Some(uuid) =
-            resolve_phantom_id(request, route, &behaviour.phantom_selection, |_| None)?
+        && let AgentBinding::Id(agent_id) =
+            route_agent_binding(request, route, &behaviour.phantom_selection, |_| {
+                AgentBinding::Constructor
+            })?
     {
         let query = url::form_urlencoded::Serializer::new(String::new())
-            .append_pair(name, &uuid.to_string())
+            .append_pair(name, &agent_id.to_string())
             .finish();
         url.push('?');
         url.push_str(&query);
     }
     Ok(url)
-}
-
-fn stable_phantom(session: &str) -> Uuid {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(session.as_bytes());
-    let mut b = [0; 16];
-    b.copy_from_slice(&hash[..16]);
-    b[6] = (b[6] & 15) | 4;
-    b[8] = (b[8] & 63) | 128;
-    Uuid::from_bytes(b)
 }
 
 fn response(status: StatusCode) -> RouteExecutionResult {
@@ -624,11 +623,86 @@ fn rejection_response(rejection: LoadRejection) -> RouteExecutionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::agent::AgentMode;
     use golem_service_base::custom_api::{
         DurableStreamRepresentation, DurableStreamSlot, DurableStreamSlotDirection,
     };
     use test_r::test;
+
+    #[test]
+    async fn query_keys_are_checked_before_session_and_resource_side_effects() {
+        use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+        use golem_service_base::custom_api::{
+            AgentRouteMode, MethodParameter, PathSegmentType, QueryOrHeaderType, RouteBehaviour,
+        };
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let handler = DurableStreamsHandler::new(
+            harness.worker_service.clone(),
+            Arc::new(CallAgentHandler::new(harness.worker_service.clone())),
+            &DurableStreamsConfig::default(),
+        );
+        for (method, path) in [
+            ("PUT", "/run"),
+            ("PUT", "/run/invocations/session"),
+            ("GET", "/run/invocations/session"),
+            ("DELETE", "/run/invocations/session"),
+            ("GET", "/run/invocations/session/streams/events"),
+            ("HEAD", "/run/invocations/session/streams/events"),
+            ("POST", "/run/invocations/session/streams/events"),
+            ("PUT", "/run/invocations/session/streams/events"),
+            ("DELETE", "/run/invocations/session/streams/events"),
+        ] {
+            let pattern = path
+                .replace("/session", "/{session}")
+                .replace("/events", "/{slot}");
+            let mut route = test_route(1, &pattern, Some(method), "typed");
+            let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+                unreachable!()
+            };
+            call.route_mode = AgentRouteMode::DurableStreams;
+            call.durable_streams = Some(DurableStreamRoutePolicy {
+                family_id: 1,
+                slots: vec![DurableStreamSlot {
+                    canonical_name: "events".into(),
+                    public_name: "events".into(),
+                    direction: DurableStreamSlotDirection::Input,
+                    content_type: "application/json".into(),
+                    representation: DurableStreamRepresentation::Json,
+                }],
+                allow_external_writes: true,
+                allow_stream_delete: true,
+                allow_invocation_delete: true,
+                load: None,
+            });
+            call.method_parameters = vec![MethodParameter::Query {
+                query_parameter_name: "required".into(),
+                parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
+            }];
+            let resolver = test_resolver(vec![route]);
+            let request = poem::Request::builder()
+                .method(method.parse().unwrap())
+                .uri(format!("{path}?unknown=x").parse().unwrap())
+                .header("host", "example.com")
+                .body(poem::Body::from_bytes_stream(futures::stream::poll_fn(
+                    |_| -> std::task::Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
+                        panic!("must not read body")
+                    },
+                )));
+            let route = resolver.resolve_matching_route(&request).await.unwrap();
+            let super::super::RichRouteBehaviour::CallAgent(call) = &route.route.behavior else {
+                unreachable!()
+            };
+            let error = handler
+                .handle(&mut RichRequest::new(request), &route, call)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, RequestHandlerError::UnknownQueryParameter { ref name } if name == "unknown"),
+                "{method} {path}: {error}"
+            );
+        }
+        assert!(harness.metadata_reads.lock().unwrap().is_empty());
+    }
 
     #[test]
     async fn session_and_fork_addressing_uses_family_scope_not_endpoint_identity() {
@@ -680,10 +754,9 @@ mod tests {
             })
             .collect();
         let resolver = test_resolver(routes);
-        let root = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "StreamAgent()".into(),
-        };
+        let type_id = golem_common::model::type_id::TypeId::try_from(9u32).unwrap();
+        let root = AgentId::random(type_id);
+        let environment_id = EnvironmentId(Uuid::nil());
         let owner = |scope| {
             InvocationRequestKey::RouteSession {
                 scope,
@@ -708,11 +781,19 @@ mod tests {
             assert_eq!(scope, expected_scope);
             assert_eq!(owner(scope.clone()), owner(expected_scope.clone()));
             assert_eq!(
-                ephemeral_invocation_phantom_id(&owner(scope.clone())),
-                ephemeral_invocation_phantom_id(&owner(expected_scope.clone()))
+                AgentId::durable_stream_session(environment_id, type_id, &scope, "session"),
+                AgentId::durable_stream_session(
+                    environment_id,
+                    type_id,
+                    &expected_scope,
+                    "session"
+                )
             );
-            let fork = fork::fork_phantom_id(&root, &scope, "fork");
-            assert_eq!(fork, fork::fork_phantom_id(&root, &expected_scope, "fork"));
+            let fork = AgentId::durable_stream_fork(environment_id, root, &scope, "fork");
+            assert_eq!(
+                fork,
+                AgentId::durable_stream_fork(environment_id, root, &expected_scope, "fork")
+            );
 
             for dimension in ["environment", "revision", "family"] {
                 let route = &resolved.route;
@@ -748,8 +829,23 @@ mod tests {
                 assert_ne!(isolated_scope, expected_scope, "{dimension}");
                 assert_ne!(owner(isolated_scope.clone()), owner(expected_scope.clone()));
                 assert_ne!(
-                    fork::fork_phantom_id(&root, &isolated_scope, "fork"),
+                    AgentId::durable_stream_fork(environment_id, root, &isolated_scope, "fork"),
                     fork,
+                    "{dimension}"
+                );
+                assert_ne!(
+                    AgentId::durable_stream_session(
+                        environment_id,
+                        type_id,
+                        &isolated_scope,
+                        "session"
+                    ),
+                    AgentId::durable_stream_session(
+                        environment_id,
+                        type_id,
+                        &expected_scope,
+                        "session"
+                    ),
                     "{dimension}"
                 );
             }
@@ -1008,10 +1104,7 @@ mod tests {
     #[test]
     fn redeployed_route_does_not_inherit_an_old_reader_budget() {
         let environment_id = EnvironmentId::new();
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "LoadTest()".into(),
-        };
+        let agent_id = AgentId::from_parts(9, 1);
         let old_key = route_stream_load_key(
             environment_id,
             DeploymentRevision::INITIAL,

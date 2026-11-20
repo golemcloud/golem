@@ -494,17 +494,31 @@ impl RpcLocalConfigAgent for RpcLocalConfigAgentImpl {
 
     async fn echo_local_config(&self) -> String {
         let config = self.config.get().expect("config access should be allowed");
-        let client = LocalConfigAgentClient::get_with_config(
+        // A keyed create sets the overrides on a new agent; an existing agent keeps its
+        // configuration and is reused.
+        let created = LocalConfigAgentClient::create(
             self.name.clone(),
-            LocalConfigAgentConfigRpc {
-                foo: Some(config.foo.clone()),
-                nested: NestedLocalAgentConfigRpc {
-                    a: config.nested_a,
+            golem_rust::CreateOptions {
+                keyed: true,
+                config: LocalConfigAgentConfigRpc {
+                    foo: Some(config.foo.clone()),
+                    nested: NestedLocalAgentConfigRpc {
+                        a: config.nested_a,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
-                ..Default::default()
+                env: Vec::new(),
             },
-        );
+        )
+        .await;
+        let client = match created {
+            Ok(client) => client,
+            Err(golem_rust::GolemReflectError::Conflict(_)) => {
+                LocalConfigAgentClient::upsert(self.name.clone())
+            }
+            Err(error) => panic!("failed to create the LocalConfigAgent: {error}"),
+        };
         client.echo_local_config().await
     }
 }

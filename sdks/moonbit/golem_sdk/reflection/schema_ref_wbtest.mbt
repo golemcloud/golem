@@ -718,9 +718,9 @@ fn test_invocation(
 ) -> Invocation[@model.SchemaValue?] {
   {
     metadata: {
-      agent_id: { value: "test-agent", },
+      agent_id: @schema.AgentId::from_uuid(@schema.Uuid::from_bits(0, 2)),
       invocation_id: @rpc.InvocationId::new(
-        "test-agent",
+        @schema.AgentId::from_uuid(@schema.Uuid::from_bits(0, 2)),
         @schema.Uuid::from_bits(0, 1),
       ),
     },

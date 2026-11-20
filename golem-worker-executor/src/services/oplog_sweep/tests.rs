@@ -29,10 +29,8 @@ use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace};
 use async_trait::async_trait;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::OwnerKind;
-use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
-use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::environment::EnvironmentName;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::{
     AgentFingerprint, AgentMetadata, AgentStatusRecord, RetryConfig, ShardEpoch,
@@ -40,7 +38,6 @@ use golem_common::model::{
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::component::Component;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use nonempty_collections::nev;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -69,19 +66,21 @@ fn revision_of(incarnation: Uuid, number: u64) -> ShardLeaseRevision {
     }
 }
 
-fn agent(name: &str, component_id: ComponentId) -> AgentId {
-    AgentId {
-        component_id,
-        agent_id: name.to_string(),
-    }
+fn agent(h: u128) -> AgentId {
+    AgentId::from_parts(7, h)
+}
+
+fn component_id() -> ComponentId {
+    ComponentId(Uuid::from_u128(0xc0))
 }
 
 fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry {
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
-        agent_id: agent_id.clone(),
-        component_id: agent_id.component_id,
+        agent_id: *agent_id,
+        component_id: component_id(),
         agent_type_name: None,
         canonical_key: None,
+        constructor_parameters: None,
         owner_kind: OwnerKind::ComponentAgent,
         agent_mode: AgentMode::Ephemeral,
         component_revision: ComponentRevision::new(1).unwrap(),
@@ -93,14 +92,14 @@ fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry
         initial_total_linear_memory_size: 100,
         initial_active_plugins: HashSet::new(),
         local_agent_config: Vec::new(),
-        original_phantom_id: None,
         instance_id: Uuid::new_v4(),
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
+        never_live: false,
     }))
 }
 
@@ -108,26 +107,23 @@ fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry
 
 #[test]
 fn parse_agent_id_round_trips_the_layer_key() {
-    let agent_id = agent("counter-1", ComponentId::new());
-    assert_eq!(parse_agent_id(&agent_id.to_redis_key()), Some(agent_id));
-}
-
-#[test]
-fn parse_agent_id_keeps_separators_inside_the_agent_name() {
-    let agent_id = agent("ns:counter:1", ComponentId::new());
-    assert_eq!(parse_agent_id(&agent_id.to_redis_key()), Some(agent_id));
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent(1));
+    assert_eq!(
+        parse_agent_id(&owned_agent_id.storage_key()),
+        Some(owned_agent_id)
+    );
 }
 
 #[test]
 fn parse_agent_id_rejects_malformed_keys() {
-    assert_eq!(parse_agent_id("not-a-uuid:counter"), None);
+    assert_eq!(parse_agent_id("not-a-uuid/counter"), None);
     assert_eq!(parse_agent_id("no-separator"), None);
-    assert_eq!(parse_agent_id(&format!("{}:", Uuid::new_v4())), None);
+    assert_eq!(parse_agent_id(&format!("{}/", Uuid::new_v4())), None);
 }
 
 #[test]
 fn owns_follows_the_shard_assignment() {
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     let shard_id = ShardId::from_routing_hash(ShardId::hash_agent_id(&agent_id), 4);
 
     let mine = ShardAssignment::unexpiring(4, [shard_id]);
@@ -292,7 +288,6 @@ fn only_ephemeral_layers_are_routed() {
         &layers,
         OplogSweepConfig::default(),
         all_shards(),
-        EnvironmentId::new(),
         HashSet::new(),
     );
 
@@ -328,7 +323,6 @@ fn tally_counts_every_outcome_once() {
         Outcome::Empty,
         Outcome::Waiting,
         Outcome::Resident,
-        Outcome::Unaddressable,
         Outcome::Declined,
         Outcome::ArchiveFailed,
         Outcome::Archived,
@@ -338,7 +332,7 @@ fn tally_counts_every_outcome_once() {
     assert_eq!(report.count(Outcome::Archived), 2);
     assert_eq!(
         report.outcomes.iter().sum::<u64>(),
-        10,
+        9,
         "every outcome lands in exactly one counter"
     );
     assert_eq!(
@@ -364,46 +358,47 @@ fn merge_adds_every_field() {
     // Distinct non-zero values, so a wrongly added field cannot match by coincidence.
     let left = RouteReport {
         scanned: 2,
-        outcomes: [3, 4, 5, 6, 7, 8, 9, 10, 11],
+        outcomes: [3, 4, 5, 6, 7, 8, 9, 10],
         store_visits: 12,
         truncated: false,
     };
     let right = RouteReport {
         scanned: 13,
-        outcomes: [14, 15, 16, 17, 18, 19, 20, 21, 22],
+        outcomes: [14, 15, 16, 17, 18, 19, 20, 21],
         store_visits: 23,
         truncated: true,
     };
 
     let merged = merge(left, right);
     assert_eq!(merged.scanned, 15);
-    assert_eq!(merged.outcomes, [17, 19, 21, 23, 25, 27, 29, 31, 33]);
+    assert_eq!(merged.outcomes, [17, 19, 21, 23, 25, 27, 29, 31]);
     assert_eq!(merged.store_visits, 35);
     assert!(merged.truncated, "truncation is sticky");
 }
 
 #[test]
 fn triage_settles_what_it_can_without_touching_storage() {
-    let component_id = ComponentId::new();
-    let mine = agent("mine", component_id);
+    let environment_id = EnvironmentId::new();
+    let mine = agent(1);
     let my_shard = ShardId::from_routing_hash(ShardId::hash_agent_id(&mine), 4);
-    // Found rather than guessed: with four shards a guessed name often lands on the same shard.
-    let theirs = (0..)
-        .map(|i| agent(&format!("theirs-{i}"), component_id))
+    // Found rather than guessed: with four shards a guessed ID often lands on the same shard.
+    // The routing hash is the top 63 bits of the 90-bit H, so the candidates vary those bits.
+    let theirs = (1u128..)
+        .map(|i| agent(i << 27))
         .find(|candidate| {
             ShardId::from_routing_hash(ShardId::hash_agent_id(candidate), 4) != my_shard
         })
-        .expect("no agent name maps to another shard");
+        .expect("no agent ID maps to another shard");
     let assignment = ShardAssignment::unexpiring(4, [my_shard]);
 
     let keys = vec![
-        mine.to_redis_key(),
-        theirs.to_redis_key(),
+        OwnedAgentId::new(environment_id, &mine).storage_key(),
+        OwnedAgentId::new(environment_id, &theirs).storage_key(),
         "garbage".to_string(),
     ];
     let (candidates, settled) = triage(&keys, &assignment);
 
-    assert_eq!(candidates, vec![mine]);
+    assert_eq!(candidates, vec![OwnedAgentId::new(environment_id, &mine)]);
     assert_eq!(
         settled.iter().filter(|o| **o == Outcome::NotOwned).count(),
         1
@@ -852,10 +847,11 @@ fn deep_layers(compressed_levels: usize) -> Layers {
 
 fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata {
     AgentMetadata {
-        agent_id: agent_id.clone(),
-        component_id: agent_id.component_id,
+        agent_id: *agent_id,
+        component_id: component_id(),
         agent_type_name: None,
         canonical_key: None,
+        constructor_parameters: None,
         owner_kind: OwnerKind::ComponentAgent,
         env: vec![],
         environment_id,
@@ -865,13 +861,12 @@ fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata 
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: AgentStatusRecord::default(),
-        original_phantom_id: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Ephemeral,
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -890,96 +885,6 @@ fn execution_lock() -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
     })))
 }
 
-/// Resolves every component to one environment.
-struct FixedEnvironment {
-    environment_id: EnvironmentId,
-    /// Answers nothing at all, deployed lookup or pinned.
-    fails: bool,
-    /// Answers only a pinned revision, as for a deleted component.
-    deleted: bool,
-    /// Registry lookups made.
-    lookups: std::sync::atomic::AtomicU64,
-    /// Starts running the agent on the first lookup, then disarms.
-    resident_on_lookup: std::sync::Mutex<Option<(ResidentSet, AgentId)>>,
-    /// Appends to a layer on the first lookup, then disarms.
-    grow_on_lookup: std::sync::Mutex<Option<LayerGrowth>>,
-}
-
-#[async_trait]
-impl ComponentService for FixedEnvironment {
-    async fn get(
-        &self,
-        _engine: &wasmtime::Engine,
-        _component_id: ComponentId,
-        _component_revision: ComponentRevision,
-    ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
-        unreachable!("the sweep never loads a component")
-    }
-
-    async fn get_metadata(
-        &self,
-        component_id: ComponentId,
-        forced_revision: Option<ComponentRevision>,
-    ) -> Result<Component, WorkerExecutorError> {
-        self.lookups
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if let Some((resident, agent_id)) = self.resident_on_lookup.lock().unwrap().take() {
-            resident.lock().unwrap().insert(agent_id);
-        }
-        let grow = self.grow_on_lookup.lock().unwrap().take();
-        if let Some((archive, owned_agent_id, at)) = grow {
-            archive
-                .open(&owned_agent_id, AgentMode::Ephemeral, None)
-                .await
-                .unwrap()
-                .append(&[(at, OplogEntry::suspend())])
-                .await
-                .unwrap();
-        }
-        if self.fails || (self.deleted && forced_revision.is_none()) {
-            return Err(WorkerExecutorError::runtime("component not found"));
-        }
-        Ok(Component {
-            id: component_id,
-            revision: ComponentRevision::INITIAL,
-            environment_id: self.environment_id,
-            component_name: ComponentName("sweep-test".to_string()),
-            hash: golem_common::model::diff::Hash::empty(),
-            application_id: ApplicationId::new(),
-            account_id: AccountId::new(),
-            account_email: AccountEmail::new("test@golem"),
-            application_name: ApplicationName("sweep-test-app".to_string()),
-            environment_name: EnvironmentName::try_from("sweep-test-env").unwrap(),
-            component_size: 100,
-            metadata: ComponentMetadata::from_parts(
-                Default::default(),
-                vec![],
-                vec![],
-                BTreeMap::new(),
-            ),
-            created_at: chrono::Utc::now(),
-            wasm_hash: golem_common::model::diff::Hash::empty(),
-            object_store_key: String::new(),
-        })
-    }
-
-    async fn resolve_component(
-        &self,
-        _component_reference: String,
-        _resolving_environment: EnvironmentId,
-        _resolving_application: ApplicationId,
-        _resolving_account: AccountId,
-    ) -> Result<Option<ComponentId>, WorkerExecutorError> {
-        Ok(None)
-    }
-
-    async fn all_cached_metadata(&self) -> Vec<Component> {
-        Vec::new()
-    }
-
-    async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
-}
-
 /// Archives without building a `Worker`: it opens the oplog under the agent's lifecycle guard
 /// and runs the same blocking steps as `Worker::archive_oplog` with `ArchiveWait::Finished`.
 struct DirectAccess {
@@ -994,9 +899,6 @@ struct DirectAccess {
 }
 
 type ResidentSet = Arc<std::sync::Mutex<HashSet<AgentId>>>;
-
-/// A layer, an agent in it, and the index to append at.
-type LayerGrowth = (Arc<dyn OplogArchiveService>, OwnedAgentId, OplogIndex);
 
 fn resident_set(agents: HashSet<AgentId>) -> ResidentSet {
     Arc::new(std::sync::Mutex::new(agents))
@@ -1105,7 +1007,6 @@ fn build(
     layers: &Layers,
     config: OplogSweepConfig,
     shards: Arc<dyn ShardService>,
-    environment_id: EnvironmentId,
     resident: HashSet<AgentId>,
 ) -> Arc<OplogSweeper> {
     build_over(
@@ -1113,7 +1014,6 @@ fn build(
         layers,
         config,
         shards,
-        environment_id,
         resident,
     )
 }
@@ -1124,7 +1024,6 @@ fn build_over(
     layers: &Layers,
     config: OplogSweepConfig,
     shards: Arc<dyn ShardService>,
-    environment_id: EnvironmentId,
     resident: HashSet<AgentId>,
 ) -> Arc<OplogSweeper> {
     OplogSweeper::over_layers(
@@ -1132,14 +1031,6 @@ fn build_over(
         indexed_storage,
         &layers.archives,
         shards,
-        Arc::new(FixedEnvironment {
-            environment_id,
-            fails: false,
-            deleted: false,
-            lookups: std::sync::atomic::AtomicU64::new(0),
-            resident_on_lookup: std::sync::Mutex::new(None),
-            grow_on_lookup: std::sync::Mutex::new(None),
-        }),
         Arc::new(DirectAccess {
             oplog_service: layers.oplog_service.clone(),
             refuse_archive: HashSet::new(),
@@ -1188,13 +1079,7 @@ async fn stranded_ephemeral_oplog(
 #[test]
 async fn the_bottom_layer_is_never_a_source() {
     let layers = layers();
-    let sweeper = build(
-        &layers,
-        manual(),
-        all_shards(),
-        EnvironmentId::new(),
-        HashSet::new(),
-    );
+    let sweeper = build(&layers, manual(), all_shards(), HashSet::new());
 
     // Two archives, one route: the blob layer receives entries and cannot enumerate its own.
     assert_eq!(sweeper.routes.len(), 1);
@@ -1206,16 +1091,10 @@ async fn the_bottom_layer_is_never_a_source() {
 async fn a_quiet_ephemeral_layer_is_archived_on_the_second_tick() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let sweeper = build(
-        &layers,
-        manual(),
-        all_shards(),
-        environment_id,
-        HashSet::new(),
-    );
+    let sweeper = build(&layers, manual(), all_shards(), HashSet::new());
 
     // Ephemeral entries start in the first lower layer, and the layer below is empty.
     assert_eq!(
@@ -1290,7 +1169,7 @@ async fn a_tick_cut_during_a_probe_still_archives_the_agent_it_probed() {
     // Read through the wrapper, so the index read is where the seam fires.
     let (layers, storage) = counting_layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let sweeper = build_over(
@@ -1298,7 +1177,6 @@ async fn a_tick_cut_during_a_probe_still_archives_the_agent_it_probed() {
         &layers,
         manual(),
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -1339,10 +1217,7 @@ async fn a_tick_cut_during_a_probe_still_archives_the_agent_it_probed() {
 async fn a_sweep_cut_on_every_tick_still_drains_the_layer() {
     let (layers, storage) = counting_layers();
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let agents: Vec<AgentId> = (0..4)
-        .map(|i| agent(&format!("counter-{i}"), component_id))
-        .collect();
+    let agents: Vec<AgentId> = (0..4).map(|i| agent(100 + i as u128)).collect();
     for agent_id in &agents {
         stranded_ephemeral_oplog(&layers, agent_id, environment_id).await;
     }
@@ -1354,7 +1229,6 @@ async fn a_sweep_cut_on_every_tick_still_drains_the_layer() {
             ..manual()
         },
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -1399,7 +1273,7 @@ async fn a_sweep_cut_on_every_tick_still_drains_the_layer() {
 async fn a_tick_cut_before_a_pages_agents_leaves_them_for_the_next_pass() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
     let storage = pages_of(&layers);
     let sweeper = build_over(
@@ -1407,7 +1281,6 @@ async fn a_tick_cut_before_a_pages_agents_leaves_them_for_the_next_pass() {
         &layers,
         manual(),
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -1436,143 +1309,6 @@ async fn a_tick_cut_before_a_pages_agents_leaves_them_for_the_next_pass() {
     );
 }
 
-#[test]
-#[timeout("1m")]
-async fn an_environment_is_resolved_once_and_not_once_per_tick() {
-    let layers = layers();
-    let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    // Deleted, so a cold lookup costs two calls: deployed misses, then the pinned one answers.
-    let components = Arc::new(FixedEnvironment {
-        environment_id,
-        fails: false,
-        deleted: true,
-        lookups: std::sync::atomic::AtomicU64::new(0),
-        resident_on_lookup: std::sync::Mutex::new(None),
-        grow_on_lookup: std::sync::Mutex::new(None),
-    });
-    for name in ["counter-1", "counter-2"] {
-        stranded_ephemeral_oplog(&layers, &agent(name, component_id), environment_id).await;
-    }
-
-    let sweeper = OplogSweeper::over_layers(
-        manual(),
-        layers.indexed_storage.clone(),
-        &layers.archives,
-        all_shards(),
-        components.clone(),
-        Arc::new(DirectAccess {
-            oplog_service: layers.oplog_service.clone(),
-            refuse_archive: HashSet::new(),
-            decline_archive: HashSet::new(),
-            resident: resident_set(HashSet::new()),
-        }),
-    );
-
-    // The first tick resolves the shared component once, before reading either index.
-    sweeper.sweep_once(&CancellationToken::new()).await;
-    let after_first_resolve = components.lookups.load(std::sync::atomic::Ordering::SeqCst);
-    assert_eq!(
-        after_first_resolve, 2,
-        "one deployed miss and one pinned hit, for the component both agents share"
-    );
-
-    // The second archives both agents and asks nothing further.
-    let second = sweeper.sweep_once(&CancellationToken::new()).await;
-    assert_eq!(second.archived(), 2);
-    assert_eq!(
-        components.lookups.load(std::sync::atomic::Ordering::SeqCst),
-        after_first_resolve
-    );
-
-    // A later agent on the same component asks nothing further.
-    stranded_ephemeral_oplog(&layers, &agent("counter-3", component_id), environment_id).await;
-    sweeper.sweep_once(&CancellationToken::new()).await;
-    let third = sweeper.sweep_once(&CancellationToken::new()).await;
-    assert_eq!(third.archived(), 1);
-    assert_eq!(
-        components.lookups.load(std::sync::atomic::Ordering::SeqCst),
-        after_first_resolve,
-        "the environment was already known"
-    );
-}
-
-#[test]
-#[timeout("1m")]
-async fn a_component_that_will_not_resolve_is_not_asked_again_every_tick() {
-    let layers = layers();
-    let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let components = Arc::new(FixedEnvironment {
-        environment_id,
-        fails: true,
-        deleted: false,
-        lookups: std::sync::atomic::AtomicU64::new(0),
-        resident_on_lookup: std::sync::Mutex::new(None),
-        grow_on_lookup: std::sync::Mutex::new(None),
-    });
-    stranded_ephemeral_oplog(&layers, &agent("counter-1", component_id), environment_id).await;
-
-    let sweeper = OplogSweeper::over_layers(
-        manual(),
-        layers.indexed_storage.clone(),
-        &layers.archives,
-        all_shards(),
-        components.clone(),
-        Arc::new(DirectAccess {
-            oplog_service: layers.oplog_service.clone(),
-            refuse_archive: HashSet::new(),
-            decline_archive: HashSet::new(),
-            resident: resident_set(HashSet::new()),
-        }),
-    );
-
-    sweeper.sweep_once(&CancellationToken::new()).await;
-    let second = sweeper.sweep_once(&CancellationToken::new()).await;
-    assert_eq!(
-        second.route(EPHEMERAL_L1).count(Outcome::Unaddressable),
-        1,
-        "the agent is still reported rather than skipped silently"
-    );
-    let after_failing = components.lookups.load(std::sync::atomic::Ordering::SeqCst);
-    assert_eq!(
-        after_failing, 2,
-        "the deployed lookup and the pinned one, both of which failed"
-    );
-
-    // The agent stays in the layer, so every later tick meets it again.
-    for _ in 0..3 {
-        sweeper.sweep_once(&CancellationToken::new()).await;
-    }
-    assert_eq!(
-        components.lookups.load(std::sync::atomic::Ordering::SeqCst),
-        after_failing,
-        "and the failure is remembered, not repaid once per tick"
-    );
-}
-
-fn sweeper_over(
-    layers: &Layers,
-    config: OplogSweepConfig,
-    storage: Arc<dyn IndexedStorage + Send + Sync>,
-    components: Arc<FixedEnvironment>,
-    resident: Arc<std::sync::Mutex<HashSet<AgentId>>>,
-) -> Arc<OplogSweeper> {
-    OplogSweeper::over_layers(
-        config,
-        storage,
-        &layers.archives,
-        all_shards(),
-        components,
-        Arc::new(DirectAccess {
-            oplog_service: layers.oplog_service.clone(),
-            refuse_archive: HashSet::new(),
-            decline_archive: HashSet::new(),
-            resident,
-        }),
-    )
-}
-
 fn pages_of(layers: &Layers) -> Arc<FixedPages> {
     Arc::new(FixedPages {
         inner: layers.indexed_storage.clone(),
@@ -1583,159 +1319,6 @@ fn pages_of(layers: &Layers) -> Arc<FixedPages> {
         last_ids: std::sync::atomic::AtomicU64::new(0),
         calls: std::sync::atomic::AtomicU64::new(0),
     })
-}
-
-#[test]
-#[timeout("1m")]
-async fn a_failed_lookup_is_asked_again_once_its_window_has_passed() {
-    let layers = layers();
-    let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let components = Arc::new(FixedEnvironment {
-        environment_id,
-        fails: true,
-        deleted: false,
-        lookups: std::sync::atomic::AtomicU64::new(0),
-        resident_on_lookup: std::sync::Mutex::new(None),
-        grow_on_lookup: std::sync::Mutex::new(None),
-    });
-    stranded_ephemeral_oplog(&layers, &agent("counter-1", component_id), environment_id).await;
-    let sweeper = sweeper_over(
-        &layers,
-        manual(),
-        layers.indexed_storage.clone(),
-        components.clone(),
-        resident_set(HashSet::new()),
-    );
-
-    sweeper.sweep_once(&CancellationToken::new()).await;
-    sweeper.sweep_once(&CancellationToken::new()).await;
-    let while_remembered = components.lookups.load(std::sync::atomic::Ordering::SeqCst);
-    assert_eq!(while_remembered, 2);
-    assert!(
-        matches!(
-            sweeper.environments.lock().await.get(&component_id),
-            Some(ResolvedEnvironment::Unknown { .. })
-        ),
-        "the failure has to be remembered before there is a window to expire; without this \
-             the rewind below iterates an empty map and proves nothing"
-    );
-
-    // Wind the window into the past rather than waiting it out.
-    {
-        let mut cache = sweeper.environments.lock().await;
-        for entry in cache.values_mut() {
-            *entry = ResolvedEnvironment::Unknown {
-                retry_after: Instant::now() - Duration::from_secs(1),
-            };
-        }
-    }
-
-    sweeper.sweep_once(&CancellationToken::new()).await;
-    assert_eq!(
-        components.lookups.load(std::sync::atomic::Ordering::SeqCst),
-        while_remembered + 2,
-        "the deployed lookup and the pinned one are both tried again"
-    );
-}
-
-/// The index is read after the environment lookup, so a write during the lookup is seen.
-#[test]
-#[timeout("1m")]
-async fn an_agent_whose_layer_grows_during_its_environment_lookup_is_left_alone() {
-    let layers = layers();
-    let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
-    stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
-    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let components = Arc::new(FixedEnvironment {
-        environment_id,
-        fails: false,
-        deleted: false,
-        lookups: std::sync::atomic::AtomicU64::new(0),
-        resident_on_lookup: std::sync::Mutex::new(None),
-        grow_on_lookup: std::sync::Mutex::new(None),
-    });
-    let sweeper = sweeper_over(
-        &layers,
-        manual(),
-        layers.indexed_storage.clone(),
-        components.clone(),
-        resident_set(HashSet::new()),
-    );
-
-    // Records the index, so the next tick's probe opens the gate.
-    sweeper.sweep_once(&CancellationToken::new()).await;
-
-    // Forgotten, so the next lookup is a registry call, and the layer grows during it.
-    sweeper.environments.lock().await.clear();
-    *components.grow_on_lookup.lock().unwrap() = Some((
-        layers.archives[0].clone(),
-        owned_agent_id.clone(),
-        OplogIndex::from_u64(4),
-    ));
-
-    let after = sweeper.sweep_once(&CancellationToken::new()).await;
-    assert_eq!(after.archived(), 0);
-    assert_eq!(
-        after.route(EPHEMERAL_L1).count(Outcome::Waiting),
-        1,
-        "the index moved before it was read, so the agent is not quiet"
-    );
-    assert_eq!(
-        layers.archives[0]
-            .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-            .await
-            .unwrap(),
-        OplogIndex::from_u64(4),
-        "and nothing was moved out from under the writer"
-    );
-}
-
-/// Residency is checked after the environment lookup, so an agent started during it is seen.
-#[test]
-#[timeout("1m")]
-async fn an_agent_that_starts_running_during_its_environment_lookup_is_left_alone() {
-    let layers = layers();
-    let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
-    stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
-    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let storage = pages_of(&layers);
-    let resident = resident_set(HashSet::new());
-    let components = Arc::new(FixedEnvironment {
-        environment_id,
-        fails: false,
-        deleted: false,
-        lookups: std::sync::atomic::AtomicU64::new(0),
-        resident_on_lookup: std::sync::Mutex::new(None),
-        grow_on_lookup: std::sync::Mutex::new(None),
-    });
-    let sweeper = sweeper_over(
-        &layers,
-        manual(),
-        storage.clone(),
-        components.clone(),
-        resident.clone(),
-    );
-
-    sweeper.sweep_once(&CancellationToken::new()).await;
-
-    // Forgotten, so the next lookup is a registry call, and the agent starts during it.
-    sweeper.environments.lock().await.clear();
-    *components.resident_on_lookup.lock().unwrap() = Some((resident.clone(), agent_id.clone()));
-    let after = sweeper.sweep_once(&CancellationToken::new()).await;
-
-    assert_eq!(after.archived(), 0);
-    assert_eq!(after.route(EPHEMERAL_L1).count(Outcome::Resident), 1);
-    assert_eq!(
-        layers.archives[0]
-            .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-            .await
-            .unwrap(),
-        OplogIndex::from_u64(3),
-        "the entries stay where the running agent expects them"
-    );
 }
 
 /// Charging the other outcomes would let resident or emptied agents exhaust the allowance
@@ -1751,7 +1334,6 @@ fn only_an_archive_attempt_costs_archive_budget() {
         Outcome::Empty,
         Outcome::Waiting,
         Outcome::Resident,
-        Outcome::Unaddressable,
     ] {
         assert!(!outcome.reached_the_store(), "{outcome:?}");
     }
@@ -1785,19 +1367,8 @@ async fn seed_layer(
 async fn what_one_route_spends_comes_off_the_next_routes_share() {
     let layers = deep_layers(2);
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    seed_layer(
-        &layers.archives[1],
-        &agent("deep", component_id),
-        environment_id,
-    )
-    .await;
-    seed_layer(
-        &layers.archives[0],
-        &agent("shallow", component_id),
-        environment_id,
-    )
-    .await;
+    seed_layer(&layers.archives[1], &agent(1), environment_id).await;
+    seed_layer(&layers.archives[0], &agent(2), environment_id).await;
 
     let sweeper = build(
         &layers,
@@ -1807,7 +1378,6 @@ async fn what_one_route_spends_comes_off_the_next_routes_share() {
             ..manual()
         },
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
     assert_eq!(sweeper.routes.len(), 2);
@@ -1843,15 +1413,9 @@ async fn what_one_route_spends_comes_off_the_next_routes_share() {
 async fn a_failed_archive_costs_the_tick_what_a_successful_one_costs() {
     let layers = deep_layers(2);
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let deep_agent = agent("deep", component_id);
+    let deep_agent = agent(1);
     seed_layer(&layers.archives[1], &deep_agent, environment_id).await;
-    seed_layer(
-        &layers.archives[0],
-        &agent("shallow", component_id),
-        environment_id,
-    )
-    .await;
+    seed_layer(&layers.archives[0], &agent(2), environment_id).await;
 
     let sweeper = OplogSweeper::over_layers(
         OplogSweepConfig {
@@ -1862,18 +1426,10 @@ async fn a_failed_archive_costs_the_tick_what_a_successful_one_costs() {
         layers.indexed_storage.clone(),
         &layers.archives,
         all_shards(),
-        Arc::new(FixedEnvironment {
-            environment_id,
-            fails: false,
-            deleted: false,
-            lookups: std::sync::atomic::AtomicU64::new(0),
-            resident_on_lookup: std::sync::Mutex::new(None),
-            grow_on_lookup: std::sync::Mutex::new(None),
-        }),
         Arc::new(DirectAccess {
             oplog_service: layers.oplog_service.clone(),
             // So the deeper agent reaches `archive_agent` and fails there.
-            refuse_archive: HashSet::from([deep_agent.clone()]),
+            refuse_archive: HashSet::from([deep_agent]),
             decline_archive: HashSet::new(),
             resident: resident_set(HashSet::new()),
         }),
@@ -1904,47 +1460,8 @@ async fn a_failed_archive_costs_the_tick_what_a_successful_one_costs() {
 
 #[test]
 #[timeout("1m")]
-async fn a_full_environment_cache_is_cleared_and_keeps_working() {
-    let layers = layers();
-    let environment_id = EnvironmentId::new();
-    let sweeper = build(
-        &layers,
-        manual(),
-        all_shards(),
-        environment_id,
-        HashSet::new(),
-    );
-
-    {
-        let mut cache = sweeper.environments.lock().await;
-        for _ in 0..MAX_CACHED_ENVIRONMENTS {
-            cache.insert(
-                ComponentId::new(),
-                ResolvedEnvironment::Known(EnvironmentId::new()),
-            );
-        }
-    }
-
-    let fresh = ComponentId::new();
-    assert_eq!(sweeper.environment_of(fresh).await, Some(environment_id));
-
-    let cache = sweeper.environments.lock().await;
-    assert_eq!(
-        cache.len(),
-        1,
-        "the full cache was dropped rather than left to grow past its bound"
-    );
-    assert!(
-        matches!(cache.get(&fresh), Some(ResolvedEnvironment::Known(_))),
-        "and the answer that overflowed it is the one kept"
-    );
-}
-
-#[test]
-#[timeout("1m")]
 async fn a_tick_that_stops_early_starts_the_next_one_where_it_stopped() {
     let layers = deep_layers(2);
-    let environment_id = EnvironmentId::new();
     let storage = Arc::new(FixedPages {
         inner: layers.indexed_storage.clone(),
         keys_per_page: 10,
@@ -1959,7 +1476,6 @@ async fn a_tick_that_stops_early_starts_the_next_one_where_it_stopped() {
         &layers,
         manual(),
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
     assert_eq!(
@@ -2008,16 +1524,10 @@ async fn an_agent_invoked_a_second_time_is_still_archived() {
     // invoked twice.
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let sweeper = build(
-        &layers,
-        manual(),
-        all_shards(),
-        environment_id,
-        HashSet::new(),
-    );
+    let sweeper = build(&layers, manual(), all_shards(), HashSet::new());
 
     sweeper.sweep_once(&CancellationToken::new()).await;
     assert_eq!(
@@ -2064,85 +1574,7 @@ async fn an_agent_invoked_a_second_time_is_still_archived() {
 
     sweeper.sweep_once(&CancellationToken::new()).await;
     let second = sweeper.sweep_once(&CancellationToken::new()).await;
-    assert_eq!(second.route(EPHEMERAL_L1).count(Outcome::Unaddressable), 0);
     assert_eq!(second.archived(), 1, "second lifetime");
-    assert_eq!(
-        layers.archives[0]
-            .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-            .await
-            .unwrap(),
-        OplogIndex::NONE
-    );
-}
-
-#[test]
-async fn an_agent_whose_component_cannot_be_resolved_is_reported_not_skipped_silently() {
-    let (layers, storage) = counting_layers();
-    let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
-    stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
-    let reads_before = storage.last_ids.load(std::sync::atomic::Ordering::SeqCst);
-
-    let sweeper = sweeper_over(
-        &layers,
-        manual(),
-        storage.clone(),
-        Arc::new(FixedEnvironment {
-            environment_id,
-            fails: true,
-            deleted: false,
-            lookups: std::sync::atomic::AtomicU64::new(0),
-            resident_on_lookup: std::sync::Mutex::new(None),
-            grow_on_lookup: std::sync::Mutex::new(None),
-        }),
-        resident_set(HashSet::new()),
-    );
-
-    sweeper.sweep_once(&CancellationToken::new()).await;
-    let second = sweeper.sweep_once(&CancellationToken::new()).await;
-    assert_eq!(second.route(EPHEMERAL_L1).count(Outcome::Unaddressable), 1);
-    assert_eq!(second.archived(), 0);
-    assert_eq!(
-        storage.last_ids.load(std::sync::atomic::Ordering::SeqCst),
-        reads_before,
-        "and its index is never read: nothing could act on the answer"
-    );
-}
-
-#[test]
-async fn an_agent_whose_component_was_deleted_is_still_archived() {
-    let layers = layers();
-    let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
-    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
-
-    let sweeper = OplogSweeper::over_layers(
-        manual(),
-        layers.indexed_storage.clone(),
-        &layers.archives,
-        all_shards(),
-        Arc::new(FixedEnvironment {
-            environment_id,
-            fails: false,
-            deleted: true,
-            lookups: std::sync::atomic::AtomicU64::new(0),
-            resident_on_lookup: std::sync::Mutex::new(None),
-            grow_on_lookup: std::sync::Mutex::new(None),
-        }),
-        Arc::new(DirectAccess {
-            oplog_service: layers.oplog_service.clone(),
-            refuse_archive: HashSet::new(),
-            decline_archive: HashSet::new(),
-            resident: resident_set(HashSet::new()),
-        }),
-    );
-
-    sweeper.sweep_once(&CancellationToken::new()).await;
-    let second = sweeper.sweep_once(&CancellationToken::new()).await;
-
-    assert_eq!(second.route(EPHEMERAL_L1).count(Outcome::Unaddressable), 0);
-    assert_eq!(second.archived(), 1);
     assert_eq!(
         layers.archives[0]
             .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
@@ -2156,7 +1588,7 @@ async fn an_agent_whose_component_was_deleted_is_still_archived() {
 async fn a_key_handed_back_twice_in_one_pass_does_not_clear_the_gate() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
     let sweeper = build_over(
@@ -2172,7 +1604,6 @@ async fn a_key_handed_back_twice_in_one_pass_does_not_clear_the_gate() {
         &layers,
         manual(),
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -2194,7 +1625,7 @@ async fn a_key_handed_back_twice_in_one_pass_does_not_clear_the_gate() {
 async fn an_agent_that_cannot_be_archived_keeps_the_gate_it_passed() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
     // A failed archive keeps the sighting that passed the gate, or `finish_pass` would drop it
@@ -2204,17 +1635,9 @@ async fn an_agent_that_cannot_be_archived_keeps_the_gate_it_passed() {
         layers.indexed_storage.clone(),
         &layers.archives,
         all_shards(),
-        Arc::new(FixedEnvironment {
-            environment_id,
-            fails: false,
-            deleted: false,
-            lookups: std::sync::atomic::AtomicU64::new(0),
-            resident_on_lookup: std::sync::Mutex::new(None),
-            grow_on_lookup: std::sync::Mutex::new(None),
-        }),
         Arc::new(DirectAccess {
             oplog_service: layers.oplog_service.clone(),
-            refuse_archive: HashSet::from([agent_id.clone()]),
+            refuse_archive: HashSet::from([agent_id]),
             decline_archive: HashSet::new(),
             resident: resident_set(HashSet::new()),
         }),
@@ -2241,7 +1664,7 @@ async fn an_agent_that_cannot_be_archived_keeps_the_gate_it_passed() {
 async fn a_declined_archive_moves_nothing_and_is_asked_again() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
     let sweeper = OplogSweeper::over_layers(
@@ -2249,18 +1672,10 @@ async fn a_declined_archive_moves_nothing_and_is_asked_again() {
         layers.indexed_storage.clone(),
         &layers.archives,
         all_shards(),
-        Arc::new(FixedEnvironment {
-            environment_id,
-            fails: false,
-            deleted: false,
-            lookups: std::sync::atomic::AtomicU64::new(0),
-            resident_on_lookup: std::sync::Mutex::new(None),
-            grow_on_lookup: std::sync::Mutex::new(None),
-        }),
         Arc::new(DirectAccess {
             oplog_service: layers.oplog_service.clone(),
             refuse_archive: HashSet::new(),
-            decline_archive: HashSet::from([agent_id.clone()]),
+            decline_archive: HashSet::from([agent_id]),
             resident: resident_set(HashSet::new()),
         }),
     );
@@ -2293,15 +1708,9 @@ async fn a_declined_archive_moves_nothing_and_is_asked_again() {
 async fn an_agent_this_executor_is_running_is_left_alone() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
-    let sweeper = build(
-        &layers,
-        manual(),
-        all_shards(),
-        environment_id,
-        HashSet::from([agent_id.clone()]),
-    );
+    let sweeper = build(&layers, manual(), all_shards(), HashSet::from([agent_id]));
 
     // Residency is decided in memory, so it lands on the first tick.
     let first = sweeper.sweep_once(&CancellationToken::new()).await;
@@ -2343,19 +1752,12 @@ async fn a_completed_pass_drops_the_agents_that_left_the_layer() {
     // to go when a pass completes.
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let transient = agent("counter-drained", component_id);
-    let staying = agent("counter-staying", component_id);
+    let transient = agent(1);
+    let staying = agent(2);
     stranded_ephemeral_oplog(&layers, &transient, environment_id).await;
     stranded_ephemeral_oplog(&layers, &staying, environment_id).await;
 
-    let sweeper = build(
-        &layers,
-        manual(),
-        all_shards(),
-        environment_id,
-        HashSet::new(),
-    );
+    let sweeper = build(&layers, manual(), all_shards(), HashSet::new());
 
     sweeper.sweep_once(&CancellationToken::new()).await;
     assert_eq!(sweeper.memo.lock().await.len(), 2, "both were remembered");
@@ -2390,19 +1792,19 @@ async fn a_completed_pass_drops_the_agents_that_left_the_layer() {
         1,
         "the drained agent must not be tracked forever"
     );
-    assert!(memo.contains_key(&(EPHEMERAL_L1, staying)));
+    assert!(memo.contains_key(&(EPHEMERAL_L1, OwnedAgentId::new(environment_id, &staying))));
 }
 
 #[test]
 async fn an_agent_on_another_shard_is_left_alone() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
     let shards = Arc::new(ShardServiceDefault::new());
     shards.register(4, &HashMap::new(), None, revision_of(MANAGER, 0));
-    let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
+    let sweeper = build(&layers, manual(), shards, HashSet::new());
 
     sweeper.sweep_once(&CancellationToken::new()).await;
     let second = sweeper.sweep_once(&CancellationToken::new()).await;
@@ -2415,17 +1817,11 @@ async fn an_agent_on_another_shard_is_left_alone() {
 async fn a_reshard_drops_the_tracking_entries_it_no_longer_owns() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
     let shards = all_shards();
-    let sweeper = build(
-        &layers,
-        manual(),
-        shards.clone(),
-        environment_id,
-        HashSet::new(),
-    );
+    let sweeper = build(&layers, manual(), shards.clone(), HashSet::new());
 
     sweeper.sweep_once(&CancellationToken::new()).await;
     assert_eq!(sweeper.memo.lock().await.len(), 1);
@@ -2446,10 +1842,7 @@ async fn a_reshard_drops_the_tracking_entries_it_no_longer_owns() {
 async fn a_budgeted_tick_resumes_where_it_stopped() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let agents: Vec<AgentId> = (0..3)
-        .map(|i| agent(&format!("counter-{i}"), component_id))
-        .collect();
+    let agents: Vec<AgentId> = (0..3).map(|i| agent(100 + i as u128)).collect();
     for agent_id in &agents {
         stranded_ephemeral_oplog(&layers, agent_id, environment_id).await;
     }
@@ -2464,7 +1857,6 @@ async fn a_budgeted_tick_resumes_where_it_stopped() {
             ..OplogSweepConfig::default()
         },
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -2487,14 +1879,8 @@ async fn a_budgeted_tick_resumes_where_it_stopped() {
 async fn the_archive_budget_stops_a_tick() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
     for i in 0..2 {
-        stranded_ephemeral_oplog(
-            &layers,
-            &agent(&format!("counter-{i}"), component_id),
-            environment_id,
-        )
-        .await;
+        stranded_ephemeral_oplog(&layers, &agent(100 + i as u128), environment_id).await;
     }
 
     let sweeper = build(
@@ -2506,7 +1892,6 @@ async fn the_archive_budget_stops_a_tick() {
             ..OplogSweepConfig::default()
         },
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -2524,14 +1909,8 @@ async fn the_archive_budget_stops_a_tick() {
 async fn one_tick_archives_every_quiet_agent_across_pages() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
     for i in 0..4 {
-        stranded_ephemeral_oplog(
-            &layers,
-            &agent(&format!("counter-{i}"), component_id),
-            environment_id,
-        )
-        .await;
+        stranded_ephemeral_oplog(&layers, &agent(100 + i as u128), environment_id).await;
     }
 
     // One key per page, so a tick pages four times before archiving. Every agent it walked is
@@ -2544,7 +1923,6 @@ async fn one_tick_archives_every_quiet_agent_across_pages() {
             ..OplogSweepConfig::default()
         },
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -2566,14 +1944,8 @@ async fn one_tick_archives_every_quiet_agent_across_pages() {
 async fn a_full_tracking_table_declines_an_agent_rather_than_forgetting_every_agent() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
     for i in 0..2 {
-        stranded_ephemeral_oplog(
-            &layers,
-            &agent(&format!("counter-{i}"), component_id),
-            environment_id,
-        )
-        .await;
+        stranded_ephemeral_oplog(&layers, &agent(100 + i as u128), environment_id).await;
     }
 
     // Room for one agent and two agents to track. Clearing the table on overflow would drop the
@@ -2586,7 +1958,6 @@ async fn a_full_tracking_table_declines_an_agent_rather_than_forgetting_every_ag
             ..OplogSweepConfig::default()
         },
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -2606,14 +1977,8 @@ async fn a_full_tracking_table_declines_an_agent_rather_than_forgetting_every_ag
 async fn a_tick_never_scans_past_its_budget() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
     for i in 0..10 {
-        stranded_ephemeral_oplog(
-            &layers,
-            &agent(&format!("counter-{i}"), component_id),
-            environment_id,
-        )
-        .await;
+        stranded_ephemeral_oplog(&layers, &agent(100 + i as u128), environment_id).await;
     }
 
     // A page far larger than the budget, so the tick has to ask the scan for less than a full
@@ -2627,7 +1992,6 @@ async fn a_tick_never_scans_past_its_budget() {
             ..OplogSweepConfig::default()
         },
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -2712,16 +2076,16 @@ impl OplogArchiveService for Miscounting {
         self.inner.exists(owned_agent_id, agent_mode).await
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: golem_common::model::type_id::TypeId,
         modes: Option<AgentMode>,
         cursor: golem_common::model::ScanCursor,
         count: u64,
     ) -> Result<(golem_common::model::ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, modes, cursor, count)
+            .scan_for_type(environment_id, type_id, modes, cursor, count)
             .await
     }
 
@@ -2848,15 +2212,9 @@ async fn a_layer_that_keeps_reporting_more_work_is_stopped_at_the_step_bound() {
         indexed_storage,
     };
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
-    let sweeper = build(
-        &layers,
-        manual(),
-        all_shards(),
-        environment_id,
-        HashSet::new(),
-    );
+    let sweeper = build(&layers, manual(), all_shards(), HashSet::new());
 
     sweeper.sweep_once(&CancellationToken::new()).await;
     let second = sweeper.sweep_once(&CancellationToken::new()).await;
@@ -2880,17 +2238,11 @@ async fn a_layer_that_keeps_reporting_more_work_is_stopped_at_the_step_bound() {
 async fn a_stack_deeper_than_any_fixed_bound_still_drains_fully() {
     let layers = deep_layers(24);
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
-    let sweeper = build(
-        &layers,
-        manual(),
-        all_shards(),
-        environment_id,
-        HashSet::new(),
-    );
+    let sweeper = build(&layers, manual(), all_shards(), HashSet::new());
 
     sweeper.sweep_once(&CancellationToken::new()).await;
     let second = sweeper.sweep_once(&CancellationToken::new()).await;
@@ -2925,14 +2277,8 @@ async fn a_stack_deeper_than_any_fixed_bound_still_drains_fully() {
 async fn a_tick_stops_at_its_page_budget_when_pages_come_back_short() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
     for i in 0..10 {
-        stranded_ephemeral_oplog(
-            &layers,
-            &agent(&format!("counter-{i}"), component_id),
-            environment_id,
-        )
-        .await;
+        stranded_ephemeral_oplog(&layers, &agent(100 + i as u128), environment_id).await;
     }
 
     // A budget of eight over pages of four allows two pages, and this backend answers one key
@@ -2955,7 +2301,6 @@ async fn a_tick_stops_at_its_page_budget_when_pages_come_back_short() {
             ..OplogSweepConfig::default()
         },
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -2968,14 +2313,8 @@ async fn a_tick_stops_at_its_page_budget_when_pages_come_back_short() {
 async fn a_tick_stops_at_its_scan_budget_when_pages_come_back_long() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
     for i in 0..10 {
-        stranded_ephemeral_oplog(
-            &layers,
-            &agent(&format!("counter-{i}"), component_id),
-            environment_id,
-        )
-        .await;
+        stranded_ephemeral_oplog(&layers, &agent(100 + i as u128), environment_id).await;
     }
 
     // Six pages of one fit the budget, but the backend answers four keys per ask, so the tick
@@ -2998,7 +2337,6 @@ async fn a_tick_stops_at_its_scan_budget_when_pages_come_back_long() {
             ..OplogSweepConfig::default()
         },
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -3016,10 +2354,9 @@ async fn a_tick_stops_at_its_scan_budget_when_pages_come_back_long() {
 async fn a_tick_that_archives_resumes_where_it_left_off() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
     let mut resident = HashSet::new();
     for i in 0..6 {
-        let agent_id = agent(&format!("counter-{i}"), component_id);
+        let agent_id = agent(100 + i as u128);
         stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
         // Two agents that can never be archived, left behind for a rewind to trip over.
         if i >= 4 {
@@ -3039,7 +2376,6 @@ async fn a_tick_that_archives_resumes_where_it_left_off() {
             ..OplogSweepConfig::default()
         },
         all_shards(),
-        environment_id,
         resident,
     );
 
@@ -3066,14 +2402,13 @@ async fn a_tick_that_archives_resumes_where_it_left_off() {
 async fn a_sweep_without_a_shard_assignment_does_nothing() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
     let sweeper = build(
         &layers,
         manual(),
         Arc::new(ShardServiceDefault::new()),
-        environment_id,
         HashSet::new(),
     );
 
@@ -3087,7 +2422,7 @@ async fn a_sweep_without_a_shard_assignment_does_nothing() {
 async fn a_sweep_holding_a_zero_shard_assignment_does_nothing() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
     // A registration can install shard ids with a shard count of zero, and routing an agent
@@ -3099,7 +2434,7 @@ async fn a_sweep_holding_a_zero_shard_assignment_does_nothing() {
         None,
         revision_of(MANAGER, 0),
     );
-    let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
+    let sweeper = build(&layers, manual(), shards, HashSet::new());
 
     let report = sweeper.sweep_once(&CancellationToken::new()).await;
 
@@ -3112,7 +2447,7 @@ async fn a_sweep_holding_a_zero_shard_assignment_does_nothing() {
 async fn a_sweep_holding_a_lapsed_lease_does_nothing() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
@@ -3124,7 +2459,7 @@ async fn a_sweep_holding_a_lapsed_lease_does_nothing() {
         Some(Instant::now()),
         revision_of(MANAGER, 0),
     );
-    let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
+    let sweeper = build(&layers, manual(), shards, HashSet::new());
 
     // Two ticks, which is what a quiet agent takes to be archived under a live lease.
     for _ in 0..2 {
@@ -3146,7 +2481,7 @@ async fn a_sweep_holding_a_lapsed_lease_does_nothing() {
 async fn a_disabled_sweep_never_ticks() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
     let sweeper = build(
         &layers,
@@ -3156,7 +2491,6 @@ async fn a_disabled_sweep_never_ticks() {
             ..OplogSweepConfig::default()
         },
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 
@@ -3182,14 +2516,6 @@ async fn a_stack_with_no_source_layer_never_ticks() {
         // Only the bottom layer, which can never be a source.
         &layers.archives[1..],
         all_shards(),
-        Arc::new(FixedEnvironment {
-            environment_id: EnvironmentId::new(),
-            fails: false,
-            deleted: false,
-            lookups: std::sync::atomic::AtomicU64::new(0),
-            resident_on_lookup: std::sync::Mutex::new(None),
-            grow_on_lookup: std::sync::Mutex::new(None),
-        }),
         Arc::new(DirectAccess {
             oplog_service: layers.oplog_service.clone(),
             refuse_archive: HashSet::new(),
@@ -3211,7 +2537,7 @@ async fn a_stack_with_no_source_layer_never_ticks() {
 async fn cancelling_the_token_stops_the_loop() {
     let layers = layers();
     let environment_id = EnvironmentId::new();
-    let agent_id = agent("counter-1", ComponentId::new());
+    let agent_id = agent(1);
     stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
     let sweeper = build(
         &layers,
@@ -3221,7 +2547,6 @@ async fn cancelling_the_token_stops_the_loop() {
             ..OplogSweepConfig::default()
         },
         all_shards(),
-        environment_id,
         HashSet::new(),
     );
 

@@ -102,21 +102,21 @@ impl PostgresIndexedStorage {
     fn namespace(namespace: IndexedStorageNamespace) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-oplog")
             }
             IndexedStorageNamespace::StagedOpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-staged-oplog")
             }
             IndexedStorageNamespace::CompressedOpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
                 level,
             } => {
@@ -124,7 +124,7 @@ impl PostgresIndexedStorage {
                 format!("{mode}-worker-c{level}-oplog")
             }
             IndexedStorageNamespace::BlobOplogManifest {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
                 level,
             } => {

@@ -33,7 +33,7 @@ register("./host-module-hooks.mjs", import.meta.url, {
 });
 const ambient = await import("golem:agent/host@2.0.0");
 assert.throws(
-  () => ambient.parseAgentId(),
+  () => ambient.getSelfMetadata(),
   /Unexpected host call: golem:agent\/host@2\.0\.0/,
 );
 const { linked: client, source } = await loadFixture(clientPath);

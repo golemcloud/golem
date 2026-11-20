@@ -33,9 +33,9 @@ use golem_common::schema::agent::{
 use golem_common::schema::validation::validate_value;
 use golem_common::schema::validation::value::validate_record_fields;
 use golem_common::schema::{
-    AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, FieldSource,
-    InputSchema, MetadataEnvelope, NamedField, NamedFieldType, OutputSchema, SchemaGraph,
-    SchemaType, SchemaTypeDef, SchemaValue, TypeId, TypedSchemaValue,
+    AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, FieldSource, InputSchema,
+    MetadataEnvelope, NamedField, NamedFieldType, OutputSchema, SchemaGraph, SchemaType,
+    SchemaTypeDef, SchemaValue, TypeId, TypedSchemaValue,
 };
 use golem_schema::Empty;
 
@@ -88,13 +88,6 @@ fn representative_agent_type() -> AgentTypeSchema {
         NamedField::user_supplied("maybe", SchemaType::option(SchemaType::bool())),
         NamedField::user_supplied("first", SchemaType::ref_to(TypeId::new("t000"))),
         NamedField::user_supplied("last", SchemaType::ref_to(TypeId::new("t031"))),
-        // Host-injected field: excluded from caller input arity and validation,
-        // exercising the `FieldSource::UserSupplied` filter in the hot path.
-        NamedField::auto_injected(
-            "principal",
-            AutoInjectedKind::Principal,
-            SchemaType::string(),
-        ),
     ];
 
     AgentTypeSchema {

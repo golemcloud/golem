@@ -1,13 +1,13 @@
 /**
  * @since 1.6.0
  */
-import { Effect, Option, Pipeable, Result, Schema, SchemaAST } from "effect"
+import { Effect, Option, Pipeable, Result, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { HostServices } from "../host/HostLive.js"
 import type { EndpointDef } from "../Http.js"
+import { InvocationContext } from "../InvocationContext.js"
 import { isMultimodal, type Multimodal } from "../Multimodal.js"
-import { Principal, type PrincipalInputSchema } from "../Principal.js"
 import {
   isElementSpec,
   isOptionalElementSpec,
@@ -23,7 +23,6 @@ import {
   type UnsupportedSchemaError,
   type WitCodec,
 } from "../WitCodec.js"
-import { witPrincipalAnnotationKey } from "../WitTypes.js"
 import {
   type BindableKeys,
   type EndpointBound,
@@ -31,8 +30,11 @@ import {
   type NoCaseFoldDuplicates,
   type NoDuplicateBindings,
   type PathBindableKeys,
+  type QueryBindableKeys,
   type QueryOrHeaderBindableKeys,
+  type StreamResourceKeys,
 } from "./httpTypes.js"
+import { type RejectLiveValues } from "./liveValues.js"
 import { withPipe } from "./pipeable.js"
 import { composeSchemaGraphs } from "./schema-model/builder.js"
 import {
@@ -74,13 +76,6 @@ export type ParamInputType<P extends MethodParam> =
 export type MethodInput<Input extends MethodParams> = {
   readonly [K in keyof Input]: ParamInputType<Input[K]>
 }
-/** Caller-supplied parameters omit principals injected by the host. @since 1.6.0 @category models */
-export type CallerInput<Input extends MethodParams> = {
-  readonly [K in keyof Input as Input[K] extends PrincipalInputSchema ? never : K]: ParamInputType<
-    Input[K]
-  >
-}
-
 /** @since 1.6.0 @category models */
 export type ReadOnlyOption = {
   readonly cache?: "no-cache" | "until-write" | { readonly ttlNanos: bigint }
@@ -107,20 +102,7 @@ export interface MethodSpec<
   readonly readOnly?: ReadOnly
 }
 
-type HasPrincipalInput<Input extends MethodParams> = true extends {
-  [K in keyof Input]: Input[K] extends PrincipalInputSchema ? true : false
-}[keyof Input]
-  ? true
-  : false
-
-type HandlerServices<S extends MethodSpec<any, any, any>, CfgTag> =
-  S extends MethodSpec<any, any, any, any, infer ReadOnly>
-    ? ReadOnly extends true | ReadOnlyOption
-      ? HasPrincipalInput<S["input"]> extends true
-        ? Principal | HostServices | CfgTag
-        : HostServices | CfgTag
-      : Principal | HostServices | CfgTag
-    : never
+type HandlerServices<CfgTag> = InvocationContext | HostServices | CfgTag
 
 type UnsupportedBinding<N extends string, A extends string, S extends string> = string extends N
   ? unknown
@@ -133,11 +115,7 @@ type ValidateBindingSources<B extends EndpointBound, P> =
   UnsupportedBinding<B["path"][number], PathBindableKeys<P>, "path"> extends infer A
     ? A extends Invalid<string>
       ? A
-      : UnsupportedBinding<
-            B["query"][number],
-            QueryOrHeaderBindableKeys<P>,
-            "query"
-          > extends infer Q
+      : UnsupportedBinding<B["query"][number], QueryBindableKeys<P>, "query"> extends infer Q
         ? Q extends Invalid<string>
           ? Q
           : UnsupportedBinding<B["header"][number], QueryOrHeaderBindableKeys<P>, "header">
@@ -166,9 +144,11 @@ type ValidateEndpointsTuple<
 > = {
   readonly [K in keyof E]: E[K] extends EndpointDef<infer V, infer Kind, infer B, infer H>
     ? Kind extends "bodyless"
-      ? [Exclude<keyof CallerInput<P> & string, V>] extends [never]
+      ? [
+          Exclude<keyof MethodInput<P> & string, V | QueryBindableKeys<P> | StreamResourceKeys<P>>,
+        ] extends [never]
         ? ValidateEndpointStructure<E[K], B, H, P>
-        : Invalid<`GET/HEAD endpoint cannot have unbound param '${Exclude<keyof CallerInput<P> & string, V> & string}' (only path / query / header bindings are allowed because there is no request body)`>
+        : Invalid<`GET/HEAD/DELETE endpoint cannot bind implicit query input '${Exclude<keyof MethodInput<P> & string, V | QueryBindableKeys<P> | StreamResourceKeys<P>> & string}' (use a body method for records and rich payloads)`>
       : ValidateEndpointStructure<E[K], B, H, P>
     : E[K]
 }
@@ -187,34 +167,45 @@ export const method: {
     Error extends Schema.Top,
     const Eps extends ReadonlyArray<EndpointDef<BindableKeys<Input>>> = readonly [],
     const ReadOnly extends boolean | ReadOnlyOption | undefined = undefined,
-  >(spec: {
-    readonly input: Input
-    readonly success: Success
-    readonly error: Error
-    readonly description?: string
-    readonly promptHint?: string
-    readonly http?: ValidateEndpointsTuple<Eps, Input>
-    readonly readOnly?: ReadOnly &
-      (ReadOnly extends ReadOnlyOption
-        ? Record<Exclude<keyof ReadOnly, keyof ReadOnlyOption>, never>
-        : unknown)
-  }): MethodSpec<Input, Success, Error, IsNonEmptyTuple<Eps>, ReadOnly>
+  >(
+    spec: {
+      readonly input: Input
+      readonly success: Success
+      readonly error: Error
+      readonly description?: string
+      readonly promptHint?: string
+      readonly http?: ValidateEndpointsTuple<Eps, Input>
+      readonly readOnly?: ReadOnly &
+        (ReadOnly extends ReadOnlyOption
+          ? Record<Exclude<keyof ReadOnly, keyof ReadOnlyOption>, never>
+          : unknown)
+    } & RejectLiveValues<{
+      input: MethodInput<Input>
+      success: MethodSuccessType<Success>
+      error: Error["Type"]
+    }>,
+  ): MethodSpec<Input, Success, Error, IsNonEmptyTuple<Eps>, ReadOnly>
   <
     const Input extends MethodParams,
     Success extends MethodSuccess,
     const Eps extends ReadonlyArray<EndpointDef<BindableKeys<Input>>> = readonly [],
     const ReadOnly extends boolean | ReadOnlyOption | undefined = undefined,
-  >(spec: {
-    readonly input: Input
-    readonly success: Success
-    readonly description?: string
-    readonly promptHint?: string
-    readonly http?: ValidateEndpointsTuple<Eps, Input>
-    readonly readOnly?: ReadOnly &
-      (ReadOnly extends ReadOnlyOption
-        ? Record<Exclude<keyof ReadOnly, keyof ReadOnlyOption>, never>
-        : unknown)
-  }): MethodSpec<Input, Success, typeof Schema.Void, IsNonEmptyTuple<Eps>, ReadOnly>
+  >(
+    spec: {
+      readonly input: Input
+      readonly success: Success
+      readonly description?: string
+      readonly promptHint?: string
+      readonly http?: ValidateEndpointsTuple<Eps, Input>
+      readonly readOnly?: ReadOnly &
+        (ReadOnly extends ReadOnlyOption
+          ? Record<Exclude<keyof ReadOnly, keyof ReadOnlyOption>, never>
+          : unknown)
+    } & RejectLiveValues<{
+      input: MethodInput<Input>
+      success: MethodSuccessType<Success>
+    }>,
+  ): MethodSpec<Input, Success, typeof Schema.Void, IsNonEmptyTuple<Eps>, ReadOnly>
 } = (spec: any): any => withPipe({ error: Schema.Void, ...spec })
 
 /** @since 1.6.0 @category combinators */
@@ -251,24 +242,35 @@ export interface Method<
 }
 /** @since 1.6.0 @category constructors */
 export const defineMethod: {
-  <const I extends MethodParams, S extends MethodSuccess, E extends Schema.Top, R>(definition: {
-    readonly name: string
-    readonly input: I
-    readonly success: S
-    readonly error: E
-    readonly body: (input: MethodInput<I>) => Effect.Effect<MethodSuccessType<S>, E["Type"], R>
-  }): Method<I, S, E, R>
-  <const I extends MethodParams, S extends MethodSuccess, R>(definition: {
-    readonly name: string
-    readonly input: I
-    readonly success: S
-    readonly body: (input: MethodInput<I>) => Effect.Effect<MethodSuccessType<S>, never, R>
-  }): Method<I, S, typeof Schema.Void, R>
+  <const I extends MethodParams, S extends MethodSuccess, E extends Schema.Top, R>(
+    definition: {
+      readonly name: string
+      readonly input: I
+      readonly success: S
+      readonly error: E
+      readonly body: (input: MethodInput<I>) => Effect.Effect<MethodSuccessType<S>, E["Type"], R>
+    } & RejectLiveValues<{
+      input: MethodInput<I>
+      success: MethodSuccessType<S>
+      error: E["Type"]
+    }>,
+  ): Method<I, S, E, R>
+  <const I extends MethodParams, S extends MethodSuccess, R>(
+    definition: {
+      readonly name: string
+      readonly input: I
+      readonly success: S
+      readonly body: (input: MethodInput<I>) => Effect.Effect<MethodSuccessType<S>, never, R>
+    } & RejectLiveValues<{
+      input: MethodInput<I>
+      success: MethodSuccessType<S>
+    }>,
+  ): Method<I, S, typeof Schema.Void, R>
 } = (definition: any): any => withPipe({ error: Schema.Void, ...definition })
 /** @since 1.6.0 @category models */
 export type Handler<S extends MethodSpec<any, any, any>, CfgTag = never> = (
   input: MethodInput<S["input"]>,
-) => Effect.Effect<MethodSuccessType<S["success"]>, S["error"]["Type"], HandlerServices<S, CfgTag>>
+) => Effect.Effect<MethodSuccessType<S["success"]>, S["error"]["Type"], HandlerServices<CfgTag>>
 /** @since 1.6.0 @category operations */
 export const invoke = <I extends MethodParams, S extends MethodSuccess, E extends Schema.Top, R>(
   m: Method<I, S, E, R>,
@@ -295,13 +297,6 @@ export interface CompiledInputCodec<
   ) => Effect.Effect<Value, Schema.SchemaError, any>
 }
 
-const isPrincipal = (schema: Schema.Top): boolean =>
-  (
-    SchemaAST as unknown as {
-      resolveAt: <T>(key: string) => (ast: SchemaAST.AST) => T | undefined
-    }
-  ).resolveAt<boolean>(witPrincipalAnnotationKey)(schema.ast) === true
-
 const paramCodec = (param: MethodParam) =>
   isMultimodal(param)
     ? param.compile()
@@ -315,12 +310,11 @@ export const compileParamBindings = <Input extends MethodParams>(
   input: Input,
 ): Effect.Effect<CompiledInputCodec<Input>, UnsupportedSchemaError> =>
   Effect.gen(function* () {
-    const entries: Array<{ name: string; codec: WitCodec<Schema.Top>; injected: boolean }> = []
+    const entries: Array<{ name: string; codec: WitCodec<Schema.Top> }> = []
     for (const [name, param] of Object.entries(input)) {
       entries.push({
         name,
         codec: (yield* paramCodec(param)) as WitCodec<Schema.Top>,
-        injected: !isElementSpec(param) && !isMultimodal(param) && isPrincipal(param as Schema.Top),
       })
     }
     if (entries.some((e) => isMultimodal(input[e.name])) && entries.length !== 1) {
@@ -344,7 +338,7 @@ export const compileParamBindings = <Input extends MethodParams>(
       tag: "parameters",
       val: entries.map((e, i) => ({
         name: e.name,
-        source: e.injected ? { tag: "auto-injected", val: "principal" } : { tag: "user-supplied" },
+        source: { tag: "user-supplied" },
         schema: roots[i]!,
         metadata: emptyMetadata(),
       })),
@@ -387,24 +381,6 @@ export const compileParamBindings = <Input extends MethodParams>(
     }
   })
 
-/** Compile only caller-supplied fields; principal fields are supplied by the host. @since 1.6.0 @category operations */
-export const compileCallerParamBindings = <Input extends MethodParams>(
-  context: string,
-  input: Input,
-): Effect.Effect<CompiledInputCodec<Input, CallerInput<Input>>, UnsupportedSchemaError> =>
-  compileParamBindings(
-    context,
-    Object.fromEntries(
-      Object.entries(input).filter(
-        ([, param]) =>
-          isElementSpec(param) || isMultimodal(param) || !isPrincipal(param as Schema.Top),
-      ),
-    ) as Input,
-  ) as unknown as Effect.Effect<
-    CompiledInputCodec<Input, CallerInput<Input>>,
-    UnsupportedSchemaError
-  >
-
 /** @since 1.6.0 @category models */
 export interface MethodCodec<
   I extends MethodParams,
@@ -415,7 +391,7 @@ export interface MethodCodec<
   readonly spec: MethodSpec<I, S, E>
   readonly graph: SchemaGraph
   readonly schemaGraph: CoreTypes.SchemaGraph
-  readonly inputCodec: CompiledInputCodec<I, CallerInput<I>>
+  readonly inputCodec: CompiledInputCodec<I>
   readonly outputCodec: WitCodec<Schema.Top> | undefined
   readonly encodeOutput:
     | ((value: unknown) => Effect.Effect<CoreTypes.SchemaValueTree, Schema.SchemaError, any>)
@@ -465,7 +441,6 @@ const unstructuredResultCodec = (
 }
 const readOnlyConfig = (
   option: boolean | ReadOnlyOption | undefined,
-  usesPrincipal: boolean,
 ): AgentCommon.ReadOnlyConfig | undefined => {
   if (!option) return undefined
   const value = option === true ? {} : option
@@ -477,7 +452,6 @@ const readOnlyConfig = (
         : typeof cache === "object"
           ? { tag: "ttl", val: cache.ttlNanos }
           : { tag: "until-write" },
-    usesPrincipal,
   }
 }
 
@@ -492,10 +466,6 @@ export const compileMethodSpec = <
 ): Effect.Effect<MethodCodec<I, S, E>, UnsupportedSchemaError> =>
   Effect.gen(function* () {
     const inputCodec = yield* compileParamBindings(name, spec.input)
-    const callerCodec = yield* compileCallerParamBindings(name, spec.input)
-    const usesPrincipal = Object.values(spec.input).some(
-      (param) => !isElementSpec(param) && !isMultimodal(param) && isPrincipal(param as Schema.Top),
-    )
     const errorWrapped = !isVoidSchema(spec.error)
     const success: MethodSuccess = spec.success
     const unstructured = isElementSpec(success)
@@ -543,7 +513,7 @@ export const compileMethodSpec = <
       spec,
       graph,
       schemaGraph,
-      inputCodec: callerCodec,
+      inputCodec,
       outputCodec:
         outputCodec && outputType
           ? { ...outputCodec, graph: { defs: graph.defs, root: outputType } }
@@ -553,7 +523,7 @@ export const compileMethodSpec = <
       outputSchema: outputRoot === undefined ? { tag: "unit" } : { tag: "single", val: outputRoot },
       errorWrapped,
       successVoid,
-      readOnly: readOnlyConfig(spec.readOnly, usesPrincipal),
+      readOnly: readOnlyConfig(spec.readOnly),
     }
   })
 
@@ -609,35 +579,12 @@ export const invokeWireValue = <
   options: {
     readonly errorWrapped: boolean
     readonly successVoid: boolean
-    readonly inputSchema?: AgentCommon.InputSchema
   },
   handler: (input: MethodInput<I>) => Effect.Effect<MethodSuccessType<S>, E["Type"], R>,
   input: CoreTypes.SchemaValueTree,
-): Effect.Effect<
-  CoreTypes.SchemaValueTree | undefined,
-  Schema.SchemaError | E["Type"],
-  R | Principal
-> =>
+): Effect.Effect<CoreTypes.SchemaValueTree | undefined, Schema.SchemaError | E["Type"], R> =>
   Effect.gen(function* () {
-    const decoded = yield* inputCodec.decode(input)
-    const injected =
-      options.inputSchema?.val.flatMap((field) =>
-        field.source.tag === "auto-injected" ? [{ name: field.name, kind: field.source.val }] : [],
-      ) ?? []
-    const principal = injected.length > 0 ? yield* Principal : undefined
-    const fullInput = {
-      ...decoded,
-      ...Object.fromEntries(
-        injected.map(({ name, kind }) => {
-          switch (kind) {
-            case "principal":
-              return [name, principal]
-            default:
-              throw new Error(`Unsupported auto-injected input kind: ${kind satisfies never}`)
-          }
-        }),
-      ),
-    } as unknown as MethodInput<I>
+    const fullInput = (yield* inputCodec.decode(input)) as unknown as MethodInput<I>
     if (options.errorWrapped) {
       const result = yield* handler(fullInput).pipe(
         Effect.match({
@@ -669,12 +616,7 @@ export const invokeMethod = <
     {
       errorWrapped: codec.errorWrapped,
       successVoid: codec.successVoid,
-      inputSchema: codec.inputSchema,
     },
     handler,
     input,
-  ) as Effect.Effect<
-    CoreTypes.SchemaValueTree | undefined,
-    Schema.SchemaError | E["Type"],
-    R | (HasPrincipalInput<I> extends true ? Principal : never)
-  >
+  ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, Schema.SchemaError | E["Type"], R>

@@ -36,6 +36,7 @@ impl CursorTx<'_> {
         self.try_get_oplog_entry(|_| false).await?;
         if self.cursor.has_replay_remaining() {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                self.cursor.last_replayed_index().next(),
                 "consumed replay prefix before live authority publication",
                 "unconsumed positional entry or delivery boundary",
             ));
@@ -286,10 +287,32 @@ impl ReplayState {
     pub(crate) async fn ensure_bootstrap_consumed(&self) -> Result<(), WorkerExecutorError> {
         self.validate_consumed_replay_prefix().await?;
         if self.has_unclaimed_retained_starts() {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                "every durable call of the bootstrap block claimed by the core initializer",
-                "unclaimed durable call recorded in the bootstrap block",
-            ));
+            let first = self
+                .run_owned_cursor_op(|state| async move {
+                    let st = state.cursor.state.lock().await;
+                    Ok(st
+                        .starts
+                        .retained_iter()
+                        .next()
+                        .map(|(index, retained)| (*index, retained.entry.clone())))
+                })
+                .await?;
+            let (oplog_index, expected) = match first {
+                Some((index, entry)) => (index, super::super::claims::recorded_step(&entry)),
+                None => (
+                    self.last_replayed_index().next(),
+                    ReplayStep::described("unclaimed durable call recorded in the bootstrap block"),
+                ),
+            };
+            return Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
+                oplog_index,
+                expected,
+                actual: ReplayStep::described(
+                    "the end of the core initializer before it claimed every durable call of \
+                     the bootstrap block",
+                ),
+                mismatched: Vec::new(),
+            }));
         }
         Ok(())
     }
@@ -306,10 +329,16 @@ impl ReplayState {
         };
         self.validate_consumed_replay_prefix().await?;
         match tail {
-            BootstrapTail::Strict => Err(WorkerExecutorError::unexpected_oplog_entry(
-                "durable call recorded in the bootstrap block",
-                "core initializer made a durable call after its recorded bootstrap block",
-            )),
+            BootstrapTail::Strict => {
+                Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
+                    oplog_index: self.last_replayed_index().next(),
+                    expected: ReplayStep::end_of_history(),
+                    actual: ReplayStep::described(
+                        "core initializer made a durable call after its recorded bootstrap block",
+                    ),
+                    mismatched: Vec::new(),
+                }))
+            }
             BootstrapTail::Live => {
                 let replay_target = self.exhaust_cursor_replay_prefix().await?;
                 self.cursor.publish_live();

@@ -17,7 +17,7 @@ export const SelfRpcAgentImpl = SelfRpcAgent.implement({
             return;
         },
         async selfRpc() {
-            return SelfRpcAgent.client.get({ name: this.name }).doWork();
+            return SelfRpcAgent.client.upsert({ name: this.name }).doWork();
         },
     },
 });

@@ -387,7 +387,7 @@ pub async fn MoonBitToolReflectionCaller::principal_round_trip(
     Some(value) => value
     None => return "missing-audit-log"
   }
-  let reflected = agent_type.get_json(
+  let reflected = agent_type.upsert_json(
     Json::object({ "name": Json::string(name) }),
   ) catch {
     error => return "reflected-binding:\{Repr(error)}"
@@ -396,24 +396,17 @@ pub async fn MoonBitToolReflectionCaller::principal_round_trip(
   let reflected_result = reflected.invoke_json("get_creator", Json::object({})) catch {
     error => return "reflected-call:\{Repr(error)}"
   }
-  let parts = reflected_result.metadata.agent_id.parts() catch {
-    error => return "id:\{Repr(error)}"
+  let reflected_id = reflected_result.metadata.agent_id
+  let reflected_client_id = reflected.agent_id() catch {
+    error => return "reflected-id:\{Repr(error)}"
   }
-  guard parts.constructor_value ==
-    @model.SchemaValue::Record([@model.SchemaValue::String(name)]) else {
-    return "principal-in-id"
-  }
-  let full = @reflection.FullAgentClient::bind(
-    "AuditLog",
-    reflected_result.metadata.agent_id,
-    (@schema.type_tag() : @schema.TypeTag[AuditLogConstructor]),
-  ) catch {
+  let full = @reflection.FullAgentClient::upsert("AuditLog", AuditLogConstructor::{
+    name,
+  }) catch {
     error => return "full-binding:\{Repr(error)}"
   }
   defer full.drop()
-  let method_only = @reflection.MethodOnlyAgentClient::bind(
-    reflected_result.metadata.agent_id,
-  ) catch {
+  let method_only = @reflection.MethodOnlyAgentClient::bind(reflected_id) catch {
     error => return "method-binding:\{Repr(error)}"
   }
   defer method_only.drop()
@@ -429,16 +422,17 @@ pub async fn MoonBitToolReflectionCaller::principal_round_trip(
   ) catch {
     error => return "method-call:\{Repr(error)}"
   }
-  let generated = AuditLogClient::get(name) catch {
+  let generated = AuditLogClient::upsert(name) catch {
     error => return "generated-binding:\{Repr(error)}"
   }
   defer generated.drop()
-  let generated_id = generated.get_agent_id() catch {
+  let generated_id = generated.agent_id() catch {
     error => return "generated-id:\{Repr(error)}"
   }
-  guard full_result.metadata.agent_id == reflected_result.metadata.agent_id &&
-    method_result.metadata.agent_id == reflected_result.metadata.agent_id &&
-    generated_id == reflected_result.metadata.agent_id.value else {
+  guard reflected_client_id == reflected_id &&
+    full_result.metadata.agent_id == reflected_id &&
+    method_result.metadata.agent_id == reflected_id &&
+    generated_id == reflected_id else {
     return "identity-mismatch"
   }
   let generated_result = generated.get_creator()
@@ -457,7 +451,7 @@ pub async fn MoonBitToolReflectionCaller::agent_round_trip(
     Some(value) => value
     None => return "missing-counter"
   }
-  let client = agent_type.get_json(
+  let client = agent_type.upsert_json(
     Json::object({ "name": Json::string("reflected-" + self.name) }),
   ) catch {
     error => return "binding:\{Repr(error)}"
@@ -467,9 +461,6 @@ pub async fn MoonBitToolReflectionCaller::agent_round_trip(
   }
   let native = client.invoke_value("get_value", @model.SchemaValue::Record([])) catch {
     error => return "native:\{Repr(error)}"
-  }
-  let parts = first.metadata.agent_id.parts() catch {
-    error => return "identity:\{Repr(error)}"
   }
   let discovered = @reflection.get_agent_type_by_agent_id(
     first.metadata.agent_id,
@@ -484,7 +475,8 @@ pub async fn MoonBitToolReflectionCaller::agent_round_trip(
   let second = client.invoke_json("get_value", Json::object({})) catch {
     error => return "second:\{Repr(error)}"
   }
-  let dynamic = @reflection.DynamicAgentClient::from_agent_id(
+  let dynamic = @reflection.DynamicAgentClient::get_by_id(
+    agent_type.name(),
     first.metadata.agent_id,
   ) catch {
     error => return "dynamic-binding:\{Repr(error)}"
@@ -512,5 +504,5 @@ pub async fn MoonBitToolReflectionCaller::agent_round_trip(
     Some(value) => value.name
     None => "missing"
   }
-  "\{parts.type_name}|\{discovered_name}|\{first_value}|\{native_value}|\{second_value}|\{dynamic_value}"
+  "\{agent_type.name()}|\{discovered_name}|\{first_value}|\{native_value}|\{second_value}|\{dynamic_value}"
 }

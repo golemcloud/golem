@@ -27,9 +27,8 @@ use crate::services::golem_config::FilesystemStorageMode;
 use async_trait::async_trait;
 use futures::FutureExt as _;
 use futures::StreamExt as _;
-use golem_common::model::component::ComponentId;
+use golem_common::model::OwnedAgentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, OwnedAgentId};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -885,26 +884,14 @@ fn service_until(
 
 fn agent_snapshots(name: &str) -> AgentSnapshots {
     AgentSnapshots::agent(
-        &OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: name.to_string(),
-            },
-        ),
+        &OwnedAgentId::new(EnvironmentId::new(), &crate::test_agent_id(name)),
         golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
     )
 }
 
 /// The target of a fork, with a new stage id and the snapshots of that stage.
 fn fork_target(name: &str) -> (OwnedAgentId, uuid::Uuid, AgentSnapshots) {
-    let target = OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: name.to_string(),
-        },
-    );
+    let target = OwnedAgentId::new(EnvironmentId::new(), &crate::test_agent_id(name));
     let stage_id = uuid::Uuid::new_v4();
     let stage = AgentSnapshots::agent(&target, golem_common::model::AgentFingerprint(stage_id));
     (target, stage_id, stage)
@@ -4531,12 +4518,11 @@ fn a_fork_waits_only_for_another_attempt_of_its_request_and_for_a_pending_delete
         let source = agent_snapshots("fork-source");
         let (target, _, _) = fork_target("fork-target");
         let flight = fork_flight(&target.agent_id, [3; 32]);
-        let first = snapshots.begin_fork(&source, flight.clone()).await.unwrap();
+        let first = snapshots.begin_fork(&source, flight).await.unwrap();
         let first_waited = first.waited();
 
         let second = {
-            let (snapshots, source, flight) =
-                (Arc::clone(&snapshots), source.clone(), flight.clone());
+            let (snapshots, source, flight) = (Arc::clone(&snapshots), source.clone(), flight);
             tokio::spawn(async move {
                 snapshots
                     .begin_fork(&source, flight)

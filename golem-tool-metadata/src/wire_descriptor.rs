@@ -550,6 +550,7 @@ impl ExtendedToolType<WireTypeRef> {
         Ok(tool::Tool {
             version: self.version,
             requires_filesystem: self.requires_filesystem,
+            http_mount: self.http_mount.map(Into::into),
             commands: tool::CommandTree { nodes },
             schema: schema.finish(),
         })
@@ -563,6 +564,7 @@ fn lower_command(
         name: node.name,
         aliases: node.aliases,
         doc: (&node.doc).into(),
+        http: node.http.map(Into::into),
         globals: tool::Globals {
             options: node.globals.options.into_iter().map(lower_option).collect(),
             flags: node.globals.flags.iter().map(Into::into).collect(),

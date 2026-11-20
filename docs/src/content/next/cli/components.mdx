@@ -38,6 +38,8 @@ Select a component preset with `--preset` (`-P`). For example, built-in Rust tem
 golem --preset release build
 ```
 
+The Rust `release` preset does not check integer overflow or run `debug_assert!`, so a program can behave differently than in the `debug` preset. See [How the presets differ](/next/how-to-guides/common/golem-profiles-and-environments#how-the-presets-differ).
+
 Presets can be customized in the application manifest.
 
 To deploy **all components** of an application, use:
@@ -109,6 +111,6 @@ This workflow is supported by the `component redeploy-agents` command:
 golem component redeploy-agents example:component
 ```
 
-This command does not build or deploy code. It deletes and recreates **all** agents of the selected component using the currently deployed revision. Agent IDs, environment variables, and configuration are preserved, but agent state is lost.
+This command does not build or deploy code. It deletes and recreates **all** agents of the selected component using the currently deployed revision. Constructor parameters, environment variables, and configuration are preserved, but agent state is lost. A keyed agent keeps its agent ID; an agent without a key is recreated with a new agent ID, which the command reports.
 
 Omit the positional component name to use directory-based component selection.

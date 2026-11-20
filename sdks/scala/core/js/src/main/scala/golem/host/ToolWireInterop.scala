@@ -17,6 +17,9 @@
 package golem.host
 
 import golem.host.js.tool._
+import golem.host.js._
+import golem.runtime.http._
+import golem.runtime.autowire.AgentRequestBuilder
 import golem.tool._
 import golem.tool.wire._
 
@@ -81,7 +84,8 @@ object ToolWireInterop {
       t.version,
       t.requiresFilesystem,
       JsCommandTree(t.commands.nodes.map(commandNodeToJs).toJSArray),
-      SchemaWireInterop.graphToJs(t.schema)
+      SchemaWireInterop.graphToJs(t.schema),
+      t.httpMount.map(m => JsToolHttpMount(pathToJs(m.pathPrefix))).orUndefined
     )
 
   def toolFromJs(j: JsTool): WitTool =
@@ -89,7 +93,8 @@ object ToolWireInterop {
       j.version,
       j.requiresFilesystem,
       WitCommandTree(j.commands.nodes.toList.toVector.map(commandNodeFromJs)),
-      SchemaWireInterop.graphFromJs(j.schema)
+      SchemaWireInterop.graphFromJs(j.schema),
+      j.httpMount.toOption.map(m => ToolHttpMount(pathFromJs(m.pathPrefix)))
     )
 
   def toolErrorToJs(e: WitToolError): JsToolError =
@@ -541,7 +546,8 @@ object ToolWireInterop {
       docToJs(n.doc),
       globalsToJs(n.globals),
       n.subcommands.toJSArray,
-      n.body.map(commandBodyToJs).orUndefined
+      n.body.map(commandBodyToJs).orUndefined,
+      n.http.map(httpToJs).orUndefined
     )
 
   private def commandNodeFromJs(j: JsCommandNode): WitCommandNode =
@@ -551,6 +557,103 @@ object ToolWireInterop {
       docFromJs(j.doc),
       globalsFromJs(j.globals),
       j.subcommands.toList,
-      j.body.toOption.map(commandBodyFromJs)
+      j.body.toOption.map(commandBodyFromJs),
+      j.http.toOption.map(httpFromJs)
     )
+
+  private def pathToJs(path: List[PathSegment]): js.Array[JsNeutralPathSegment] = path.map {
+    case PathSegment.Literal(value)              => JsShape.tagged[JsNeutralPathSegment]("literal", value)
+    case PathSegment.PathVariable(name)          => JsShape.tagged[JsNeutralPathSegment]("path-variable", JsPathVariable(name))
+    case PathSegment.RemainingPathVariable(name) =>
+      JsShape.tagged[JsNeutralPathSegment]("remaining-path-variable", JsPathVariable(name))
+    case PathSegment.SystemVariable(_) =>
+      throw new IllegalArgumentException("tool HTTP paths cannot contain system variables")
+  }.toJSArray
+
+  private def pathFromJs(path: js.Array[JsNeutralPathSegment]): List[PathSegment] = path.toList.map { segment =>
+    segment.tag match {
+      case "literal"                 => PathSegment.Literal(valOf(segment).asInstanceOf[String])
+      case "path-variable"           => PathSegment.PathVariable(valOf(segment).asInstanceOf[JsPathVariable].variableName)
+      case "remaining-path-variable" =>
+        PathSegment.RemainingPathVariable(valOf(segment).asInstanceOf[JsPathVariable].variableName)
+      case other => throw new IllegalArgumentException(s"unknown tool path segment: $other")
+    }
+  }
+
+  private def httpToJs(http: CommandHttp): JsCommandHttp = http match {
+    case CommandHttp.Prefix(path) =>
+      JsShape.tagged[JsCommandHttp]("prefix", js.Dynamic.literal("pathSuffix" -> pathToJs(path)))
+    case endpoint: CommandHttp.Endpoint =>
+      val value = js.Dynamic.literal(
+        "httpMethod" -> (endpoint.httpMethod match {
+          case HttpMethod.Any => throw new IllegalArgumentException("tools require a concrete HTTP method")
+          case method         => valOf(AgentRequestBuilder.encodeHttpMethod(method))
+        }),
+        "pathSuffix"      -> pathToJs(endpoint.pathSuffix),
+        "queryVars"       -> endpoint.queryVars.map(q => JsQueryVariable(q.queryParamName, q.variableName)).toJSArray,
+        "headerVars"      -> endpoint.headerVars.map(h => JsHeaderVariable(h.headerName, h.variableName)).toJSArray,
+        "responseHeaders" -> endpoint.responseHeaders.map(h => JsFileResponseHeader(h.name, h.value)).toJSArray
+      )
+      endpoint.routeId.foreach(v => value.updateDynamic("routeId")(v))
+      endpoint.mode.foreach(v => value.updateDynamic("mode")(v.wireValue))
+      endpoint.durableStreams.foreach(v =>
+        value.updateDynamic("durableStreams")(AgentRequestBuilder.encodeDurableStreams(v))
+      )
+      JsShape.tagged[JsCommandHttp]("endpoint", value)
+  }
+
+  private def httpFromJs(http: JsCommandHttp): CommandHttp = http.tag match {
+    case "prefix" =>
+      CommandHttp.Prefix(
+        pathFromJs(
+          valOf(http).asInstanceOf[js.Dynamic].selectDynamic("pathSuffix").asInstanceOf[js.Array[JsNeutralPathSegment]]
+        )
+      )
+    case "endpoint" =>
+      val ep            = valOf(http).asInstanceOf[JsToolHttpEndpoint]
+      val method        = ep.httpMethod.asInstanceOf[js.Dynamic]
+      val methodName    = method.selectDynamic("tag").asInstanceOf[String]
+      val decodedMethod =
+        if (methodName == "custom") HttpMethod.Custom(method.selectDynamic("val").asInstanceOf[String])
+        else
+          HttpMethod
+            .fromString(methodName.toUpperCase)
+            .fold(error => throw new IllegalArgumentException(error), identity)
+      val mode = ep.mode.toOption.map {
+        case "plain"           => HttpRouteMode.Plain
+        case "durable-streams" => HttpRouteMode.DurableStreams
+        case "sse"             => HttpRouteMode.Sse
+        case "web-socket"      => HttpRouteMode.WebSocket
+        case other             => throw new IllegalArgumentException(s"unknown HTTP route mode: $other")
+      }
+      val streams = ep.durableStreams.toOption.map { options =>
+        DurableStreamRouteOptions(
+          options.slots.toList.map { slot =>
+            val source = slot.source.tag match {
+              case "input"  => DurableStreamSlotSource.Input(slot.source.value)
+              case "output" => DurableStreamSlotSource.Output(slot.source.value)
+              case other    => throw new IllegalArgumentException(s"unknown stream source: $other")
+            }
+            DurableStreamSlotOptions(source, slot.name.toOption, slot.contentType.toOption)
+          },
+          options.load.toOption.map(load =>
+            DurableStreamRouteLoadOptions(
+              load.maxConcurrentReadersPerStream.toOption,
+              load.maxAppendRequestsPerSecondPerStream.toOption
+            )
+          )
+        )
+      }
+      CommandHttp.Endpoint(
+        ep.routeId.toOption,
+        decodedMethod,
+        pathFromJs(ep.pathSuffix),
+        ep.queryVars.toList.map(q => QueryVariable(q.queryParamName, q.variableName)),
+        ep.headerVars.toList.map(h => HeaderVariable(h.headerName, h.variableName)),
+        ep.responseHeaders.toList.map(h => FileResponseHeader(h.name, h.value)),
+        mode,
+        streams
+      )
+    case other => throw new IllegalArgumentException(s"unknown tool HTTP declaration: $other")
+  }
 }

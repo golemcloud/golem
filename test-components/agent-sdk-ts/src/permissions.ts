@@ -220,11 +220,10 @@ export const PermissionCaller = defineAgent({
   },
 });
 
-function calleeHolder(calleeName: string): permissions.Holder {
-  return permissions.Holder.agent({
-    componentId: getSelfMetadata().agentId.componentId,
-    agentId: PermissionCallee.agentId({ name: calleeName }).value,
-  });
+async function calleeHolder(calleeName: string): Promise<permissions.Holder> {
+  return permissions.Holder.agent(
+    await PermissionCallee.client.upsert({ name: calleeName }).agentId(),
+  );
 }
 
 export const PermissionCallerImpl = PermissionCaller.implement({
@@ -257,13 +256,11 @@ export const PermissionCallerImpl = PermissionCaller.implement({
     async scopeRpc({ calleeName }) {
       const template = templateCard();
       const scope = permissions.deriveScope([template], { lowerPositive: [envGrant] }).unwrap();
-      const callee = PermissionCallee.client.get({ name: calleeName });
+      const callee = PermissionCallee.client.upsert({ name: calleeName });
       const before = await callee.scopeEnv();
       const during = await callee.scopeEnv({ scopeCard: scope });
       const after = await callee.scopeEnv();
-      const scoped = PermissionCallee.client.get({ name: calleeName }, undefined, {
-        scopeCard: scope,
-      });
+      const scoped = PermissionCallee.client.upsert({ name: calleeName }, { scopeCard: scope });
       const clientDefault = await scoped.scopeEnv();
       const suppressed = await scoped.scopeEnv({ scopeCard: null });
       const scopeCardKept = !scope.isMoved() && !template.isMoved();
@@ -273,13 +270,13 @@ export const PermissionCallerImpl = PermissionCaller.implement({
     },
 
     async installAndRevoke({ calleeName }) {
-      const callee = PermissionCallee.client.get({ name: calleeName });
+      const callee = PermissionCallee.client.upsert({ name: calleeName });
       const walletBefore = (await callee.walletKinds()).kinds;
       const parent = permissions
         .deriveFromWallet({ lowerPositive: [inspectGrant, envGrant] })
         .unwrap();
       const child = parent.derive({ lowerPositive: [envGrant] }).unwrap();
-      const installed = child.install(calleeHolder(calleeName)).isOk();
+      const installed = child.install(await calleeHolder(calleeName)).isOk();
       let movedError = '';
       try {
         child.id();
@@ -353,7 +350,7 @@ export const PermissionCallerImpl = PermissionCaller.implement({
           lowerPositive: [inspectGrant, envGrant],
         })
         .unwrap();
-      const callee = PermissionCallee.client.get({ name: calleeName });
+      const callee = PermissionCallee.client.upsert({ name: calleeName });
       const calleeWithoutScope = await callee.walletKinds();
       const calleeWithScope = await callee.walletKinds({ scopeCard: scope });
       const result = {
@@ -384,7 +381,7 @@ export const PermissionCallerImpl = PermissionCaller.implement({
       const scope = this.keptScope;
       if (scope === undefined) throw new Error('no kept scope card');
       try {
-        return await PermissionCallee.client.get({ name: calleeName }).scopeEnv({ scopeCard: scope });
+        return await PermissionCallee.client.upsert({ name: calleeName }).scopeEnv({ scopeCard: scope });
       } catch (error) {
         return isRemoteCallError(error) ? error.cause.tag : `unexpected: ${errorMessage(error)}`;
       }
@@ -394,11 +391,11 @@ export const PermissionCallerImpl = PermissionCaller.implement({
       const card = permissions.deriveFromWallet({ lowerPositive: [inspectGrant] }).unwrap();
       if (!(card instanceof permissions.PermissionCard)) throw new Error('expected concrete card');
       const id = card.id();
-      const returned = await PermissionCallee.client.get({ name: calleeName }).echoCard({ card });
+      const returned = await PermissionCallee.client.upsert({ name: calleeName }).echoCard({ card });
       const template = templateCard();
       const templateId = template.id();
       const returnedTemplate = await PermissionCallee.client
-        .get({ name: calleeName })
+        .upsert({ name: calleeName })
         .echoTemplate({ card: template });
       const result = {
         movedAfterSend: card.isMoved(),
@@ -415,11 +412,11 @@ export const PermissionCallerImpl = PermissionCaller.implement({
       return result;
     },
 
-    recipientMismatch({ calleeName }) {
+    async recipientMismatch({ calleeName }) {
       const card = permissions
         .deriveFromWallet({ lowerPositive: [mismatchedRecipientGrant] })
         .unwrap();
-      const result = card.install(calleeHolder(calleeName));
+      const result = card.install(await calleeHolder(calleeName));
       return {
         error: result.isErr() ? result.unwrapErr().kind : 'installed',
         moved: card.isMoved(),

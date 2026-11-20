@@ -168,7 +168,7 @@ pub async fn invoke_registered_tool_middleware_wire(
   ]?,
   stdout : @toolStreams.ToolOutputWriter?,
   stderr : @toolStreams.ToolOutputWriter?,
-  principal : @agentCommon.Principal,
+  invocation_context : @caller.InvocationContext,
   underlying : UnderlyingTool,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let context = underlying.ownership_context()
@@ -185,7 +185,7 @@ pub async fn invoke_registered_tool_middleware_wire(
   })
   let invocation = RawToolInvocation::from_wit(
     context, tool_name, tool_metadata, decoded_parameters, command_path, input, stdin,
-    stdout, stderr, principal,
+    stdout, stderr, invocation_context,
   )
   let parameter_schema = match
     tool_middleware_state.descriptors.get(middleware_name) {
@@ -320,7 +320,7 @@ async fn invoke_registered_tool_middleware(
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
-  principal : @agentCommon.Principal,
+  invocation_context : @caller.InvocationContext,
   underlying : UnderlyingTool,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   invoke_registered_tool_middleware_wire(
@@ -333,7 +333,7 @@ async fn invoke_registered_tool_middleware(
     stdin.map(byte_stream_items),
     None,
     None,
-    principal,
+    invocation_context,
     underlying,
   )
 }

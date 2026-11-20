@@ -97,15 +97,15 @@ async fn pending_managed_xfs_storage(
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("Networking", "managed-xfs-storage-seed"),
+            agent_key!("Networking", "managed-xfs-storage-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while seed.eviction_class().await.is_none() {
             tokio::task::yield_now().await;
@@ -115,25 +115,21 @@ async fn pending_managed_xfs_storage(
     .context("seed permit release")?;
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("Networking", "managed-xfs-storage")
+        agent_key!("Networking", "managed-xfs-storage")
     } else {
-        agent_id!("EphemeralNetworking", "managed-xfs-storage")
+        agent_key!("EphemeralNetworking", "managed-xfs-storage")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                "tcp_collect_p3",
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        "tcp_collect_p3",
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -141,7 +137,16 @@ async fn pending_managed_xfs_storage(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            "tcp_collect_p3",
+        ),
     )
     .await?;
     let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
@@ -180,7 +185,7 @@ async fn pending_managed_xfs_storage(
     let chunk = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             executor.commit_oplog(&id).await?;
-            let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             if let Some(entry) = entries.iter().find(|e| matches!(&e.entry, PublicOplogEntry::Start(start) if start.function_name == "sockets::types::tcp-socket::receive-chunk")) {
                 return Ok::<_, anyhow::Error>(entry.oplog_index);
             }
@@ -303,7 +308,7 @@ async fn pending_managed_xfs_storage(
                 .values()
                 .any(|entry| matches!(entry, OplogEntry::Suspend { .. }))
         );
-        let suspended = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let suspended = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         assert_eq!(
             count_agent_invocation_pair_since(&suspended, OplogIndex::INITIAL),
             (2, 1)
@@ -322,12 +327,12 @@ async fn pending_managed_xfs_storage(
         applied_refresh(&limits, &registry, context.account_id)
             .await?
             .await?;
-        executor.resume(&id, false).await?;
+        executor.resume(&owned, false).await?;
         let result = tokio::time::timeout(Duration::from_secs(30), invocation)
             .await???
             .into_typed::<Result<String, String>>()?;
         assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
-        let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let recovered_raw = read_stored().await?;
         let stopped_last = *stopped_raw.last_key_value().unwrap().0;
         assert_eq!(
@@ -410,7 +415,7 @@ async fn durable_storage_month_rollover_reconstructs_and_runs_pending_invocation
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("Counter", "durable-storage-month-rollover");
+    let agent_id = agent_key!("Counter", "durable-storage-month-rollover");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -479,7 +484,7 @@ async fn durable_storage_month_rollover_reconstructs_and_runs_pending_invocation
     )
     .await?;
     assert_eq!(registry.monthly_usage_mode_revision(), 0);
-    wait_for_invocation_pair(&executor, &worker_id, before_pending_invocation).await?;
+    wait_for_invocation_pair(&executor, &worker_id.agent_id, before_pending_invocation).await?;
     let recovered_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_eq!(
         count_agent_invocation_pair_since(&recovered_oplog, before_pending_invocation),

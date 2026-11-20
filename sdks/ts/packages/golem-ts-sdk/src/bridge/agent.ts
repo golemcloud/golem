@@ -2,11 +2,7 @@
 // Licensed under the Golem Source License v1.1
 
 import { WasmRpc } from 'golem:agent/host@2.0.0';
-import {
-  connectRemoteAgent,
-  decodeAgentId,
-  type RemoteAgentCreation,
-} from '../internal/agentIdentity';
+import * as wasiEnv from 'wasi:cli/environment@0.3.0';
 import type { SchemaValueTree } from 'golem:core/types@2.0.0';
 import type { CancellationToken, Datetime, RpcError } from 'golem:agent/host@2.0.0';
 import { awaitAbortable, throwIfAborted } from '../internal/pollableUtils';
@@ -15,11 +11,12 @@ import {
   schemaValueToWit,
   schemaValueToWitAsync,
   typedSchemaValueFromWit,
+  typedSchemaValueToWit,
   preflightWitValueTree,
   type SchemaValue,
   type TypedSchemaValue,
 } from '../internal/schema-model';
-import type { Uuid } from '../uuid';
+import { AgentId } from '../agentId';
 import {
   invocationMetadataFromHost,
   type CancelableScheduledInvocationReceipt,
@@ -42,7 +39,12 @@ export type RemoteCallErrorCause<Value = TypedSchemaValue> =
   | { readonly tag: 'denied'; readonly details: string }
   | { readonly tag: 'not-found'; readonly details: string }
   | { readonly tag: 'remote-internal-error'; readonly details: string }
-  | { readonly tag: 'remote-agent-error'; readonly error: RemoteAgentError<Value> };
+  | { readonly tag: 'remote-agent-error'; readonly error: RemoteAgentError<Value> }
+  /**
+   * A keyed create found an agent that already has the key, or the agent at the ID that a key
+   * derives has another key.
+   */
+  | { readonly tag: 'conflict'; readonly details: string };
 
 export class RemoteCallError<Value = TypedSchemaValue> extends Error {
   readonly _tag = 'RemoteCallError';
@@ -91,6 +93,7 @@ function isRpcError(error: unknown): error is RpcError {
     case 'not-found':
     case 'remote-internal-error':
     case 'remote-agent-error':
+    case 'conflict':
       return true;
     default:
       return false;
@@ -110,6 +113,7 @@ function mapRemoteCallErrorCause<Value>(
     case 'denied':
     case 'not-found':
     case 'remote-internal-error':
+    case 'conflict':
       return { tag: error.tag, details: error.val };
     case 'remote-agent-error':
       return { tag: error.tag, error: mapRemoteAgentError(error.val, decode) };
@@ -124,6 +128,7 @@ function isRemoteCallErrorCause(cause: unknown): cause is RemoteCallErrorCause {
     case 'denied':
     case 'not-found':
     case 'remote-internal-error':
+    case 'conflict':
       return typeof tagged.details === 'string';
     case 'remote-agent-error':
       return isRemoteAgentError(tagged.error);
@@ -179,6 +184,15 @@ function mapRpcError<T>(context: string, operation: () => T): T {
   }
 }
 
+async function mapAsyncRpcError<T>(context: string, operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isRpcError(error)) throw error;
+    throw remoteCallError(context, error);
+  }
+}
+
 function disposeOwnedWitResources(tree: SchemaValueTree): void {
   for (const node of tree.valueNodes) {
     switch (node.tag) {
@@ -216,7 +230,13 @@ function returnUnsentWitResources(tree: SchemaValueTree): void {
 }
 
 export interface RemoteAgentHandle<Value = SchemaValue> {
-  readonly agentId: string;
+  /** Names the target in error messages: the agent type, and the agent ID when it is known. */
+  readonly target: string;
+  /**
+   * The ID of the agent this handle connects to. On a handle of {@link upsertRemoteAgent} it
+   * creates the agent when it is missing, without invoking a method.
+   */
+  agentId(): Promise<AgentId>;
   /**
    * Invoke `method` and await its result. A `scopeCard` is borrowed for the
    * call: the callee holds its authority until the invocation ends, and the
@@ -255,87 +275,113 @@ export function wireRemoteAgent(
   return wireRemotes.get(remote);
 }
 
-export function resolveRemoteAgent(
-  agentTypeName: string,
-  constructorValue: SchemaValue,
-  phantomId?: Uuid,
-  configEntries: readonly AgentConfigEntry[] = [],
-  mode: 'durable' | 'ephemeral' = 'durable',
-): RemoteAgentHandle {
-  return resolveRemoteAgentWith(
-    agentTypeName,
-    constructorValue,
-    phantomId,
-    configEntries,
-    mode,
-    (typeName, constructorTree, phantom, config) =>
-      new WasmRpc(typeName, constructorTree, phantom, config),
-  );
+/** Options of {@link createRemoteAgent}. */
+export interface RemoteAgentCreateOptions {
+  /**
+   * Creates the keyed agent of the constructor parameters, and fails with a `conflict`
+   * {@link RemoteCallError} when it already exists. Otherwise the new agent has no key and a new
+   * ID.
+   */
+  readonly keyed?: boolean;
+  /** Overrides of the agent type's local configuration values. */
+  readonly config?: readonly AgentConfigEntry[];
+  /** Environment variables added to the ones the manifest defines. */
+  readonly env?: readonly (readonly [string, string])[];
 }
 
-export function resolveRemoteAgentFallibly(
-  agentTypeName: string,
-  constructorValue: SchemaValue,
-  phantomId?: Uuid,
-  configEntries: readonly AgentConfigEntry[] = [],
-  mode: 'durable' | 'ephemeral' = 'durable',
-): RemoteAgentHandle {
-  return resolveRemoteAgentWith(
-    agentTypeName,
-    constructorValue,
-    phantomId,
-    configEntries,
-    mode,
-    (typeName, constructorTree, phantom, config, agentId) =>
-      mapRpcError(`Failed to create remote agent client for ${agentId}`, () =>
-        WasmRpc.create(typeName, constructorTree, phantom, config),
-      ),
-  );
+function configEntriesToWit(entries: readonly AgentConfigEntry[]) {
+  return entries.map((entry) => ({
+    path: [...entry.path],
+    value: typedSchemaValueToWit(entry.value),
+  }));
 }
 
-function resolveRemoteAgentWith(
+/**
+ * Connects to the keyed agent of the given type and constructor parameters. A durable target is
+ * created when it is missing; for an ephemeral target, each invocation runs on a new one-shot
+ * instance. Host failures throw a {@link RemoteCallError}.
+ */
+export function upsertRemoteAgent(
   agentTypeName: string,
   constructorValue: SchemaValue,
-  phantomId: Uuid | undefined,
-  configEntries: readonly AgentConfigEntry[],
-  mode: 'durable' | 'ephemeral',
-  create: RemoteAgentCreation,
 ): RemoteAgentHandle {
-  const { agentId, rpc } = connectRemoteAgent(
-    agentTypeName,
-    constructorValue,
-    phantomId,
-    configEntries,
-    mode,
-    create,
+  const rpc = mapRpcError(`Failed to upsert remote agent ${agentTypeName}`, () =>
+    WasmRpc.upsert(agentTypeName, schemaValueToWit(constructorValue)),
   );
-  return boundRemoteAgent(agentId, rpc);
+  return boundRemoteAgent(agentTypeName, rpc);
+}
+
+/**
+ * Creates a durable agent of the given type, and connects to it after its initialization. A
+ * keyed create that finds the key fails with a `conflict` {@link RemoteCallError}.
+ */
+export async function createRemoteAgent(
+  agentTypeName: string,
+  constructorValue: SchemaValue,
+  options: RemoteAgentCreateOptions = {},
+): Promise<RemoteAgentHandle> {
+  const created = await mapAsyncRpcError(`Failed to create remote agent ${agentTypeName}`, () =>
+    WasmRpc.create(agentTypeName, schemaValueToWit(constructorValue), {
+      keyed: options.keyed ?? false,
+      agentConfig: configEntriesToWit(options.config ?? []),
+      env: (options.env ?? []).map(([name, value]) => [name, value] as [string, string]),
+    }),
+  );
+  const agentId = AgentId.from(created.agentId);
+  return boundRemoteAgent(`${agentTypeName}[${agentId.toString()}]`, created.client);
+}
+
+/**
+ * Connects to the existing agent of the given type with the given ID. Never creates the agent: an
+ * unknown ID, or the ID of an agent of another type, fails with a `not-found`
+ * {@link RemoteCallError}.
+ */
+export async function getRemoteAgentById(
+  agentTypeName: string,
+  agentId: AgentId,
+): Promise<RemoteAgentHandle> {
+  const target = `${agentTypeName}[${agentId.toString()}]`;
+  const rpc = mapRpcError(`Failed to connect to remote agent ${target}`, () =>
+    WasmRpc.getById(agentTypeName, agentId),
+  );
+  return boundRemoteAgent(target, rpc);
+}
+
+/** @internal The agent type of the current agent, which Golem sets in `GOLEM_AGENT_TYPE`. */
+export function selfAgentTypeName(): string | undefined {
+  return wasiEnv.getEnvironment().find(([key]) => key === 'GOLEM_AGENT_TYPE')?.[1];
 }
 
 /** Bind self without creating or initializing a target, retaining its recorded identity. */
 export function bindSelfRemoteAgent(expectedTypeName: string): RemoteAgentHandle {
-  const [agentId, rpc] = mapRpcError('Failed to bind self', () => WasmRpc.bindSelf());
+  const [rawAgentId, rpc] = mapRpcError('Failed to bind self', () => WasmRpc.bindSelf());
   try {
-    const [typeName] = decodeAgentId(agentId);
+    const typeName = selfAgentTypeName();
     if (typeName !== expectedTypeName) {
       throw remoteCallError('Failed to bind self', {
         tag: 'remote-agent-error',
         val: {
           tag: 'invalid-type',
-          val: `Full agent client '${expectedTypeName}' cannot bind agent type '${typeName}'`,
+          val: `Full agent client '${expectedTypeName}' cannot bind agent type '${typeName ?? '<unknown>'}'`,
         },
       });
     }
-    return boundRemoteAgent(agentId, rpc);
+    const agentId = AgentId.from(rawAgentId);
+    return boundRemoteAgent(`${expectedTypeName}[${agentId.toString()}]`, rpc);
   } catch (error) {
     (rpc as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
     throw error;
   }
 }
 
-function boundRemoteAgent(agentId: string, rpc: WasmRpc): RemoteAgentHandle {
+function boundRemoteAgent(target: string, rpc: WasmRpc): RemoteAgentHandle {
+  const agentId = () =>
+    mapAsyncRpcError(`Failed to get the ID of remote agent ${target}`, async () =>
+      AgentId.from(await rpc.agentId()),
+    );
   const remote = remoteTransport(
     rpc,
+    target,
     agentId,
     schemaValueToWit,
     schemaValueToWitAsync,
@@ -346,6 +392,7 @@ function boundRemoteAgent(agentId: string, rpc: WasmRpc): RemoteAgentHandle {
     remote,
     remoteTransport(
       rpc,
+      target,
       agentId,
       (value) => value,
       async (value) => value,
@@ -367,7 +414,8 @@ function boundRemoteAgent(agentId: string, rpc: WasmRpc): RemoteAgentHandle {
 
 function remoteTransport<Value>(
   rpc: WasmRpc,
-  agentId: string,
+  target: string,
+  agentId: () => Promise<AgentId>,
   encode: (value: Value) => SchemaValueTree,
   encodeAsync: (value: Value) => Promise<SchemaValueTree>,
   decode: (value: SchemaValueTree) => Value,
@@ -417,11 +465,11 @@ function remoteTransport<Value>(
       result = await awaitAbortable(future.get(), signal, () => future.cancel());
     } catch (error) {
       if (!isRpcError(error)) throw error;
-      throw failure(`Remote agent ${agentId}.${method} errored`, error);
+      throw failure(`Remote agent ${target}.${method} errored`, error);
     }
     if (metadata === undefined) {
       if (result !== undefined) disposeOwnedWitResources(result);
-      throw new RemoteCallError(`Remote agent ${agentId}.${method} errored`, {
+      throw new RemoteCallError(`Remote agent ${target}.${method} errored`, {
         tag: 'protocol-error',
         details: 'completed invocation has no invocation metadata',
       });
@@ -433,45 +481,46 @@ function remoteTransport<Value>(
       };
     } catch (error) {
       throw new RemoteOutputError(
-        `Remote agent ${agentId}.${method} returned an invalid schema value: ${error instanceof Error ? error.message : String(error)}`,
+        `Remote agent ${target}.${method} returned an invalid schema value: ${error instanceof Error ? error.message : String(error)}`,
         { cause: error },
       );
     }
   };
   return {
+    target,
     agentId,
     invokeAndAwait: async (method, params, signal, scopeCard) =>
       (await awaitInvocation(method, params, signal, scopeCard)).value,
     invokeAndAwaitWithMetadata: awaitInvocation,
     invoke(method, params) {
-      mapRpcError(`Remote agent ${agentId}.${method} errored`, () =>
+      mapRpcError(`Remote agent ${target}.${method} errored`, () =>
         rpc.invoke(method, encode(params), undefined),
       );
     },
     invokeWithMetadata(method, params) {
-      const metadata = mapRpcError(`Remote agent ${agentId}.${method} errored`, () =>
+      const metadata = mapRpcError(`Remote agent ${target}.${method} errored`, () =>
         rpc.invoke(method, encode(params), undefined),
       );
       return invocationMetadataFromHost(metadata);
     },
     schedule(at, method, params) {
-      mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+      mapRpcError(`Scheduling remote agent ${target}.${method} failed`, () =>
         rpc.scheduleInvocation(at, method, encode(params), undefined),
       );
     },
     scheduleWithMetadata(at, method, params) {
-      const receipt = mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+      const receipt = mapRpcError(`Scheduling remote agent ${target}.${method} failed`, () =>
         rpc.scheduleInvocation(at, method, encode(params), undefined),
       );
       return Object.freeze({ metadata: invocationMetadataFromHost(receipt.metadata) });
     },
     scheduleCancelable(at, method, params) {
-      return mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+      return mapRpcError(`Scheduling remote agent ${target}.${method} failed`, () =>
         rpc.scheduleCancelableInvocation(at, method, encode(params), undefined),
       ).cancellationToken;
     },
     scheduleCancelableWithMetadata(at, method, params) {
-      const receipt = mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
+      const receipt = mapRpcError(`Scheduling remote agent ${target}.${method} failed`, () =>
         rpc.scheduleCancelableInvocation(at, method, encode(params), undefined),
       );
       return Object.freeze({

@@ -42,6 +42,32 @@ object zioGolemMill extends ScalaModule {
   )
 }
 
+// The sbt projects of the same names link the same sources; ../scripts/test-build-plugins.sh
+// compares the two plugins' bundles.
+trait BuildPluginFixture extends golem.mill.GolemAutoRegister {
+  def fixtureDir: String
+
+  override def moduleDir = BuildCtx.workspaceRoot / os.up / "test-build-plugins" / fixtureDir
+  override def sources   = Task.Sources(moduleDir / "src" / "main" / "scala")
+
+  def scalaVersion = "3.3.7"
+
+  override def scalaJSConfig = Task.Anon {
+    val config = super.scalaJSConfig()
+    config
+      .withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
+      .withOutputPatterns(config.outputPatterns.withSourceMapFile("%s.sourcemap"))
+  }
+}
+
+object singleModuleFixture extends BuildPluginFixture {
+  def fixtureDir = "single-module"
+}
+
+object dynamicImportFixture extends BuildPluginFixture {
+  def fixtureDir = "dynamic-import"
+}
+
 object fixture extends golem.mill.GolemAutoRegister {
   override def moduleDir = BuildCtx.workspaceRoot / "test-fixture"
 

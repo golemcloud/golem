@@ -17,7 +17,7 @@
 package golem.host
 
 import golem.host.PermissionsApi._
-import golem.host.js.{JsComponentId, JsPermissionCardResource, JsUuid}
+import golem.host.js.JsPermissionCardResource
 import golem.schema.{FromSchema, GuestPermissionCardHandle, IntoSchema, PermissionCardSpec, SchemaTypeBody, SchemaValue}
 import golem.schema.wire.{ConcreteCodec, WitSchemaTypeBody, WitSchemaValueNode}
 import zio.test._
@@ -442,9 +442,9 @@ object PermissionsApiSpec extends ZIOSpecDefault {
           else js.undefined
         )
         .install()
-      val componentId = JsComponentId(JsUuid(js.BigInt(7), js.BigInt(8)))
+      val target      = golem.AgentId(new java.util.UUID(7L, 8L))
       val agentCard   = card(host.rawCard("a"))
-      val agentResult = agentCard.install(Holder.agent(componentId, "Target(\"b\")"))
+      val agentResult = agentCard.install(Holder.Agent(target))
       val agentArgs   = host.args("installCard")
       val appCard     = card(host.rawCard("b"))
       val appResult   = appCard.install(Holder.App(new java.util.UUID(5L, 6L)))
@@ -453,8 +453,8 @@ object PermissionsApiSpec extends ZIOSpecDefault {
       assertTrue(
         agentResult == Left(PermissionError.InstallRecipientMismatch("card recipient is another agent")),
         !agentCard.isPresent,
-        holder.`val`.agentId.asInstanceOf[String] == "Target(\"b\")",
-        holder.`val`.componentId.uuid.lowBits.toString == "8",
+        holder.`val`.uuid.highBits.toString == "7",
+        holder.`val`.uuid.lowBits.toString == "8",
         appResult == Right(()),
         appArgs(1).asInstanceOf[js.Dynamic].tag.asInstanceOf[String] == "app",
         appArgs(1).asInstanceOf[js.Dynamic].`val`.highBits.toString == "5",

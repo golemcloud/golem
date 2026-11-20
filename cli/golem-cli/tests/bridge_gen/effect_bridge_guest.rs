@@ -23,7 +23,7 @@ fn effect_guest_all_schema_nested_streams_and_durable_config_compile() {
         r#"
 import { Effect, Stream } from "effect"
 import { GuestStreamingAgent } from "./guest-streaming-agent-guest-client.js"
-const client = GuestStreamingAgent.getWithConfig("id", 10n)
+const client = GuestStreamingAgent.create("id", { keyed: true, config: { limits: { maximum: 10n } }, env: { MODE: "test" } })
 const call = Effect.flatMap(client, value => value.status())
 const streamCall = Effect.flatMap(client, value => value.produce())
 const checked: Effect.Effect<Stream.Stream<unknown, unknown>, unknown, unknown> = streamCall
@@ -34,7 +34,7 @@ void checked
 }
 
 #[test]
-fn effect_guest_ephemeral_metadata_and_config_compile() {
+fn effect_guest_ephemeral_upsert_only_and_metadata_compile() {
     let mut schema = agent(
         "EphemeralEffectAgent",
         "effect",
@@ -54,8 +54,12 @@ fn effect_guest_ephemeral_metadata_and_config_compile() {
         r#"
 import { Effect } from "effect"
 import { EphemeralEffectAgent } from "./ephemeral-effect-agent-guest-client.js"
-const result = Effect.flatMap(EphemeralEffectAgent.newPhantomWithConfig("name", "model"), client => client.run(1))
+const result = Effect.flatMap(EphemeralEffectAgent.upsert("name"), client => client.run(1))
 const checked: Effect.Effect<{ readonly metadata: unknown; readonly value: string }, unknown, unknown> = result
+// @ts-expect-error an ephemeral agent has no create
+void EphemeralEffectAgent.create("name")
+// @ts-expect-error an ephemeral agent has no getById
+void EphemeralEffectAgent.getById
 void checked
 "#,
     );
@@ -81,7 +85,7 @@ fn effect_guest_stream_agent_and_schema_name_compile() {
         r#"
 import { Effect } from "effect"
 import { Stream as GeneratedStream } from "./stream-guest-client.js"
-const produced = GeneratedStream.get().pipe(Effect.flatMap(client => client.produce()))
+const produced = GeneratedStream.upsert().pipe(Effect.flatMap(client => client.produce()))
 void produced
 "#,
     );
@@ -114,8 +118,8 @@ fn effect_guest_agent_named_result_and_effect_result_alias_compile() {
         r#"
 import { Effect, Result } from "effect"
 import { Result as GeneratedResult } from "./result-guest-client.js"
-const status = GeneratedResult.get().pipe(Effect.flatMap(client => client.status()))
-const outcome = GeneratedResult.get().pipe(
+const status = GeneratedResult.upsert().pipe(Effect.flatMap(client => client.status()))
+const outcome = GeneratedResult.upsert().pipe(
   Effect.flatMap(client => client.outcome(Result.succeed("yes"))),
 )
 const checked: Effect.Effect<Result.Result<string, number>, unknown, unknown> = outcome
@@ -155,10 +159,10 @@ fn effect_guest_scope_cards_on_awaited_calls_compile() {
             mode,
         );
         let (factory, value) = if durable {
-            ("CardAgent.get(\"a\")", "string")
+            ("CardAgent.upsert(\"a\")", "string")
         } else {
             (
-                "CardAgent.newPhantom(\"a\")",
+                "CardAgent.upsert(\"a\")",
                 "{ readonly metadata: unknown; readonly value: string }",
             )
         };
@@ -237,7 +241,7 @@ import { TemplateAgent } from "./template-agent-guest-client.js"
 declare const card: Permissions.PermissionCard
 declare const template: Permissions.PolymorphicPermissionCard
 const program = Effect.gen(function* () {
-  const client = yield* TemplateAgent.get("a")
+  const client = yield* TemplateAgent.upsert("a")
   const returnedTemplate: Permissions.PolymorphicPermissionCard = yield* client.giveTemplate(template)
   const returnedCard: Permissions.PermissionCard = yield* client.giveConcrete(card)
   // @ts-expect-error a concrete card is not a polymorphic card
@@ -305,8 +309,12 @@ fn effect_guest_effect_results_and_trailing_optional_parameters_compile() {
 import { Effect, Result } from "effect"
 import { OptionalEffectAgent } from "./optional-effect-agent-guest-client.js"
 const program = Effect.gen(function*() {
-  const client = yield* OptionalEffectAgent.get("name")
-  yield* OptionalEffectAgent.get("name", "nick")
+  const client = yield* OptionalEffectAgent.upsert("name")
+  yield* OptionalEffectAgent.upsert("name", "nick")
+  const created = yield* OptionalEffectAgent.create("name", "nick", { keyed: true, env: { MODE: "test" } })
+  const id = yield* created.agentId
+  const byId: OptionalEffectAgent = yield* OptionalEffectAgent.getById(id)
+  void byId
   const found: Result.Result<bigint, string> = yield* client.lookup(undefined, 1)
   const count: bigint = Result.isSuccess(found) ? found.success : 0n
   yield* client.lookup("first", 1, "last")
@@ -359,7 +367,7 @@ fn effect_guest_parameter_named_result_does_not_shadow_effect_result() {
 import { Effect, Result } from "effect"
 import { ShadowEffectAgent } from "./shadow-effect-agent-guest-client.js"
 const program = Effect.gen(function*() {
-  const client = yield* ShadowEffectAgent.get("name")
+  const client = yield* ShadowEffectAgent.upsert("name")
   const checked: Result.Result<string, number> = yield* client.check(Result.succeed("yes"), "effect")
   return checked
 })

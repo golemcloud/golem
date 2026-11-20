@@ -51,6 +51,32 @@ func TestUUIDParsesBothCasesAndRendersLowercase(t *testing.T) {
 	}
 }
 
+func TestAgentIDTextFormIsTheUUID(t *testing.T) {
+	const text = "00000007-0000-8000-8000-000000000004"
+	u, err := ParseUUID(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := AgentIDFromUUID(u)
+	if id.String() != text || id.UUID() != u || id.IsZero() {
+		t.Fatalf("AgentIDFromUUID(%s) = %s", text, id)
+	}
+	encoded, err := id.MarshalText()
+	if err != nil || string(encoded) != text {
+		t.Fatalf("MarshalText = %q, %v", encoded, err)
+	}
+	var back AgentID
+	if err := back.UnmarshalText([]byte(strings.ToUpper(text))); err != nil || back != id {
+		t.Fatalf("UnmarshalText = %s, %v", back, err)
+	}
+	if err := back.UnmarshalText([]byte("Counter(1)")); err == nil {
+		t.Fatal("accepted a readable agent name")
+	}
+	if !(AgentID{}).IsZero() {
+		t.Fatal("the zero AgentID is not zero")
+	}
+}
+
 func TestOptionAccessors(t *testing.T) {
 	some, none := Some(7), None[int]()
 	if v, ok := some.Get(); !ok || v != 7 || !some.IsSome() || some.IsNone() {

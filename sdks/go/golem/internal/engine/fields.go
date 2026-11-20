@@ -67,9 +67,6 @@ type Field struct {
 	Index int
 	Typ   reflect.Type
 	Codec *Codec
-	// AutoInjected marks a Principal field: the host fills it from the
-	// invocation, so it has no codec and no value on the wire.
-	AutoInjected bool
 	// Restrict is what the field's golem tag declared.
 	Restrict *Restriction
 }
@@ -92,10 +89,6 @@ func (d *Engine) StructFields(t reflect.Type) []Field {
 			d.reportNameClash(t, other, f.Name, name)
 		}
 		byName[name] = f.Name
-		if f.Type == d.PrincipalType {
-			out = append(out, Field{Name: name, Index: i, Typ: f.Type, AutoInjected: true})
-			continue
-		}
 		fi := Field{
 			Name:  name,
 			Index: i,

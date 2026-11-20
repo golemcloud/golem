@@ -35,7 +35,7 @@ const scheduleReport = () =>
       nanoseconds: Math.floor(atMillis % 1_000) * 1_000_000,
     };
 
-    const recorder = yield* DelayedRecorderDefinition.client.get({ name });
+    const recorder = yield* DelayedRecorderDefinition.client.upsert({ name });
     yield* recorder.recordCount.schedule(scheduledAt, { value: newCount });
     return newCount;
   }).pipe(Effect.scoped, Effect.orDie);
@@ -49,10 +49,10 @@ scheduling failure, map it to a domain error declared in the method's `error` sc
 
 ## Exact Call Shape
 
-- `Target.client.get(...)` takes the complete named agent `id` record.
+- `Target.client.upsert(...)` takes the complete named agent `id` record.
 - Remote method inputs are named records. Pass `{}` for a method declared with `input: {}`.
 - `.schedule(...)` takes the absolute datetime first and the method input second.
-- Both `client.get(...)` and `.schedule(...)` are lazy Effects and must be yielded.
+- Both `client.upsert(...)` and `.schedule(...)` are lazy Effects and must be yielded.
 - Yielding `.schedule(...)` waits only for schedule submission, not for future execution.
 - Scheduling reports only submission failures. The target method's later success or typed failure
   is not returned to the caller.
@@ -61,7 +61,7 @@ For a no-parameter method:
 
 ```typescript
 const scheduleIncrement = Effect.gen(function* () {
-  const counter = yield* CounterDefinition.client.get({ name: "my-counter" });
+  const counter = yield* CounterDefinition.client.upsert({ name: "my-counter" });
   yield* counter.increment.schedule(scheduledAt, {});
 });
 ```

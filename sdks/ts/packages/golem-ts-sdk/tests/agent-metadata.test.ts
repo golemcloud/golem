@@ -21,6 +21,7 @@ import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { schemaValueFromWit, schemaValueToWit, v } from '../src/internal/schema-model';
 import { golemTool010Guest, guest, tool } from '../src';
 import { s } from '../src/schema/markers';
+import { selectSelfAgent } from './selfAgentTestSupport';
 
 const get = (name: string) => AgentTypeRegistry.get(new AgentClassName(name));
 
@@ -93,10 +94,7 @@ describe('agent metadata (Phase 3)', () => {
     expect(methods['read'].description).toBe('Reads the value');
     expect(methods['read'].promptHint).toBe('No arguments needed');
     // `readOnly: true` uses the `until-write` cache policy (matching the base SDK).
-    expect(methods['read'].readOnly).toEqual({
-      cachePolicy: { tag: 'until-write' },
-      usesPrincipal: false,
-    });
+    expect(methods['read'].readOnly).toEqual({ cachePolicy: { tag: 'until-write' } });
 
     // Omitted metadata keeps today's defaults.
     expect(methods['write'].description).toBe('');
@@ -104,61 +102,33 @@ describe('agent metadata (Phase 3)', () => {
     expect(methods['write'].readOnly).toBeUndefined();
   });
 
-  it('infers per-principal caching only from direct method inputs', () => {
+  it('emits no auto-injected field and no uses-principal flag', () => {
     defineAgent({
-      name: 'PrincipalReadOnlyMetadata',
-      id: { creator: s.principal() },
+      name: 'ContextReadOnlyMetadata',
+      id: { creator: s.principalRef() },
       methods: {
-        direct: method({ input: { caller: s.principal() }, returns: z.string(), readOnly: true }),
+        direct: method({ input: { who: s.principalRef() }, returns: z.string(), readOnly: true }),
         ttl: method({
-          input: { caller: s.principal() },
+          input: {},
           returns: z.string(),
           readOnly: { cache: { ttlNanos: 123n } },
         }),
-        uncached: method({
-          input: { caller: s.principal() },
-          returns: z.string(),
-          readOnly: { cache: 'no-cache' },
-        }),
-        nested: method({
-          input: { data: z.object({ caller: s.principal() }) },
-          returns: z.string(),
-          readOnly: {},
-        }),
-        returned: method({ input: {}, returns: s.principal(), readOnly: true }),
-        ordinary: method({ input: {}, returns: z.string(), readOnly: true }),
-        mutable: method({ input: { caller: s.principal() }, returns: z.string() }),
-        disabled: method({
-          input: { caller: s.principal() },
-          returns: z.string(),
-          readOnly: false,
-        }),
+        uncached: method({ input: {}, returns: s.principalRef(), readOnly: { cache: 'no-cache' } }),
+        mutable: method({ input: {}, returns: z.string() }),
+        disabled: method({ input: {}, returns: z.string(), readOnly: false }),
       },
     });
 
-    const methods = Object.fromEntries(
-      get('PrincipalReadOnlyMetadata')!.methods.map((m) => [m.name, m]),
-    );
-    expect(methods.direct.readOnly).toEqual({
-      cachePolicy: { tag: 'until-write' },
-      usesPrincipal: true,
-    });
-    expect(methods.ttl.readOnly).toEqual({
-      cachePolicy: { tag: 'ttl', val: 123n },
-      usesPrincipal: true,
-    });
-    expect(methods.uncached.readOnly).toEqual({
-      cachePolicy: { tag: 'no-cache' },
-      usesPrincipal: true,
-    });
-    for (const name of ['nested', 'returned', 'ordinary']) {
-      expect(methods[name].readOnly).toEqual({
-        cachePolicy: { tag: 'until-write' },
-        usesPrincipal: false,
-      });
-    }
+    const type = get('ContextReadOnlyMetadata')!;
+    const methods = Object.fromEntries(type.methods.map((m) => [m.name, m]));
+    expect(methods.direct.readOnly).toEqual({ cachePolicy: { tag: 'until-write' } });
+    expect(methods.ttl.readOnly).toEqual({ cachePolicy: { tag: 'ttl', val: 123n } });
+    expect(methods.uncached.readOnly).toEqual({ cachePolicy: { tag: 'no-cache' } });
     expect(methods.mutable.readOnly).toBeUndefined();
     expect(methods.disabled.readOnly).toBeUndefined();
+    const sources = (fields: { source: { tag: string } }[]) => fields.map((f) => f.source.tag);
+    expect(sources(type.constructor.inputSchema.val)).toEqual(['user-supplied']);
+    expect(sources(methods.direct.inputSchema.val)).toEqual(['user-supplied']);
   });
 
   it('maps snapshotting variants correctly', () => {
@@ -405,14 +375,16 @@ describe('agent metadata (Phase 3)', () => {
     invalidDef.implement(implementation);
 
     const emptyInput = schemaValueToWit(v.record([]));
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `SnapshotDeferredInvalid(${JSON.stringify(emptyInput)})`;
+    selectSelfAgent('SnapshotDeferredInvalid');
 
     await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: new Uint8Array([1]),
-        mimeType: 'application/octet-stream',
-      }),
+      isolatedGuest.loadSnapshot.load(
+        {
+          payload: new Uint8Array([1]),
+          mimeType: 'application/octet-stream',
+        },
+        emptyInput,
+      ),
     ).rejects.toContain('implement() was called more than once');
   });
 
@@ -434,14 +406,16 @@ describe('agent metadata (Phase 3)', () => {
     invalidDef.implement(implementation);
 
     const emptyInput = schemaValueToWit(v.record([]));
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `MalformedSnapshotDeferredInvalid(${JSON.stringify(emptyInput)})`;
+    selectSelfAgent('MalformedSnapshotDeferredInvalid');
 
     const rejection = await isolatedGuest.loadSnapshot
-      .load({
-        payload: new TextEncoder().encode('{'),
-        mimeType: 'application/json',
-      })
+      .load(
+        {
+          payload: new TextEncoder().encode('{'),
+          mimeType: 'application/json',
+        },
+        emptyInput,
+      )
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -452,7 +426,7 @@ describe('agent metadata (Phase 3)', () => {
     expect(rejection).toContain('implement() was called more than once');
   });
 
-  it('installs principal and restored state only after the restoration factory succeeds', async () => {
+  it('installs restored state only after the restoration factory succeeds and installs no principal', async () => {
     vi.resetModules();
     const [{ defineAgent: isolatedDefineAgent }, { method: isolatedMethod }, isolatedGuest] =
       await Promise.all([import('../src/defineAgent'), import('../src/method'), import('../src')]);
@@ -488,8 +462,7 @@ describe('agent metadata (Phase 3)', () => {
     });
 
     const idValue = v.record([v.string('counter')]);
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `AtomicSnapshotRestore(${JSON.stringify(schemaValueToWit(idValue))})`;
+    selectSelfAgent('AtomicSnapshotRestore');
     const envelope = (state: object) => ({
       payload: new TextEncoder().encode(
         JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state, fileDatabases: {} }),
@@ -497,25 +470,78 @@ describe('agent metadata (Phase 3)', () => {
       mimeType: 'application/json',
     });
 
-    await expect(isolatedGuest.loadSnapshot.load(envelope({ fail: true }))).rejects.toContain(
-      'rejected snapshot',
-    );
+    const constructorInput = schemaValueToWit(idValue);
+    await expect(
+      isolatedGuest.loadSnapshot.load(envelope({ fail: true }), constructorInput),
+    ).rejects.toContain('rejected snapshot');
     await expect(isolatedGuest.saveSnapshot.save()).rejects.toThrow('agent is not initialized');
     expect(initializeCalls).toBe(0);
     expect(restoreCalls).toBe(1);
 
-    await isolatedGuest.loadSnapshot.load(envelope({ count: 9 }));
+    await isolatedGuest.loadSnapshot.load(envelope({ count: 9 }), constructorInput);
     const saved = await isolatedGuest.saveSnapshot.save();
-    const principalLength = new DataView(
-      saved.payload.buffer,
-      saved.payload.byteOffset,
-      saved.payload.byteLength,
-    ).getUint32(1, false);
-    expect(JSON.parse(new TextDecoder().decode(saved.payload.slice(5 + principalLength)))).toEqual({
-      count: 9,
-    });
+    expect(saved.mimeType).toBe('application/octet-stream');
+    expect(saved.payload[0]).toBe(3);
+    expect(JSON.parse(new TextDecoder().decode(saved.payload.slice(1)))).toEqual({ count: 9 });
     expect(initializeCalls).toBe(0);
     expect(restoreCalls).toBe(2);
+  });
+
+  it('hands the constructor parameters of load to the restoration factory', async () => {
+    vi.resetModules();
+    const [{ defineAgent: isolatedDefineAgent }, isolatedGuest] = await Promise.all([
+      import('../src/defineAgent'),
+      import('../src'),
+    ]);
+
+    const restoredIds: unknown[] = [];
+    isolatedDefineAgent({
+      name: 'RestoreParameters',
+      id: { region: z.string(), tenant: z.string() },
+      methods: {},
+    }).implement({
+      init: ({ id }) => ({ region: `init:${id.region}`, tenant: `init:${id.tenant}` }),
+      methods: {},
+      snapshot: {
+        save() {
+          return new TextEncoder().encode(
+            JSON.stringify({ region: this.region, tenant: this.tenant }),
+          );
+        },
+        load(bytes, ctx) {
+          restoredIds.push(ctx.id);
+          const saved = JSON.parse(new TextDecoder().decode(bytes));
+          return { region: ctx.id.region, tenant: `${ctx.id.tenant}:${saved.tenant}` };
+        },
+      },
+    });
+    selectSelfAgent('RestoreParameters');
+
+    const principalBytes = new TextEncoder().encode(JSON.stringify({ tag: 'anonymous' }));
+    const data = new TextEncoder().encode(JSON.stringify({ region: 'stored', tenant: 'stored' }));
+    const payload = new Uint8Array(5 + principalBytes.length + data.length);
+    payload[0] = 2;
+    new DataView(payload.buffer).setUint32(1, principalBytes.length, false);
+    payload.set(principalBytes, 5);
+    payload.set(data, 5 + principalBytes.length);
+    const snapshot = { payload, mimeType: 'application/octet-stream' };
+
+    await expect(
+      isolatedGuest.loadSnapshot.load(snapshot, schemaValueToWit(v.record([v.string('eu-west')]))),
+    ).rejects.toBeDefined();
+    await expect(isolatedGuest.saveSnapshot.save()).rejects.toThrow('agent is not initialized');
+    expect(restoredIds).toEqual([]);
+
+    await isolatedGuest.loadSnapshot.load(
+      snapshot,
+      schemaValueToWit(v.record([v.string('eu-west'), v.string('acme')])),
+    );
+    expect(restoredIds).toEqual([{ region: 'eu-west', tenant: 'acme' }]);
+    const saved = await isolatedGuest.saveSnapshot.save();
+    expect(saved.payload[0]).toBe(3);
+    expect(
+      JSON.parse(new TextDecoder().decode(saved.payload.slice(1))),
+    ).toEqual({ region: 'eu-west', tenant: 'acme:stored' });
   });
 
   it('strictly validates JSON, multipart, and binary snapshot envelopes', async () => {
@@ -541,8 +567,7 @@ describe('agent metadata (Phase 3)', () => {
       },
     });
     const emptyInput = schemaValueToWit(v.record([]));
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `StrictSnapshotEnvelope(${JSON.stringify(emptyInput)})`;
+    selectSelfAgent('StrictSnapshotEnvelope');
 
     const jsonSnapshot = (envelope: object) => ({
       payload: new TextEncoder().encode(JSON.stringify(envelope)),
@@ -550,7 +575,9 @@ describe('agent metadata (Phase 3)', () => {
     });
     const invalidJsonEnvelopes: Array<[object, string]> = [
       [{ principal: { tag: 'anonymous' }, state: {} }, "missing 'version' field"],
-      [{ version: 2, principal: { tag: 'anonymous' }, state: {} }, 'version must be 1'],
+      [{ version: 3, state: {} }, 'version must be 1 or 2'],
+      [{ version: 2 }, "missing 'state' field"],
+      [{ version: 2, state: {} }, "missing 'fileDatabases' field"],
       [{ version: 1, state: {} }, "missing 'principal' field"],
       [{ version: 1, principal: { tag: 'anonymous' } }, "missing 'state' field"],
       [{ version: 1, principal: { tag: 'anonymous' }, state: {} }, "missing 'fileDatabases' field"],
@@ -564,9 +591,9 @@ describe('agent metadata (Phase 3)', () => {
       ],
     ];
     for (const [envelope, message] of invalidJsonEnvelopes) {
-      await expect(isolatedGuest.loadSnapshot.load(jsonSnapshot(envelope))).rejects.toContain(
-        message,
-      );
+      await expect(
+        isolatedGuest.loadSnapshot.load(jsonSnapshot(envelope), emptyInput),
+      ).rejects.toContain(message);
     }
 
     const multipart = encodeMultipart([
@@ -579,29 +606,41 @@ describe('agent metadata (Phase 3)', () => {
       },
     ]);
     await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: multipart.data,
-        mimeType: `multipart/mixed; boundary=${multipart.boundary}`,
-      }),
+      isolatedGuest.loadSnapshot.load(
+        {
+          payload: multipart.data,
+          mimeType: `multipart/mixed; boundary=${multipart.boundary}`,
+        },
+        emptyInput,
+      ),
     ).rejects.toContain("multipart state part missing 'version' field");
 
     await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: new Uint8Array(),
-        mimeType: 'application/octet-stream',
-      }),
+      isolatedGuest.loadSnapshot.load(
+        {
+          payload: new Uint8Array(),
+          mimeType: 'application/octet-stream',
+        },
+        emptyInput,
+      ),
     ).rejects.toContain('Snapshot is empty');
     await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: new Uint8Array([2, 0, 0, 0]),
-        mimeType: 'application/octet-stream',
-      }),
+      isolatedGuest.loadSnapshot.load(
+        {
+          payload: new Uint8Array([2, 0, 0, 0]),
+          mimeType: 'application/octet-stream',
+        },
+        emptyInput,
+      ),
     ).rejects.toContain('too short for principal length');
     await expect(
-      isolatedGuest.loadSnapshot.load({
-        payload: new Uint8Array([2, 0, 0, 0, 2, 123]),
-        mimeType: 'application/octet-stream',
-      }),
+      isolatedGuest.loadSnapshot.load(
+        {
+          payload: new Uint8Array([2, 0, 0, 0, 2, 123]),
+          mimeType: 'application/octet-stream',
+        },
+        emptyInput,
+      ),
     ).rejects.toContain('too short for principal data');
   });
 
@@ -748,8 +787,7 @@ describe('agent metadata (Phase 3)', () => {
     );
     expect(invalidInitializeError).toMatchObject({ tag: 'custom-error' });
 
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `DeferredValidAgent(${JSON.stringify(emptyInput)})`;
+    selectSelfAgent('DeferredValidAgent');
     await expect(guest.initialize('DeferredValidAgent', emptyInput)).resolves.toBeUndefined();
     expect(guest.getDefinition()).toBe(get('DeferredValidAgent'));
   });

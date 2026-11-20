@@ -54,14 +54,14 @@ async fn identical_live_work_has_equal_compute_charge_after_real_reconstruction(
         .component_dep(&context.default_environment_id, counters)
         .store()
         .await?;
-    let name = agent_id!("Counter", "reconstruction-charge");
+    let name = agent_key!("Counter", "reconstruction-charge");
     // Compare the identical increment work after setup. Initialization remains charged, but
     // its SDK maps and random inputs can change instruction counts across fresh incarnations.
     // Replaying that initialization is still inside the measured reconstruction interval.
     for reconstruct in [false, true] {
         let setup = registry.applied_updates().len();
         let id = executor.start_agent(&component.id, name.clone()).await?;
-        wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+        wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
         limits.run_batch_for_test().await;
         assert!(
             registry.applied_updates()[setup..]
@@ -75,10 +75,7 @@ async fn identical_live_work_has_equal_compute_charge_after_real_reconstruction(
         for expected in [1u32, 2] {
             if reconstruct && expected == 2 {
                 let worker = executor
-                    .production_active_agent(&OwnedAgentId::new(
-                        context.default_environment_id,
-                        &id,
-                    ))
+                    .production_active_agent(&id.clone())
                     .await
                     .unwrap()
                     .primary();

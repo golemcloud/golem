@@ -126,7 +126,7 @@ pub(crate) fn epoch_record_verdict(
         Err(error) => return Err(error),
     };
     record_oplog_epoch_fence(metric_op, true);
-    let fence = OplogFence::refused(agent_id.clone(), refusal);
+    let fence = OplogFence::refused(*agent_id, refusal);
     tracing::warn!(
         agent_id = %agent_id,
         store = svc_name,

@@ -17,7 +17,7 @@
 
 use crate::Tracing;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -66,7 +66,7 @@ async fn go_agent_config_read(
         .store()
         .await?;
 
-    let agent_id = agent_id!("ConfigAgent", "go-config-1");
+    let agent_id = agent_key!("ConfigAgent", "go-config-1");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

@@ -23,7 +23,7 @@ verify the existing suite until that coverage is migrated.
 - Keep local port 9881 free; the suite owns the server lifecycle. HTTP fixtures also use localhost:9006.
 - Generate the Scala guest runtimes. The test manifest consumes `.generated/agent_guest.wasm`; current CI runs the generator first.
 
-For a complete local Scala publication from repository root, use `cargo make build-sdk-scala`. For the exact CI setup, follow the `scala-sdk-integration-tests` job in `.github/workflows/ci.yaml`.
+For a complete local Scala publication from repository root, use `cargo make build-sdk-scala`. For the exact CI setup, follow `validate-sdk-scala` in `Makefile.sdk-validation.toml` and `main-validation-scala` in `Makefile.main-validation.toml`.
 
 ## Run
 

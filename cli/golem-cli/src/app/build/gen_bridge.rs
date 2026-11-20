@@ -2017,8 +2017,8 @@ mod tests {
         CommandNode, CommandTree, Doc, Globals, MonomorphicToolMiddlewareScope, Tool,
     };
     use golem_common::schema::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
-        NamedField, OutputSchema, SchemaGraph, SchemaType,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
+        OutputSchema, SchemaGraph, SchemaType,
     };
     use golem_schema::Empty;
     use indoc::indoc;
@@ -2950,17 +2950,11 @@ components:
             BridgeSdkTargetSubject::Agent(agent) => agent,
             BridgeSdkTargetSubject::Tool { .. } => unreachable!(),
         };
-        constructor_agent.constructor.input_schema = InputSchema::parameters([
-            NamedField::user_supplied(
+        constructor_agent.constructor.input_schema =
+            InputSchema::parameters([NamedField::user_supplied(
                 "authorization",
                 SchemaType::permission_card(Default::default()),
-            ),
-            NamedField::auto_injected(
-                "host-secret",
-                AutoInjectedKind::Principal,
-                SchemaType::secret(Default::default()),
-            ),
-        ]);
+            )]);
 
         let error = validate_host_managed_bridge_targets(&[constructor_target])
             .unwrap_err()
@@ -3009,19 +3003,6 @@ components:
             default_value: None,
             path: vec!["credentials".to_string()],
             value_type: SchemaType::secret(Default::default()),
-        });
-        agent.methods.push(AgentMethodSchema {
-            name: "inspect".to_string(),
-            description: String::new(),
-            prompt_hint: None,
-            input_schema: InputSchema::parameters([NamedField::auto_injected(
-                "authority",
-                AutoInjectedKind::Principal,
-                SchemaType::permission_card(Default::default()),
-            )]),
-            output_schema: OutputSchema::Unit,
-            http_endpoint: vec![],
-            read_only: None,
         });
 
         validate_host_managed_bridge_targets(&[target]).unwrap();
@@ -3210,11 +3191,13 @@ components:
         Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),
                     aliases: vec![],
                     doc: Doc::default(),
+                    http: None,
                     globals: Globals::default(),
                     subcommands: vec![],
                     body: None,

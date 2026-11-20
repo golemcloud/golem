@@ -750,13 +750,8 @@ async fn filesystem_limit_update_is_delivered_to_registered_target() {
         AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE,
         1,
     ));
-    let owned_agent_id = OwnedAgentId::new(
-        EnvironmentId(Uuid::new_v4()),
-        &AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "live-filesystem-limit".to_string(),
-        },
-    );
+    let owned_agent_id =
+        OwnedAgentId::new(EnvironmentId(Uuid::new_v4()), &AgentId::from_parts(7, 1));
     let observed = Arc::new(Mutex::new(Vec::new()));
     let _registration = entry.register_agent_filesystem_limit_target(owned_agent_id, {
         let observed = Arc::clone(&observed);
@@ -784,13 +779,8 @@ async fn dropped_filesystem_limit_registration_detaches_target() {
         AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE,
         1,
     ));
-    let owned_agent_id = OwnedAgentId::new(
-        EnvironmentId(Uuid::new_v4()),
-        &AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "detached-filesystem-limit".to_string(),
-        },
-    );
+    let owned_agent_id =
+        OwnedAgentId::new(EnvironmentId(Uuid::new_v4()), &AgentId::from_parts(7, 2));
     let observed = Arc::new(Mutex::new(Vec::new()));
     let registration = entry.register_agent_filesystem_limit_target(owned_agent_id, {
         let observed = Arc::clone(&observed);
@@ -5038,13 +5028,7 @@ async fn all_disabled_production_service_skips_monthly_work_and_keeps_per_agent_
     entry.register_agent_memory_limit_target(Arc::downgrade(&memory_target_dyn));
     let observed_disk_limits = Arc::new(Mutex::new(Vec::new()));
     let _filesystem_registration = entry.register_agent_filesystem_limit_target(
-        OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "all-disabled-managed-xfs".to_string(),
-            },
-        ),
+        OwnedAgentId::new(EnvironmentId(Uuid::new_v4()), &AgentId::from_parts(7, 3)),
         {
             let observed_disk_limits = Arc::clone(&observed_disk_limits);
             move |limit| {
@@ -5108,13 +5092,7 @@ async fn periodic_refresh_with_pending_filesystem_reply(changed_limit: bool) {
     let release = Arc::new(Semaphore::new(0));
     let (completed_tx, mut completed_rx) = tokio::sync::mpsc::unbounded_channel();
     let registration = entry.register_agent_filesystem_limit_target(
-        OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "periodic-refresh-pending-filesystem-reply".to_string(),
-            },
-        ),
+        OwnedAgentId::new(EnvironmentId(Uuid::new_v4()), &AgentId::from_parts(7, 4)),
         {
             let entered = entered.clone();
             let release = release.clone();
@@ -5269,13 +5247,7 @@ async fn production_refresh_updates_existing_per_agent_limit_targets() {
     let observed_disk_limits = Arc::new(Mutex::new(Vec::new()));
     let (applied, mut applied_limits) = tokio::sync::mpsc::unbounded_channel();
     let _filesystem_registration = entry.register_agent_filesystem_limit_target(
-        OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "refresh-existing-limit-targets".to_string(),
-            },
-        ),
+        OwnedAgentId::new(EnvironmentId(Uuid::new_v4()), &AgentId::from_parts(7, 5)),
         {
             let observed_disk_limits = Arc::clone(&observed_disk_limits);
             move |limit| {
@@ -5325,13 +5297,7 @@ async fn monthly_refresh_finishes_before_pending_filesystem_limit_target() {
     let release = Arc::new(tokio::sync::Semaphore::new(0));
     let completed = Arc::new(tokio::sync::Semaphore::new(0));
     let _registration = entry.register_agent_filesystem_limit_target(
-        OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "unchanged-filesystem-limit-capacity-watch".to_string(),
-            },
-        ),
+        OwnedAgentId::new(EnvironmentId(Uuid::new_v4()), &AgentId::from_parts(7, 6)),
         {
             let entered = entered.clone();
             let release = release.clone();
@@ -5391,13 +5357,7 @@ async fn queued_filesystem_limits_coalesce_without_overwriting_latest_cached_lim
     let (entered, mut requests) = tokio::sync::mpsc::unbounded_channel();
     let (completed, mut completions) = tokio::sync::mpsc::unbounded_channel();
     let registration = entry.register_agent_filesystem_limit_target(
-        OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "coalesced-filesystem-limit".to_string(),
-            },
-        ),
+        OwnedAgentId::new(EnvironmentId(Uuid::new_v4()), &AgentId::from_parts(7, 7)),
         {
             let release = release.clone();
             move |limit| {
@@ -5452,13 +5412,7 @@ async fn next_filesystem_refresh_retries_same_limit_after_target_failure() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let (completed, mut completions) = tokio::sync::mpsc::unbounded_channel();
     let _registration = entry.register_agent_filesystem_limit_target(
-        OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "retry-filesystem-limit-on-next-refresh".to_string(),
-            },
-        ),
+        OwnedAgentId::new(EnvironmentId(Uuid::new_v4()), &AgentId::from_parts(7, 8)),
         move |limit| {
             let completed = completed.clone();
             let attempts = attempts.clone();

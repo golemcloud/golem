@@ -20,13 +20,14 @@
 //! over RPC.
 
 use crate::Tracing;
+use golem_common::model::OwnedAgentId;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
-use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_type::SchemaType;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
 use golem_worker_executor::worker::EvictionClass;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start, start_with_overrides,
@@ -78,7 +79,7 @@ fn is_read_only_violation(err: &anyhow::Error, method: &str) -> bool {
 /// this helper before snapshotting to make those tests deterministic.
 async fn wait_oplog_settled<E: TestDsl + Sync>(
     executor: &E,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -137,7 +138,7 @@ async fn t1_read_only_returns_value_on_fresh_agent(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t1-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t1-{unique_id}"));
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -174,7 +175,7 @@ async fn t2_read_only_caches_until_write(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t2-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t2-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -200,7 +201,7 @@ async fn wait_for_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
     agent_id: &golem_common::model::agent::ParsedAgentKey,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -245,7 +246,7 @@ async fn t3_read_only_invalidates_after_write(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t3-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t3-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -312,7 +313,7 @@ async fn t4_read_only_bypasses_queue_during_slow_write(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t4-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t4-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -448,14 +449,14 @@ async fn t5_read_only_bypasses_agent_loading(
 
     // R: the worker whose read-only cache we want to keep alive across eviction.
     let unique_id = context.redis_prefix();
-    let r_agent_id = agent_id!(AGENT_TYPE, format!("t5-r-{unique_id}"));
+    let r_agent_id = agent_key!(AGENT_TYPE, format!("t5-r-{unique_id}"));
     let r_worker_id = tokio::time::timeout(
         Duration::from_secs(10),
         executor.start_agent(&component.id, r_agent_id.clone()),
     )
     .await
     .expect("first worker failed to load: check SYSTEM_MEMORY against the component's module charge and initial linear memory")?;
-    let r_owned = OwnedAgentId::new(context.default_environment_id, &r_worker_id);
+    let r_owned = OwnedAgentId::new(context.default_environment_id, &r_worker_id.agent_id);
 
     // Warm R's read-only cache: cache miss + populate via the detached observer.
     let _ = executor
@@ -491,11 +492,11 @@ async fn t5_read_only_bypasses_agent_loading(
     // Q: a second worker of the same agent type. Loading Q reserves another
     // `r_req` against the budget (Q shares R's already-charged module), which
     // forces eviction of R.
-    let q_agent_id = agent_id!(AGENT_TYPE, format!("t5-q-{unique_id}"));
+    let q_agent_id = agent_key!(AGENT_TYPE, format!("t5-q-{unique_id}"));
     let q_worker_id = executor
         .start_agent(&component.id, q_agent_id.clone())
         .await?;
-    let q_owned = OwnedAgentId::new(context.default_environment_id, &q_worker_id);
+    let q_owned = OwnedAgentId::new(context.default_environment_id, &q_worker_id.agent_id);
 
     // Trigger Q's instance load. The invocation forces the worker out of
     // `Unloaded`, which acquires memory from `ActiveAgents` and runs
@@ -604,18 +605,15 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// T6 — per-principal cache partitioning
+// T6 — per-caller cache partitioning
 // ---------------------------------------------------------------------------
 
-/// Issue #3393 T6: `uses_principal = true` methods (the SDK auto-derives this
-/// from the presence of a `Principal` parameter) must cache independently per
-/// principal, while `uses_principal = false` methods share a single cache
-/// entry regardless of which principal invokes them.
+/// Two callers never share a cached result, whether or not the method reads the caller.
 ///
 /// The agent exposes:
-///   - `get_count_for(_principal: Principal) -> u64` — `#[read_only]` with
-///     `uses_principal = true` (derived from the `Principal` parameter).
-///   - `get_count() -> u64` — `#[read_only]` with `uses_principal = false`.
+///   - `get_count_for(ctx: InvocationContext) -> u64`, a `#[read_only]` method that reads the
+///     caller.
+///   - `get_count() -> u64`, a `#[read_only]` method that never reads the caller.
 ///
 /// Both return the same counter, so the test asserts on oplog deltas: a cache
 /// miss writes one `AgentInvocationStarted/Finished` pair; a cache hit writes
@@ -623,14 +621,13 @@ where
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn t6_principal_aware_caches_per_principal(
+async fn t6_two_callers_never_share_a_cached_result(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{GolemUserPrincipal, Principal};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -641,36 +638,29 @@ async fn t6_principal_aware_caches_per_principal(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t6-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t6-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     wait_oplog_settled(&executor, &worker_id).await?;
 
-    // Two distinct principals — same shape, different account IDs.
-    // `Principal` is auto-injected from `InvokeAgentRequest.principal` (the
-    // SDK macro derives `uses_principal = true` from the `Principal`
-    // parameter), so `method_parameters` stays `data_value!()` below.
-    let principal_a = Principal::GolemUser(GolemUserPrincipal {
-        account_id: AccountId::new(),
-    });
-    let principal_b = Principal::GolemUser(GolemUserPrincipal {
-        account_id: AccountId::new(),
-    });
+    // Two distinct callers: same shape, different account IDs.
+    let caller_a = callers::account(AccountId::new());
+    let caller_b = callers::account(AccountId::new());
     assert_ne!(
-        principal_a, principal_b,
-        "test bug: principals must differ to exercise per-principal partitioning"
+        caller_a, caller_b,
+        "test bug: callers must differ to exercise per-caller partitioning"
     );
 
-    // -- get_count_for: uses_principal = true ------------------------------
+    // -- get_count_for: a method that reads the caller ---------------------
 
     // First read as A: cache miss → one Started/Finished pair.
     let before = executor.oplog_max_index(&worker_id).await?;
     let _ = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &component,
             &agent_id,
-            principal_a.clone(),
+            caller_a.clone(),
             "get_count_for",
             data_value!(),
         )
@@ -679,22 +669,29 @@ async fn t6_principal_aware_caches_per_principal(
     let (started_a, finished_a) = count_agent_invocation_pair_since(&entries, before);
     assert_eq!(
         started_a, 1,
-        "first read as principal A must miss the cache (got {started_a} started)"
+        "first read as caller A must miss the cache (got {started_a} started)"
     );
     assert_eq!(finished_a, 1);
 
-    // Wait for the detached observer to populate the cache for principal A.
-    wait_for_principal_cache_hit(&executor, &component, &agent_id, &worker_id, &principal_a)
-        .await?;
+    // Wait for the detached observer to populate the cache for caller A.
+    wait_for_caller_cache_hit(
+        &executor,
+        &component,
+        &agent_id,
+        &worker_id,
+        "get_count_for",
+        &caller_a,
+    )
+    .await?;
 
     // First read as B: must also miss because the cache key is partitioned
-    // by principal_digest (see `build_read_only_cache_key`).
+    // by the caller digest (see `build_read_only_cache_key`).
     let before = executor.oplog_max_index(&worker_id).await?;
     let _ = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &component,
             &agent_id,
-            principal_b.clone(),
+            caller_b.clone(),
             "get_count_for",
             data_value!(),
         )
@@ -703,21 +700,28 @@ async fn t6_principal_aware_caches_per_principal(
     let (started_b, finished_b) = count_agent_invocation_pair_since(&entries, before);
     assert_eq!(
         started_b, 1,
-        "first read as principal B must miss the cache (got {started_b} started)"
+        "first read as caller B must miss the cache (got {started_b} started)"
     );
     assert_eq!(finished_b, 1);
 
-    // Wait for the cache to populate for principal B.
-    wait_for_principal_cache_hit(&executor, &component, &agent_id, &worker_id, &principal_b)
-        .await?;
+    // Wait for the cache to populate for caller B.
+    wait_for_caller_cache_hit(
+        &executor,
+        &component,
+        &agent_id,
+        &worker_id,
+        "get_count_for",
+        &caller_b,
+    )
+    .await?;
 
     // Second read as A must hit the cache (still partitioned, not evicted).
     let before = executor.oplog_max_index(&worker_id).await?;
     let _ = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &component,
             &agent_id,
-            principal_a.clone(),
+            caller_a.clone(),
             "get_count_for",
             data_value!(),
         )
@@ -726,82 +730,78 @@ async fn t6_principal_aware_caches_per_principal(
     let (started_a2, _) = count_agent_invocation_pair_since(&entries, before);
     assert_eq!(
         started_a2, 0,
-        "second read as principal A must hit the cache (got {started_a2} started)"
+        "second read as caller A must hit the cache (got {started_a2} started)"
     );
 
-    // -- get_count: uses_principal = false ---------------------------------
+    // -- get_count: a method that never reads the caller ---------------------
 
-    // First `get_count` as A: cache miss → one Started/Finished pair.
-    let before = executor.oplog_max_index(&worker_id).await?;
-    let _ = executor
-        .invoke_and_await_agent_as_principal(
+    // The key still holds the caller, so each caller has its own entry.
+    for (label, caller) in [("A", &caller_a), ("B", &caller_b)] {
+        let before = executor.oplog_max_index(&worker_id).await?;
+        let _ = executor
+            .invoke_and_await_agent_as_caller(
+                &component,
+                &agent_id,
+                caller.clone(),
+                "get_count",
+                data_value!(),
+            )
+            .await?;
+        let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let (started, _) = count_agent_invocation_pair_since(&entries, before);
+        assert_eq!(
+            started, 1,
+            "first `get_count` as caller {label} must miss the cache (got {started} started)"
+        );
+        wait_for_caller_cache_hit(
+            &executor,
             &component,
             &agent_id,
-            principal_a.clone(),
+            &worker_id,
             "get_count",
-            data_value!(),
+            caller,
         )
         .await?;
-    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let (started_gc_a, _) = count_agent_invocation_pair_since(&entries, before);
-    assert_eq!(
-        started_gc_a, 1,
-        "first `get_count` (any principal) must miss the cache (got {started_gc_a} started)"
-    );
-
-    // Wait for the cache to populate (using anonymous because get_count is
-    // principal-unaware — any principal works).
-    wait_for_cache_hit(&executor, &component, &agent_id, &worker_id).await?;
-
-    // `get_count` as B must hit even though the cache was warmed as A,
-    // because `uses_principal = false` means the principal is not part of
-    // the cache key.
-    let before = executor.oplog_max_index(&worker_id).await?;
-    let _ = executor
-        .invoke_and_await_agent_as_principal(
-            &component,
-            &agent_id,
-            principal_b.clone(),
-            "get_count",
-            data_value!(),
-        )
-        .await?;
-    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let (started_gc_b, _) = count_agent_invocation_pair_since(&entries, before);
-    assert_eq!(
-        started_gc_b, 0,
-        "second `get_count` (different principal, same cache key) must hit the cache \
-         (got {started_gc_b} started)"
-    );
+    }
+    for (label, caller) in [("A", &caller_a), ("B", &caller_b)] {
+        let before = executor.oplog_max_index(&worker_id).await?;
+        let _ = executor
+            .invoke_and_await_agent_as_caller(
+                &component,
+                &agent_id,
+                caller.clone(),
+                "get_count",
+                data_value!(),
+            )
+            .await?;
+        let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let (started, _) = count_agent_invocation_pair_since(&entries, before);
+        assert_eq!(
+            started, 0,
+            "a repeated `get_count` as caller {label} must hit the cache (got {started} started)"
+        );
+    }
 
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// T6b — public oplog input for a principal-aware method is well-formed
+// T6b — public oplog input for a method that reads the caller is well-formed
 // ---------------------------------------------------------------------------
 
-/// Reproducer for the public-oplog bug where a principal-aware method's
-/// recorded (caller-only) input value was paired with a record schema that
-/// still included the auto-injected `principal` field, producing a malformed
-/// `TypedSchemaValue` whose schema arity did not match its value arity.
-///
-/// `get_count_for(_principal: Principal) -> u64` declares a single
-/// auto-injected field and no user-supplied parameters, so the recorded input
-/// is an empty record. The public oplog's `function_input` must describe an
-/// empty record too (the principal excluded), keeping schema and value arities
-/// aligned.
+/// `get_count_for(ctx: InvocationContext) -> u64` declares no parameter besides the context, which
+/// is not part of its signature, so the recorded input is an empty record. The public oplog's
+/// `function_input` must describe an empty record too, keeping schema and value arities aligned.
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn t6b_principal_method_public_oplog_input_is_well_formed(
+async fn t6b_caller_method_public_oplog_input_is_well_formed(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{GolemUserPrincipal, Principal};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -812,20 +812,18 @@ async fn t6b_principal_method_public_oplog_input_is_well_formed(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t6b-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t6b-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     wait_oplog_settled(&executor, &worker_id).await?;
 
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: AccountId::new(),
-    });
+    let caller = callers::account(AccountId::new());
     executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &component,
             &agent_id,
-            principal,
+            caller,
             "get_count_for",
             data_value!(),
         )
@@ -837,14 +835,13 @@ async fn t6b_principal_method_public_oplog_input_is_well_formed(
 
     assert_well_formed_record(&function_input);
 
-    // `get_count_for` declares only the auto-injected principal, so the
-    // caller-visible input is an empty record.
+    // `get_count_for` declares no parameter, so the input is an empty record.
     let SchemaType::Record { fields, .. } = function_input.root_type() else {
         panic!("expected record root, got {:?}", function_input.root_type());
     };
     assert!(
         fields.is_empty(),
-        "auto-injected principal must be excluded from the public oplog input, got fields {:?}",
+        "the context must not be part of the public oplog input, got fields {:?}",
         fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
     );
 
@@ -887,24 +884,25 @@ fn assert_well_formed_record(typed: &golem_common::schema::TypedSchemaValue) {
     );
 }
 
-/// Polls until `get_count_for` as `principal` is served from the per-principal
+/// Polls until `method` as `caller` is served from the per-caller
 /// read-only cache (no new `AgentInvocationStarted` entries on the oplog).
-async fn wait_for_principal_cache_hit<E: TestDsl + Sync>(
+async fn wait_for_caller_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
     agent_id: &golem_common::model::agent::ParsedAgentKey,
-    worker_id: &AgentId,
-    principal: &golem_common::model::agent::Principal,
+    worker_id: &OwnedAgentId,
+    method: &str,
+    caller: &golem_common::model::caller::Caller,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let before = executor.oplog_max_index(worker_id).await?;
         let _ = executor
-            .invoke_and_await_agent_as_principal(
+            .invoke_and_await_agent_as_caller(
                 component,
                 agent_id,
-                principal.clone(),
-                "get_count_for",
+                caller.clone(),
+                method,
                 data_value!(),
             )
             .await?;
@@ -914,9 +912,7 @@ async fn wait_for_principal_cache_hit<E: TestDsl + Sync>(
             return Ok(());
         }
         if Instant::now() > deadline {
-            panic!(
-                "expected a per-principal read-only cache hit within 5s for principal {principal:?}"
-            );
+            panic!("expected a per-caller read-only cache hit within 5s for caller {caller:?}");
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -944,7 +940,7 @@ async fn t7_ttl_expires_cache_entry(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t7-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t7-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -981,7 +977,7 @@ async fn wait_for_ttl_cache_hit<E: TestDsl + Sync>(
     executor: &E,
     component: &golem_common::model::component::ComponentDto,
     agent_id: &golem_common::model::agent::ParsedAgentKey,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -1023,7 +1019,7 @@ async fn t8_no_cache_runs_every_time(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t8-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t8-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1080,7 +1076,7 @@ async fn t9_bad_write_traps(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t9w-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t9w-{unique_id}"));
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1116,7 +1112,7 @@ async fn t9_bad_remote_read_traps(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t9r-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t9r-{unique_id}"));
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1156,7 +1152,7 @@ async fn t10_read_only_oplog_markers_present_when_executed(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t10-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t10-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1221,7 +1217,7 @@ async fn t11_concurrent_misses_coalesce(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t11-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t11-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1305,7 +1301,7 @@ async fn t11b_coalesced_owner_survives_caller_cancellation(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t11b-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t11b-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1352,7 +1348,7 @@ async fn t11b_coalesced_owner_survives_caller_cancellation(
     cancelled.abort();
     let _ = cancelled.await;
 
-    // A second Await with the same (method, args, principal, epoch) must
+    // A second Await with the same (method, args, caller, epoch) must
     // join the pending cache entry as a waiter and successfully receive
     // the value from the spawned owner — proving the spawned owner kept
     // running past caller abort. The timeout must comfortably exceed the
@@ -1431,7 +1427,7 @@ async fn t11c_coalescing_does_not_cache_idempotency_replay(
         .await?;
 
     let unique_id = context.redis_prefix();
-    let agent_id = agent_id!(AGENT_TYPE, format!("t11c-{unique_id}"));
+    let agent_id = agent_key!(AGENT_TYPE, format!("t11c-{unique_id}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1520,12 +1516,12 @@ async fn r1_rpc_read_only_uses_cache_fast_path(
 
     let unique_id = context.redis_prefix();
     let target_str = format!("r1-target-{unique_id}");
-    let target_agent_id = agent_id!(AGENT_TYPE, target_str.clone());
+    let target_agent_id = agent_key!(AGENT_TYPE, target_str.clone());
     let target_worker_id = executor
         .start_agent(&component.id, target_agent_id.clone())
         .await?;
 
-    let caller_agent_id = agent_id!(CALLER_TYPE, format!("r1-caller-{unique_id}"));
+    let caller_agent_id = agent_key!(CALLER_TYPE, format!("r1-caller-{unique_id}"));
     let _caller_worker_id = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
@@ -1597,22 +1593,45 @@ async fn r2_rpc_read_only_during_slow_target_invocation(
 
     let unique_id = context.redis_prefix();
     let target_str = format!("r2-target-{unique_id}");
-    let target_agent_id = agent_id!(AGENT_TYPE, target_str.clone());
+    let target_agent_id = agent_key!(AGENT_TYPE, target_str.clone());
     let target_worker_id = executor
         .start_agent(&component.id, target_agent_id.clone())
         .await?;
 
-    let caller_agent_id = agent_id!(CALLER_TYPE, format!("r2-caller-{unique_id}"));
+    let caller_agent_id = agent_key!(CALLER_TYPE, format!("r2-caller-{unique_id}"));
     let _caller_worker_id = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
 
-    // Warm target cache so an embedded get_count would hit without the
-    // slow_increment enqueue invalidating it.
-    let _ = executor
-        .invoke_and_await_agent(&component, &target_agent_id, "get_count", data_value!())
-        .await?;
-    wait_for_cache_hit(&executor, &component, &target_agent_id, &target_worker_id).await?;
+    // Warm the target cache as the same caller that reads over RPC later: a cached result is
+    // served only to the caller it was computed for. The embedded get_count then hits the cache
+    // without the slow_increment enqueue invalidating it.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let before = executor.oplog_max_index(&target_worker_id).await?;
+        let warm = executor
+            .invoke_and_await_agent(
+                &component,
+                &caller_agent_id,
+                "read_via_rpc",
+                data_value!(target_str.clone()),
+            )
+            .await?
+            .into_typed::<u64>()?;
+        assert_eq!(warm, 0);
+        let entries = executor
+            .get_oplog(&target_worker_id, OplogIndex::INITIAL)
+            .await?;
+        let (started, _) = count_agent_invocation_pair_since(&entries, before);
+        if started == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected an RPC read-only cache hit within 5s for the calling agent"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     let result = tokio::time::timeout(
         Duration::from_secs(5),
@@ -1662,13 +1681,13 @@ async fn r3_rpc_parallel_reads_coalesce(
 
     let unique_id = context.redis_prefix();
     let target_str = format!("r3-target-{unique_id}");
-    let target_agent_id = agent_id!(AGENT_TYPE, target_str.clone());
+    let target_agent_id = agent_key!(AGENT_TYPE, target_str.clone());
     let target_worker_id = executor
         .start_agent(&component.id, target_agent_id.clone())
         .await?;
     wait_oplog_settled(&executor, &target_worker_id).await?;
 
-    let caller_agent_id = agent_id!(CALLER_TYPE, format!("r3-caller-{unique_id}"));
+    let caller_agent_id = agent_key!(CALLER_TYPE, format!("r3-caller-{unique_id}"));
     let _caller_worker_id = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
@@ -1758,8 +1777,8 @@ async fn r4_rpc_read_only_method_cannot_make_rpc(
 
     let unique_id = context.redis_prefix();
     let target_str = format!("r4-target-{unique_id}");
-    let _target_agent_id = agent_id!(AGENT_TYPE, target_str.clone());
-    let caller_agent_id = agent_id!(CALLER_TYPE, format!("r4-caller-{unique_id}"));
+    let _target_agent_id = agent_key!(AGENT_TYPE, target_str.clone());
+    let caller_agent_id = agent_key!(CALLER_TYPE, format!("r4-caller-{unique_id}"));
     let _caller_worker_id = executor
         .start_agent(&component.id, caller_agent_id.clone())
         .await?;
@@ -1797,7 +1816,7 @@ async fn settled_read_only_cache_hit_persists_nothing(
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .store()
         .await?;
-    let agent_id = agent_id!(
+    let agent_id = agent_key!(
         AGENT_TYPE,
         format!("no-persistence-{}", context.redis_prefix())
     );
@@ -1848,7 +1867,7 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .store()
         .await?;
-    let control_agent_id = agent_id!(
+    let control_agent_id = agent_key!(
         AGENT_TYPE,
         format!("no-followers-control-{}", context.redis_prefix())
     );
@@ -1871,7 +1890,7 @@ async fn coalesced_read_only_followers_persist_no_durable_entries(
         .await?;
     let single_invocation_entries = entry_types_since(&control_entries, control_before);
 
-    let agent_id = agent_id!(
+    let agent_id = agent_key!(
         AGENT_TYPE,
         format!("no-followers-{}", context.redis_prefix())
     );

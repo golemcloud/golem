@@ -18,10 +18,10 @@ use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
-use golem_common::agent_id;
+use golem_common::agent_key;
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_component_metadata;
-use golem_common::model::agent::{AgentTypeName, GolemUserPrincipal, Principal};
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -47,6 +47,7 @@ use golem_service_base::model::agent_secret::AgentSecret;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::quota::{LeaseInterest, QuotaService, UnlimitedQuotaService};
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start_with_overrides,
@@ -142,9 +143,9 @@ impl QuotaService for RecordingQuotaService {
 struct Fixture {
     executor: TestWorkerExecutor,
     owner_component: golem_common::model::component::ComponentDto,
-    owner_id: golem_common::model::AgentId,
-    other_owner_id: golem_common::model::AgentId,
-    cross_environment_owner_id: golem_common::model::AgentId,
+    owner_id: golem_common::model::OwnedAgentId,
+    other_owner_id: golem_common::model::OwnedAgentId,
+    cross_environment_owner_id: golem_common::model::OwnedAgentId,
     account_id: AccountId,
     environment_id: EnvironmentId,
     other_environment_id: EnvironmentId,
@@ -280,7 +281,7 @@ async fn fixture(
             Some(deployment),
         );
     }
-    let agent_id = agent_id!("ToolRuntimeBypassOwner", "e2-owner");
+    let agent_id = agent_key!("ToolRuntimeBypassOwner", "e2-owner");
     let owner_id = executor
         .start_agent_with(
             &owner_component.id,
@@ -296,7 +297,7 @@ async fn fixture(
     let other_owner_id = executor
         .start_agent_with(
             &owner_component.id,
-            agent_id!("ToolRuntimeBypassOwner", "e2-other"),
+            agent_key!("ToolRuntimeBypassOwner", "e2-other"),
             HashMap::from([
                 ("OWNER_MARKER".to_string(), "caller-one-config".to_string()),
                 ("EFFECT_PORT".to_string(), effect_port.to_string()),
@@ -311,7 +312,7 @@ async fn fixture(
     let cross_environment_owner_id = executor
         .start_agent_with(
             &other_owner_component.id,
-            agent_id!("ToolRuntimeBypassOwner", "e2-cross-environment"),
+            agent_key!("ToolRuntimeBypassOwner", "e2-cross-environment"),
             HashMap::from([
                 ("OWNER_MARKER".to_string(), "caller-two-config".to_string()),
                 ("EFFECT_PORT".to_string(), effect_port.to_string()),
@@ -352,27 +353,17 @@ async fn immediate_successor_overlap_and_calling_owner_context(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let fixture = fixture(last_unique_id, deps, owner, provider).await?;
-    let normal = invoke_chain(&fixture, "forged-principal", "normal").await?;
-    assert_eq!(normal.claimed_principal, "P2>P1>U2>U1>forged-principal");
+    let normal = invoke_chain(&fixture, "forged-caller", "normal").await?;
+    assert_eq!(normal.claimed_principal, "P2>P1>U2>U1>forged-caller");
     assert_eq!(normal.owner_config, "caller-one-config");
     assert_eq!(normal.owner_secret, "caller-one-secret");
-    let account_bits = fixture.account_id.0.as_u128();
-    assert!(normal.actual_principal.contains("Principal::GolemUser"));
-    assert!(
-        normal
-            .actual_principal
-            .contains(&format!("high-bits: {}", account_bits >> 64)),
-        "unexpected middleware principal: {}",
+    assert_eq!(
+        normal.actual_principal,
+        callers::account_text(fixture.account_id),
+        "unexpected middleware caller: {}",
         normal.actual_principal
     );
-    assert!(
-        normal
-            .actual_principal
-            .contains(&format!("low-bits: {}", account_bits & u64::MAX as u128)),
-        "unexpected middleware principal: {}",
-        normal.actual_principal
-    );
-    assert!(!normal.actual_principal.contains("forged-principal"));
+    assert!(!normal.actual_principal.contains("forged-caller"));
     assert_eq!(normal.nested.label, "U1>U2>P1>P2>normal");
 
     let overlap = invoke_chain(&fixture, "spoofed", "overlap").await?;
@@ -433,40 +424,43 @@ async fn calling_owner_context_isolated_across_environments(
 ) -> anyhow::Result<()> {
     let fixture = fixture(last_unique_id, deps, owner, provider).await?;
 
-    let first = invoke_chain(&fixture, "first-forged-principal", "first").await?;
+    let first = invoke_chain(&fixture, "first-forged-caller", "first").await?;
     let second = invoke_chain_for(
         &fixture,
-        &fixture.cross_environment_owner_id,
+        &fixture.cross_environment_owner_id.agent_id,
         fixture.cross_environment_fingerprint,
-        "second-forged-principal",
+        "second-forged-caller",
         "second",
     )
     .await?;
-    let first_again = invoke_chain(&fixture, "first-again-forged-principal", "first-again").await?;
+    let first_again = invoke_chain(&fixture, "first-again-forged-caller", "first-again").await?;
 
     for (evidence, config, secret, forged) in [
         (
             &first,
             "caller-one-config",
             "caller-one-secret",
-            "first-forged-principal",
+            "first-forged-caller",
         ),
         (
             &second,
             "caller-two-config",
             "caller-two-secret",
-            "second-forged-principal",
+            "second-forged-caller",
         ),
         (
             &first_again,
             "caller-one-config",
             "caller-one-secret",
-            "first-again-forged-principal",
+            "first-again-forged-caller",
         ),
     ] {
         assert_eq!(evidence.owner_config, config);
         assert_eq!(evidence.owner_secret, secret);
-        assert!(evidence.actual_principal.contains("Principal::GolemUser"));
+        assert_eq!(
+            evidence.actual_principal,
+            callers::account_text(fixture.account_id)
+        );
         assert!(!evidence.actual_principal.contains(forged));
     }
 
@@ -515,7 +509,7 @@ async fn underlying_handle_is_revoked_after_return_and_cannot_cross_invocations(
 
     let fresh = invoke_chain_for(
         &fixture,
-        &fixture.other_owner_id,
+        &fixture.other_owner_id.agent_id,
         fixture.other_fingerprint,
         "fresh",
         "normal",
@@ -527,8 +521,9 @@ async fn underlying_handle_is_revoked_after_return_and_cannot_cross_invocations(
     fixture
         .executor
         .complete_promise(
+            &fixture.owner_id.environment_id,
             &golem_common::model::PromiseId {
-                agent_id: fixture.owner_id.clone(),
+                agent_id: fixture.owner_id.agent_id,
                 fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint),
             },
@@ -590,7 +585,7 @@ async fn universal_results_are_validated_and_valid_stream_transformation_survive
         assert_entity_cleanup(&fixture).await;
     }
 
-    let agent_id = agent_id!("ToolRuntimeBypassOwner", "e2-owner");
+    let agent_id = agent_key!("ToolRuntimeBypassOwner", "e2-owner");
     let valid: ValidationEvidence = fixture
         .executor
         .invoke_and_await_agent(
@@ -642,7 +637,7 @@ async fn invoke_chain(
 ) -> anyhow::Result<ChainEvidence> {
     invoke_chain_for(
         fixture,
-        &fixture.owner_id,
+        &fixture.owner_id.agent_id,
         fixture.fingerprint,
         claimed,
         mode,
@@ -665,7 +660,7 @@ async fn invoke_chain_for(
         vec![
             SchemaValue::String(claimed.to_string()),
             SchemaValue::String(mode.to_string()),
-            SchemaValue::String("payload-principal".to_string()),
+            SchemaValue::String("payload-caller".to_string()),
         ],
     )
     .await?;
@@ -687,7 +682,7 @@ fn leaf_effect_count(fixture: &Fixture) -> usize {
 }
 
 async fn assert_entity_cleanup(fixture: &Fixture) {
-    let owner = OwnedAgentId::new(fixture.environment_id, &fixture.owner_id);
+    let owner = OwnedAgentId::new(fixture.environment_id, &fixture.owner_id.agent_id);
     if let Some(active) = fixture.executor.active_entity_metadata(&owner).await {
         assert!(
             active.tool_operations.operations.is_empty(),
@@ -711,7 +706,7 @@ async fn invoke_tool(
 ) -> anyhow::Result<AgentInvocationResult> {
     invoke_tool_for(
         fixture,
-        &fixture.owner_id,
+        &fixture.owner_id.agent_id,
         fixture.fingerprint,
         name,
         fields,
@@ -737,7 +732,7 @@ async fn invoke_tool_for(
         .command_index_by_path(&command_path)
         .ok_or_else(|| anyhow::anyhow!("tool `{name}` has no inspect command"))?;
     let schema = definition.canonical_input_record_schema(command)?;
-    let environment_id = if owner_id == &fixture.cross_environment_owner_id {
+    let environment_id = if owner_id == &fixture.cross_environment_owner_id.agent_id {
         fixture.other_environment_id
     } else {
         fixture.environment_id
@@ -753,9 +748,7 @@ async fn invoke_tool_for(
             command_path,
             TypedSchemaValue::new(schema, SchemaValue::Record { fields }),
             InvocationContextStack::fresh(),
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: fixture.account_id,
-            }),
+            callers::account(fixture.account_id),
             None,
         )
         .await?;

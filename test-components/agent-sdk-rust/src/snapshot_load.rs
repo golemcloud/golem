@@ -26,9 +26,8 @@ struct SnapshotLoadProbeImpl {
     loaded_value: Option<u64>,
     origin: &'static str,
     mode: String,
-    principal: String,
     agent_type: String,
-    phantom_id: Option<String>,
+    agent_id: Option<String>,
     config_marker: String,
     read_bytes: usize,
     constructor_calls_at_restore: u32,
@@ -41,9 +40,8 @@ struct SnapshotLoadProbeStatus<'a> {
     loaded_value: Option<u64>,
     origin: &'a str,
     mode: &'a str,
-    principal: &'a str,
     agent_type: &'a str,
-    phantom_id: &'a Option<String>,
+    agent_id: &'a Option<String>,
     config_marker: &'a str,
     read_bytes: usize,
     constructor_calls_at_restore: u32,
@@ -60,9 +58,8 @@ impl SnapshotLoadProbe for SnapshotLoadProbeImpl {
             loaded_value: None,
             origin: "initialized",
             mode,
-            principal: "initialized".to_string(),
             agent_type: "SnapshotLoadProbe".to_string(),
-            phantom_id: None,
+            agent_id: None,
             config_marker: config
                 .get()
                 .expect("config access should be allowed")
@@ -83,9 +80,8 @@ impl SnapshotLoadProbe for SnapshotLoadProbeImpl {
             loaded_value: self.loaded_value,
             origin: self.origin,
             mode: &self.mode,
-            principal: &self.principal,
             agent_type: &self.agent_type,
-            phantom_id: &self.phantom_id,
+            agent_id: &self.agent_id,
             config_marker: &self.config_marker,
             read_bytes: self.read_bytes,
             constructor_calls_at_restore: self.constructor_calls_at_restore,
@@ -136,7 +132,7 @@ impl SnapshotLoadProbe for SnapshotLoadProbeImpl {
                 }
                 "rpc" => {
                     let client =
-                        ReadonlyAgentClient::get("snapshot-load-probe-rpc-target".to_string());
+                        ReadonlyAgentClient::upsert("snapshot-load-probe-rpc-target".to_string());
                     let _ = client.get_count().await;
                 }
                 other => return Err(format!("unsupported snapshot load mode: {other}")),
@@ -148,10 +144,8 @@ impl SnapshotLoadProbe for SnapshotLoadProbeImpl {
             loaded_value: Some(value),
             origin: "restored",
             mode,
-            principal: serde_json::to_string(&context.principal)
-                .expect("principal should serialize"),
             agent_type: context.agent_type,
-            phantom_id: context.phantom_id.map(|id| id.to_string()),
+            agent_id: Some(context.agent_id.uuid.to_string()),
             config_marker,
             read_bytes,
             constructor_calls_at_restore,

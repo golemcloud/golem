@@ -13,16 +13,15 @@
 // limitations under the License.
 
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { AgentType, Principal } from 'golem:agent/common@2.0.0';
-import { caller } from 'golem:agent/invocation-context@2.0.0';
-import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
+import { AgentType } from 'golem:agent/common@2.0.0';
+import { SchemaValueTree } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
 import type { ExtendedCommandBody } from './internal/tool';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { getRawSelfAgentId } from './host/hostapi';
+import { selfAgentTypeName } from './bridge/agent';
 import { AgentInitiator } from './internal/agentInitiator';
 import { encodeMultipart, decodeMultipart, extractBoundary } from './internal/multipart';
 import { normalizeContentType, SnapshotError, validatePartName } from './snapshot';
@@ -30,7 +29,8 @@ import type { SnapshotPart } from './snapshot';
 import { decodeSnapshotDatabases, SnapshotDatabases } from './internal/databaseSnapshot';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
-import { sdkPrincipalFromHost } from './principal';
+import { currentInvocationContext, type EndableInvocationContext } from './caller';
+import { validateLegacySnapshotPrincipal } from './internal/legacySnapshotPrincipal';
 import {
   encodeDeclaredToolErrorPayload,
   encodeToolValueAsync,
@@ -54,17 +54,22 @@ export type {
 } from './invocationId';
 export { Datetime } from './datetime';
 export { ComponentId, AccountId, EnvironmentId } from './ids';
-export { ParsedAgentId } from './agentId';
-export type {
-  AgentClientBindOptions,
-  ParsedAgentIdCreateOptions,
-  ParsedAgentIdParts,
-} from './agentId';
+export { AgentId } from './agentId';
 export * from './agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 export * from './newTypes/multimodalAdvanced';
-export { Principal } from './principal';
+export {
+  AccountPrincipal,
+  AgentPrincipal,
+  AnonymousPrincipal,
+  Caller,
+  PrincipalRef,
+  TokenProvenance,
+  ToolPrincipal,
+  UserPrincipal,
+} from './caller';
+export type { AccountAuthentication, InvocationContext, Principal, PrincipalKind } from './caller';
 export { AgentClassName } from './agentClassName';
 export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
@@ -215,13 +220,14 @@ export type {
   ConfigOverrides,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
-  PhantomClientDetails,
   RemoteAgentError,
+  RemoteAgentIdAccessor,
   RemoteCallErrorCause,
   RemoteCallOptions,
   RemoteClientOptions,
   RemoteClient,
   RemoteClientFactory,
+  RemoteCreateOptions,
 } from './client';
 export {
   golemTool010ToolMiddlewareGuest,
@@ -247,11 +253,15 @@ export {
   getAgentType as getReflectedAgentType,
   getToolType as getReflectedToolType,
 } from './reflection';
-export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
+export type {
+  ReflectedCreateOptions,
+  ReflectedCreateValueOptions,
+  ReflectedInvocation,
+} from './reflection';
 export type { CollectedToolInvocation, StartedToolInvocation } from './bridge/tool';
 export { ToolStreamError } from './internal/tool/startedToolInvocation';
 
-let initializedAgent: { agent: ResolvedAgent; principal: Principal } | undefined;
+let initializedAgent: { agent: ResolvedAgent } | undefined;
 
 interface GolemAgentGuest {
   initialize(agentTypeName: string, input: SchemaValueTree): Promise<void>;
@@ -278,7 +288,7 @@ interface SaveSnapshotGuest {
 }
 
 interface LoadSnapshotGuest {
-  load(snapshot: Snapshot): Promise<void>;
+  load(snapshot: Snapshot, constructor: SchemaValueTree): Promise<void>;
 }
 
 async function initialize(agentTypeName: string, input: SchemaValueTree): Promise<void> {
@@ -302,14 +312,24 @@ async function initialize(agentTypeName: string, input: SchemaValueTree): Promis
     );
   }
 
-  const principal = caller().immediate;
-  const initiateResult = await initiator.initiate(input, principal);
+  const context = currentInvocationContext();
+  let initiateResult;
+  try {
+    initiateResult = await initiator.initiate(input, context);
+  } finally {
+    context.end();
+  }
 
   if (initiateResult.tag === 'ok') {
-    initializedAgent = { agent: initiateResult.val, principal };
+    initializedAgent = { agent: initiateResult.val };
   } else {
     throw initiateResult.val;
   }
+}
+
+/** Whether an encoded result holds a stream, whose producer runs after the call returns. */
+function returnsStream(tree: SchemaValueTree | undefined): boolean {
+  return tree?.valueNodes.some((node) => node.tag === 'stream-value') ?? false;
 }
 
 async function invokeAgent(
@@ -319,7 +339,13 @@ async function invokeAgent(
   if (!initializedAgent) {
     throw createCustomError(`Failed to invoke method ${methodName}: agent is not initialized`);
   }
-  const result = await initializedAgent.agent.invoke(methodName, input, caller().immediate);
+  const context = currentInvocationContext();
+  let result;
+  try {
+    result = await initializedAgent.agent.invoke(methodName, input, context);
+  } finally {
+    context.end(result?.tag === 'ok' && returnsStream(result.val));
+  }
 
   if (result.tag === 'ok') {
     return result.val;
@@ -354,6 +380,8 @@ async function invokeTool(
   stdout: ToolOutputWriter | undefined,
   stderr: ToolOutputWriter | undefined,
 ): Promise<InvocationResult> {
+  let invocation: EndableInvocationContext | undefined;
+  let toolResult: InvocationResult | undefined;
   let inputAdapter: ToolInputStreamAdapter | undefined;
   let stdoutAdapter: ToolOutputStreamAdapter | undefined;
   let stderrAdapter: ToolOutputStreamAdapter | undefined;
@@ -378,8 +406,12 @@ async function invokeTool(
     const body = resolved.command.body;
     if (!body) throw { tag: 'invalid-command-path', val: [...commandPath] } satisfies ToolError;
 
+    invocation = currentInvocationContext();
+    const invocationContext = invocation;
     const context: Record<string, unknown> = {
-      principal: sdkPrincipalFromHost(caller().immediate),
+      get caller() {
+        return invocationContext.caller;
+      },
     };
     if (body.stdin) {
       if (!stdin && body.stdin.required) {
@@ -415,6 +447,7 @@ async function invokeTool(
     outputFinishes = [stdoutAdapter?.finish(), stderrAdapter?.finish()];
     await Promise.all(outputFinishes);
     const result = await projectToolOutcome(body, outcome);
+    toolResult = result;
     await disposeInput();
     return result;
   } catch (error) {
@@ -426,6 +459,7 @@ async function invokeTool(
     await Promise.allSettled(outputFinishes);
     throw error;
   } finally {
+    invocation?.end(returnsStream(toolResult?.result?.value));
     for (const writer of [stdout, stderr]) {
       try {
         (writer as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();
@@ -746,125 +780,8 @@ function getDefinition(): AgentType {
   return initializedAgent.agent.getAgentType();
 }
 
-function serializePrincipal(p: Principal): object {
-  switch (p.tag) {
-    case 'anonymous':
-      return { tag: 'anonymous' };
-    case 'agent':
-      return {
-        tag: 'agent',
-        val: {
-          componentId: uuidToString(p.val.agentId.componentId.uuid),
-          agentId: p.val.agentId.agentId,
-        },
-      };
-    case 'golem-user':
-      return {
-        tag: 'golem-user',
-        val: { accountId: uuidToString(p.val.accountId.uuid) },
-      };
-    case 'oidc':
-      return {
-        tag: 'oidc',
-        val: {
-          sub: p.val.sub,
-          issuer: p.val.issuer,
-          email: p.val.email ?? null,
-          name: p.val.name ?? null,
-          emailVerified: p.val.emailVerified ?? null,
-          givenName: p.val.givenName ?? null,
-          familyName: p.val.familyName ?? null,
-          picture: p.val.picture ?? null,
-          preferredUsername: p.val.preferredUsername ?? null,
-          claims: p.val.claims,
-        },
-      };
-  }
-}
-
-function deserializePrincipal(obj: any, strict = false): Principal {
-  if (strict) {
-    if (obj === null || typeof obj !== 'object' || Array.isArray(obj))
-      throw new SnapshotError('invalid snapshot principal');
-    if (obj.tag !== 'anonymous') {
-      if (obj.val === null || typeof obj.val !== 'object' || Array.isArray(obj.val))
-        throw new SnapshotError('invalid snapshot principal value');
-      const val = obj.val;
-      if (
-        obj.tag === 'agent' &&
-        (typeof val.componentId !== 'string' || typeof val.agentId !== 'string')
-      )
-        throw new SnapshotError('invalid agent principal');
-      if (obj.tag === 'golem-user' && typeof val.accountId !== 'string')
-        throw new SnapshotError('invalid golem-user principal');
-      if (obj.tag === 'oidc') {
-        for (const key of ['sub', 'issuer', 'claims']) {
-          if (typeof val[key] !== 'string')
-            throw new SnapshotError(`invalid oidc principal ${key}`);
-        }
-        for (const key of [
-          'email',
-          'name',
-          'givenName',
-          'familyName',
-          'picture',
-          'preferredUsername',
-        ]) {
-          if (val[key] != null && typeof val[key] !== 'string')
-            throw new SnapshotError(`invalid oidc principal ${key}`);
-        }
-        if (val.emailVerified != null && typeof val.emailVerified !== 'boolean')
-          throw new SnapshotError('invalid oidc principal emailVerified');
-      }
-    }
-  }
-  switch (obj.tag) {
-    case 'anonymous':
-      return { tag: 'anonymous' };
-    case 'agent':
-      return {
-        tag: 'agent',
-        val: {
-          agentId: {
-            componentId: { uuid: parseUuid(obj.val.componentId) },
-            agentId: obj.val.agentId,
-          },
-        },
-      };
-    case 'golem-user':
-      return {
-        tag: 'golem-user',
-        val: { accountId: { uuid: parseUuid(obj.val.accountId) } },
-      };
-    case 'oidc': {
-      if (
-        !obj.val ||
-        typeof obj.val.sub !== 'string' ||
-        typeof obj.val.issuer !== 'string' ||
-        typeof obj.val.claims !== 'string'
-      ) {
-        throw new Error('Missing required fields (sub, issuer, claims) in oidc principal');
-      }
-      return {
-        tag: 'oidc',
-        val: {
-          sub: obj.val.sub,
-          issuer: obj.val.issuer,
-          email: obj.val.email ?? undefined,
-          name: obj.val.name ?? undefined,
-          emailVerified: obj.val.emailVerified ?? undefined,
-          givenName: obj.val.givenName ?? undefined,
-          familyName: obj.val.familyName ?? undefined,
-          picture: obj.val.picture ?? undefined,
-          preferredUsername: obj.val.preferredUsername ?? undefined,
-          claims: obj.val.claims,
-        },
-      };
-    }
-    default:
-      throw new Error(`Unknown principal tag: ${obj.tag}`);
-  }
-}
+/** The binary snapshot version that 2.0 writes. Versions 1 and 2 are the 1.6 forms. */
+const BINARY_SNAPSHOT_VERSION = 3;
 
 async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
   if (!initializedAgent) {
@@ -872,13 +789,10 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
   }
 
   const transport = await initializedAgent.agent.saveSnapshot();
-  const principal = initializedAgent.principal;
-  const serializedPrincipal = serializePrincipal(principal);
 
   if (transport.kind === 'multipart') {
     const envelope = {
-      version: 1,
-      principal: serializedPrincipal,
+      version: 2,
       state: transport.state,
       ...(transport.fileDatabases === undefined ? {} : { fileDatabases: transport.fileDatabases }),
     };
@@ -898,8 +812,7 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     // JSON snapshot: wrap typed state and database metadata in its envelope.
     const state = JSON.parse(new TextDecoder().decode(transport.data));
     const envelope = {
-      version: 1,
-      principal: serializedPrincipal,
+      version: 2,
       state,
       fileDatabases: transport.fileDatabases,
     };
@@ -908,30 +821,29 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
       mimeType: 'application/json',
     };
   } else {
-    // Binary snapshot: version-2 binary envelope with principal
-    const principalJson = JSON.stringify(serializedPrincipal);
-    const principalBytes = new TextEncoder().encode(principalJson);
-
-    const totalLength = 1 + 4 + principalBytes.length + transport.data.length;
-    const fullSnapshot = new Uint8Array(totalLength);
-    const view = new DataView(fullSnapshot.buffer);
-    view.setUint8(0, 2); // version
-    view.setUint32(1, principalBytes.length, false); // big-endian
-    fullSnapshot.set(principalBytes, 5);
-    fullSnapshot.set(transport.data, 5 + principalBytes.length);
+    // Binary snapshot: a version tag, then the agent's own state.
+    const fullSnapshot = new Uint8Array(1 + transport.data.length);
+    fullSnapshot[0] = BINARY_SNAPSHOT_VERSION;
+    fullSnapshot.set(transport.data, 1);
 
     return { payload: fullSnapshot, mimeType: 'application/octet-stream' };
   }
 }
 
-async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promise<void> {
+async function load(
+  snapshot: { payload: Uint8Array; mimeType: string },
+  agentParameters: SchemaValueTree,
+): Promise<void> {
   const bytes = snapshot.payload;
 
   if (initializedAgent) {
     throw `Agent is already initialized in this container`;
   }
 
-  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsedWire();
+  const agentTypeName = selfAgentTypeName();
+  if (agentTypeName === undefined) {
+    throw "GOLEM_AGENT_TYPE is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE";
+  }
   const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
   if (registrationError) {
     // The snapshot WIT interface returns `result<_, string>`, not AgentError.
@@ -940,7 +852,6 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
 
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
-  let principal: Principal;
   let databases: SnapshotDatabases | undefined = { inMemory: [], fileDatabases: {} };
   const userParts = new Map<string, SnapshotPart>();
 
@@ -964,8 +875,13 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
           const keys = objects[objects.length - 1]!;
           if (keys.has(key)) throw new SnapshotError(`duplicate JSON key '${key}'`);
           keys.add(key);
-          if (objects.length === 1 && key === 'version' && tokens[i + 2] !== '1') {
-            throw new SnapshotError('multipart version must be integer 1');
+          if (
+            objects.length === 1 &&
+            key === 'version' &&
+            tokens[i + 2] !== '1' &&
+            tokens[i + 2] !== '2'
+          ) {
+            throw new SnapshotError('multipart version must be integer 1 or 2');
           }
         }
       }
@@ -976,11 +892,15 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     if (!Object.hasOwn(envelope, 'version')) {
       throw `${description} missing 'version' field`;
     }
-    if (envelope.version !== 1) {
-      throw `${description} version must be 1`;
+    if (envelope.version !== 1 && envelope.version !== 2) {
+      throw `${description} version must be 1 or 2`;
     }
-    if (!Object.hasOwn(envelope, 'principal')) {
-      throw `${description} missing 'principal' field`;
+    if (envelope.version === 1) {
+      // A 1.6 envelope: its principal is checked as before and then dropped.
+      if (!Object.hasOwn(envelope, 'principal')) {
+        throw `${description} missing 'principal' field`;
+      }
+      validateLegacySnapshotPrincipal(envelope.principal, strict);
     }
     if (!Object.hasOwn(envelope, 'state')) {
       throw `${description} missing 'state' field`;
@@ -989,7 +909,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   };
 
   if (snapshot.mimeType.split(';', 1)[0].trim().toLowerCase() === 'multipart/mixed') {
-    // Multipart snapshot: extract principal from the state JSON part
+    // Multipart snapshot: the envelope is the state JSON part
     const boundary = extractBoundary(snapshot.mimeType);
     if (!boundary) throw new SnapshotError('multipart snapshot missing boundary');
     const parts = decodeMultipart(bytes, boundary);
@@ -1002,7 +922,6 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     if (parts[stateIdx].contentType !== 'application/json')
       throw new SnapshotError('state part must be application/json');
     const envelope = decodeJsonEnvelope(parts[stateIdx].body, 'multipart state part', true);
-    principal = deserializePrincipal(envelope.principal, true);
 
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'multipart/mixed';
@@ -1025,9 +944,8 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
         ? decodeSnapshotDatabases(parts, envelope, 'multipart state part')
         : undefined;
   } else if (snapshot.mimeType === 'application/json') {
-    // JSON snapshot: unwrap envelope { version, principal, state, fileDatabases }
+    // JSON snapshot: unwrap envelope { version, state, fileDatabases }
     const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
-    principal = deserializePrincipal(envelope.principal);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
     databases = decodeSnapshotDatabases([], envelope, 'JSON snapshot');
@@ -1039,9 +957,8 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const version = view.getUint8(0);
 
-    if (version === 1) {
+    if (version === 1 || version === BINARY_SNAPSHOT_VERSION) {
       agentSnapshot = bytes.slice(1);
-      principal = { tag: 'anonymous' };
     } else if (version === 2) {
       if (bytes.byteLength < 5) {
         throw `Version 2 snapshot too short for principal length`;
@@ -1050,8 +967,9 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
       if (principalLen > bytes.byteLength - 5) {
         throw `Version 2 snapshot too short for principal data`;
       }
+      // A 1.6 envelope: its principal is checked as before and then dropped.
       const principalBytes = bytes.slice(5, 5 + principalLen);
-      principal = deserializePrincipal(JSON.parse(new TextDecoder().decode(principalBytes)));
+      validateLegacySnapshotPrincipal(JSON.parse(new TextDecoder().decode(principalBytes)));
       agentSnapshot = bytes.slice(5 + principalLen);
     } else {
       throw `Unsupported snapshot version ${version}`;
@@ -1064,17 +982,23 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  const initiateResult = await initiator.loadSnapshot(
-    agentParameters,
-    principal,
-    agentSnapshot,
-    agentSnapshotMimeType,
-    databases,
-    userParts,
-  );
+  const context = currentInvocationContext();
+  let initiateResult;
+  try {
+    initiateResult = await initiator.loadSnapshot(
+      agentParameters,
+      context,
+      agentSnapshot,
+      agentSnapshotMimeType,
+      databases,
+      userParts,
+    );
+  } finally {
+    context.end();
+  }
 
   if (initiateResult.tag === 'ok') {
-    initializedAgent = { agent: initiateResult.val, principal };
+    initializedAgent = { agent: initiateResult.val };
   } else {
     // Throwing a String because the load WIT function returns result<_, string>
     let errorString = 'Failed to construct agent';

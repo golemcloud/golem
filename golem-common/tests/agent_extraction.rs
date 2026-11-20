@@ -18,6 +18,7 @@ use golem_common::model::agent::extraction::{
 };
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema};
 use golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache;
+use golem_schema::http::FileMapping;
 use std::path::PathBuf;
 use std::str::FromStr;
 use test_r::test;
@@ -31,7 +32,12 @@ fn assert_valid_regular_agent_types(agent_types: &[AgentTypeSchema]) {
         agent_type.validate().unwrap();
         if let Some(mount) = &agent_type.http_mount {
             assert!(mount.static_bindings.is_empty());
-            assert!(mount.filesystem_bindings.is_empty());
+            let expected_filesystem_bindings = if agent_type.type_name.0 == "HttpAgent" {
+                vec![FileMapping::compile("/query-file", "/query.txt").unwrap()]
+            } else {
+                vec![]
+            };
+            assert!(mount.filesystem_bindings == expected_filesystem_bindings);
             assert!(mount.openapi_provider_method.is_none());
         }
     }
@@ -53,7 +59,14 @@ async fn can_extract_agent_type_schemas_from_component_with_dynamic_rpc() -> any
         .map(|agent| agent.type_name.0.as_str())
         .collect();
     router_names.sort_unstable();
-    assert!(router_names == vec!["RawHttpRouter", "StaticHttpRouter"]);
+    assert!(
+        router_names
+            == vec![
+                "AuthenticatedHttpRouter",
+                "RawHttpRouter",
+                "StaticHttpRouter"
+            ]
+    );
     for router in &routers {
         router.validate().unwrap();
     }
@@ -96,7 +109,10 @@ async fn can_extract_http_mounts_from_rust_and_typescript_components() -> anyhow
             .expect("HttpAgent must be mounted");
         assert!(mount.path_prefix.len() == 2);
         assert!(mount.static_bindings.is_empty());
-        assert!(mount.filesystem_bindings.is_empty());
+        assert!(
+            mount.filesystem_bindings
+                == vec![FileMapping::compile("/query-file", "/query.txt").unwrap()]
+        );
         assert!(mount.openapi_provider_method.is_none());
     }
     Ok(())

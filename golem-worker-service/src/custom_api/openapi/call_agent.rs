@@ -18,25 +18,6 @@ use golem_service_base::custom_api::{
 };
 use golem_service_base::model::SafeIndex;
 
-pub fn get_query_variable_and_types(
-    method_params: &[MethodParameter],
-) -> Vec<(&str, &QueryOrHeaderType)> {
-    method_params
-        .iter()
-        .filter_map(|p| {
-            if let MethodParameter::Query {
-                query_parameter_name,
-                parameter_type,
-            } = p
-            {
-                Some((query_parameter_name.as_str(), parameter_type))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
 pub fn get_header_variable_and_types(
     method_params: &[MethodParameter],
 ) -> Vec<(&str, &QueryOrHeaderType)> {

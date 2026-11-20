@@ -36,6 +36,7 @@ use crate::repo::environment_tool_middleware_grant::{
     DbEnvironmentToolMiddlewareGrantRepo, EnvironmentToolMiddlewareGrantRepo,
 };
 use crate::repo::http_api_deployment::{DbHttpApiDeploymentRepo, HttpApiDeploymentRepo};
+use crate::repo::installation::{DbInstallationRepo, InstallationRepo};
 use crate::repo::mcp_deployment::{DbMcpDeploymentRepo, McpDeploymentRepo};
 use crate::repo::mcp_oauth::{DbMcpOAuthGrantRepo, McpOAuthGrantRepo};
 use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
@@ -95,6 +96,7 @@ use crate::startup::StartupProgress;
 use anyhow::{Context, anyhow};
 use golem_common::IntoAnyhow;
 use golem_common::config::DbConfig;
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
@@ -134,6 +136,8 @@ pub struct Services {
     pub environment_service: Arc<EnvironmentService>,
     pub environment_state_service: Arc<EnvironmentStateService>,
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
+    /// The installation's Golem issuer: configured, stored, or generated and stored.
+    pub golem_issuer: GolemIssuer,
     pub mcp_deployment_service: Arc<McpDeploymentService>,
     pub mcp_oauth_service: Arc<McpOAuthService>,
     pub mcp_import_resolver: Arc<McpImportResolver>,
@@ -167,6 +171,7 @@ struct Repos {
     environment_tool_middleware_grant_repo: Arc<dyn EnvironmentToolMiddlewareGrantRepo>,
     environment_repo: Arc<dyn EnvironmentRepo>,
     http_api_deployment_repo: Arc<dyn HttpApiDeploymentRepo>,
+    installation_repo: Arc<dyn InstallationRepo>,
     mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
     mcp_oauth_grant_repo: Arc<dyn McpOAuthGrantRepo>,
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
@@ -184,12 +189,22 @@ struct Repos {
 }
 
 impl Services {
+    /// `builtin_artifact_shutdown` lets the caller stop built-in artifact resolution and wait
+    /// for it to actually stop before proceeding to drop the owning Tokio runtime, such as when
+    /// a server shutdown signal arrives during startup; see
+    /// [`crate::services::builtin_artifact::BuiltinArtifactShutdown`].
     pub async fn new(
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
         startup_progress: &StartupProgress,
+        builtin_artifact_shutdown: crate::services::builtin_artifact::BuiltinArtifactShutdown,
     ) -> anyhow::Result<Self> {
-        Self::new_inner(config, join_set, Some(startup_progress)).await
+        Self::new_inner(
+            config,
+            join_set,
+            Some((startup_progress, builtin_artifact_shutdown)),
+        )
+        .await
     }
 
     #[doc(hidden)]
@@ -203,10 +218,18 @@ impl Services {
     async fn new_inner(
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
-        component_builtins_startup_progress: Option<&StartupProgress>,
+        component_builtins: Option<(
+            &StartupProgress,
+            crate::services::builtin_artifact::BuiltinArtifactShutdown,
+        )>,
     ) -> anyhow::Result<Self> {
         config.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
+        let golem_issuer = crate::services::installation::resolve_golem_issuer(
+            repos.installation_repo.as_ref(),
+            config.golem_issuer.clone(),
+        )
+        .await?;
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
 
@@ -545,11 +568,12 @@ impl Services {
             });
         }
 
-        if let Some(startup_progress) = component_builtins_startup_progress {
+        if let Some((startup_progress, builtin_artifact_shutdown)) = component_builtins {
             let artifact_resolver =
                 crate::services::builtin_artifact::BuiltinArtifactResolver::new(
                     &config.builtin_artifacts,
                     startup_progress.clone(),
+                    builtin_artifact_shutdown,
                 )?;
             crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
                 &config.builtin_plugins,
@@ -602,6 +626,7 @@ impl Services {
             .map_err(|error| anyhow::anyhow!("Failed to provision native tools: {error}"))?;
 
         Ok(Self {
+            golem_issuer,
             account_service,
             account_usage_service,
             account_resource_override_service,
@@ -695,6 +720,7 @@ async fn make_repos(
             let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
+            let installation_repo = Arc::new(DbInstallationRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
             let mcp_oauth_grant_repo = Arc::new(DbMcpOAuthGrantRepo::new(db_pool.clone()));
             let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
@@ -718,6 +744,7 @@ async fn make_repos(
                 environment_tool_middleware_grant_repo,
                 environment_repo,
                 http_api_deployment_repo,
+                installation_repo,
                 mcp_deployment_repo,
                 mcp_oauth_grant_repo,
                 oauth2_token_repo,
@@ -774,6 +801,7 @@ async fn make_repos(
             let security_scheme_repo = Arc::new(DbSecuritySchemeRepo::logged(db_pool.clone()));
             let http_api_deployment_repo =
                 Arc::new(DbHttpApiDeploymentRepo::logged(db_pool.clone()));
+            let installation_repo = Arc::new(DbInstallationRepo::logged(db_pool.clone()));
             let mcp_deployment_repo = Arc::new(DbMcpDeploymentRepo::logged(db_pool.clone()));
             let mcp_oauth_grant_repo = Arc::new(DbMcpOAuthGrantRepo::new(db_pool.clone()));
             let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
@@ -797,6 +825,7 @@ async fn make_repos(
                 environment_tool_middleware_grant_repo,
                 environment_repo,
                 http_api_deployment_repo,
+                installation_repo,
                 mcp_deployment_repo,
                 mcp_oauth_grant_repo,
                 oauth2_token_repo,

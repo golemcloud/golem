@@ -833,6 +833,7 @@ mod tests {
             name: name.to_string(),
             aliases: vec![],
             doc: Doc::default(),
+            http: None,
             globals: Globals::default(),
             subcommands,
             body: Some(CommandBody {
@@ -851,6 +852,7 @@ mod tests {
         Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: vec![
                     node("presented-search", vec![CommandIndex(1)]),

@@ -161,7 +161,7 @@ test "checked-in authoring fixture generates middleware source" {
   assert_true(generated.contains("typed_result_value("))
   assert_true(generated.contains("typed_result_stdout("))
   assert_true(generated.contains("typed_result_value_with_stdout"))
-  assert_true(generated.contains("__golem_invocation.principal()"))
+  assert_true(generated.contains("__golem_invocation.invocation_context()"))
   assert_true(generated.contains("__golem_invocation.stdin()"))
   assert_true(generated.contains("fn __golem_middleware_tool_def_Presented"))
   assert_true(generated.contains("fn __golem_middleware_tool_def_Nested"))

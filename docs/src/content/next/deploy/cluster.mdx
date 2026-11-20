@@ -183,11 +183,10 @@ The management API is split between two services. A reverse proxy or load balanc
 
 | Path | Service and port |
 | --- | --- |
-| `/v1/agents/*` | Worker service, 9005 |
-| `/v1/components/<component>/workers` and everything below it | Worker service, 9005 |
+| `/v1/runtime` and everything below it | Worker service, 9005 |
 | Everything else | Registry service, 8083 |
 
-Two of the worker service paths are WebSocket connections: `/v1/agents/invoke-agent-session` and `/v1/components/<component>/workers/<agent>/connect`.
+Two of the worker service paths are WebSocket connections: `/v1/runtime/envs/<environment>/invoke-agent-session` and `/v1/runtime/envs/<environment>/agents/<agent>/connect`.
 
 Every other host goes to the worker service's custom request port, 9006, which serves the HTTP API and MCP deployments of that host. Reserve the management host with `GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS='["golem.example.com"]'` on the registry service, so that no environment can register it.
 

@@ -6,12 +6,8 @@ import {
   dispatchLoadSnapshot,
   dispatchSaveSnapshot,
 } from "../src/Agent.js"
-import {
-  __resetParseAgentIdImpl as __resetParseAgentIdForTest,
-  __setParseAgentIdImpl as __setParseAgentIdForTest,
-} from "./mocks/golem-agent-host.js"
 import { method } from "../src/Method.js"
-import { guest } from "../src/internal/guest.js"
+import { guest, loadSnapshot } from "../src/internal/guest.js"
 import * as Snapshot from "../src/Snapshot.js"
 import { defineConfig } from "../src/Config.js"
 import {
@@ -31,13 +27,13 @@ import {
 } from "../src/internal/snapshotEnvelope.js"
 import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v, type SchemaValue } from "../src/internal/schema-model/model.js"
-import { Principal } from "../src/Principal.js"
+import { InvocationContext } from "../src/InvocationContext.js"
 import * as Ids from "../src/Ids.js"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
+import { userPrincipal } from "./callers.js"
 
 const anonymous = { tag: "anonymous" } as const
 const wire = (...fields: Array<SchemaValue>) => schemaValueToWit(v.record(fields))
-const typed = (value: ReturnType<typeof wire>) => ({ value }) as never
 const read = <A>(value: NonNullable<Awaited<ReturnType<typeof guest.invoke>>>): A => {
   const decoded = schemaValueFromWit(value)
   if (decoded.tag !== "string" && decoded.tag !== "f64") {
@@ -45,10 +41,7 @@ const read = <A>(value: NonNullable<Awaited<ReturnType<typeof guest.invoke>>>): 
   }
   return decoded.value as A
 }
-const oidcBob = {
-  tag: "oidc",
-  val: { sub: "bob", issuer: "https://example.test", claims: "{}" },
-} as const
+const oidcBob = userPrincipal("bob")
 
 // ---------------------------------------------------------------------------
 // Auto-snapshot agent
@@ -111,9 +104,14 @@ const AutoSnapshotCounter = AutoSnapshotCounterSpec.implement({
 // Custom-snapshot agent
 // ---------------------------------------------------------------------------
 
-const customStore = {
+const customStore: {
+  saveCalls: number
+  loadCalls: number
+  restoredId: Readonly<{ name: string }> | undefined
+} = {
   saveCalls: 0,
   loadCalls: 0,
+  restoredId: undefined,
 }
 
 const CustomSnapshotAgent = defineAgent({
@@ -140,9 +138,10 @@ const CustomSnapshotAgent = defineAgent({
         const s = yield* Ref.get(ref)
         return new TextEncoder().encode(JSON.stringify(s))
       }),
-    restore: (bytes) =>
+    restore: (bytes, { id }) =>
       Effect.gen(function* () {
         customStore.loadCalls++
+        customStore.restoredId = id
         const decoded: { count: number; owner: string } = JSON.parse(
           new TextDecoder().decode(bytes),
         )
@@ -218,8 +217,8 @@ const ConfigCustomAgent = defineAgent({
     restore: (bytes) =>
       Effect.gen(function* () {
         configCustomStore.loadCalls++
-        const principal = yield* Principal
-        expect(principal).toEqual(oidcBob)
+        const context = yield* InvocationContext
+        expect(context.caller.immediate.toString()).toBe(`user ("https://example.test","bob")`)
         // Read the config service from inside the load handler too.
         const cfg = yield* ConfigCustomCfg
         const prefix = yield* cfg.prefix
@@ -243,6 +242,7 @@ describe("snapshotting", () => {
     await __resetAgents()
     customStore.saveCalls = 0
     customStore.loadCalls = 0
+    customStore.restoredId = undefined
     configCustomStore.saveCalls = 0
     configCustomStore.loadCalls = 0
     configCustomStore.lastBytes = null
@@ -255,7 +255,6 @@ describe("snapshotting", () => {
 
   afterEach(() => {
     __resetGetEnvironmentForTest()
-    __resetParseAgentIdForTest()
     __resetGetConfigValueForTest()
   })
 
@@ -345,10 +344,7 @@ describe("snapshotting", () => {
       })
       const initial: typeof schema.Type = {
         promise: {
-          agentId: {
-            componentId: { uuid: "ffffffff-ffff-ffff-0000-000000000002" as Ids.Uuid },
-            agentId: "waiting-agent",
-          },
+          agentId: { uuid: "ffffffff-ffff-ffff-0000-000000000002" as Ids.Uuid },
           fingerprint: "00000000-0000-0007-ffff-ffffffffffff" as Ids.Uuid,
           oplogIdx: 9007199254740993n,
         },
@@ -390,7 +386,7 @@ describe("snapshotting", () => {
       expect(persisted.state.promise.oplogIdx).toEqual({
         $golemSnapshot: ["bigint", "9007199254740993"],
       })
-      expect(persisted.state.promise.agentId.componentId.uuid.highBits).toEqual({
+      expect(persisted.state.promise.agentId.uuid.highBits).toEqual({
         $golemSnapshot: ["bigint", "18446744073709551615"],
       })
       expect(persisted.state.promise.fingerprint.lowBits).toEqual({
@@ -398,9 +394,8 @@ describe("snapshotting", () => {
       })
       expect(persisted.state.transformed).toBe("7")
       await __resetAgents()
-      __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "PromiseSnapshot"]])
-      __setParseAgentIdForTest(() => ["PromiseSnapshot", typed(wire()), undefined])
-      await dispatchLoadSnapshot(snapshot)
+      __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "PromiseSnapshot"]])
+      await dispatchLoadSnapshot(snapshot, wire())
       await withCaller(anonymous, () => guest.invoke("check", wire()))
     },
   )
@@ -427,10 +422,9 @@ describe("snapshotting", () => {
     ["object", [[1, 2]]],
     ["object", [["x"]]],
   ])("auto: rejects malformed snapshot state tag %j", async (...tag) => {
-    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "DirectSnapshotAgent"]])
-    __setParseAgentIdForTest(() => ["DirectSnapshotAgent", typed(wire()), undefined])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "DirectSnapshotAgent"]])
     await expect(
-      dispatchLoadSnapshot(encodeJsonEnvelope(anonymous, { $golemSnapshot: tag })),
+      dispatchLoadSnapshot(encodeJsonEnvelope({ $golemSnapshot: tag }), wire()),
     ).rejects.toThrow(SnapshotEnvelopeError)
   })
 
@@ -450,22 +444,8 @@ describe("snapshotting", () => {
       const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
       expect(snapshot.mimeType).toBe("application/json")
       const obj = JSON.parse(new TextDecoder().decode(snapshot.payload))
-      expect(obj.version).toBe(1)
-      expect(obj.principal).toEqual({
-        tag: "oidc",
-        val: {
-          sub: "bob",
-          issuer: "https://example.test",
-          email: null,
-          name: null,
-          emailVerified: null,
-          givenName: null,
-          familyName: null,
-          picture: null,
-          preferredUsername: null,
-          claims: "{}",
-        },
-      })
+      expect(obj.version).toBe(2)
+      expect(obj).not.toHaveProperty("principal")
       expect(obj.state).toEqual({
         count: 14,
         owner: "alice",
@@ -478,10 +458,9 @@ describe("snapshotting", () => {
       // Reset (simulating new container) and load.
       yield* Effect.promise(() => __resetAgents())
 
-      __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "AutoSnapshotCounter:alice"]])
-      __setParseAgentIdForTest(() => ["AutoSnapshotCounter", typed(wire(aliceWv)), undefined])
+      __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
 
-      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
+      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot, wire(aliceWv)))
 
       const out = yield* Effect.promise(() =>
         withCaller(oidcBob, () => guest.invoke("value", wire())),
@@ -503,9 +482,8 @@ describe("snapshotting", () => {
     const snapshot = await dispatchSaveSnapshot()
 
     await __resetAgents()
-    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "DirectSnapshotAgent"]])
-    __setParseAgentIdForTest(() => ["DirectSnapshotAgent", typed(wire()), undefined])
-    await dispatchLoadSnapshot(snapshot)
+    __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "DirectSnapshotAgent"]])
+    await dispatchLoadSnapshot(snapshot, wire())
 
     expect(directInitCalls).toBe(1)
     const out = await withCaller(anonymous, () => guest.invoke("value", wire()))
@@ -516,26 +494,24 @@ describe("snapshotting", () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
     const aliceWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("alice"))
 
-    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "AutoSnapshotCounter:alice"]])
-    __setParseAgentIdForTest(() => ["AutoSnapshotCounter", typed(wire(aliceWv)), undefined])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
 
-    const wrong = encodeBinaryEnvelope(anonymous, new Uint8Array([1, 2, 3]))
-    await expect(dispatchLoadSnapshot(wrong)).rejects.toThrow(SnapshotEnvelopeError)
+    const wrong = encodeBinaryEnvelope(new Uint8Array([1, 2, 3]))
+    await expect(dispatchLoadSnapshot(wrong, wire(aliceWv))).rejects.toThrow(SnapshotEnvelopeError)
   })
 
   it("auto: load rejects record state that does not match the private snapshot schema", async () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
     const aliceWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("alice"))
 
-    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "AutoSnapshotCounter:alice"]])
-    __setParseAgentIdForTest(() => ["AutoSnapshotCounter", typed(wire(aliceWv)), undefined])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
 
-    const malformed = encodeJsonEnvelope(anonymous, {
+    const malformed = encodeJsonEnvelope({
       count: 1,
       owner: "alice",
       groups: { broken: { values: ["not-a-number"] } },
     })
-    await expect(dispatchLoadSnapshot(malformed)).rejects.toThrow()
+    await expect(dispatchLoadSnapshot(malformed, wire(aliceWv))).rejects.toThrow()
   })
 
   // -------------------------------------------------------------------------
@@ -560,10 +536,9 @@ describe("snapshotting", () => {
       expect(customStore.saveCalls).toBe(1)
 
       yield* Effect.promise(() => __resetAgents())
-      __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "CustomSnapshotAgent:carol"]])
-      __setParseAgentIdForTest(() => ["CustomSnapshotAgent", typed(wire(carolWv)), undefined])
+      __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CustomSnapshotAgent"]])
 
-      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
+      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot, wire(carolWv)))
       expect(customStore.loadCalls).toBe(1)
 
       const out = yield* Effect.promise(() =>
@@ -573,6 +548,38 @@ describe("snapshotting", () => {
       expect(value).toBe(6)
     }),
   )
+
+  it.effect("custom: restore receives the constructor input passed to the load export", () =>
+    Effect.gen(function* () {
+      const stringCodec = yield* toWitCodec(Schema.String)
+      const carolWv = yield* Schema.encodeEffect(stringCodec.codec)("carol")
+      const daveWv = yield* Schema.encodeEffect(stringCodec.codec)("dave")
+
+      yield* Effect.promise(() =>
+        withCaller(oidcBob, () => guest.initialize("CustomSnapshotAgent", wire(carolWv))),
+      )
+      const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
+
+      yield* Effect.promise(() => __resetAgents())
+      __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CustomSnapshotAgent"]])
+      yield* Effect.promise(() => loadSnapshot.load(snapshot, wire(daveWv)))
+
+      expect(customStore.loadCalls).toBe(1)
+      expect(customStore.restoredId).toEqual({ name: "dave" })
+    }),
+  )
+
+  it("custom: load rejects a constructor input that does not match the constructor schema", async () => {
+    const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
+    const carolWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("carol"))
+    await withCaller(oidcBob, () => guest.initialize("CustomSnapshotAgent", wire(carolWv)))
+    const snapshot = await dispatchSaveSnapshot()
+
+    await __resetAgents()
+    __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CustomSnapshotAgent"]])
+    await expect(loadSnapshot.load(snapshot, wire())).rejects.toBeDefined()
+    expect(customStore.loadCalls).toBe(0)
+  })
 
   it.effect("custom: save/load handlers can read the agent's config service", () =>
     Effect.gen(function* () {
@@ -597,14 +604,13 @@ describe("snapshotting", () => {
       expect(configCustomStore.saveCalls).toBe(1)
 
       yield* Effect.promise(() => __resetAgents())
-      __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "ConfigCustomAgent:dan"]])
-      __setParseAgentIdForTest(() => ["ConfigCustomAgent", typed(wire(danWv)), undefined])
+      __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "ConfigCustomAgent"]])
       __setGetConfigValueForTest((path) => {
         if (path.length === 1 && path[0] === "prefix") return schemaValueToWit(prefixWv)
         throw new Error(`unexpected config path: ${path.join(".")}`)
       })
 
-      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
+      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot, wire(danWv)))
       expect(configCustomStore.loadCalls).toBe(1)
 
       const out = yield* Effect.promise(() =>
@@ -628,23 +634,23 @@ describe("snapshotting", () => {
     const snapshot = await dispatchSaveSnapshot()
 
     await __resetAgents()
-    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "ConfigCustomAgent:dan"]])
-    __setParseAgentIdForTest(() => ["ConfigCustomAgent", typed(wire(danWv)), undefined])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "ConfigCustomAgent"]])
     const prefixB = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("B"))
     __setGetConfigValueForTest(() => schemaValueToWit(prefixB))
 
-    await expect(dispatchLoadSnapshot(snapshot)).rejects.toThrow(/does not match config prefix/)
+    await expect(dispatchLoadSnapshot(snapshot, wire(danWv))).rejects.toThrow(
+      /does not match config prefix/,
+    )
   })
 
   it("custom: load rejects an envelope whose mime type is JSON", async () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
     const carolWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("carol"))
 
-    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "CustomSnapshotAgent:carol"]])
-    __setParseAgentIdForTest(() => ["CustomSnapshotAgent", typed(wire(carolWv)), undefined])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CustomSnapshotAgent"]])
 
-    const wrong = encodeJsonEnvelope(anonymous, { count: 0, owner: "carol" })
-    await expect(dispatchLoadSnapshot(wrong)).rejects.toThrow(SnapshotEnvelopeError)
+    const wrong = encodeJsonEnvelope({ count: 0, owner: "carol" })
+    await expect(dispatchLoadSnapshot(wrong, wire(carolWv))).rejects.toThrow(SnapshotEnvelopeError)
   })
 
   // -------------------------------------------------------------------------
@@ -670,39 +676,37 @@ describe("snapshotting", () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
     const aliceWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("alice"))
     await withCaller(oidcBob, () => guest.initialize("AutoSnapshotCounter", wire(aliceWv)))
-    const fake = encodeJsonEnvelope(anonymous, { count: 0, owner: "alice" })
-    await expect(dispatchLoadSnapshot(fake)).rejects.toThrow(/already initialized/)
+    const fake = encodeJsonEnvelope({ count: 0, owner: "alice" })
+    await expect(dispatchLoadSnapshot(fake, wire(aliceWv))).rejects.toThrow(/already initialized/)
   })
 
-  it("load fails with the missing card grant when GOLEM_AGENT_ID is not readable", async () => {
-    __setGetEnvironmentForTest([])
-    const fake = encodeJsonEnvelope(anonymous, { count: 0, owner: "x" })
-    await expect(dispatchLoadSnapshot(fake)).rejects.toThrow(
+  it("load fails with the missing card grant when GOLEM_AGENT_TYPE is not readable", async () => {
+    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "00000001-0000-8000-8000-000000000001"]])
+    const fake = encodeJsonEnvelope({ count: 0, owner: "x" })
+    await expect(dispatchLoadSnapshot(fake, wire())).rejects.toThrow(
       new Error(
-        "load-snapshot: GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+        "load-snapshot: GOLEM_AGENT_TYPE is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE",
       ),
     )
   })
 
   it("load rejects malformed multipart/mixed envelopes (no body)", async () => {
-    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "AutoSnapshotCounter:x"]])
-    __setParseAgentIdForTest(() => ["AutoSnapshotCounter", typed(wire()), undefined])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
     await expect(
-      dispatchLoadSnapshot({
-        payload: new Uint8Array(0),
-        mimeType: "multipart/mixed; boundary=abc",
-      }),
+      dispatchLoadSnapshot(
+        {
+          payload: new Uint8Array(0),
+          mimeType: "multipart/mixed; boundary=abc",
+        },
+        wire(),
+      ),
     ).rejects.toThrow(SnapshotEnvelopeError)
   })
 
   it("load rejects multipart/mixed without a boundary parameter", async () => {
-    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "AutoSnapshotCounter:x"]])
-    __setParseAgentIdForTest(() => ["AutoSnapshotCounter", typed(wire()), undefined])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
     await expect(
-      dispatchLoadSnapshot({
-        payload: new Uint8Array(0),
-        mimeType: "multipart/mixed",
-      }),
+      dispatchLoadSnapshot({ payload: new Uint8Array(0), mimeType: "multipart/mixed" }, wire()),
     ).rejects.toThrow(UnsupportedSnapshotFormatError)
   })
 
@@ -725,11 +729,10 @@ describe("snapshotting", () => {
       },
     })
     void CleanupOnRestoreFailure
-    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "CleanupOnRestoreFailure"]])
-    __setParseAgentIdForTest(() => ["CleanupOnRestoreFailure", typed(wire()), undefined])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CleanupOnRestoreFailure"]])
 
     await expect(
-      dispatchLoadSnapshot(encodeBinaryEnvelope(anonymous, new Uint8Array([1]))),
+      dispatchLoadSnapshot(encodeBinaryEnvelope(new Uint8Array([1])), wire()),
     ).rejects.toBeTruthy()
     expect(cleaned).toBe(true)
   })

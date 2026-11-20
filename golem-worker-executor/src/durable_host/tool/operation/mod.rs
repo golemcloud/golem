@@ -30,7 +30,7 @@ use crate::worker::owner_lane::{
 };
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
-use golem_common::model::agent::Principal;
+use golem_common::model::caller::Caller;
 use golem_common::model::entity::{
     EntityActivation, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
     FilesystemCapability,
@@ -220,7 +220,7 @@ pub(crate) struct OwnerToolOperationContext {
     pub parent: OwnerInvocationId,
     pub call_mode: EntityCallMode,
     pub activation: Arc<EntityActivation>,
-    pub principal: Principal,
+    pub caller: Caller,
     pub descriptor: EntityInvocationDescriptor,
     pub input: TypedSchemaValue,
 }

@@ -3,7 +3,9 @@ package "golemcloud/golem_sdk/tool-middleware"
 
 import {
   "golemcloud/golem_sdk/async-core",
+  "golemcloud/golem_sdk/caller",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/golem/tool/common",
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model",
   "moonbitlang/core/debug",
@@ -44,8 +46,8 @@ pub struct MiddlewareStdin {
 }
 
 pub(all) struct MonomorphicToolMiddlewareScope {
-  presented : @golemcloud/golem_sdk/interface/golem/tool/common.Tool
-  expected : @golemcloud/golem_sdk/interface/golem/tool/common.Tool?
+  presented : @common.Tool
+  expected : @common.Tool?
 }
 
 pub struct OwnedInvocationResult {
@@ -72,9 +74,9 @@ pub struct RawToolInvocation {
 pub fn RawToolInvocation::command_path(Self) -> Array[String]
 pub fn RawToolInvocation::empty_result(Self) -> RawInvocationResult
 pub fn RawToolInvocation::input(Self) -> RawTypedSchemaValue
-pub fn RawToolInvocation::principal(Self) -> @golemcloud/golem_sdk/interface/golem/agent/common.Principal
+pub fn RawToolInvocation::invocation_context(Self) -> @caller.InvocationContext
 pub fn RawToolInvocation::stdin(Self) -> MiddlewareStdin?
-pub fn RawToolInvocation::tool_metadata(Self) -> @golemcloud/golem_sdk/interface/golem/tool/common.Tool
+pub fn RawToolInvocation::tool_metadata(Self) -> @common.Tool
 pub fn RawToolInvocation::tool_name(Self) -> String
 
 pub struct RawTypedSchemaValue {
@@ -122,7 +124,7 @@ pub(all) struct ToolMiddleware {
   name : String
   version : String
   aliases : Array[String]
-  doc : @golemcloud/golem_sdk/interface/golem/tool/common.Doc
+  doc : @common.Doc
   scope : ToolMiddlewareScope
   parameter_schema : @schema_model.SchemaGraph
 }

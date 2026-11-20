@@ -11,6 +11,7 @@ use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -79,7 +80,12 @@ async fn admitted_receive(
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             executor.commit_oplog(id).await?;
-            let entries = executor.get_oplog(id, OplogIndex::INITIAL).await?;
+            let entries = executor
+                .get_oplog(
+                    &OwnedAgentId::new(executor.context.default_environment_id, id),
+                    OplogIndex::INITIAL,
+                )
+                .await?;
             if let Ok(start) = receive_start(&entries, 0) {
                 return Ok::<_, anyhow::Error>(start);
             }
@@ -208,15 +214,15 @@ async fn pending_receive(
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("Networking", "p3-udp-receive-seed"),
+            agent_key!("Networking", "p3-udp-receive-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -230,25 +236,21 @@ async fn pending_receive(
     }
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("Networking", "monthly-p3-udp-receive")
+        agent_key!("Networking", "monthly-p3-udp-receive")
     } else {
-        agent_id!("EphemeralNetworking", "monthly-p3-udp-receive")
+        agent_key!("EphemeralNetworking", "monthly-p3-udp-receive")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                "udp_receive_wait_p3",
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        "udp_receive_wait_p3",
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -256,7 +258,16 @@ async fn pending_receive(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            "udp_receive_wait_p3",
+        ),
     )
     .await?;
     let stored_key = executor
@@ -318,7 +329,7 @@ async fn pending_receive(
         failure_address = Some(address);
         admitted_receive(&executor, &id).await?;
         executor.commit_oplog(&id).await?;
-        let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let receive_start = receive_start(&entries, 0)?;
         assert_invocation(&entries, &stored_key, 0)?;
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
@@ -415,7 +426,7 @@ async fn pending_receive(
         if let Some(refresh) = refresh {
             refresh.await?;
         }
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let stopped_raw = read_stored().await?;
         ensure!(stopped_raw.range(..=prefix_last).eq(prefix.iter()), "the full committed UDP prefix must survive stop");
         ensure!(stopped_raw.values().all(|entry| !matches!(entry, OplogEntry::Jump { .. })));
@@ -510,9 +521,9 @@ async fn pending_receive(
             applied_refresh(&limits, &registry, context.account_id)
                 .await?
                 .await?;
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             executor.commit_oplog(&id).await?;
-            ensure!(self::receive_start(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 0)? == receive_start);
+            ensure!(self::receive_start(&executor.get_oplog(&owned, OplogIndex::INITIAL).await?, 0)? == receive_start);
             let sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
             // Bind executes again on replay; the recorded readiness send does not.
             let resumed = tokio::time::timeout(Duration::from_secs(10), async {
@@ -525,7 +536,7 @@ async fn pending_receive(
                 }
             }).await.context("retained invocation continuation")??;
             ensure!(resumed.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"recovered".to_vec()));
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             let recovered_raw = read_stored().await?;
             let stopped_last = *stopped_raw.last_key_value().unwrap().0;
             ensure!(recovered_raw.range(..=stopped_last).eq(stopped_raw.iter()), "the full stopped prefix must survive UDP reconstruction");
@@ -566,7 +577,7 @@ async fn pending_receive(
                 tokio::try_join!(fresh, release_fresh)
             }).await.context("completed-history replay and fresh receive")??;
             ensure!(fresh.into_typed::<Result<Vec<u8>, String>>()? == Ok(b"fresh".to_vec()));
-            let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             let history_raw = read_stored().await?;
             let recovered_last = *recovered_raw.last_key_value().unwrap().0;
             ensure!(history_raw.range(..=recovered_last).eq(recovered_raw.iter()), "completed-history reconstruction must preserve the full recovered prefix");
@@ -596,7 +607,7 @@ async fn pending_receive(
         {
             let _ = sender.send_to(b"failure-cleanup", address).await;
         }
-        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&owned)).await;
         let _ = tokio::time::timeout(
             Duration::from_secs(10),
             worker.join_accepted_stops_for_test(),

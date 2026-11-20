@@ -14,6 +14,7 @@
 
 mod account;
 mod account_usage;
+mod agent_identity;
 mod agent_secret;
 mod application;
 mod auth;

@@ -9,3 +9,25 @@ message OplogCursor {
   // oplog read without a query.
   string query_hash = 3;
 }
+
+// The scan allowance of an oplog range read: the number of oplog entries that it may read, and
+// how long it may read.
+message OplogScanAllowance {
+  uint64 entries = 1;
+  uint64 millis = 2;
+}
+
+// The scan accounting of an oplog range read.
+message OplogScan {
+  // The allowance that the read applied: the requested allowance, or the configured allowance of
+  // the executor without one, clamped to the configured allowance.
+  OplogScanAllowance limit = 1;
+  // The oplog entries that the read charged: the entries that it read to find the component
+  // revision at the start of the range, and the entries that it read for the page, also those
+  // that the byte limit of the page left out.
+  uint64 charged_entries = 2;
+  // The time that the read charged, rounded up to a millisecond.
+  uint64 charged_millis = 3;
+  // The read stopped before the end of the range because it spent the allowance.
+  bool exhausted = 4;
+}

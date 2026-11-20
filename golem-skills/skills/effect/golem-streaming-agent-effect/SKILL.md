@@ -90,7 +90,7 @@ Definition clients return Effects and require a scope while live streams or clie
 ```ts
 const program = Effect.scoped(
   Effect.gen(function* () {
-    const target = yield* StreamingAgent.client.get({ name: "main" })
+    const target = yield* StreamingAgent.client.upsert({ name: "main" })
     const output = yield* target.doubled({ values: Stream.make(1, 2, 3) })
     return yield* output.pipe(Stream.runCollect)
   }),

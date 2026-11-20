@@ -1,6 +1,7 @@
 use golem_rust::bindings::golem::api::context::AttributeValue;
+use golem_rust::bindings::golem::api::oplog::EnvironmentId;
 use golem_rust::bindings::golem::api::oplog::{Timestamp, WorkerError, WrappedFunctionType};
-use golem_rust::schema::wit::wire::{AgentId, ComponentId};
+use golem_rust::schema::wit::wire::AgentId;
 use golem_rust::wasip3::clocks::system_clock::Instant;
 use std::collections::HashMap;
 
@@ -12,10 +13,13 @@ pub(crate) fn timestamp_to_nanos(ts: &Timestamp) -> u128 {
     datetime_to_nanos(&ts.timestamp)
 }
 
-pub(crate) fn worker_key(component_id: &ComponentId, worker_id: &AgentId) -> String {
+pub(crate) fn agent_key(environment_id: &EnvironmentId, agent_id: &AgentId) -> String {
     format!(
-        "{:016x}{:016x}/{}",
-        component_id.uuid.high_bits, component_id.uuid.low_bits, worker_id.agent_id
+        "{:016x}{:016x}/{:016x}{:016x}",
+        environment_id.uuid.high_bits,
+        environment_id.uuid.low_bits,
+        agent_id.uuid.high_bits,
+        agent_id.uuid.low_bits
     )
 }
 

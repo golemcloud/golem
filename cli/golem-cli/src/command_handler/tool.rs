@@ -361,9 +361,8 @@ impl ToolCommandHandler {
             .await?;
         let owner = if args.lookup
             && let Some(agent) = args.agent.as_ref()
-            && agent.0.parse::<AgentId>().is_ok()
+            && let Ok(agent_id) = agent.0.parse::<AgentId>()
         {
-            let agent_id = final_tool_lookup_owner(agent)?;
             ToolOwner {
                 application_name: environment.application_name.clone(),
                 environment_name: environment.environment_name.clone(),
@@ -375,9 +374,7 @@ impl ToolCommandHandler {
             self.resolve_tool_owner(raw).await?
         } else if let Some(name) = args.component {
             if args.lookup {
-                bail!(
-                    "--lookup requires --agent <component-id>:<agent-id> from the invocation receipt"
-                );
+                bail!("--lookup requires --agent <agent-id> from the invocation receipt");
             }
             let component = self
                 .ctx
@@ -478,7 +475,10 @@ impl ToolCommandHandler {
                 None
             };
             let session = InvocationSession::open(
-                Arc::new(CliSessionRequestProvider::new(self.ctx.clone())),
+                Arc::new(CliSessionRequestProvider::new(
+                    self.ctx.clone(),
+                    owner.environment.environment_id,
+                )),
                 connector,
                 ReconnectPolicy::Unlimited,
                 initial,
@@ -515,8 +515,7 @@ impl ToolCommandHandler {
                 .ok_or_else(|| anyhow!("the tool session ended without an acceptance"))?;
             let view = ToolInvocationSessionView {
                 target: PublicNativeToolTarget::Agent {
-                    component_id: accepted.agent_id().component_id.0,
-                    agent_id: accepted.agent_id().agent_id.clone(),
+                    agent_id: *accepted.agent_id(),
                 },
                 idempotency_key: accepted.id(),
                 result,
@@ -579,21 +578,14 @@ impl ToolCommandHandler {
     /// Resolves an existing agent as a tool owner, the same way for every native tool client.
     /// It never creates the agent and never falls back to a component target.
     pub(crate) async fn resolve_tool_owner(&self, agent: RawAgentId) -> anyhow::Result<ToolOwner> {
-        let matched = self.ctx.agent_handler().match_agent_id(agent).await?;
-        let component = self
-            .ctx
-            .component_handler()
-            .resolve_component(&matched.environment, &matched.component_name, None)
-            .await?
-            .ok_or_else(|| anyhow!("Component '{}' is not deployed", matched.component_name))?;
+        let agent_handler = self.ctx.agent_handler();
+        let matched = agent_handler.match_agent_id(agent).await?;
+        let (_, agent_id) = agent_handler.component_by_agent_id_match(&matched).await?;
         let environment = matched.environment;
         Ok(ToolOwner {
             application_name: environment.application_name.clone(),
             environment_name: environment.environment_name.clone(),
-            agent_id: Some(AgentId {
-                component_id: component.id,
-                agent_id: matched.agent_id.0,
-            }),
+            agent_id: Some(agent_id),
             component_id: None,
             environment,
         })
@@ -610,13 +602,14 @@ impl ToolCommandHandler {
             .golem_clients()
             .await?
             .agent
-            .describe_tool(&NativeToolDescribeRequest {
-                app_name: owner.application_name.to_string(),
-                env_name: owner.environment_name.to_string(),
-                agent_id: owner.agent_id.clone(),
-                component_id: owner.component_id.map(|id| id.0),
-                tool_name: tool_name.to_string(),
-            })
+            .describe_tool(
+                &owner.environment.environment_id.0,
+                &NativeToolDescribeRequest {
+                    agent_id: owner.agent_id.map(|id| id.0),
+                    component_id: owner.component_id.map(|id| id.0),
+                    tool_name: tool_name.to_string(),
+                },
+            )
             .await
             .map_service_error()?)
     }
@@ -665,18 +658,16 @@ impl ToolCommandHandler {
             .await?
             .agent
             .invoke_tool(
+                &owner.environment.environment_id.0,
                 Some(&key.value),
                 &NativeToolInvocationRequest {
-                    app_name: owner.application_name.to_string(),
-                    env_name: owner.environment_name.to_string(),
-                    agent_id: owner.agent_id.clone(),
+                    agent_id: owner.agent_id.map(|id| id.0),
                     component_id: owner.component_id.map(|id| id.0),
                     tool_name: tool_name.to_string(),
                     command_path,
                     input,
                     mode,
                     schedule_at,
-                    idempotency_key: Some(key.value.clone()),
                 },
             )
             .await
@@ -920,20 +911,11 @@ fn tool_input_or_empty(
         })
 }
 
-fn final_tool_lookup_owner(raw: &RawAgentId) -> anyhow::Result<AgentId> {
-    let owner: AgentId = raw.0.parse().map_err(anyhow::Error::msg)?;
-    if owner.agent_id.is_empty() {
-        bail!("the invocation receipt owner must have a nonempty agent id");
-    }
-    Ok(owner)
-}
-
 /// The owner as a live session names the target of a tool call.
 pub(crate) fn public_target(owner: &ToolOwner) -> PublicNativeToolTarget {
     match (&owner.agent_id, owner.component_id) {
         (Some(agent_id), None) => PublicNativeToolTarget::Agent {
-            component_id: agent_id.component_id.0,
-            agent_id: agent_id.agent_id.clone(),
+            agent_id: *agent_id,
         },
         (None, Some(component_id)) => PublicNativeToolTarget::Component {
             component_id: component_id.0,
@@ -1062,15 +1044,14 @@ fn finish_tool_report(failed: bool) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LiveReportDestination, final_tool_lookup_owner, finish_tool_report,
-        live_report_destination, native_tool_result_failed, public_tool_failed, public_typed_value,
+        LiveReportDestination, finish_tool_report, live_report_destination,
+        native_tool_result_failed, public_tool_failed, public_typed_value,
     };
     use crate::error::PipedExitCode;
     use crate::log::{
         Output, RawOutputReservation, TracingSuppression, TracingWriter, reservation_aware_output,
         tracing_writer,
     };
-    use crate::model::agent::RawAgentId;
     use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
     use golem_common::model::invocation_session_public::PublicInvocationResult;
     use golem_common::model::tool::SerializableToolRpcError;
@@ -1078,17 +1059,6 @@ mod tests {
         NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
     };
     use test_r::test;
-
-    #[test]
-    fn final_tool_lookup_owner_preserves_reserved_owner_without_type_resolution() {
-        let component = uuid::Uuid::new_v4();
-        let name = "__external_tool:non-constructor-owner";
-        let owner = final_tool_lookup_owner(&RawAgentId(format!("{component}:{name}"))).unwrap();
-        assert_eq!(owner.component_id.0, component);
-        assert_eq!(owner.agent_id, name);
-        assert!(final_tool_lookup_owner(&RawAgentId(format!("{component}:"))).is_err());
-        assert!(final_tool_lookup_owner(&RawAgentId("BashOwner(\"acceptance\")".into())).is_err());
-    }
 
     #[test]
     fn native_session_input_uses_public_schema_json_not_internal_value_encoding() {

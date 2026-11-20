@@ -24,7 +24,7 @@ pub use multimodal_derivation::*;
 
 mod agent_client_impl;
 mod agent_definition_attributes;
-mod agent_definition_http_endpoint;
+pub(crate) mod agent_definition_http_endpoint;
 mod agent_definition_impl;
 mod agent_definition_read_only;
 mod agent_implementation_impl;

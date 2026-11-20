@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_common::model::AgentStatus;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationFinishedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::{AgentStatus, OwnedAgentId};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::resource_limits::AtomicResourceEntry;
 use golem_worker_executor_test_utils::{
@@ -76,7 +76,7 @@ async fn fuel_is_consumed_during_invocation(
         .store()
         .await?;
 
-    let agent_id = agent_id!("Clocks", "fuel-consumed-1");
+    let agent_id = agent_key!("Clocks", "fuel-consumed-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -131,9 +131,8 @@ async fn zero_fuel_suspends_and_unloads_runnable_constructor(
 
     // Clocks::new only stores its name: it is runnable and has no guest wait
     // that could cause voluntary suspension. Do not invoke a sleeping method.
-    let agent = agent_id!("Clocks", "zero-fuel-runnable-constructor");
-    let worker_id = golem_common::model::AgentId::from_agent_id(component.id, &agent)
-        .map_err(anyhow::Error::msg)?;
+    let agent = agent_key!("Clocks", "zero-fuel-runnable-constructor");
+    let worker_id = executor.keyed_agent_id(context.default_environment_id, &agent)?;
     let create = executor.start_agent(&component.id, agent);
     tokio::pin!(create);
     tokio::select! {
@@ -148,7 +147,7 @@ async fn zero_fuel_suspends_and_unloads_runnable_constructor(
         }) => { result??; },
     }
 
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_is_loaded(&owned_agent_id).await {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -202,7 +201,7 @@ async fn each_invocation_fuel_is_accounted_independently(
         .store()
         .await?;
 
-    let agent_id = agent_id!("Clocks", "fuel-independent-1");
+    let agent_id = agent_key!("Clocks", "fuel-independent-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;

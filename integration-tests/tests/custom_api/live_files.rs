@@ -1,8 +1,7 @@
 use super::http_test_context::{HttpTestContext, make_test_context_with_files};
-use golem_common::agent_id;
+use golem_common::agent_key;
 use golem_common::data_value;
-use golem_common::model::AgentId;
-use golem_common::model::agent::AgentTypeName;
+use golem_common::model::agent::{AgentTypeName, OwnedAgentId};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
@@ -11,6 +10,7 @@ use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogE
 use golem_test_framework::config::EnvBasedTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::model::IFSEntry;
+use integration_tests::agents::derive_keyed_agent_id;
 use reqwest::{Method, StatusCode};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -24,6 +24,60 @@ fn large_file_contents() -> Vec<u8> {
         .finalize_xof()
         .fill(&mut contents);
     contents
+}
+
+#[test]
+#[timeout("120s")]
+async fn authenticated_live_files_preserve_no_store(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    use super::http_test_context::make_test_context;
+    use golem_common::model::http_api_deployment::{
+        HttpApiDeploymentAgentSecurity, TestSessionHeaderAgentSecurity,
+    };
+
+    let context = make_test_context(
+        deps,
+        vec![(
+            AgentTypeName("AuthenticatedLiveFiles".into()),
+            HttpApiDeploymentAgentOptions {
+                security: Some(HttpApiDeploymentAgentSecurity::TestSessionHeader(
+                    TestSessionHeaderAgentSecurity {
+                        header_name: "x-session".into(),
+                    },
+                )),
+            },
+        )],
+        "it_initial_file_system_release",
+        "golem-it:initial-file-system",
+    )
+    .await?;
+    context
+        .user
+        .start_agent(
+            &context.component_id,
+            agent_key!("AuthenticatedLiveFiles", "cache-user"),
+        )
+        .await?;
+    for (path, status, body) in [
+        ("created.txt", StatusCode::OK, "cache-user"),
+        ("missing.txt", StatusCode::NOT_FOUND, ""),
+    ] {
+        let response = context
+            .client
+            .get(
+                context
+                    .base_url
+                    .join(&format!("/private-files/cache-user/{path}"))?,
+            )
+            .header("x-session", "{}")
+            .send()
+            .await?;
+        assert_eq!(response.status(), status);
+        assert_eq!(response.headers()["cache-control"], "private, no-store");
+        assert_eq!(response.text().await?, body);
+    }
+    Ok(())
 }
 
 #[test]
@@ -84,18 +138,20 @@ async fn context(deps: &EnvBasedTestDependencies) -> anyhow::Result<HttpTestCont
     .await
 }
 
-fn agent(context: &HttpTestContext, name: &str) -> AgentId {
-    AgentId {
-        component_id: context.component_id,
-        agent_id: agent_id!("LiveFiles", name).to_string(),
-    }
+async fn agent(context: &HttpTestContext, name: &str) -> anyhow::Result<OwnedAgentId> {
+    derive_keyed_agent_id(
+        &context.user,
+        &context.component_id,
+        &agent_key!("LiveFiles", name),
+    )
+    .await
 }
 
 async fn effects(context: &HttpTestContext, name: &str) -> anyhow::Result<(usize, usize)> {
     let mut counts = (0, 0);
     for entry in context
         .user
-        .get_oplog(&agent(context, name), OplogIndex::INITIAL)
+        .get_oplog(&agent(context, name).await?, OplogIndex::INITIAL)
         .await?
     {
         if let PublicOplogEntry::AgentInvocationStarted(start) = entry.entry {
@@ -118,14 +174,14 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
     assert!(
         context
             .user
-            .get_worker_metadata_opt(&agent(&context, "first"))
+            .get_worker_metadata_opt(&agent(&context, "first").await?)
             .await?
             .is_none()
     );
     for name in ["first", "second"] {
         context
             .user
-            .start_agent(&context.component_id, agent_id!("LiveFiles", name))
+            .start_agent(&context.component_id, agent_key!("LiveFiles", name))
             .await?;
     }
     let url = context.base_url.join("/files/first/created.txt")?;
@@ -229,6 +285,13 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
         let response = request.send().await?;
         assert_eq!(response.status().as_u16(), status, "{suffix}");
         assert_eq!(response.headers()["cache-control"], "no-store");
+        let vary = response.headers()["vary"].to_str()?;
+        for name in ["Authorization", "Cookie", "Golem-Token"] {
+            assert!(
+                vary.split(',')
+                    .any(|token| token.trim().eq_ignore_ascii_case(name))
+            );
+        }
         assert_eq!(
             response.headers()["access-control-allow-origin"],
             "https://allowed.test"
@@ -247,7 +310,7 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
             .user
             .invoke_and_await_agent(
                 &component,
-                &agent_id!("LiveFiles", "first"),
+                &agent_key!("LiveFiles", "first"),
                 "replace",
                 data_value!("/public/ro.txt", b"forbidden".to_vec()),
             )
@@ -270,7 +333,7 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
                 .user
                 .invoke_and_await_agent(
                     &component,
-                    &agent_id!("LiveFiles", "first"),
+                    &agent_key!("LiveFiles", "first"),
                     "replace",
                     data_value!(format!("/public/{path}"), contents.to_vec()),
                 )
@@ -288,7 +351,7 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
     assert_eq!(effects(&context, "first").await?, (1, 3));
     context
         .user
-        .simulated_crash(&agent(&context, "first"))
+        .simulated_crash(&agent(&context, "first").await?)
         .await?;
     let restored = context
         .client
@@ -301,7 +364,7 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
     context
         .user
         .revert(
-            &agent(&context, "first"),
+            &agent(&context, "first").await?,
             golem_common::model::agent::RevertWorkerTarget::RevertLastInvocations(
                 golem_common::model::agent::RevertLastInvocations {
                     number_of_invocations: 1,
@@ -324,7 +387,7 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
     // The constructor of `fail` traps, so creating it may report the failure.
     let _ = context
         .user
-        .try_start_agent(&context.component_id, agent_id!("LiveFiles", "fail"))
+        .try_start_agent(&context.component_id, agent_key!("LiveFiles", "fail"))
         .await?;
     let response = context
         .client
@@ -344,10 +407,10 @@ async fn mounted_live_files_of_a_missing_or_deleted_agent_are_not_found_and_crea
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let context = context(deps).await?;
-    let deleted = agent(&context, "deleted");
+    let deleted = agent(&context, "deleted").await?;
     context
         .user
-        .start_agent(&context.component_id, agent_id!("LiveFiles", "deleted"))
+        .start_agent(&context.component_id, agent_key!("LiveFiles", "deleted"))
         .await?;
     let served = context
         .client
@@ -362,7 +425,7 @@ async fn mounted_live_files_of_a_missing_or_deleted_agent_are_not_found_and_crea
         assert!(
             context
                 .user
-                .get_worker_metadata_opt(&agent(&context, name))
+                .get_worker_metadata_opt(&agent(&context, name).await?)
                 .await?
                 .is_none(),
             "{name}"
@@ -392,7 +455,7 @@ async fn mounted_live_files_of_a_missing_or_deleted_agent_are_not_found_and_crea
         assert!(
             context
                 .user
-                .get_worker_metadata_opt(&agent(&context, name))
+                .get_worker_metadata_opt(&agent(&context, name).await?)
                 .await?
                 .is_none(),
             "{name}: a live file read created the agent"
@@ -416,7 +479,10 @@ async fn mounted_live_stream_completion_and_disconnect_release_mutation(
         let name = format!("large-{disconnect}");
         context
             .user
-            .start_agent(&context.component_id, agent_id!("LiveFiles", name.as_str()))
+            .start_agent(
+                &context.component_id,
+                agent_key!("LiveFiles", name.as_str()),
+            )
             .await?;
         let domain = context.host_header.to_str()?;
         let address = ([127, 0, 0, 1], context.base_url.port().unwrap()).into();
@@ -438,7 +504,7 @@ async fn mounted_live_stream_completion_and_disconnect_release_mutation(
         );
         let first = response.chunk().await?.unwrap();
         assert_eq!(first.as_ref(), &expected[..first.len()]);
-        let parsed = agent_id!("LiveFiles", name.as_str());
+        let parsed = agent_key!("LiveFiles", name.as_str());
         let mut mutation = Box::pin(context.user.invoke_and_await_agent(
             &component,
             &parsed,
@@ -449,7 +515,7 @@ async fn mounted_live_stream_completion_and_disconnect_release_mutation(
             result = &mut mutation => panic!("mutation passed an active file read: {result:?}"),
             admitted = tokio::time::timeout(Duration::from_secs(10), async {
                 loop {
-                    let oplog = context.user.get_oplog(&agent(&context, &name), OplogIndex::INITIAL).await?;
+                    let oplog = context.user.get_oplog(&agent(&context, &name).await?, OplogIndex::INITIAL).await?;
                     if oplog.iter().any(|entry| matches!(&entry.entry,
                         PublicOplogEntry::PendingAgentInvocation(pending)
                             if matches!(pending.invocation, PublicAgentInvocation::AgentMethodInvocation(_)))) {

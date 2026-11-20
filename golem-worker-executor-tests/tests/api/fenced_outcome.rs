@@ -40,25 +40,27 @@ async fn selected_writer_fence(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let name = agent_id!("FailingCounter", format!("fenced-selected-{failure}"));
+    let name = agent_key!("FailingCounter", format!("fenced-selected-{failure}"));
     let id = executor.start_agent(&component.id, name.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &name, "add", data_value!(1u64))
         .await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let owned = id.clone();
     let worker = executor
         .production_active_agent(&owned)
         .await
         .unwrap()
         .primary();
     let fingerprint = worker.get_initial_worker_metadata().fingerprint;
-    let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
+    let (selected, release) = executor
+        .gate_next_invocation_outcome_append(&id.agent_id)
+        .await;
     let key = IdempotencyKey::fresh();
     let stored_key = golem_common::model::InvocationRequestKey::external(
         executor.auth_ctx().idempotency_scope(),
         Some(&key),
     )
-    .finalize(id.clone(), fingerprint, "add")
+    .finalize(id.agent_id, fingerprint, "add")
     .id();
     let caller = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
@@ -78,10 +80,10 @@ async fn selected_writer_fence(
         }
     }));
     tokio::time::timeout(Duration::from_secs(10), selected).await??;
-    let mut contender = Box::pin(executor.acquire_account_concurrent_agent_permit(id.clone()));
+    let mut contender = Box::pin(executor.acquire_account_concurrent_agent_permit(id.agent_id));
     assert!(futures::poll!(contender.as_mut()).is_pending());
     // Persist the selected invocation's prefix before the new owner takes over.
-    executor.commit_oplog(&id).await?;
+    executor.commit_oplog(&id.agent_id).await?;
     let entries = agent_oplog_length(deps, &context, &owned).await?;
     let prefix = worker
         .oplog()

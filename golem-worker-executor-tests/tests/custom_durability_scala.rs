@@ -22,7 +22,7 @@ use golem_common::model::oplog::{
     DurableInvocationId, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
     PublicOplogEntryWithIndex,
 };
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -242,7 +242,7 @@ async fn scala_custom_durability_siblings_complete_in_adverse_order(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let agent_id = agent_id!("ScalaCustomDurability", "adverse-order");
+    let agent_id = agent_key!("ScalaCustomDurability", "adverse-order");
     let env = HashMap::from([("PORT".to_string(), server.port.to_string())]);
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
@@ -302,7 +302,7 @@ async fn scala_custom_durability_root_call_while_scope_waits(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let agent_id = agent_id!("ScalaCustomDurability", "root-call");
+    let agent_id = agent_key!("ScalaCustomDurability", "root-call");
     let env = HashMap::from([("PORT".to_string(), server.port.to_string())]);
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
@@ -364,7 +364,7 @@ async fn scala_custom_durability_nested_operation_has_outer_parent(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let agent_id = agent_id!("ScalaCustomDurability", "nested");
+    let agent_id = agent_key!("ScalaCustomDurability", "nested");
     let env = HashMap::from([("PORT".to_string(), server.port.to_string())]);
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
@@ -433,7 +433,7 @@ async fn scala_custom_durability_continuation_runs_in_registering_scope(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let agent_id = agent_id!("ScalaCustomDurability", "cross-scope");
+    let agent_id = agent_key!("ScalaCustomDurability", "cross-scope");
     let env = HashMap::from([("PORT".to_string(), server.port.to_string())]);
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
@@ -528,7 +528,7 @@ async fn scala_custom_durability_recovers_one_completed_and_one_incomplete_sibli
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let agent_id = agent_id!("ScalaCustomDurability", "partial-recovery");
+    let agent_id = agent_key!("ScalaCustomDurability", "partial-recovery");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -554,7 +554,7 @@ async fn scala_custom_durability_recovers_one_completed_and_one_incomplete_sibli
         .in_current_span()
     });
     tokio::time::timeout(std::time::Duration::from_secs(60), checkpoint.notified()).await?;
-    executor.commit_oplog(&worker_id).await?;
+    executor.commit_oplog(&worker_id.agent_id).await?;
 
     let ends = |oplog: &[PublicOplogEntryWithIndex], start: OplogIndex| {
         oplog
@@ -650,7 +650,7 @@ async fn scala_custom_durability_failed_body_leaves_no_scope_behind(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let agent_id = agent_id!("ScalaCustomDurability", "failed-body");
+    let agent_id = agent_key!("ScalaCustomDurability", "failed-body");
     let env = HashMap::from([("PORT".to_string(), server.port.to_string())]);
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
@@ -739,7 +739,7 @@ async fn scala_custom_durability_parasitic_continuations_follow_the_completer(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let agent_id = agent_id!("ScalaCustomDurability", "parasitic");
+    let agent_id = agent_key!("ScalaCustomDurability", "parasitic");
     let env = HashMap::from([("PORT".to_string(), server.port.to_string())]);
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
@@ -819,7 +819,7 @@ async fn scala_custom_durability_promise_conversions_stay_in_scope(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let agent_id = agent_id!("ScalaCustomDurability", "promise");
+    let agent_id = agent_key!("ScalaCustomDurability", "promise");
     let env = HashMap::from([("PORT".to_string(), server.port.to_string())]);
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
@@ -887,7 +887,7 @@ async fn scala_custom_durability_escaped_work_runs_in_nearest_open_scope(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let agent_id = agent_id!("ScalaCustomDurability", "escaped");
+    let agent_id = agent_key!("ScalaCustomDurability", "escaped");
     let env = HashMap::from([("PORT".to_string(), server.port.to_string())]);
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())

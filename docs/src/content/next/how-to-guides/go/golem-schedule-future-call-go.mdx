@@ -10,7 +10,7 @@ For a task that **reschedules itself** on an interval (a periodic / cron-like lo
 
 ## Steps
 
-1. **Get a client** for the target instance: `counter.Agent.Get(counter.ID{Name: "my-counter"})`.
+1. **Get a client** for the target instance: `counter.Agent.Upsert(counter.ID{Name: "my-counter"})`.
 2. **Schedule the method** at a `time.Time`: `counter.Increment.MustSchedule(c, when, in)`.
 3. **Keep the returned `*golem.ScheduledInvocation`** if you may need to cancel it.
 4. **Cancel** with `inv.Cancel()` before the scheduled time to prevent it.
@@ -35,7 +35,7 @@ var agent = scheduler.Agent.Implement(func(scheduler.ID) *state { return &state{
 
 func init() {
 	agent.Handle(scheduler.Arm, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
-		c := counter.Agent.Get(counter.ID{Name: "my-counter"})
+		c := counter.Agent.Upsert(counter.ID{Name: "my-counter"})
 		// Run counter.increment 60 seconds from now.
 		ctx.State.pending = counter.Increment.MustSchedule(c, time.Now().Add(60*time.Second), golem.Unit{})
 		return golem.Unit{}
@@ -50,7 +50,7 @@ func init() {
 Pass the method's input value as the last argument, exactly as with `Call` / `Trigger`:
 
 ```go
-c := counter.Agent.Get(counter.ID{Name: "my-counter"})
+c := counter.Agent.Upsert(counter.ID{Name: "my-counter"})
 counter.Add.MustSchedule(c, time.Now().Add(24*time.Hour), counter.AddIn{By: 5})
 ```
 
@@ -74,10 +74,10 @@ func init() {
 
 ## Scheduling a future call to itself
 
-To message its own instance an agent binds a client to its own id (see [`golem-recurring-task-go`](/next/how-to-guides/go/golem-recurring-task-go) for the full pattern):
+To message its own instance an agent gets a client for its own agent ID (see [`golem-recurring-task-go`](/next/how-to-guides/go/golem-recurring-task-go) for the full pattern):
 
 ```go
-self := golem.Must(counter.Agent.Bind(ctx.AgentID()))
+self := counter.Agent.MustGetByID(ctx.AgentID())
 counter.Increment.MustSchedule(self, time.Now().Add(time.Minute), golem.Unit{})
 ```
 
@@ -89,7 +89,7 @@ counter.Increment.MustSchedule(self, time.Now().Add(time.Minute), golem.Unit{})
 
 ## Key Constraints
 
-- `Schedule` / `Trigger` are called on the **method descriptor** (`counter.Increment.Schedule(c, ...)`), and the client comes from the callee's **definition** (`counter.Agent.Get(id)`).
+- `Schedule` / `Trigger` are called on the **method descriptor** (`counter.Increment.Schedule(c, ...)`), and the client comes from the callee's **definition** (`counter.Agent.Upsert(id)`).
 - Compute the time with `time.Now().Add(d)` (a `time.Time`); it is recorded durably.
 - To cancel later, you must retain the `*golem.ScheduledInvocation` — don't discard it if cancellation may be needed. Hold it in agent state, not across a bare `var` initializer.
 - For a self-scheduling recurring loop, don't hand-roll it here — use [`golem-recurring-task-go`](/next/how-to-guides/go/golem-recurring-task-go).

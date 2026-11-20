@@ -247,6 +247,9 @@ impl From<WorkerServiceError> for ApiEndpointError {
             WorkerServiceError::AgentNotFound(_) => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
             }
+            WorkerServiceError::AgentAccessDenied(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
             WorkerServiceError::GolemError(inner) => inner.into(),
             WorkerServiceError::Component(inner) => inner.into(),
             WorkerServiceError::InternalCallError(inner) => inner.into(),
@@ -322,6 +325,9 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             }
             WorkerExecutorError::AgentAlreadyExists { .. } => {
                 Self::conflict(api::error_code::AGENT_ALREADY_EXISTS, error)
+            }
+            WorkerExecutorError::AgentKeyCollision { .. } => {
+                Self::conflict(api::error_code::AGENT_KEY_COLLISION, error)
             }
             WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => {
                 Self::unprocessable_entity(api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT, error)
@@ -445,7 +451,21 @@ impl From<RegistryServiceError> for ApiEndpointError {
 impl From<RequestHandlerError> for ApiEndpointError {
     fn from(value: RequestHandlerError) -> Self {
         match value {
-            RequestHandlerError::ValueParsingFailed { .. } => {
+            RequestHandlerError::ParameterParsingFailed { ref error, .. } => {
+                let code = match error.as_ref() {
+                    RequestHandlerError::MissingValue { .. } => {
+                        api::error_code::REQUEST_MISSING_VALUE
+                    }
+                    RequestHandlerError::TooManyValues { .. } => {
+                        api::error_code::REQUEST_TOO_MANY_VALUES
+                    }
+                    _ => api::error_code::REQUEST_VALUE_PARSING_FAILED,
+                };
+                Self::bad_request(code, value)
+            }
+            RequestHandlerError::ValueParsingFailed { .. }
+            | RequestHandlerError::InvalidParameter { .. }
+            | RequestHandlerError::UnknownQueryParameter { .. } => {
                 Self::bad_request(api::error_code::REQUEST_VALUE_PARSING_FAILED, value)
             }
             RequestHandlerError::MissingValue { .. } => {
@@ -519,6 +539,13 @@ impl From<RequestHandlerError> for ApiEndpointError {
             )) if matches!(&error, WorkerExecutorError::InvalidRequest { details } if details.starts_with("IdempotencyConflict:")) => {
                 error.into()
             }
+            RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
+                error @ WorkerExecutorError::AgentKeyCollision { .. },
+            )) => error.into(),
+            RequestHandlerError::AgentInvocationFailed(
+                WorkerServiceError::AgentNotFound(_)
+                | WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. }),
+            ) => Self::not_found(api::error_code::AGENT_NOT_FOUND, value),
             RequestHandlerError::AgentInvocationFailed(_) => {
                 Self::internal(api::error_code::INTERNAL_AGENT_EXECUTION_FAILED, value)
             }
@@ -558,22 +585,24 @@ mod tests {
     async fn create_conflicts_preserve_their_codes_through_grpc_and_http() {
         use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
         use golem_common::model::AgentId;
-        use golem_common::model::component::ComponentId;
         use poem::IntoResponse;
         use poem::http::StatusCode;
         use prost::Message;
 
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Counter(\"create-conflicts\")".into(),
-        };
+        let agent_id = AgentId::from_parts(7, 1);
         for (error, status, code) in [
             (
-                WorkerExecutorError::AgentAlreadyExists {
-                    agent_id: agent_id.clone(),
-                },
+                WorkerExecutorError::AgentAlreadyExists { agent_id },
                 StatusCode::CONFLICT,
                 api::error_code::AGENT_ALREADY_EXISTS,
+            ),
+            (
+                WorkerExecutorError::AgentKeyCollision {
+                    agent_id,
+                    requested_key: "Counter(\"a\")".to_string(),
+                },
+                StatusCode::CONFLICT,
+                api::error_code::AGENT_KEY_COLLISION,
             ),
             (
                 WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id },
@@ -722,12 +751,7 @@ mod tests {
         ] {
             let api_error: ApiEndpointError =
                 WorkerServiceError::GolemError(WorkerExecutorError::StaleCursor {
-                    agent_id: golem_common::model::AgentId {
-                        component_id: golem_common::model::component::ComponentId(
-                            uuid::Uuid::nil(),
-                        ),
-                        agent_id: "Counter(\"a\")".to_string(),
-                    },
+                    agent_id: golem_common::model::AgentId::from_parts(7, 3),
                     next_oplog_index: golem_common::model::OplogIndex::from_u64(42),
                     reason,
                 })

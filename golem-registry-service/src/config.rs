@@ -17,6 +17,7 @@ use golem_common::config::DbConfig;
 use golem_common::config::{ConfigLoader, DbSqliteConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_common::model::tool::BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL;
 use golem_common::tracing::TracingConfig;
@@ -241,6 +242,18 @@ impl McpImportResolverConfig {
 pub struct RegistryServiceConfig {
     pub tracing: TracingConfig,
     pub environment: String,
+    /// The installation's Golem issuer: the issuer of the identities of its agents, tools and
+    /// accounts. An https URL on its own host, or a `urn:golem:issuer:<uuid>` value that Golem
+    /// generated. The registry keeps it in its database and every worker service and executor of
+    /// the installation asks the registry for it. Without it, the first start generates one and
+    /// stores it. A value that differs from the stored one stops the start, because changing it
+    /// would change every identity. It is not the issuer of invocation session tokens
+    /// (`invocation_session_tokens.issuer`).
+    #[serde(
+        default,
+        deserialize_with = "golem_common::model::golem_issuer::deserialize_setting"
+    )]
+    pub golem_issuer: Option<GolemIssuer>,
     pub workspace: String,
     /// The address every listener of this service binds to. `0.0.0.0` accepts IPv4 only; `::`
     /// accepts both IPv6 and IPv4.
@@ -344,6 +357,10 @@ impl SafeDisplay for RegistryServiceConfig {
         let _ = writeln!(&mut result, "tracing:");
         let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
         let _ = writeln!(&mut result, "environment: {}", self.environment);
+        let _ = match &self.golem_issuer {
+            Some(golem_issuer) => writeln!(&mut result, "golem issuer: {golem_issuer}"),
+            None => writeln!(&mut result, "golem issuer: stored in the database"),
+        };
         let _ = writeln!(&mut result, "workspace: {}", self.workspace);
         let _ = writeln!(&mut result, "bind address: {}", self.bind_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
@@ -540,6 +557,7 @@ impl Default for RegistryServiceConfig {
         Self {
             tracing: TracingConfig::local_dev("registry-service"),
             environment: "dev".to_string(),
+            golem_issuer: None,
             workspace: "release".to_string(),
             bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             http_port: 8081,
@@ -1302,6 +1320,7 @@ mod tests {
     #[test]
     pub async fn mcp_import_resolver_rejects_unrepresentable_operation_timeout() {
         use crate::bootstrap::Services;
+        use crate::services::builtin_artifact::BuiltinArtifactShutdown;
         use golem_common::config::{DbConfig, DbSqliteConfig};
 
         let mut config = RegistryServiceConfig::default();
@@ -1319,6 +1338,7 @@ mod tests {
             &config,
             &mut tasks,
             &crate::startup::StartupProgress::default(),
+            BuiltinArtifactShutdown::never(),
         )
         .await
         .err()
@@ -1361,6 +1381,7 @@ mod tests {
     #[test]
     pub async fn mcp_oauth_config_validates_before_bootstrap() {
         use crate::bootstrap::Services;
+        use crate::services::builtin_artifact::BuiltinArtifactShutdown;
         use golem_common::config::{DbConfig, DbSqliteConfig};
         use serde_json::json;
         use std::time::Duration;
@@ -1398,6 +1419,7 @@ mod tests {
             &config,
             &mut tasks,
             &crate::startup::StartupProgress::default(),
+            BuiltinArtifactShutdown::never(),
         )
         .await
         .err()

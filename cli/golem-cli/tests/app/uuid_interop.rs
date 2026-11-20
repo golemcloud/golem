@@ -14,9 +14,10 @@
 //! same agent ID for a UUID constructor parameter.
 //!
 //! `RustUuidTarget` also reads a `label` config that the manifest sets. The
-//! Rust, TypeScript and MoonBit guest callers override it with
-//! `get_with_config`, trigger `touch` on a pinned phantom and then await it,
-//! and the Rust caller checks that `new_phantom` creates a fresh instance.
+//! Rust, TypeScript and MoonBit guest callers override it with a keyed
+//! `create`, create an agent without a key, trigger `touch` on it through
+//! `get_by_id` and then await it, and the Rust caller checks that every
+//! `create` without a key makes a new agent.
 
 use super::agents::{assert_generated_driver, run_generated_driver};
 use super::{TestContext, cmd, flag};
@@ -162,7 +163,7 @@ fn write_rust_caller(ctx: &TestContext) {
                     let key = $key;
                     let nil = Uuid::nil();
                     let max = Uuid::from_u128(u128::MAX);
-                    let target = $agent::get(key).unwrap();
+                    let target = $agent::upsert(key).unwrap();
                     for value in [key, nil, max] {
                         assert_eq!(target.echo(value).await.unwrap(), value);
                     }
@@ -208,13 +209,17 @@ fn write_rust_caller(ctx: &TestContext) {
                 async fn probe(&self, key: String) -> String {
                     use rust_uuid_target_guest_client::RustUuidTarget;
                     let key = Uuid::parse_str(&key).unwrap();
-                    assert_eq!(RustUuidTarget::get(key).unwrap().label().await.unwrap(), "manifest");
-                    let configured = RustUuidTarget::get_with_config(Uuid::from_u128(11), Some("rust".to_string())).unwrap();
+                    assert_eq!(RustUuidTarget::upsert(key).unwrap().label().await.unwrap(), "manifest");
+                    let configured = RustUuidTarget::create(
+                        Uuid::from_u128(11),
+                        golem_rust::CreateOptions { keyed: true, config: Some("rust".to_string()), ..Default::default() },
+                    ).await.unwrap();
                     assert_eq!(configured.label().await.unwrap(), "rust");
-                    let phantom = Uuid::from_u128(1);
-                    RustUuidTarget::get_phantom(phantom, key).unwrap().trigger_touch().unwrap();
-                    assert_eq!(RustUuidTarget::get_phantom(phantom, key).unwrap().touch().await.unwrap(), 2);
-                    assert_eq!(RustUuidTarget::new_phantom(key).unwrap().touch().await.unwrap(), 1);
+                    let unkeyed = RustUuidTarget::create(key, Default::default()).await.unwrap();
+                    let unkeyed_id = unkeyed.agent_id().await.unwrap();
+                    RustUuidTarget::get_by_id(&unkeyed_id).unwrap().trigger_touch().unwrap();
+                    assert_eq!(RustUuidTarget::get_by_id(&unkeyed_id).unwrap().touch().await.unwrap(), 2);
+                    assert_eq!(RustUuidTarget::create(key, Default::default()).await.unwrap().touch().await.unwrap(), 1);
                     "probed".to_string()
                 }
             }
@@ -304,7 +309,7 @@ fn write_ts(ctx: &TestContext) {
                   const id = Uuid.parse(key);
                   const nil = Uuid.parse('00000000-0000-0000-0000-000000000000');
                   const max = Uuid.parse('ffffffff-ffff-ffff-ffff-ffffffffffff');
-                  const target = RustUuidTarget.get(id);
+                  const target = RustUuidTarget.upsert(id);
                   for (const value of [id, nil, max]) {
                     check(text(await target.echo(value)) === text(value), `echo ${text(value)}`);
                   }
@@ -315,11 +320,14 @@ fn write_ts(ctx: &TestContext) {
                     check(back.all.map(text).join() === [id, nil, max].map(text).join(), 'nested all');
                   }
                   check(text(await target.identity()) === key, 'identity');
-                  const configured = RustUuidTarget.getWithConfig(Uuid.parse('00000000-0000-0000-0000-00000000000c'), 'ts');
+                  const configured = await RustUuidTarget.create(
+                    Uuid.parse('00000000-0000-0000-0000-00000000000c'),
+                    { keyed: true, config: { label: 'ts' } },
+                  );
                   check(await configured.label() === 'ts', 'config override');
-                  const phantom = Uuid.parse('00000000-0000-0000-0000-000000000002');
-                  RustUuidTarget.getPhantom(phantom, id).touch.trigger();
-                  check(await RustUuidTarget.getPhantom(phantom, id).touch() === 2, 'trigger on phantom');
+                  const unkeyedId = await (await RustUuidTarget.create(id)).agentId();
+                  (await RustUuidTarget.getById(unkeyedId)).touch.trigger();
+                  check(await (await RustUuidTarget.getById(unkeyedId)).touch() === 2, 'trigger by agent ID');
                   return `ok:${await target.touch()}`;
                 },
               },
@@ -425,7 +433,7 @@ fn write_go(ctx: &TestContext) {
             		key := golem.Must(values.ParseUUID(in.Key))
             		var nilUUID values.UUID
             		maxUUID := golem.Must(values.ParseUUID("ffffffff-ffff-ffff-ffff-ffffffffffff"))
-            		remote := golem.Must(rust.GetRustUUIDTarget(rust.RustUUIDTargetID{{Key: key}}))
+            		remote := golem.Must(rust.UpsertRustUUIDTarget(rust.RustUUIDTargetID{{Key: key}}))
             		for _, value := range []values.UUID{{key, nilUUID, maxUUID}} {{
             			echoed := golem.Must(remote.Echo(value))
             			check(echoed == value, "echo %s returned %s", value, echoed)
@@ -518,7 +526,7 @@ fn write_scala(ctx: &TestContext) {
                 val id = UUID.fromString(key)
                 val nil = new UUID(0L, 0L)
                 val max = new UUID(-1L, -1L)
-                val target = RustUuidTargetClient.get(id)
+                val target = RustUuidTargetClient.upsert(id)
                 for {
                   echoed <- Future.sequence(List(id, nil, max).map(v => target.echo(v)))
                   withSome <- target.nested(RustHolder(id, Some(max), List(id, nil, max)))
@@ -571,7 +579,7 @@ fn write_scala_caller(ctx: &TestContext) {
                 val id = UUID.fromString(key)
                 val nil = new UUID(0L, 0L)
                 val max = new UUID(-1L, -1L)
-                val target = ScalaUuidTargetClient.get(id)
+                val target = ScalaUuidTargetClient.upsert(id)
                 for {
                   echoed <- Future.sequence(List(id, nil, max).map(v => target.echo(v)))
                   withSome <- target.nested(UuidHolder(id, Some(max), List(id, nil, max)))
@@ -668,11 +676,14 @@ fn write_moonbit(ctx: &TestContext) {
               let id = @schema.Uuid::parse(key) catch { _ => abort("invalid key") }
               let nil = @schema.Uuid::from_bits(0, 0)
               let max = @schema.Uuid::from_bits(0xFFFFFFFFFFFFFFFFUL, 0xFFFFFFFFFFFFFFFFUL)
-              let configured = @rust.RustUuidTargetClient::get_with_config(@schema.Uuid::from_bits(0, 13), Some("moonbit"))
+              let configured = @rust.RustUuidTargetClient::create(@schema.Uuid::from_bits(0, 13), keyed=true, config_label="moonbit")
               defer configured.drop()
               assert_eq(configured.label(), "moonbit")
-              let phantom = @schema.Uuid::from_bits(0, 3)
-              let pinned = @rust.RustUuidTargetClient::get_phantom(id, phantom)
+              let unkeyed = @rust.RustUuidTargetClient::create(id)
+              defer unkeyed.drop()
+              let pinned = @rust.RustUuidTargetClient::get_by_id(unkeyed.agent_id()) catch {
+                _ => abort("get_by_id")
+              }
               defer pinned.drop()
               pinned.trigger_touch()
               assert_eq(pinned.touch(), 2)
@@ -793,7 +804,7 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
                 let key = Uuid::parse_str("{KEY}")?;
                 let nil = Uuid::nil();
                 let max = Uuid::from_u128(u128::MAX);
-                let target = RustUuidTarget::get(key).await?;
+                let target = RustUuidTarget::upsert(key)?;
                 for value in [key, nil, max] {{
                     assert_eq!(target.echo(value).await?, value);
                 }}
@@ -840,7 +851,7 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
             const key = Uuid.parse('{KEY}')
             const nil = Uuid.parse('00000000-0000-0000-0000-000000000000')
             const max = Uuid.parse('ffffffff-ffff-ffff-ffff-ffffffffffff')
-            const target = await RustUuidTarget.get(key)
+            const target = RustUuidTarget.upsert(key)
             for (const value of [key, nil, max]) assert.equal(text(await target.echo(value)), text(value))
             for (const maybe of [max, undefined]) {{
               const holder = await target.nested({{ primary: key, maybe, all: [key, nil, max] }})
@@ -892,7 +903,7 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
                 val key = UUID.fromString("{KEY}")
                 val nil = new UUID(0L, 0L)
                 val max = new UUID(-1L, -1L)
-                val target = Await.result(RustUuidTargetClient.get(key), timeout)
+                val target = RustUuidTargetClient.upsert(key)
                 for (value <- List(key, nil, max)) assert(Await.result(target.echo(value), timeout) == value)
                 for (maybe <- List(Some(max), None)) {{
                   val holder = UuidHolder(key, maybe, List(key, nil, max))
@@ -980,7 +991,7 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
             	key := must(values.ParseUUID("{KEY}"))
             	var nilUUID values.UUID
             	maxUUID := must(values.ParseUUID("ffffffff-ffff-ffff-ffff-ffffffffffff"))
-            	target := must(client.GetRustUUIDTarget(client.RustUUIDTargetID{{Key: key}}))
+            	target := must(client.UpsertRustUUIDTarget(client.RustUUIDTargetID{{Key: key}}))
             	for _, value := range []values.UUID{{key, nilUUID, maxUUID}} {{
             		if echoed := must(target.Echo(ctx, value)); echoed != value {{
             			log.Fatalf("echo %s returned %s", value, echoed)
@@ -1051,7 +1062,7 @@ async fn run_external_drivers(ctx: &TestContext, first_touch: u32) {
               let key = @runtime.Uuid::parse("{KEY}")
               let nil = @runtime.Uuid::from_bits(0, 0)
               let max = @runtime.Uuid::from_bits(0xFFFFFFFFFFFFFFFFUL, 0xFFFFFFFFFFFFFFFFUL)
-              let target = @client.RustUuidTarget::get(key)
+              let target = @client.RustUuidTarget::upsert(key)
               for value in [key, nil, max] {{
                 assert_eq(target.echo(value), value)
               }}
@@ -1120,7 +1131,7 @@ async fn uuid_values_cross_every_bridge() {
     .await;
     assert!(
         stdout.contains("probed"),
-        "Rust guest caller config, trigger and phantom calls: {stdout}"
+        "Rust guest caller config, trigger and create calls: {stdout}"
     );
 
     let stdout = invoke(

@@ -25,6 +25,7 @@ pub extend ToolBuildError with Debug::{to_repr}
 pub(all) struct ToolDef {
   version : String
   requires_filesystem : Bool
+  http_mount : @toolCommon.ToolHttpMount?
   commands : Array[CommandNodeDef]
 }
 
@@ -36,6 +37,7 @@ pub(all) struct CommandNodeDef {
   globals : GlobalsDef
   subcommands : Array[Int32]
   body : CommandBodyDef?
+  http : @toolCommon.CommandHttp?
 }
 
 ///|
@@ -256,6 +258,7 @@ pub fn ToolDef::to_tool(
   {
     version: self.version,
     requires_filesystem: self.requires_filesystem,
+    http_mount: self.http_mount,
     commands: @toolCommon.CommandTree::{ nodes, },
     schema,
   }
@@ -338,6 +341,7 @@ fn CommandNodeDef::to_command_node(
     doc: self.doc,
     globals: self.globals.to_globals(encoder),
     subcommands: self.subcommands,
+    http: self.http,
     body: match self.body {
       Some(body) => Some(body.to_command_body(encoder))
       None => None

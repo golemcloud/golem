@@ -57,7 +57,7 @@ func TestACommandResultIsTheSharedProcessExitStatus(t *testing.T) {
 		t.Fatalf("the result refers to %q", id)
 	}
 
-	loopback(t, r, d, golem.AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousCaller())
 	status, err := exit.Call(func(a *ExitArgs) { a.Code = 3 })
 	if err != nil || status.ExitCode != 3 {
 		t.Fatalf("call gave %+v, %v", status, err)

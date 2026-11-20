@@ -36,7 +36,7 @@ interface SaveSnapshotExports {
 }
 
 interface LoadSnapshotExports {
-  load: (snapshot: ApiHost.Snapshot) => Promise<void>
+  load: (snapshot: ApiHost.Snapshot, constructor: CoreTypes.SchemaValueTree) => Promise<void>
 }
 
 /**

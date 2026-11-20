@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 #[test]
@@ -37,23 +38,23 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("WebsocketTest", "monthly-ws-handshake-completion");
+    let name = agent_key!("WebsocketTest", "monthly-ws-handshake-completion");
     let key = IdempotencyKey::fresh();
-    let id = AgentId::from_agent_id(component.id, &name).unwrap();
+    let id = crate::agent::keyed_agent_id(component.environment_id, &name).agent_id;
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("WebsocketTest", "monthly-ws-handshake-control-seed"),
+            agent_key!("WebsocketTest", "monthly-ws-handshake-control-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .context("seed worker missing")?
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
-    let worker = Worker::get_or_create_suspended(
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -61,7 +62,12 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        golem_worker_executor::worker::CreateIntent::Invocation {
+            owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
+            idempotency_key: None,
+        },
     )
     .await?;
     let pool = worker.websocket_connection_pool();
@@ -94,7 +100,7 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         let held = peer.held().await?;
         ensure!(held.number == 1);
         executor.commit_oplog(&id).await?;
-        let open = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let open = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let connect = pool::connect_start(&open, 0, 0)?;
         ensure!(worker.is_loaded().await);
         peer.assert_effects(1, 0, 0)?;
@@ -111,7 +117,7 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         invocation_joined = true;
         let completed = completed??;
         ensure!(completed.into_typed::<String>()? == "completed");
-        let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(pool::connect_start(&history, 1, 1)? == connect);
         assert_invocation(&history, &stored_key, 1)?;
         assert_settled_history(&history)?;
@@ -133,7 +139,7 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
             .await?;
         ensure!(cached.into_typed::<String>()? == "completed");
         peer.assert_effects(1, 1, 1)?;
-        let after = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let after = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         assert_invocation(&after, &stored_key, 1)?;
         ensure!(pool::connect_start(&after, 1, 1)? == connect);
         Ok::<_, anyhow::Error>(())
@@ -142,7 +148,7 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
     let mut cleanup_errors = Vec::new();
     if !invocation_joined {
         if !invocation.is_finished() {
-            match tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await {
+            match tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&owned)).await {
                 Ok(Ok(())) => {}
                 other => cleanup_errors.push(format!("interrupt: {other:?}")),
             }
@@ -168,7 +174,7 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         }
     };
     if !idle && worker.is_loaded().await {
-        match tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await {
+        match tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&owned)).await {
             Ok(Ok(())) => {}
             other => cleanup_errors.push(format!("retire: {other:?}")),
         }
