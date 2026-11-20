@@ -18,7 +18,7 @@ use crate::base_model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolM
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
 use crate::model::card::PolymorphicCard;
-use crate::schema::{AgentTypeSchema, ComponentConfigSchema};
+use crate::schema::{AgentTypeSchema, ComponentConfigSchema, TypedSchemaValue};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -347,6 +347,93 @@ impl From<ComponentMetadataDto> for ComponentMetadata {
     }
 }
 
+/// Revisioned operational config. Source metadata is optional audit information;
+/// consumers must not use it to resolve or authorize a value.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct OwnerConfig {
+    pub entries: Vec<OwnerConfigEntry>,
+    /// JSON Pointer keys address fields and nested members without conflating
+    /// record member names, dotted declaration paths, or list indices.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[cfg_attr(feature = "full", oai(default, skip_serializing_if_is_empty))]
+    pub source_meta: BTreeMap<String, ConfigSourceMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct OwnerConfigEntry {
+    pub path: Vec<String>,
+    pub source: OwnerConfigSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", content = "value", rename_all = "camelCase")]
+pub enum OwnerConfigSource {
+    Captured(TypedSchemaValue),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigSourceMetadata {
+    /// Portable source label, not a local absolute path or initializer contents.
+    pub source: String,
+    pub path: Vec<String>,
+    pub layer: String,
+}
+
+impl OwnerConfig {
+    pub fn from_captures(entries: Vec<TypedAgentConfigEntry>) -> Self {
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|entry| OwnerConfigEntry {
+                    path: entry.path,
+                    source: OwnerConfigSource::Captured(entry.value),
+                })
+                .collect(),
+            source_meta: BTreeMap::new(),
+        }
+    }
+
+    /// Convert revision captures into the existing guest/oplog value carrier.
+    pub fn captures(&self) -> Vec<TypedAgentConfigEntry> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                let OwnerConfigSource::Captured(value) = &entry.source;
+                TypedAgentConfigEntry {
+                    path: entry.path.clone(),
+                    value: value.clone(),
+                }
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
@@ -360,7 +447,7 @@ pub struct ComponentProvisionConfig {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
-    pub config: Vec<TypedAgentConfigEntry>,
+    pub config: OwnerConfig,
     #[serde(default)]
     pub plugins: Vec<InstalledPlugin>,
     #[serde(default)]
@@ -373,7 +460,7 @@ impl Default for ComponentProvisionConfig {
             initial_permissions: crate::model::component::AgentTypeInitialPermissions::default()
                 .to_polymorphic_card(),
             env: BTreeMap::new(),
-            config: Vec::new(),
+            config: OwnerConfig::default(),
             plugins: Vec::new(),
             files: Vec::new(),
         }
@@ -415,7 +502,7 @@ pub struct AgentTypeProvisionConfig {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
-    pub config: Vec<TypedAgentConfigEntry>,
+    pub config: OwnerConfig,
     #[serde(default)]
     pub plugins: Vec<InstalledPlugin>,
     #[serde(default)]

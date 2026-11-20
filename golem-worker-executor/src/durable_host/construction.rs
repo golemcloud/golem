@@ -230,7 +230,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             OwnerRuntime::Entity(_) => None,
         };
         let agent_config = if matches!(runtime, OwnerRuntime::Agent) {
-            let (provisioned_config, graph, declarations) = match &owner_context {
+            let (provisioned_config, declarations) = match &owner_context {
                 ResolvedOwnerContext::Agent(agent_id) => {
                     let agent_type = component_metadata
                         .metadata
@@ -239,9 +239,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     (
                         agent_type_provision_configs
                             .as_ref()
-                            .map(|c| c.config.clone())
+                            .map(|c| c.config.captures())
                             .unwrap_or_default(),
-                        &agent_type.schema,
                         &agent_type.config,
                     )
                 }
@@ -252,8 +251,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .metadata
                             .component_provision_config()
                             .config
-                            .clone(),
-                        &schema.schema,
+                            .captures(),
                         &schema.declarations,
                     )
                 }
@@ -261,9 +259,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             effective_agent_config(
                 worker_config.initial_agent_config.clone(),
                 provisioned_config,
-                graph,
                 declarations,
-            )?
+            )
         } else {
             worker_config
                 .initial_agent_config

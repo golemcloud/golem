@@ -2,9 +2,10 @@
 
 An agent declares one config record with `AgentConfig[C]`. Its implementation
 receives `Config[C]` and reads typed fields with `config.<field>`. `config.value`
-returns the complete record. Static data is decoded once per config instance,
-including when the constructor first uses it. Secret handles retain their own
-read behavior.
+returns the complete record. Each access reads the host captures for the current
+owner revision. Values saved by application code, such as a constructor field,
+remain application state; they do not become live config accessors. Secret
+handles retain their own read behavior.
 
 ```scala
 import golem.config.{AgentConfig, Config}

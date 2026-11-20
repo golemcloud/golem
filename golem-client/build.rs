@@ -270,6 +270,22 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::base_model::component_metadata::AgentTypeProvisionConfig",
             ),
             (
+                "OwnerConfig",
+                "golem_common::base_model::component_metadata::OwnerConfig",
+            ),
+            (
+                "OwnerConfigEntry",
+                "golem_common::base_model::component_metadata::OwnerConfigEntry",
+            ),
+            (
+                "OwnerConfigSource",
+                "golem_common::base_model::component_metadata::OwnerConfigSource",
+            ),
+            (
+                "ConfigSourceMetadata",
+                "golem_common::base_model::component_metadata::ConfigSourceMetadata",
+            ),
+            (
                 "AgentTypeProvisionConfigCreation",
                 "golem_common::model::component::AgentTypeProvisionConfigCreation",
             ),

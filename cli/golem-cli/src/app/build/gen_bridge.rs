@@ -28,7 +28,6 @@ use crate::model::app::{
     BridgeSdkTarget, BridgeSdkTargetKind, BridgeSdkTargetSource, BridgeSdkTargetSubject,
     ComponentDependency, CustomBridgeSdkTarget,
 };
-use crate::model::cascade::property::Property;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::language::GuestLanguage;
@@ -39,6 +38,7 @@ use crate::model::tool_deployment::{
 };
 use anyhow::{Context, bail};
 use camino::Utf8PathBuf;
+use golem_common::cascade::property::Property;
 use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
 use golem_common::model::tool::{ToolBindingInput, ToolName};

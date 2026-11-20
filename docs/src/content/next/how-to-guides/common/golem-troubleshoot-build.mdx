@@ -118,7 +118,7 @@ golem build --yes
 
 ## Diagnosing Manifest Configuration Issues with `manifest-trace`
 
-When environment variables, config, plugins, or files are not what you expect at runtime, use `manifest-trace` to see exactly how the manifest configuration is resolved:
+Use `manifest-trace` to inspect manifest layers without requiring built components:
 
 ```shell
 golem component manifest-trace
@@ -127,7 +127,8 @@ golem component manifest-trace
 This command outputs a detailed trace for each component showing:
 
 - **Applied Layers** — the ordered list of configuration layers that contributed to the final values (e.g., component template, component definition, agent template, agent common, environment presets, custom presets)
-- **Property Values and Origins** — for each property (`config`, `env`, `plugins`, `files`, `build`, `clean`, `componentWasm`), the final resolved value plus a trace of which layer introduced or modified it
+- **Property Values and Origins** — for `env`, `plugins`, `files`, `build`, `clean`, and `componentWasm`, the merged value and the layers that supplied it
+- **Config Inputs** — ordered `properties.configInputs` with file/path/layer origins, not a schema-free claim about effective config
 - **Merge Operations** — whether values were merged (showing inserted/updated entries) or entirely replaced, and from which layer
 
 ### Example Usage
@@ -139,10 +140,14 @@ golem component manifest-trace
 
 The handler currently ignores component-name arguments and traces all components. Find the component of interest in the output rather than relying on a name argument to filter it.
 
+After building the components, use `golem component manifest-trace --resolved` to add effective static config, code defaults and provenance in `resolvedConfig`. The default mode sets `resolvedConfig` to `null`; resolved mode returns an array, which can be empty. Resolved mode uses local built component metadata and evaluates environment substitutions through the same resolver as `golem config list` and staging. It does not build, read deployed state or show agent creation overrides. Missing or invalid build output fails rather than falling back to manifest-only output.
+
+Config payloads are masked by default. Use `--show-secrets` only in a trusted terminal; do not share credential-bearing output.
+
 ### What to Look For
 
 1. **Missing environment variables**: Check the `env` property trace to see if the variable was defined in a layer that was overridden or replaced by a later layer
-2. **Wrong config values**: Check the `config` property trace — a later layer may have replaced the entire config object instead of merging individual fields
+2. **Wrong config values**: Inspect `properties.configInputs` in order, then use `--resolved` to check schema-validated values and provenance. Catalog selectors and changed union cases can replace inherited values; do not infer the final value by merging JSON objects yourself
 3. **Plugin not applied**: Check the `plugins` property trace to see if the plugin was defined in a layer that is not in the `appliedLayers` list (e.g., an environment that is not active)
 4. **Unexpected merge behavior**: Check `envMergeMode`, `pluginsMergeMode`, or `filesMergeMode` — these control whether later layers merge with or replace earlier values
 5. **Preset not active**: Verify that the expected preset appears in `appliedLayers` — if it is missing, it may not be set as the default or selected via the environment

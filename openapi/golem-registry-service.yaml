@@ -12824,9 +12824,7 @@ components:
           additionalProperties:
             type: string
         config:
-          type: array
-          items:
-            $ref: '#/components/schemas/TypedAgentConfigEntry'
+          $ref: '#/components/schemas/OwnerConfig'
         plugins:
           type: array
           items:
@@ -14339,9 +14337,7 @@ components:
           additionalProperties:
             type: string
         config:
-          type: array
-          items:
-            $ref: '#/components/schemas/TypedAgentConfigEntry'
+          $ref: '#/components/schemas/OwnerConfig'
         plugins:
           type: array
           items:
@@ -14465,6 +14461,23 @@ components:
               title: Canonical representation of an agent config path (segments are each camelCase)
               items:
                 type: string
+    ConfigSourceMetadata:
+      type: object
+      title: ConfigSourceMetadata
+      required:
+      - source
+      - path
+      - layer
+      properties:
+        source:
+          type: string
+          description: Portable source label, not a local absolute path or initializer contents.
+        path:
+          type: array
+          items:
+            type: string
+        layer:
+          type: string
     Constraint:
       type: object
       oneOf:
@@ -18180,6 +18193,54 @@ components:
             - single
           value:
             $ref: '#/components/schemas/SchemaType'
+    OwnerConfig:
+      type: object
+      title: OwnerConfig
+      description: |-
+        Revisioned operational config. Source metadata is optional audit information;
+        consumers must not use it to resolve or authorize a value.
+      required:
+      - entries
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/OwnerConfigEntry'
+        sourceMeta:
+          type: object
+          description: |-
+            JSON Pointer keys address fields and nested members without conflating
+            record member names, dotted declaration paths, or list indices.
+          default: {}
+          additionalProperties:
+            $ref: '#/components/schemas/ConfigSourceMetadata'
+    OwnerConfigEntry:
+      type: object
+      title: OwnerConfigEntry
+      required:
+      - path
+      - source
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        source:
+          $ref: '#/components/schemas/OwnerConfigSource'
+    OwnerConfigSource:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - captured
+          value:
+            $ref: '#/components/schemas/TypedSchemaValue'
     Page_AccountSummaryReport:
       type: object
       title: Page_AccountSummaryReport
@@ -22339,19 +22400,6 @@ components:
             type: string
           implementationVersion:
             type: string
-    TypedAgentConfigEntry:
-      type: object
-      title: TypedAgentConfigEntry
-      required:
-      - path
-      - value
-      properties:
-        path:
-          type: array
-          items:
-            type: string
-        value:
-          $ref: '#/components/schemas/TypedSchemaValue'
     TypedSchemaValue:
       type: object
       required:

@@ -55,11 +55,12 @@ object StaticConfigSpec extends ZIOSpecDefault {
         byPath("recursive").valueType == IntoSchema[Node].graph
       )
     },
-    test("reads host captures, retains optional positions, and pins repeated static access") {
-      val loader = new ConfigFieldLoader {
+    test("reads current host captures and retains optional positions") {
+      var currentSettings = supplied.settings
+      val loader          = new ConfigFieldLoader {
         def loadLocal[A](path: List[String])(implicit into: IntoSchema[A], from: FromSchema[A]): A = {
           val value: TypedSchemaValue = path match {
-            case List("settings")  => IntoSchema[Settings].toTyped(supplied.settings)
+            case List("settings")  => IntoSchema[Settings].toTyped(currentSettings)
             case List("slots")     => IntoSchema[(Option[Int], Option[Int], String)].toTyped(supplied.slots)
             case List("cleared")   => IntoSchema[Option[String]].toTyped(None)
             case List("omitted")   => IntoSchema[Option[String]].toTyped(None)
@@ -81,16 +82,18 @@ object StaticConfigSpec extends ZIOSpecDefault {
         ): Secret[A] =
           throw new AssertionError("Static data must not read secrets")
       }
-      var loads              = 0
-      val config             = Config { () => loads += 1; ConfigBuilder[Values].build(Nil, loader) }
+      val config             = Config(() => ConfigBuilder[Values].build(Nil, loader))
       val settings: Settings = config.settings
       val enabled: Boolean   = config.enabled
+      val original           = config.value
+      currentSettings = Settings("updated", UInt(17L))
       assertTrue(
         settings == supplied.settings,
         !enabled,
         config.slots == supplied.slots,
-        config.value == supplied,
-        loads == 1
+        original == supplied,
+        config.settings == currentSettings,
+        config.value == supplied.copy(settings = currentSettings)
       )
     },
     test("rejects wrong-typed defaults and defaults on managed bindings") {

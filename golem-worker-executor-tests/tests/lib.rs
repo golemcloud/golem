@@ -447,6 +447,12 @@ test_component!(
     "golem-it:agent-sdk-rust"
 );
 test_component!(
+    static_config_scala,
+    "static_config_scala",
+    "golem_it_static_config_scala",
+    "scala:static-config"
+);
+test_component!(
     http_tests,
     "http_tests",
     "golem_it_http_tests_release",

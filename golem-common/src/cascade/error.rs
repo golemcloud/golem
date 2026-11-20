@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cascade::layer::Layer;
+use crate::cascade::layer::Layer;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreGetValueError<L: Layer> {

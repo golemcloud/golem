@@ -20,7 +20,7 @@ import scala.language.dynamics
 import scala.quoted.*
 
 final class Config[T] private[golem] (private val loadFn: () => T) extends Dynamic {
-  lazy val value: T = loadFn()
+  def value: T = loadFn()
 
   transparent inline def selectDynamic(inline name: String): Any = ${ ConfigAccess.access[T]('this, 'name) }
 }

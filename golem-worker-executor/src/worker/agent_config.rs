@@ -18,7 +18,6 @@ use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::schema::agent::{
     AgentConfigDeclarationSchema, typed_schema_value_with_projected_defs,
 };
-use golem_common::schema::config::{ConfigOrigin, ConfigSchema};
 use golem_common::schema::schema_type::SecretSpec;
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_common::schema::{
@@ -225,15 +224,13 @@ pub fn parse_worker_creation_agent_config(
         let component_config = component
             .metadata
             .agent_type_config(&agent_id.agent_type)
-            .map(|s| s.to_vec())
             .unwrap_or_default();
 
         let config = effective_agent_config(
             initial_agent_config.clone(),
             component_config,
-            &agent_type.schema,
             &agent_type.config,
-        )?;
+        );
 
         validate_agent_config(&config, agent_type)?;
     }
@@ -241,8 +238,8 @@ pub fn parse_worker_creation_agent_config(
     Ok(initial_agent_config)
 }
 
-/// Captures code defaults below component-level and worker-creation config entries.
-/// The declarations and values belong to the selected component revision.
+/// Overlays worker-creation entries on the selected revision's provisioned captures.
+/// Code defaults have already been captured during staging, not during reconstruction.
 ///
 /// The result is the schema-native [`TypedSchemaValue`] carried by
 /// [`TypedAgentConfigEntry`] keyed by config path; it is what the executor's
@@ -251,31 +248,9 @@ pub fn parse_worker_creation_agent_config(
 pub fn effective_agent_config(
     config: Vec<TypedAgentConfigEntry>,
     default_agent_config: Vec<TypedAgentConfigEntry>,
-    graph: &SchemaGraph,
     declarations: &[AgentConfigDeclarationSchema],
-) -> Result<HashMap<Vec<String>, TypedSchemaValue>, WorkerExecutorError> {
-    let schema = ConfigSchema::from_declarations(
-        graph,
-        declarations,
-        &ConfigOrigin {
-            file: "<component metadata>".into(),
-            path: vec!["config".into()],
-            layer: "code".into(),
-        },
-    )
-    .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-    let mut result: HashMap<Vec<String>, TypedSchemaValue> = schema
-        .fields
-        .into_iter()
-        .filter_map(|field| {
-            field.default.map(|value| {
-                (
-                    field.path,
-                    typed_schema_value_with_projected_defs(&schema.graph, field.value_type, value),
-                )
-            })
-        })
-        .collect();
+) -> HashMap<Vec<String>, TypedSchemaValue> {
+    let mut result = HashMap::new();
 
     for entry in default_agent_config.into_iter().chain(config) {
         if declarations.iter().any(|declaration| {
@@ -285,7 +260,7 @@ pub fn effective_agent_config(
         }
     }
 
-    Ok(result)
+    result
 }
 
 pub fn validate_agent_config(
@@ -367,7 +342,7 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn static_defaults_are_captured_below_provisioned_and_creation_values() {
+    fn provisioned_captures_survive_metadata_default_changes_and_creation_overrides() {
         use golem_common::schema::{SchemaTypeDef, TypeId};
 
         let id = TypeId::new("Label");
@@ -406,14 +381,21 @@ mod tests {
         };
         let creation = vec![entry("creation", "creation-wins")];
         let provisioned = vec![
+            entry("code", "captured-code-default"),
             entry("deployment", "deployment-wins"),
             entry("creation", "deployment-loses"),
+            TypedAgentConfigEntry {
+                path: vec!["settings".into(), "cleared".into()],
+                value: typed_schema_value_with_projected_defs(
+                    &graph,
+                    SchemaType::option(SchemaType::ref_to(id.clone())),
+                    SchemaValue::Option { inner: None },
+                ),
+            },
         ];
-        let captured =
-            effective_agent_config(creation.clone(), provisioned.clone(), &graph, &declarations)
-                .unwrap();
+        let captured = effective_agent_config(creation.clone(), provisioned.clone(), &declarations);
         for (name, label) in [
-            ("code", "code-only"),
+            ("code", "captured-code-default"),
             ("deployment", "deployment-wins"),
             ("creation", "creation-wins"),
         ] {
@@ -425,14 +407,18 @@ mod tests {
             &SchemaValue::Option { inner: None },
         );
         assert!(!captured.contains_key(&vec!["settings".into(), "omitted".into()]));
+        assert!(effective_agent_config(vec![], vec![], &declarations).is_empty());
+        let mut changed_defaults = declarations.clone();
+        for declaration in &mut changed_defaults {
+            declaration.default_value = Some("\"changed-code-default\"".into());
+        }
         let rebuilt =
-            effective_agent_config(creation.clone(), provisioned.clone(), &graph, &declarations)
-                .unwrap();
+            effective_agent_config(creation.clone(), provisioned.clone(), &changed_defaults);
         assert_eq!(rebuilt, captured);
 
         let mut updated = declarations.clone();
         updated.retain(|declaration| declaration.path.last().unwrap() != "creation");
-        let rebuilt = effective_agent_config(creation, provisioned, &graph, &updated).unwrap();
+        let rebuilt = effective_agent_config(creation, provisioned, &updated);
         assert!(!rebuilt.contains_key(&vec!["settings".into(), "creation".into()]));
 
         let mut agent = AgentTypeSchema {
