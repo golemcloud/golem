@@ -4301,10 +4301,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
     )
     .await
     .unwrap();
-    let expired = Err(WorkerExecutorError::oplog_expired(
-        agent_id.clone(),
-        retained_start,
-    ));
+    let expired = WorkerExecutorError::oplog_expired(agent_id.clone(), retained_start);
 
     let page_start = |cursor: Option<OplogCursor>, from: Option<u64>| {
         oplog_page_start(
@@ -4328,13 +4325,13 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         page_start(None, Some(4)).await,
         Ok((retained_start, ComponentRevision::INITIAL))
     );
-    assert_eq!(page_start(None, Some(3)).await, expired);
+    assert_eq!(page_start(None, Some(3)).await, Err(expired.clone()));
     assert_eq!(
         page_start(None, Some(1)).await,
-        expired,
+        Err(expired.clone()),
         "a page from the `Create` entry is expired"
     );
-    assert_eq!(page_start(None, Some(0)).await, expired);
+    assert_eq!(page_start(None, Some(0)).await, Err(expired.clone()));
     assert_eq!(
         page_start(
             Some(OplogCursor {
@@ -4345,7 +4342,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             None,
         )
         .await,
-        expired
+        Err(expired.clone())
     );
 
     let page = get_public_oplog_page(
@@ -4388,8 +4385,8 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             None,
         )
     };
-    assert_eq!(entry(3).await.unwrap_err(), expired.clone().unwrap_err());
-    assert_eq!(entry(2).await.unwrap_err(), expired.clone().unwrap_err());
+    assert_eq!(entry(3).await.unwrap_err(), expired);
+    assert_eq!(entry(2).await.unwrap_err(), expired);
     assert_eq!(
         entry(1).await.map(|entry| entry.oplog_index),
         Ok(OplogIndex::INITIAL),
@@ -4420,12 +4417,12 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
     };
     assert_eq!(
         WorkerExecutorError::from(page_from(3).await.err().expect("expired")),
-        expired.clone().unwrap_err(),
+        expired.clone(),
         "a page read below the start keeps the expired error"
     );
     assert_eq!(
         WorkerExecutorError::from(page_from(1).await.err().expect("expired")),
-        expired.clone().unwrap_err()
+        expired.clone()
     );
     let search = search_public_oplog_page(
         Arc::new(PanicComponentService),
@@ -4450,7 +4447,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
     .expect("expired");
     assert_eq!(
         WorkerExecutorError::from(search),
-        expired.unwrap_err(),
+        expired,
         "a search below the start keeps the expired error"
     );
 }
