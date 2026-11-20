@@ -292,10 +292,19 @@ pub trait SocketSession {
     /// Connects the socket that `p2_tcp_bind` kept in `slot` and drops the streams.
     fn p2_tcp_connect_bound(&self, slot: String, port: u16) -> Result<(), String>;
     fn p2_tcp_send(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
+    /// Sends `data` with `blocking-write-and-flush`, at most 4096 bytes per call, and keeps the
+    /// result in the send log.
+    fn p2_tcp_send_blocking(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
     fn p2_tcp_receive(&self, slot: String, len: u32) -> Result<Vec<u8>, String>;
+    /// Writes `data` with `write` and no `check-write` first, beyond the stream's write permit.
+    fn p2_tcp_write_unpermitted(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
     /// Connects a P2 TCP socket and drops it, in a read-only method.
     #[read_only]
     fn p2_tcp_connect_read_only(&self, port: u16) -> Result<(), String>;
+    /// Writes `len` bytes to a file, connects a P2 TCP socket with a send buffer of 8 KiB, splices
+    /// the file into it with `blocking-splice` until all bytes are spliced, and drops the socket at
+    /// once. Returns the number of spliced bytes.
+    fn p2_tcp_blocking_splice_file(&self, port: u16, len: u32) -> Result<u64, String>;
     /// Connects, sends `request` and reads `len` bytes of the answer, in one invocation.
     fn p2_tcp_conversation(&self, port: u16, request: Vec<u8>, len: u32)
     -> Result<Vec<u8>, String>;
@@ -308,6 +317,8 @@ pub trait SocketSession {
 
     /// The bytes and datagrams the agent received so far, per slot, in the order they arrived.
     fn received(&self) -> Vec<(String, Vec<u8>)>;
+    /// The results of the `p2_tcp_send_blocking` calls so far, in order.
+    fn sends(&self) -> Vec<Result<(), String>>;
     /// Drops the socket in `slot` and its streams.
     fn close(&self, slot: String) -> bool;
 }
@@ -315,6 +326,7 @@ pub trait SocketSession {
 pub struct SocketSessionImpl {
     slots: RefCell<HashMap<String, Slot>>,
     received: RefCell<Vec<(String, Vec<u8>)>>,
+    sends: RefCell<Vec<Result<(), String>>>,
 }
 
 impl SocketSessionImpl {
@@ -376,6 +388,7 @@ impl SocketSession for SocketSessionImpl {
         Self {
             slots: RefCell::new(HashMap::new()),
             received: RefCell::new(Vec::new()),
+            sends: RefCell::new(Vec::new()),
         }
     }
 
@@ -968,6 +981,17 @@ impl SocketSession for SocketSessionImpl {
         })
     }
 
+    fn p2_tcp_send_blocking(&self, slot: String, data: Vec<u8>) -> Result<(), String> {
+        let result = self.with_slot(&slot, |value| match value {
+            Slot::P2Tcp { output, .. } => data
+                .chunks(4096)
+                .try_for_each(|chunk| output.blocking_write_and_flush(chunk).map_err(stream_error)),
+            _ => Err(format!("slot {slot} holds no P2 TCP socket")),
+        });
+        self.sends.borrow_mut().push(result.clone());
+        result
+    }
+
     fn p2_tcp_receive(&self, slot: String, len: u32) -> Result<Vec<u8>, String> {
         let data = self.with_slot(&slot, |value| match value {
             Slot::P2Tcp { input, .. } => p2_read(input, len as usize),
@@ -977,9 +1001,59 @@ impl SocketSession for SocketSessionImpl {
         Ok(data)
     }
 
+    fn p2_tcp_write_unpermitted(&self, slot: String, data: Vec<u8>) -> Result<(), String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2Tcp { output, .. } => output.write(&data).map_err(stream_error),
+            _ => Err(format!("slot {slot} holds no P2 TCP socket")),
+        })
+    }
+
     fn p2_tcp_connect_read_only(&self, port: u16) -> Result<(), String> {
         let (_socket, _input, _output) = p2_tcp_connect(port)?;
         Ok(())
+    }
+
+    fn p2_tcp_blocking_splice_file(&self, port: u16, len: u32) -> Result<u64, String> {
+        use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+        let (root, _) = wasi::filesystem::preopens::get_directories()
+            .into_iter()
+            .next()
+            .ok_or("no preopened directory")?;
+        let file = root
+            .open_at(
+                PathFlags::empty(),
+                "splice-source",
+                OpenFlags::CREATE | OpenFlags::TRUNCATE,
+                DescriptorFlags::READ | DescriptorFlags::WRITE,
+            )
+            .map_err(error)?;
+        let contents: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let file_output = file.write_via_stream(0).map_err(error)?;
+        for chunk in contents.chunks(4096) {
+            file_output
+                .blocking_write_and_flush(chunk)
+                .map_err(stream_error)?;
+        }
+        drop(file_output);
+        let file_input = file.read_via_stream(0).map_err(error)?;
+
+        let (socket, input, output) = p2_tcp_connect(port)?;
+        socket.set_send_buffer_size(8192).map_err(error)?;
+        let mut spliced = 0u64;
+        while spliced < len as u64 {
+            let n = output
+                .blocking_splice(&file_input, 65536)
+                .map_err(stream_error)?;
+            if n == 0 {
+                break;
+            }
+            spliced += n;
+        }
+        drop(input);
+        drop(output);
+        drop(socket);
+        Ok(spliced)
     }
 
     fn p2_tcp_conversation(
@@ -1054,6 +1128,10 @@ impl SocketSession for SocketSessionImpl {
 
     fn received(&self) -> Vec<(String, Vec<u8>)> {
         self.received.borrow().clone()
+    }
+
+    fn sends(&self) -> Vec<Result<(), String>> {
+        self.sends.borrow().clone()
     }
 
     fn close(&self, slot: String) -> bool {
