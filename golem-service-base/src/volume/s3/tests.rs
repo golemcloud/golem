@@ -147,6 +147,113 @@ async fn server(
 }
 
 #[test]
+fn construction_rejects_invalid_configuration_without_io() {
+    let config = || S3VolumeConfig {
+        endpoint: Some("http://127.0.0.1:1".into()),
+        region: "us-east-1".into(),
+        bucket: "test-bucket".into(),
+        prefix: "corpus/".into(),
+        encryption: None,
+    };
+    ["bucket", "region", "prefix"]
+        .into_iter()
+        .for_each(|field| {
+            let mut invalid = config();
+            match field {
+                "bucket" => invalid.bucket = "".into(),
+                "region" => invalid.region = "".into(),
+                "prefix" => invalid.prefix = "corpus".into(),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                S3Volume::new(invalid, credentials(), ConnectionPolicy::default()).unwrap_err(),
+                VolumeError::InvalidRequest
+            );
+        });
+    ["/absolute/", "./", "../", "corpus/./", "corpus/../"]
+        .into_iter()
+        .for_each(|prefix| {
+            let mut invalid = config();
+            invalid.prefix = prefix.into();
+            assert_eq!(
+                S3Volume::new(invalid, credentials(), ConnectionPolicy::default()).unwrap_err(),
+                VolumeError::InvalidRequest
+            );
+        });
+    [
+        "not a uri[",
+        "ftp://volume.invalid/",
+        "/relative",
+        "http:///missing",
+        "http://user@volume.invalid/",
+        "https://volume.invalid/?query=1",
+    ]
+    .into_iter()
+    .for_each(|endpoint| {
+        let mut invalid = config();
+        invalid.endpoint = Some(endpoint.into());
+        assert_eq!(
+            S3Volume::new(invalid, credentials(), ConnectionPolicy::default()).unwrap_err(),
+            VolumeError::InvalidRequest,
+            "{endpoint}"
+        );
+    });
+    ["/relative", "ftp://protected.invalid/"]
+        .into_iter()
+        .for_each(|endpoint| {
+            assert_eq!(
+                S3Volume::new(
+                    config(),
+                    credentials(),
+                    ConnectionPolicy {
+                        protected_endpoints: [endpoint.parse().unwrap()].into(),
+                        ..Default::default()
+                    }
+                )
+                .unwrap_err(),
+                VolumeError::InvalidRequest
+            );
+        });
+    ["", "corpus/"].into_iter().for_each(|prefix| {
+        [
+            None,
+            Some("http://127.0.0.1:1"),
+            Some("http://volume.invalid/"),
+            Some("https://volume.invalid/"),
+            Some("https://volume.invalid:9443/"),
+            Some("http://[::1]:9000/"),
+        ]
+        .into_iter()
+        .for_each(|endpoint| {
+            let mut valid = config();
+            valid.prefix = prefix.into();
+            valid.endpoint = endpoint.map(Into::into);
+            assert!(S3Volume::new(valid, credentials(), ConnectionPolicy::default()).is_ok());
+        });
+    });
+    [
+        "http://protected.invalid/",
+        "https://protected.invalid/",
+        "http://protected.invalid:9000/",
+        "https://[::1]:9443/",
+    ]
+    .into_iter()
+    .for_each(|endpoint| {
+        assert!(
+            S3Volume::new(
+                config(),
+                credentials(),
+                ConnectionPolicy {
+                    protected_endpoints: [endpoint.parse().unwrap()].into(),
+                    ..Default::default()
+                }
+            )
+            .is_ok()
+        );
+    });
+}
+
+#[test]
 #[timeout("30s")]
 async fn encryption_and_preconditions_are_signed_on_writes() {
     stream::iter([
@@ -155,7 +262,7 @@ async fn encryption_and_preconditions_are_signed_on_writes() {
         (Some(Encryption::Kms { key_id: "kms-key".into() }), Some("aws:kms"), Some("kms-key")),
     ]).then(|(encryption, algorithm, kms)| async move {
         let (endpoint, mut requests, server) = server(vec![response(200, ""), response(200,
-            "<InitiateMultipartUploadResult><UploadId>upload-1</UploadId></InitiateMultipartUploadResult>")]).await;
+            "<InitiateMultipartUploadResult><UploadId>upload-1</UploadId></InitiateMultipartUploadResult>"), response(200, "")]).await;
         let volume = client(&endpoint, encryption, allowed());
         let result = volume.put(WriteTarget::File("report +%.txt"), WriteCondition::Absent, Bytes::from_static(b"content")).await.unwrap();
         assert_eq!(result, ObjectVersion { etag: "\"reference\"".into(), version_id: Some("version-7".into()) });
@@ -167,6 +274,7 @@ async fn encryption_and_preconditions_are_signed_on_writes() {
         assert_eq!(request.headers().get("x-amz-server-side-encryption").map(|v| v.to_str().unwrap()), algorithm);
         assert_eq!(request.headers().get("x-amz-server-side-encryption-aws-kms-key-id").map(|v| v.to_str().unwrap()), kms);
         assert_eq!(request.headers()["x-amz-security-token"], "volume-token");
+        assert_eq!(request.headers()["x-amz-content-sha256"], "ed7002b439e9ac845f22357d822bac1444730fbdb6016d3ec9432297b9ec9f73");
         let authorization = request.headers()["authorization"].to_str().unwrap();
         assert!(authorization.contains("/us-east-1/s3/aws4_request"));
         assert!(authorization.contains("if-none-match"));
@@ -175,6 +283,16 @@ async fn encryption_and_preconditions_are_signed_on_writes() {
         let request = requests.recv().await.unwrap();
         assert_eq!(request.headers().get("x-amz-server-side-encryption").map(|v| v.to_str().unwrap()), algorithm);
         assert_eq!(request.headers().get("x-amz-server-side-encryption-aws-kms-key-id").map(|v| v.to_str().unwrap()), kms);
+        let authorization = request.headers()["authorization"].to_str().unwrap();
+        if algorithm.is_some() { assert!(authorization.contains("x-amz-server-side-encryption")); }
+        if kms.is_some() { assert!(authorization.contains("x-amz-server-side-encryption-aws-kms-key-id")); }
+        let part = volume.upload_part(WriteTarget::File("large"), "upload-1", 1, Bytes::from_static(b"part")).await.unwrap();
+        assert_eq!(part.number, 1);
+        assert_eq!(part.size, 4);
+        let request = requests.try_recv().unwrap();
+        assert_eq!(request.body(), b"part".as_slice());
+        assert_eq!(request.headers()["x-amz-content-sha256"], "37a680133bd09342f934afb8dd2c7d9e1b624da5f35e3a38adb103e37c055ed1");
+        assert!(requests.try_recv().is_err());
         server.abort();
     }).collect::<()>().await;
 }
@@ -182,6 +300,97 @@ async fn encryption_and_preconditions_are_signed_on_writes() {
 #[test]
 #[timeout("30s")]
 async fn conditional_failures_redact_errors_and_never_retry() {
+    use VolumeError::{Conflict, Denied, Exists, NotFound, RequestFailed, Unsupported};
+
+    stream::iter([
+        (401, None, [Denied, Denied, Denied]),
+        (403, None, [Denied, Denied, Denied]),
+        (404, None, [NotFound, Conflict, NotFound]),
+        (405, None, [Unsupported, Unsupported, Unsupported]),
+        (409, None, [Conflict, Conflict, Conflict]),
+        (412, None, [Exists, Conflict, Conflict]),
+        (501, None, [Unsupported, Unsupported, Unsupported]),
+        (503, None, [RequestFailed, RequestFailed, RequestFailed]),
+        (404, Some(""), [NotFound, Conflict, NotFound]),
+        (404, Some("Unknown"), [NotFound, NotFound, NotFound]),
+        (503, Some("NoSuchKey"), [NotFound, Conflict, NotFound]),
+        (503, Some("NotFound"), [NotFound, Conflict, NotFound]),
+        (412, Some("NoSuchBucket"), [NotFound, NotFound, NotFound]),
+        (404, Some("NoSuchUpload"), [NotFound, NotFound, NotFound]),
+        (
+            503,
+            Some("PreconditionFailed"),
+            [Exists, Conflict, Conflict],
+        ),
+        (
+            503,
+            Some("ConditionalRequestConflict"),
+            [Conflict, Conflict, Conflict],
+        ),
+        (503, Some("AccessDenied"), [Denied, Denied, Denied]),
+        (
+            503,
+            Some("NotImplemented"),
+            [Unsupported, Unsupported, Unsupported],
+        ),
+    ])
+    .then(|(status, code, expected)| async move {
+        let body = match code {
+            None => "<Error/>".into(),
+            Some("") => "".into(),
+            Some(code) => format!(
+                "<Error><Code>{code}</Code><Message>volume-secret volume-token</Message></Error>"
+            )
+            .into_boxed_str(),
+        };
+        let (endpoint, requests, server) =
+            server((0..3).map(|_| response(status, body.to_string())).collect()).await;
+        let volume = client(&endpoint, None, allowed());
+        let mut requests = stream::iter(expected.into_iter().enumerate())
+            .fold(requests, |mut requests, (operation, expected)| {
+                let volume = &volume;
+                async move {
+                    let result = match operation {
+                        0 => volume
+                            .put(
+                                WriteTarget::File("key"),
+                                WriteCondition::Absent,
+                                Bytes::new(),
+                            )
+                            .await
+                            .map(|_| ()),
+                        1 => volume
+                            .put(
+                                WriteTarget::File("key"),
+                                WriteCondition::Matches("\"old\""),
+                                Bytes::new(),
+                            )
+                            .await
+                            .map(|_| ()),
+                        2 => volume.read("key", None, None, None).await.map(|_| ()),
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(
+                        result,
+                        Err(expected),
+                        "status={status}, code={code:?}, operation={operation}"
+                    );
+                    let request = requests.try_recv().unwrap();
+                    assert_eq!(request.method(), if operation == 2 { "GET" } else { "PUT" });
+                    assert!(requests.try_recv().is_err());
+                    let error = result.unwrap_err();
+                    let diagnostic = format!("{error:?} {error}").into_boxed_str();
+                    assert!(!diagnostic.contains("volume-secret"));
+                    assert!(!diagnostic.contains("volume-token"));
+                    requests
+                }
+            })
+            .await;
+        assert!(requests.try_recv().is_err());
+        server.abort();
+    })
+    .collect::<()>()
+    .await;
     let (endpoint, requests, server) = server(vec![
         response(412, "<Error><Code>PreconditionFailed</Code><Message>volume-secret volume-token</Message></Error>"),
         response(412, "<Error><Code>PreconditionFailed</Code></Error>"),
@@ -272,6 +481,14 @@ async fn successful_metadata_debug_does_not_disclose_reflected_credentials() {
     assert!(requests.try_recv().is_err());
     server.abort();
 
+    let configured = client(
+        "https://volume.invalid/",
+        Some(Encryption::Kms {
+            key_id: "volume-secret-volume-token".into(),
+        }),
+        ConnectionPolicy::default(),
+    );
+    assert_opaque_debug(&configured);
     assert_opaque_debug(&(
         &result,
         metadata,
@@ -440,8 +657,9 @@ async fn multipart_debug_keeps_upload_ids_after_failed_completion() {
         .unwrap();
     let mut requests = stream::iter(["PUT", "POST", "DELETE"])
         .fold(requests, |mut requests, method| async move {
-            let request = requests.recv().await.unwrap();
+            let request = requests.try_recv().unwrap();
             assert_eq!(request.method(), method);
+            assert_eq!(request.uri().path(), "/test-bucket/corpus/large");
             assert!(
                 request
                     .uri()
@@ -555,29 +773,69 @@ async fn deletion_between_read_and_publish_is_a_conflict_not_missing_infrastruct
 async fn streamed_checksum_errors_do_not_disclose_reflected_credentials() {
     use base64::Engine;
     use base64::prelude::BASE64_STANDARD;
-    let checksum: http::HeaderValue = BASE64_STANDARD.encode("volume-token").parse().unwrap();
-    let reflected = || {
-        let mut result = response(200, "body");
-        result
-            .headers_mut()
-            .insert("x-amz-checksum-sha256", checksum.clone());
-        result
-    };
-    let (endpoint, _requests, server) = server(vec![reflected(), reflected()]).await;
-    let volume = client(&endpoint, None, allowed());
-    let read = volume.read("key", None, None, None).await.unwrap();
-    let error = read.body.collect().await.unwrap_err();
-    assert_eq!(error, VolumeError::RequestFailed);
-    let debug = format!("{error:?} {error}").into_boxed_str();
-    assert!(!debug.contains("volume-token"));
-    assert!(!debug.contains("[118, 111, 108, 117, 109, 101, 45, 116, 111, 107, 101, 110]"));
-    let mut read = volume.read("key", None, None, None).await.unwrap();
-    assert_eq!(
-        read.body.next().await.unwrap(),
-        Some(Bytes::from_static(b"body"))
-    );
-    assert_eq!(read.body.next().await, Err(VolumeError::RequestFailed));
-    server.abort();
+    let capture = Capture(Arc::new(Mutex::new(Vec::new())));
+    let writer = capture.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_ansi(false)
+        .without_time()
+        .with_writer(move || writer.clone())
+        .finish();
+    let (diagnostic, operation_start) = async {
+        let checksum: http::HeaderValue = BASE64_STANDARD.encode("volume-token").parse().unwrap();
+        let reflected = || {
+            let mut result = response(200, "body");
+            result
+                .headers_mut()
+                .insert("x-amz-checksum-sha256", checksum.clone());
+            result
+        };
+        let (endpoint, _requests, server) = server(vec![reflected(), reflected()]).await;
+        let volume = client(&endpoint, None, allowed());
+        let operation_start = capture.0.lock().unwrap().len();
+        let read = volume.read("key", None, None, None).await.unwrap();
+        let error = read.body.collect().await.unwrap_err();
+        assert_eq!(error, VolumeError::RequestFailed);
+        let debug = format!("{error:?} {error}").into_boxed_str();
+        assert!(!debug.contains("volume-token"));
+        assert!(!debug.contains("[118, 111, 108, 117, 109, 101, 45, 116, 111, 107, 101, 110]"));
+        let mut read = volume.read("key", None, None, None).await.unwrap();
+        assert_eq!(
+            read.body.next().await.unwrap(),
+            Some(Bytes::from_static(b"body"))
+        );
+        assert_eq!(read.body.next().await, Err(VolumeError::RequestFailed));
+        tracing::info!("after body consumption");
+        server.abort();
+        (debug, operation_start)
+    }
+    .with_subscriber(subscriber)
+    .await;
+    let bytes = capture.0.lock().unwrap();
+    let log = std::str::from_utf8(&bytes).unwrap();
+    assert!(log.contains("after body consumption"));
+    [
+        "volume-token",
+        "volume-secret",
+        "dm9sdW1lLXRva2Vu",
+        "766f6c756d652d746f6b656e",
+        "[118, 111, 108, 117, 109, 101, 45, 116, 111, 107, 101, 110]",
+        "\\x76\\x6f\\x6c\\x75\\x6d\\x65\\x2d\\x74\\x6f\\x6b\\x65\\x6e",
+    ]
+    .into_iter()
+    .for_each(|value| {
+        assert!(!diagnostic.contains(value));
+        assert!(!log.contains(value));
+    });
+    let operation_log = &log[operation_start..];
+    ["aws_sdk_s3", "aws_smithy", "aws_sigv4", "aws_runtime"]
+        .into_iter()
+        .for_each(|target| {
+            assert!(
+                !operation_log.contains(target),
+                "body poll emitted {target} diagnostics: {operation_log}"
+            )
+        });
 }
 
 #[test]
@@ -590,18 +848,75 @@ async fn the_prefix_root_marker_is_hidden_from_stat_and_read() {
         volume.read("", None, None, None).await,
         Err(VolumeError::NotFound)
     ));
-    [
-        requests.recv().await.unwrap(),
-        requests.recv().await.unwrap(),
-    ]
-    .into_iter()
-    .for_each(|request| assert_eq!(request.uri().path(), "/test-bucket/corpus/"));
+    [requests.try_recv().unwrap(), requests.try_recv().unwrap()]
+        .into_iter()
+        .for_each(|request| assert_eq!(request.uri().path(), "/test-bucket/corpus/"));
+    assert!(requests.try_recv().is_err());
     server.abort();
 }
 
 #[test]
 #[timeout("30s")]
 async fn an_explicit_null_version_is_checked_for_stat_and_read() {
+    stream::iter([
+        (None, None, Ok(None)),
+        (None, Some("version-7"), Ok(Some("version-7"))),
+        (Some("version-7"), Some("version-7"), Ok(Some("version-7"))),
+        (Some("version-7"), None, Err(VolumeError::InvalidResponse)),
+        (
+            Some("version-7"),
+            Some("null"),
+            Err(VolumeError::InvalidResponse),
+        ),
+        (
+            Some("version-7"),
+            Some("other"),
+            Err(VolumeError::InvalidResponse),
+        ),
+    ])
+    .then(|(requested, actual, expected)| async move {
+        let observed = || {
+            let mut result = response(200, "body");
+            result.headers_mut().remove("x-amz-version-id");
+            if let Some(actual) = actual {
+                result
+                    .headers_mut()
+                    .insert("x-amz-version-id", actual.parse().unwrap());
+            }
+            result
+        };
+        let (endpoint, mut requests, server) = server(vec![observed(), observed()]).await;
+        let volume = client(&endpoint, None, allowed());
+        let stat = volume.stat("key", requested).await;
+        let read = volume.read("key", requested, None, None).await;
+        match expected {
+            Ok(version) => {
+                assert_eq!(stat.unwrap().version.version_id.as_deref(), version);
+                let read = read.unwrap();
+                assert_eq!(read.version.version_id.as_deref(), version);
+                assert_eq!(read.body.collect().await.unwrap(), "body");
+            }
+            Err(error) => {
+                assert_eq!(stat, Err(error));
+                assert_eq!(read.err(), Some(error));
+            }
+        }
+        ["HEAD", "GET"].into_iter().for_each(|method| {
+            let request = requests.try_recv().unwrap();
+            assert_eq!(request.method(), method);
+            assert_eq!(
+                request
+                    .uri()
+                    .query()
+                    .is_some_and(|query| query.contains("versionId=version-7")),
+                requested.is_some()
+            );
+        });
+        assert!(requests.try_recv().is_err());
+        server.abort();
+    })
+    .collect::<()>()
+    .await;
     stream::iter([None, Some("null"), Some("wrong-version")])
         .then(|actual_version| async move {
             let object_response = || {
@@ -652,6 +967,66 @@ async fn an_explicit_null_version_is_checked_for_stat_and_read() {
 #[test]
 #[timeout("30s")]
 async fn reads_reject_ignored_ranges_and_contradictory_versions_or_etags() {
+    stream::iter([
+        (None, Some("bytes 2-4/12"), "cde"),
+        (Some(2..=4), None, "cde"),
+        (Some(2..=4), Some("items 2-4/12"), "cde"),
+        (Some(2..=4), Some("bytes 2-4"), "cde"),
+        (Some(2..=4), Some("bytes two-4/12"), "cde"),
+        (Some(2..=4), Some("bytes 2-four/12"), "cde"),
+        (Some(2..=4), Some("bytes 2-4/*"), "cde"),
+        (Some(2..=4), Some("bytes 2-4/0"), "cde"),
+        (Some(2..=4), Some("bytes 1-4/12"), "bcde"),
+        (Some(2..=4), Some("bytes 2-3/12"), "cd"),
+        (Some(2..=4), Some("bytes 2-4/12"), "cd"),
+    ])
+    .then(|(range, content_range, body)| async move {
+        let mut result = response(206, body);
+        if let Some(content_range) = content_range {
+            result
+                .headers_mut()
+                .insert("content-range", content_range.parse().unwrap());
+        }
+        let (endpoint, mut requests, server) = server(vec![result]).await;
+        let volume = client(&endpoint, None, allowed());
+        assert!(matches!(
+            volume.read("key", None, None, range).await,
+            Err(VolumeError::InvalidResponse)
+        ));
+        assert_eq!(requests.try_recv().unwrap().method(), "GET");
+        assert!(requests.try_recv().is_err());
+        server.abort();
+    })
+    .collect::<()>()
+    .await;
+    let (endpoint, mut requests, server) = server(vec![{
+        let mut result = response(206, "cde");
+        result
+            .headers_mut()
+            .insert("content-range", "bytes 2-4/5".parse().unwrap());
+        result
+    }])
+    .await;
+    let volume = client(&endpoint, None, allowed());
+    assert!(matches!(
+        volume
+            .read("key", None, None, Some(RangeInclusive::new(5, 4)))
+            .await,
+        Err(VolumeError::InvalidRequest)
+    ));
+    assert!(requests.try_recv().is_err());
+    let tail = volume
+        .read("key", None, None, Some(2..=u64::MAX))
+        .await
+        .unwrap();
+    assert_eq!(tail.length, 3);
+    assert_eq!(tail.body.collect().await.unwrap(), "cde");
+    assert_eq!(
+        requests.try_recv().unwrap().headers()["range"],
+        "bytes=2-18446744073709551615"
+    );
+    assert!(requests.try_recv().is_err());
+    server.abort();
     let ranged = |content_range: &'static str| {
         let mut result = response(206, "cde");
         result
@@ -659,7 +1034,7 @@ async fn reads_reject_ignored_ranges_and_contradictory_versions_or_etags() {
             .insert("content-range", content_range.parse().unwrap());
         result
     };
-    let (endpoint, _requests, server) = server(vec![
+    let (endpoint, _requests, server) = self::server(vec![
         response(200, "whole-object"),
         response(200, "wrong-version"),
         response(200, "wrong-etag"),
@@ -772,13 +1147,26 @@ async fn trace_logs_do_not_disclose_credentials_or_reflected_error_messages() {
         .without_time()
         .with_writer(move || writer.clone())
         .finish();
-    async {
-        let (endpoint, _requests, server) = server(vec![response(
+    let operation_start = async {
+        let (endpoint, mut requests, server) = server(vec![response(
             403,
             "<Error><Code>AccessDenied</Code><Message>volume-secret volume-token</Message></Error>",
-        )])
+        ),
+            metadata_response(4, "\"volume-secret\"", "volume-token"),
+            listing_response(&[("corpus/volume-secret/volume-token", 4)], Some("volume-secret-volume-token")),
+            metadata_response(4, "\"volume-secret\"", "volume-token"),
+            response(200, "body"),
+            response(204, ""),
+            response(200, "<InitiateMultipartUploadResult><UploadId>volume-secret-volume-token</UploadId></InitiateMultipartUploadResult>"),
+            response(200, ""),
+            response(200, "<CompleteMultipartUploadResult><ETag>&quot;volume-secret-volume-token&quot;</ETag></CompleteMultipartUploadResult>"),
+            response(204, ""),
+            response(200, "<VersioningConfiguration><Status>volume-secret-volume-token</Status></VersioningConfiguration>"),
+            response(200, "<LifecycleConfiguration><Rule><ID>volume-secret-volume-token</ID><Status>Enabled</Status></Rule></LifecycleConfiguration>"),
+        ])
         .await;
         let volume = client(&endpoint, None, allowed());
+        let operation_start = capture.0.lock().unwrap().len();
         assert_eq!(
             volume
                 .put(
@@ -789,8 +1177,27 @@ async fn trace_logs_do_not_disclose_credentials_or_reflected_error_messages() {
                 .await,
             Err(VolumeError::Denied)
         );
+        assert_eq!(volume.stat("key", None).await.unwrap().version.etag.as_ref(), "\"volume-secret\"");
+        let page = volume.list("", None).await.unwrap();
+        assert_eq!(page.objects[0].key.as_ref(), "volume-secret/volume-token");
+        assert_eq!(page.continuation.as_deref(), Some("volume-secret-volume-token"));
+        let read = volume.read("key", None, None, None).await.unwrap();
+        assert_eq!(read.body.collect().await.unwrap(), "body");
+        assert_eq!(volume.delete(WriteTarget::File("key"), "\"volume-secret\"", 4).await.unwrap().etag.as_ref(), "\"volume-secret\"");
+        let upload = volume.start_multipart(WriteTarget::File("large")).await.unwrap();
+        assert_eq!(upload.payload().as_ref(), "volume-secret-volume-token");
+        let part = volume.upload_part(WriteTarget::File("large"), upload.payload(), 1, Bytes::from_static(b"part")).await.unwrap();
+        assert_eq!(part.number, 1);
+        assert_eq!(volume.complete_multipart(WriteTarget::File("large"), upload.payload(), &[part], WriteCondition::Absent).await.unwrap().etag.as_ref(), "\"volume-secret-volume-token\"");
+        volume.abort_multipart(WriteTarget::File("large"), upload.payload()).await.unwrap();
+        assert_eq!(volume.versioning().await.unwrap().unwrap().payload().as_str(), "volume-secret-volume-token");
+        assert_eq!(volume.lifecycle().await.unwrap()[0].payload().id(), Some("volume-secret-volume-token"));
+        ["PUT", "HEAD", "GET", "HEAD", "GET", "DELETE", "POST", "PUT", "POST", "DELETE", "GET", "GET"]
+            .into_iter().for_each(|method| assert_eq!(requests.try_recv().unwrap().method(), method));
+        assert!(requests.try_recv().is_err());
         tracing::info!("after the volume request");
         server.abort();
+        operation_start
     }
     .with_subscriber(subscriber)
     .await;
@@ -802,6 +1209,15 @@ async fn trace_logs_do_not_disclose_credentials_or_reflected_error_messages() {
         .for_each(|credential| {
             assert!(!log.contains(credential), "trace disclosed {credential}");
         });
+    let operation_log = &log[operation_start..];
+    ["aws_sdk_s3", "aws_smithy", "aws_sigv4", "aws_runtime"]
+        .into_iter()
+        .for_each(|target| {
+            assert!(
+                !operation_log.contains(target),
+                "operation emitted {target} diagnostics: {operation_log}"
+            )
+        });
 }
 
 #[test]
@@ -809,17 +1225,70 @@ async fn trace_logs_do_not_disclose_credentials_or_reflected_error_messages() {
 async fn wildcard_and_multiple_etags_cannot_bypass_write_conditions() {
     let (endpoint, mut requests, server) = server(Vec::new()).await;
     let volume = client(&endpoint, None, allowed());
-    stream::iter(["*", " * ", "\t*\t", "", "\"one\", \"two\"", "W/\"weak\""])
-        .then(|etag| async {
-            assert_eq!(
-                volume.delete(WriteTarget::File("key"), etag, 1).await,
-                Err(VolumeError::InvalidRequest)
+    stream::iter([
+        "*",
+        " * ",
+        "\t*\t",
+        "",
+        "\"one\", \"two\"",
+        "W/\"weak\"",
+        "unquoted",
+        "\"a\"b\"",
+        "\"a b\"",
+        "\"a\tb\"",
+        "\"a\rb\"",
+        "\"a\nb\"",
+        "\"a\u{7f}b\"",
+    ])
+    .then(|etag| async {
+        assert_eq!(
+            volume.delete(WriteTarget::File("key"), etag, 1).await,
+            Err(VolumeError::InvalidRequest)
+        );
+        assert_eq!(
+            volume
+                .put(
+                    WriteTarget::File("key"),
+                    WriteCondition::Matches(etag),
+                    Bytes::new()
+                )
+                .await,
+            Err(VolumeError::InvalidRequest)
+        );
+    })
+    .collect::<()>()
+    .await;
+    assert!(requests.try_recv().is_err());
+    server.abort();
+
+    stream::iter(["\"\"", "\"!\""])
+        .then(|etag| async move {
+            let (endpoint, mut requests, server) =
+                self::server(vec![response(200, ""), response(204, "")]).await;
+            let volume = client(&endpoint, None, allowed());
+            assert!(
+                volume
+                    .put(
+                        WriteTarget::File("key"),
+                        WriteCondition::Matches(etag),
+                        Bytes::new()
+                    )
+                    .await
+                    .is_ok()
             );
+            assert_eq!(requests.try_recv().unwrap().headers()["if-match"], etag);
+            assert!(
+                volume
+                    .delete(WriteTarget::File("key"), etag, 1)
+                    .await
+                    .is_ok()
+            );
+            assert_eq!(requests.try_recv().unwrap().headers()["if-match"], etag);
+            assert!(requests.try_recv().is_err());
+            server.abort();
         })
         .collect::<()>()
         .await;
-    assert!(requests.try_recv().is_err());
-    server.abort();
 }
 
 #[test]
@@ -906,6 +1375,9 @@ async fn successful_object_results_require_a_usable_reference_etag() {
         Some("*"),
         Some("W/\"weak\""),
         Some("\"one\", \"two\""),
+        Some("unquoted"),
+        Some("\"a b\""),
+        Some("\"a\"b\""),
     ])
     .then(|etag| async move {
         let without_reference = || {
@@ -919,8 +1391,22 @@ async fn successful_object_results_require_a_usable_reference_etag() {
             }
             result
         };
-        let (endpoint, _requests, server) =
-            server(vec![without_reference(), without_reference()]).await;
+        let completion = etag
+            .map(|etag| format!("<ETag>{etag}</ETag>").into_boxed_str())
+            .unwrap_or_default();
+        let (endpoint, mut requests, server) = server(vec![
+            without_reference(),
+            without_reference(),
+            without_reference(),
+            without_reference(),
+            response(
+                200,
+                format!(
+                    "<CompleteMultipartUploadResult>{completion}</CompleteMultipartUploadResult>"
+                ),
+            ),
+        ])
+        .await;
         let volume = client(&endpoint, None, allowed());
         assert!(matches!(
             volume.read("key", None, None, None).await,
@@ -936,6 +1422,35 @@ async fn successful_object_results_require_a_usable_reference_etag() {
                 .await,
             Err(VolumeError::InvalidResponse)
         );
+        assert_eq!(
+            volume.stat("key", None).await,
+            Err(VolumeError::InvalidResponse)
+        );
+        assert_eq!(
+            volume
+                .upload_part(WriteTarget::File("key"), "upload", 1, Bytes::new())
+                .await,
+            Err(VolumeError::InvalidResponse)
+        );
+        assert_eq!(
+            volume
+                .complete_multipart(
+                    WriteTarget::File("key"),
+                    "upload",
+                    &[UploadedPart {
+                        number: 1,
+                        etag: "\"part\"".into(),
+                        size: 1
+                    }],
+                    WriteCondition::Absent
+                )
+                .await,
+            Err(VolumeError::InvalidResponse)
+        );
+        ["GET", "PUT", "HEAD", "PUT", "POST"]
+            .into_iter()
+            .for_each(|method| assert_eq!(requests.try_recv().unwrap().method(), method));
+        assert!(requests.try_recv().is_err());
         server.abort();
     })
     .collect::<()>()
@@ -963,8 +1478,8 @@ async fn list_returns_the_complete_head_observation_after_discovery() {
             key: "key".into(), size,
             version: ObjectVersion { etag: etag.into(), version_id: Some(version_id.into()) },
         }]);
-        assert_eq!(requests.recv().await.unwrap().method(), "GET");
-        let head = requests.recv().await.unwrap();
+        assert_eq!(requests.try_recv().unwrap().method(), "GET");
+        let head = requests.try_recv().unwrap();
         assert_eq!(head.method(), "HEAD");
         assert_eq!(head.uri().path(), "/test-bucket/corpus/key");
         assert!(!head.uri().query().unwrap_or_default().contains("versionId"));
@@ -1012,7 +1527,7 @@ async fn list_checks_all_marker_and_file_observation_orders_without_scanning() {
                         }]
                     );
                 }
-                let list = requests.recv().await.unwrap();
+                let list = requests.try_recv().unwrap();
                 assert_eq!(list.method(), "GET");
                 assert!(list.uri().query().unwrap().contains("list-type=2"));
                 assert!(
@@ -1021,7 +1536,7 @@ async fn list_checks_all_marker_and_file_observation_orders_without_scanning() {
                         .unwrap()
                         .contains("continuation-token=previous%2Bopaque%2Ftoken")
                 );
-                let head = requests.recv().await.unwrap();
+                let head = requests.try_recv().unwrap();
                 assert_eq!(head.method(), "HEAD");
                 assert_eq!(head.uri().path(), "/test-bucket/corpus/slash/");
                 assert!(requests.try_recv().is_err());
@@ -1070,11 +1585,11 @@ async fn list_fails_the_whole_page_on_any_head_failure_in_either_key_order() {
                 _ => unreachable!(),
             };
             assert_eq!(volume.list("", None).await.unwrap_err(), expected);
-            assert_eq!(requests.recv().await.unwrap().method(), "GET");
+            assert_eq!(requests.try_recv().unwrap().method(), "GET");
             let head_count = if failure_first { 1 } else { 2 };
             let mut requests = stream::iter(keys.into_iter().take(head_count))
                 .fold(requests, |mut requests, (key, _)| async move {
-                    let request = requests.recv().await.unwrap();
+                    let request = requests.try_recv().unwrap();
                     assert_eq!(request.method(), "HEAD");
                     assert_eq!(request.uri().path(), format!("/test-bucket/{key}"));
                     requests
@@ -1110,6 +1625,55 @@ async fn list_rejects_outside_keys_even_when_they_look_like_markers() {
 #[test]
 #[timeout("30s")]
 async fn reads_keep_versions_ranges_and_hide_only_zero_byte_markers() {
+    stream::iter([
+        ("empty-file", "", true),
+        ("nonempty/", "slash content", true),
+        ("empty-marker/", "", false),
+    ])
+    .then(|(key, body, visible)| async move {
+        let (endpoint, mut requests, server) = server(vec![
+            metadata_response(body.len() as u64, "\"reference\"", "version-7"),
+            response(200, body),
+        ])
+        .await;
+        let volume = client(&endpoint, None, allowed());
+        let stat = volume.stat(key, None).await;
+        let read = volume.read(key, None, None, None).await;
+        if visible {
+            let stat = stat.unwrap();
+            assert_eq!(stat.key.as_ref(), key);
+            assert_eq!(stat.size, body.len() as u64);
+            let read = read.unwrap();
+            assert_eq!(read.length, body.len() as u64);
+            assert_eq!(read.version, stat.version);
+            assert_eq!(read.body.collect().await.unwrap(), body);
+        } else {
+            assert_eq!(stat, Err(VolumeError::NotFound));
+            assert!(matches!(read, Err(VolumeError::NotFound)));
+        }
+        ["HEAD", "GET"]
+            .into_iter()
+            .for_each(|method| assert_eq!(requests.try_recv().unwrap().method(), method));
+        assert!(requests.try_recv().is_err());
+        server.abort();
+    })
+    .collect::<()>()
+    .await;
+    {
+        let (endpoint, mut requests, server) = server(vec![response(
+            200,
+            "<ListBucketResult><IsTruncated>true</IsTruncated></ListBucketResult>",
+        )])
+        .await;
+        let volume = client(&endpoint, None, allowed());
+        assert_eq!(
+            volume.list("", None).await.unwrap_err(),
+            VolumeError::InvalidResponse
+        );
+        assert_eq!(requests.try_recv().unwrap().method(), "GET");
+        assert!(requests.try_recv().is_err());
+        server.abort();
+    }
     let mut head = response(200, "");
     head.headers_mut()
         .insert("content-length", "12".parse().unwrap());
@@ -1185,6 +1749,230 @@ async fn reads_keep_versions_ranges_and_hide_only_zero_byte_markers() {
 #[test]
 #[timeout("30s")]
 async fn multipart_completion_is_conditional_and_probe_keys_stay_reserved() {
+    {
+        let completed = || {
+            response(
+                200,
+                "<CompleteMultipartUploadResult><ETag>&quot;complete&quot;</ETag></CompleteMultipartUploadResult>",
+            )
+        };
+        let uploaded = |etag: &'static str| {
+            let mut result = response(200, "");
+            result.headers_mut().insert("etag", etag.parse().unwrap());
+            result
+        };
+        let (endpoint, mut requests, server) = server(vec![
+            uploaded("\"first\""),
+            uploaded("\"last\""),
+            completed(),
+            completed(),
+        ])
+        .await;
+        let volume = client(&endpoint, None, allowed());
+        stream::iter([0, 10001])
+            .then(|number| {
+                let volume = &volume;
+                async move {
+                    assert_eq!(
+                        volume
+                            .upload_part(WriteTarget::File("large"), "upload", number, Bytes::new())
+                            .await,
+                        Err(VolumeError::InvalidRequest)
+                    );
+                }
+            })
+            .collect::<()>()
+            .await;
+        let invalid: [&[i32]; 6] = [&[], &[0], &[10001], &[-1], &[1, 1], &[2, 1]];
+        stream::iter(invalid)
+            .then(|numbers| {
+                let volume = &volume;
+                async move {
+                    let parts = numbers
+                        .iter()
+                        .map(|number| UploadedPart {
+                            number: *number,
+                            etag: "\"part\"".into(),
+                            size: 1,
+                        })
+                        .collect::<Box<[_]>>();
+                    assert_eq!(
+                        volume
+                            .complete_multipart(
+                                WriteTarget::File("large"),
+                                "upload",
+                                &parts,
+                                WriteCondition::Absent
+                            )
+                            .await,
+                        Err(VolumeError::InvalidRequest)
+                    );
+                }
+            })
+            .collect::<()>()
+            .await;
+        let zero = [UploadedPart {
+            number: 1,
+            etag: "\"zero\"".into(),
+            size: 0,
+        }];
+        assert_eq!(
+            volume
+                .complete_multipart(
+                    WriteTarget::File("slash/"),
+                    "upload",
+                    &zero,
+                    WriteCondition::Absent
+                )
+                .await,
+            Err(VolumeError::InvalidRequest)
+        );
+        stream::iter([
+            "",
+            ".golem",
+            ".golem/unsafe",
+            "../escape",
+            "/absolute",
+            "dir/../escape",
+            "dir/./escape",
+        ])
+        .then(|key| {
+            let volume = &volume;
+            let zero = &zero;
+            async move {
+                let target = WriteTarget::File(key);
+                assert_eq!(
+                    volume
+                        .put(target, WriteCondition::Absent, Bytes::from_static(b"body"))
+                        .await,
+                    Err(VolumeError::InvalidRequest)
+                );
+                assert_eq!(
+                    volume.start_multipart(target).await,
+                    Err(VolumeError::InvalidRequest)
+                );
+                assert_eq!(
+                    volume
+                        .complete_multipart(target, "upload", zero, WriteCondition::Absent)
+                        .await,
+                    Err(VolumeError::InvalidRequest)
+                );
+            }
+        })
+        .collect::<()>()
+        .await;
+        stream::iter(["../escape", "/absolute", "dir/./escape"])
+            .then(|key| {
+                let volume = &volume;
+                async move {
+                    assert_eq!(
+                        volume.stat(key, None).await,
+                        Err(VolumeError::InvalidRequest)
+                    );
+                    assert!(matches!(
+                        volume.read(key, None, None, None).await,
+                        Err(VolumeError::InvalidRequest)
+                    ));
+                    assert!(matches!(
+                        volume.list(key, None).await,
+                        Err(VolumeError::InvalidRequest)
+                    ));
+                }
+            })
+            .collect::<()>()
+            .await;
+        assert!(requests.try_recv().is_err());
+        let first = volume
+            .upload_part(
+                WriteTarget::File("large"),
+                "upload",
+                1,
+                Bytes::from_static(b"part"),
+            )
+            .await
+            .unwrap();
+        let last = volume
+            .upload_part(WriteTarget::File("large"), "upload", 10000, Bytes::new())
+            .await
+            .unwrap();
+        let parts = [first, last];
+        assert_eq!(parts[0].number, 1);
+        assert_eq!(parts[0].size, 4);
+        assert_eq!(parts[0].etag.as_ref(), "\"first\"");
+        assert_eq!(parts[1].number, 10000);
+        assert_eq!(parts[1].size, 0);
+        assert_eq!(parts[1].etag.as_ref(), "\"last\"");
+        ["partNumber=1", "partNumber=10000"]
+            .into_iter()
+            .for_each(|parameter| {
+                let request = requests.try_recv().unwrap();
+                assert!(
+                    request
+                        .uri()
+                        .query()
+                        .unwrap()
+                        .split('&')
+                        .any(|part| part == parameter)
+                );
+            });
+        assert_eq!(
+            volume
+                .complete_multipart(
+                    WriteTarget::File("large"),
+                    "upload",
+                    &parts,
+                    WriteCondition::Absent
+                )
+                .await
+                .unwrap()
+                .etag
+                .as_ref(),
+            "\"complete\""
+        );
+        let request = requests.try_recv().unwrap();
+        assert_eq!(request.headers()["if-none-match"], "*");
+        let xml = std::str::from_utf8(request.body()).unwrap();
+        assert!(xml.contains("<PartNumber>1</PartNumber>"));
+        assert!(xml.contains("<PartNumber>10000</PartNumber>"));
+        assert_eq!(xml.matches("<Part>").count(), 2);
+        xml.split("<Part>")
+            .skip(1)
+            .zip([
+                (
+                    "<ETag>&quot;first&quot;</ETag>",
+                    "<PartNumber>1</PartNumber>",
+                ),
+                (
+                    "<ETag>&quot;last&quot;</ETag>",
+                    "<PartNumber>10000</PartNumber>",
+                ),
+            ])
+            .for_each(|(part, (etag, number))| {
+                let part = part.split("</Part>").next().unwrap();
+                assert!(part.contains(etag));
+                assert!(part.contains(number));
+            });
+        assert_eq!(
+            volume
+                .complete_multipart(
+                    WriteTarget::File("slash/"),
+                    "upload",
+                    &parts,
+                    WriteCondition::Absent
+                )
+                .await
+                .unwrap()
+                .etag
+                .as_ref(),
+            "\"complete\""
+        );
+        assert_eq!(
+            requests.try_recv().unwrap().uri().path(),
+            "/test-bucket/corpus/slash/"
+        );
+        assert!(requests.try_recv().is_err());
+        server.abort();
+    }
     let mut completed = response(
         200,
         "<CompleteMultipartUploadResult><ETag>&quot;complete&quot;</ETag></CompleteMultipartUploadResult>",
@@ -1237,7 +2025,11 @@ async fn multipart_completion_is_conditional_and_probe_keys_stay_reserved() {
         .abort_multipart(WriteTarget::File("large"), "id+1")
         .await
         .unwrap();
-    assert_eq!(requests.recv().await.unwrap().method(), "DELETE");
+    let aborted = requests.try_recv().unwrap();
+    assert_eq!(aborted.method(), "DELETE");
+    assert_eq!(aborted.uri().path(), "/test-bucket/corpus/large");
+    assert!(aborted.uri().query().unwrap().contains("uploadId=id%2B1"));
+    assert!(requests.try_recv().is_err());
     volume
         .put(
             WriteTarget::Probe("check-1"),
@@ -1409,6 +2201,9 @@ async fn bucket_checks_return_versioning_and_noncurrent_lifecycle_rules_without_
         response(200, "<LifecycleConfiguration/>"),
         response(404, "<Error><Code>NoSuchLifecycleConfiguration</Code></Error>"),
         response(403, "<Error><Code>AccessDenied</Code></Error>"),
+        response(403, "<Error><Code>AccessDenied</Code></Error>"),
+        response(404, "<Error><Code>NoSuchBucket</Code></Error>"),
+        response(503, "<Error><Code>SlowDown</Code></Error>"),
     ]).await;
     let volume = client(&endpoint, None, allowed());
     assert_eq!(
@@ -1431,6 +2226,31 @@ async fn bucket_checks_return_versioning_and_noncurrent_lifecycle_rules_without_
     assert_eq!(requests.recv().await.unwrap().method(), "GET");
     assert_eq!(volume.versioning().await, Err(VolumeError::Denied));
     assert_eq!(requests.recv().await.unwrap().method(), "GET");
+    stream::iter([
+        VolumeError::Denied,
+        VolumeError::NotFound,
+        VolumeError::RequestFailed,
+    ])
+    .then(|expected| {
+        let volume = &volume;
+        async move {
+            assert_eq!(volume.lifecycle().await, Err(expected));
+        }
+    })
+    .collect::<()>()
+    .await;
+    [0; 3].into_iter().for_each(|_| {
+        let request = requests.try_recv().unwrap();
+        assert_eq!(request.method(), "GET");
+        assert!(
+            request
+                .uri()
+                .query()
+                .unwrap()
+                .split('&')
+                .any(|part| part.starts_with("lifecycle"))
+        );
+    });
     assert!(requests.try_recv().is_err());
     server.abort();
     assert_opaque_debug(&(&result, rules, &rules[0], Some(&rules[0])));
