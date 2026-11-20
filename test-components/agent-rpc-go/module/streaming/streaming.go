@@ -193,7 +193,7 @@ func init() {
 
 	caller := Caller.Implement(func(id CallerID) *callerState { return &callerState{targetName: id.TargetName} })
 	targetOf := func(ctx *golem.Context[callerState]) golem.Client[TargetID] {
-		return Target.Get(TargetID{Name: ctx.State.targetName})
+		return Target.Upsert(TargetID{Name: ctx.State.targetName})
 	}
 	caller.Handle(run, func(ctx *golem.Context[callerState], _ golem.Unit) GoStreamingRpcReport {
 		t := targetOf(ctx)

@@ -1,3 +1,3 @@
-const demo = await ForkDemo.get("demo-json");
+const demo = await ForkDemo.upsert("demo-json");
 const result = await demo.runForkJson();
 console.log(result);

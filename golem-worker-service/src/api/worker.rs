@@ -15,31 +15,24 @@
 use super::common::ApiEndpointError;
 use crate::config::WebSocketTransportLimits;
 use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
-use crate::model;
 use crate::service::auth::AuthService;
-use crate::service::component::ComponentService;
 use crate::service::worker::ConnectWorkerStream;
 use crate::service::worker::{OplogRangeRead, WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
-use golem_common::model::agent::ParsedAgentKey;
-use golem_common::model::agent::{
-    AgentCreationRequest, AgentMetadataDto, AgentTarget, RevertWorkerTarget,
-};
+use golem_common::model::agent::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::card::StoredCard;
-use golem_common::model::component::{
-    CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
-};
+use golem_common::model::component::{CanonicalFilePath, ComponentRevision, PluginPriority};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::{OplogCursor, OplogScanAllowance};
 use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
-use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, PromiseId, ScanCursor};
-use golem_common::{SafeDisplay, recorded_http_api_request};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, PromiseId};
+use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
-use golem_service_base::model::component::Component;
 use golem_service_base::model::*;
 use poem::Body;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
@@ -55,610 +48,291 @@ const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);
 
 type Result<T> = std::result::Result<T, ApiEndpointError>;
 
+/// Management of one agent, named by its environment and its agent ID. Every endpoint takes an
+/// optional `expectedFingerprint`: when it is set and the agent is another incarnation, the
+/// request fails as not found.
 pub struct WorkerApi {
-    component_service: Arc<dyn ComponentService>,
     worker_service: Arc<WorkerService>,
     auth_service: Arc<dyn AuthService>,
     connect_websocket: WebSocketTransportLimits,
 }
 
-#[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
+#[OpenApi(prefix_path = "/v1/runtime/envs", tag = ApiTags::Worker)]
 impl WorkerApi {
     pub fn new(
-        component_service: Arc<dyn ComponentService>,
         worker_service: Arc<WorkerService>,
         auth_service: Arc<dyn AuthService>,
         connect_websocket: WebSocketTransportLimits,
     ) -> Self {
         Self {
-            component_service,
             worker_service,
             auth_service,
             connect_websocket,
         }
     }
 
-    /// Launch a new worker.
+    /// Delete an agent
     ///
-    /// Creates a new worker. The worker initially is in `Idle`` status, waiting to be invoked.
-    ///
-    /// The parameters in the request are the following:
-    /// - `name` is the name of the created worker. This has to be unique, but only for a given component
-    /// - `args` is a list of strings which appear as command line arguments for the worker
-    /// - `env` is a list of key-value pairs (represented by arrays) which appear as environment variables for the worker
+    /// Interrupts and deletes an existing agent.
     #[oai(
-        path = "/:component_id/workers",
-        method = "post",
-        operation_id = "launch_new_worker"
-    )]
-    async fn launch_new_worker(
-        &self,
-        component_id: Path<ComponentId>,
-        request: Json<AgentCreationRequest>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<WorkerCreationResponse>> {
-        let record = recorded_http_api_request!(
-            "launch_new_worker",
-            component_id = component_id.0.to_string(),
-            name = request.name
-        );
-
-        let response = self
-            .launch_new_worker_internal(component_id.0, request.0, token)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn launch_new_worker_internal(
-        &self,
-        component_id: ComponentId,
-        request: AgentCreationRequest,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<WorkerCreationResponse>> {
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let AgentCreationRequest { name, env, .. } = request;
-
-        let (agent_id, component) = self
-            .normalize_agent_id_by_latest_version(component_id, &name)
-            .await?;
-
-        let caller = self.worker_service.rest_caller(&auth).into();
-        let (component_revision, _created_at) = self
-            .worker_service
-            .create_with_component(
-                &AgentTarget::Current(agent_id.clone()),
-                component,
-                env,
-                request.config,
-                false,
-                auth,
-                None,
-                caller,
-                None,
-            )
-            .await?;
-
-        Ok(Json(WorkerCreationResponse {
-            agent_id,
-            component_revision,
-        }))
-    }
-
-    /// Delete a worker
-    ///
-    /// Interrupts and deletes an existing worker.
-    #[oai(
-        path = "/:component_id/workers/:agent_name",
+        path = "/:environment_id/agents/:agent_id",
         method = "delete",
         operation_id = "delete_worker"
     )]
     async fn delete_worker(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeleteWorkerResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
+        let record = recorded_http_api_request!("delete_worker", agent_id = agent_id.to_string());
 
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
-        let record = recorded_http_api_request!("delete_worker", agent_id = agent_id.to_string(),);
-
-        let response = self
-            .delete_worker_internal(agent_id, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            self.worker_service
+                .delete(&agent_id, expected_fingerprint.0, auth)
+                .await?;
+            Ok(Json(DeleteWorkerResponse {}))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
-    }
-
-    async fn delete_worker_internal(
-        &self,
-        agent_id: AgentId,
-        auth: AuthCtx,
-    ) -> Result<Json<DeleteWorkerResponse>> {
-        self.worker_service.delete(&agent_id, auth).await?;
-        Ok(Json(DeleteWorkerResponse {}))
     }
 
     /// Complete a promise
     ///
     /// Completes a promise with a given custom array of bytes.
-    /// The promise must be previously created from within the worker, and its identifier (a combination of a worker identifier, the agent's fingerprint and an oplogIdx) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
-    /// The data field is sent back to the worker, and it has no predefined meaning.
+    /// The promise must be previously created from within the agent, and its identifier (a combination of an agent ID, the agent's fingerprint and an oplogIdx) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
+    /// The data field is sent back to the agent, and it has no predefined meaning.
     #[oai(
-        path = "/:component_id/workers/:agent_name/complete",
+        path = "/:environment_id/agents/:agent_id/complete",
         method = "post",
         operation_id = "complete_promise"
     )]
     async fn complete_promise(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
         params: Json<CompleteParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<bool>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
         let record =
-            recorded_http_api_request!("complete_promise", agent_id = agent_id.to_string());
+            recorded_http_api_request!("complete_promise", agent_id = agent_id.0.to_string());
 
-        let response = self
-            .complete_promise_internal(agent_id, params.0, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            let CompleteParameters {
+                oplog_idx,
+                fingerprint,
+                data,
+            } = params.0;
+            let promise_id = PromiseId {
+                agent_id: agent_id.0,
+                fingerprint,
+                oplog_idx: OplogIndex::from_u64(oplog_idx),
+            };
+            let completed = self
+                .worker_service
+                .complete_promise(environment_id.0, promise_id, data, auth)
+                .await?;
+            Ok(Json(completed))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
-    async fn complete_promise_internal(
-        &self,
-        agent_id: AgentId,
-        params: CompleteParameters,
-        auth: AuthCtx,
-    ) -> Result<Json<bool>> {
-        let CompleteParameters {
-            oplog_idx,
-            fingerprint,
-            data,
-        } = params;
-        let promise_id = PromiseId {
-            agent_id,
-            fingerprint,
-            oplog_idx: OplogIndex::from_u64(oplog_idx),
-        };
-
-        let response = self
-            .worker_service
-            .complete_promise(promise_id, data, auth)
-            .await?;
-
-        Ok(Json(response))
-    }
-
-    /// Interrupt a worker
+    /// Interrupt an agent
     ///
-    /// Interrupts the execution of a worker.
-    /// The worker's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
-    /// An interrupted worker can be still used, and it is going to be automatically resumed the first time it is used.
+    /// Interrupts the execution of an agent.
+    /// The agent's status will be Interrupted unless the recover-immediately parameter was used, in which case it remains as it was.
+    /// An interrupted agent can be still used, and it is going to be automatically resumed the first time it is used.
     /// For example in case of a new invocation, the previously interrupted invocation is continued before the new one gets processed.
     #[oai(
-        path = "/:component_id/workers/:agent_name/interrupt",
+        path = "/:environment_id/agents/:agent_id/interrupt",
         method = "post",
         operation_id = "interrupt_worker"
     )]
     async fn interrupt_worker(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
-        /// if true will simulate a worker recovery. Defaults to false.
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
+        /// if true will simulate an agent recovery. Defaults to false.
         #[oai(name = "recovery-immediately")]
         recover_immediately: Query<Option<bool>>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InterruptResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record =
             recorded_http_api_request!("interrupt_worker", agent_id = agent_id.to_string());
 
-        let response = self
-            .interrupt_worker_internal(agent_id, recover_immediately.0, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            self.worker_service
+                .interrupt(
+                    &agent_id,
+                    recover_immediately.0.unwrap_or(false),
+                    expected_fingerprint.0,
+                    auth,
+                )
+                .await?;
+            Ok(Json(InterruptResponse {}))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
-    async fn interrupt_worker_internal(
-        &self,
-        agent_id: AgentId,
-        recover_immediately: Option<bool>,
-        auth: AuthCtx,
-    ) -> Result<Json<InterruptResponse>> {
-        self.worker_service
-            .interrupt(&agent_id, recover_immediately.unwrap_or(false), auth)
-            .await?;
-
-        Ok(Json(InterruptResponse {}))
-    }
-
-    /// Get metadata of a worker
+    /// Get metadata of an agent
     ///
-    /// Returns metadata about an existing worker:
-    /// - `workerId` is a combination of the used component and the worker's user specified name
-    /// - `accountId` the account the worker is created by
-    /// - `args` is the provided command line arguments passed to the worker
-    /// - `env` is the provided map of environment variables passed to the worker
-    /// - `componentVersion` is the version of the component used by the worker
-    /// - `retryCount` is the number of retries the worker did in case of a failure
-    /// - `status` is the worker's current status, one of the following:
-    ///     - `Running` if the worker is currently executing
-    ///     - `Idle` if the worker is waiting for an invocation
-    ///     - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
-    ///     - `Interrupted` if the worker was interrupted by the user
-    ///     - `Retrying` if the worker failed, and an automatic retry was scheduled for it
-    ///     - `Failed` if the worker failed and there are no more retries scheduled for it
-    ///     - `Exited` if the worker explicitly exited using the exit WASI function
+    /// Returns metadata about an existing agent:
+    /// - `agentId` is the ID of the agent
+    /// - `agentTypeName` is the agent's type
+    /// - `env` is the provided map of environment variables passed to the agent
+    /// - `componentRevision` is the revision of the component used by the agent
+    /// - `retryCount` is the number of retries the agent did in case of a failure
+    /// - `status` is the agent's current status, one of the following:
+    ///     - `Running` if the agent is currently executing
+    ///     - `Idle` if the agent is waiting for an invocation
+    ///     - `Suspended` if the agent was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+    ///     - `Interrupted` if the agent was interrupted by the user
+    ///     - `Retrying` if the agent failed, and an automatic retry was scheduled for it
+    ///     - `Failed` if the agent failed and there are no more retries scheduled for it
+    ///     - `Exited` if the agent explicitly exited using the exit WASI function
     #[oai(
-        path = "/:component_id/workers/:agent_name",
+        path = "/:environment_id/agents/:agent_id",
         method = "get",
         operation_id = "get_worker_metadata"
     )]
     async fn get_worker_metadata(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<AgentMetadataDto>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record =
             recorded_http_api_request!("get_worker_metadata", agent_id = agent_id.to_string());
 
-        let response = self
-            .get_worker_metadata_internal(agent_id, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            let mut response = self
+                .worker_service
+                .get_metadata(&agent_id, expected_fingerprint.0, auth)
+                .await?;
+            response.redact_host_managed_values_for_external();
+            Ok(Json(response))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
-    async fn get_worker_metadata_internal(
-        &self,
-        agent_id: AgentId,
-        auth: AuthCtx,
-    ) -> Result<Json<AgentMetadataDto>> {
-        let mut response = self.worker_service.get_metadata(&agent_id, auth).await?;
-        response.redact_host_managed_values_for_external();
-
-        Ok(Json(response))
-    }
-
-    /// Get metadata of multiple workers
-    ///
-    /// ### Filters
-    ///
-    /// | Property    | Comparator             | Description                    | Example                         |
-    /// |-------------|------------------------|--------------------------------|----------------------------------|
-    /// | name        | StringFilterComparator | Name of worker                 | `name = worker-name`             |
-    /// | version     | FilterComparator       | Version of worker              | `version >= 0`                   |
-    /// | status      | FilterComparator       | Status of worker               | `status = Running`               |
-    /// | env.\[key\] | StringFilterComparator | Environment variable of worker | `env.var1 = value`               |
-    /// | createdAt   | FilterComparator       | Creation time of worker        | `createdAt > 2024-04-01T12:10:00Z` |
-    ///
-    ///
-    /// ### Comparators
-    ///
-    /// - StringFilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `like`, `notlike`
-    /// - FilterComparator: `eq|equal|=|==`, `ne|notequal|!=`, `ge|greaterequal|>=`, `gt|greater|>`, `le|lessequal|<=`, `lt|less|<`
-    ///
-    /// Returns metadata about an existing component workers:
-    /// - `workers` list of workers metadata
-    /// - `cursor` cursor for next request, if cursor is empty/null, there are no other values
+    /// Resume an agent
     #[oai(
-        path = "/:component_id/workers",
-        method = "get",
-        operation_id = "get_workers_metadata"
-    )]
-    async fn get_workers_metadata(
-        &self,
-        component_id: Path<ComponentId>,
-        /// Filter for worker metadata in form of `property op value`. Can be used multiple times (AND condition is applied between them)
-        filter: Query<Option<Vec<String>>>,
-        /// Count of listed values, default: 50
-        cursor: Query<Option<String>>,
-        /// Position where to start listing, if not provided, starts from the beginning. It is used to get the next page of results. To get next page, use the cursor returned in the response
-        count: Query<Option<u64>>,
-        /// Precision in relation to worker status, if true, calculate the most up-to-date status for each worker, default is false
-        precise: Query<Option<bool>>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<model::WorkersMetadataResponse>> {
-        let record = recorded_http_api_request!(
-            "get_workers_metadata",
-            component_id = component_id.0.to_string()
-        );
-
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let response = self
-            .get_workers_metadata_internal(
-                component_id.0,
-                filter.0,
-                cursor.0,
-                count.0,
-                precise.0,
-                auth,
-            )
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_workers_metadata_internal(
-        &self,
-        component_id: ComponentId,
-        filter: Option<Vec<String>>,
-        cursor: Option<String>,
-        count: Option<u64>,
-        precise: Option<bool>,
-        auth: AuthCtx,
-    ) -> Result<Json<model::WorkersMetadataResponse>> {
-        let filter = match filter {
-            Some(filters) if !filters.is_empty() => {
-                Some(AgentFilter::from(filters).map_err(|e| {
-                    ApiEndpointError::bad_request(
-                        api::error_code::INVALID_AGENT_FILTER,
-                        golem_common::safe(e),
-                    )
-                })?)
-            }
-            _ => None,
-        };
-
-        let cursor = cursor.map(ScanCursor::from);
-
-        let (cursor, mut workers) = self
-            .worker_service
-            .find_metadata(
-                component_id,
-                filter,
-                cursor.unwrap_or_default(),
-                count.unwrap_or(50),
-                precise.unwrap_or(false),
-                auth,
-            )
-            .await?;
-
-        redact_worker_metadata_for_external(&mut workers);
-
-        Ok(Json(model::WorkersMetadataResponse { workers, cursor }))
-    }
-
-    /// Advanced search for workers
-    ///
-    /// ### Filter types
-    /// | Type      | Comparator             | Description                    | Example                                                                                       |
-    /// |-----------|------------------------|--------------------------------|-----------------------------------------------------------------------------------------------|
-    /// | Name      | StringFilterComparator | Name of worker                 | `{ "type": "Name", "comparator": "Equal", "value": "worker-name" }`                           |
-    /// | Version   | FilterComparator       | Version of worker              | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                             |
-    /// | Status    | FilterComparator       | Status of worker               | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                             |
-    /// | Env       | StringFilterComparator | Environment variable of worker | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`                  |
-    /// | CreatedAt | FilterComparator       | Creation time of worker        | `{ "type": "CreatedAt", "comparator": "Greater", "value": "2024-04-01T12:10:00Z" }`           |
-    /// | And       |                        | And filter combinator          | `{ "type": "And", "filters": [ ... ] }`                                                       |
-    /// | Or        |                        | Or filter combinator           | `{ "type": "Or", "filters": [ ... ] }`                                                        |
-    /// | Not       |                        | Negates the specified filter   | `{ "type": "Not", "filter": { "type": "Version", "comparator": "GreaterEqual", "value": 0 } }`|
-    ///
-    /// ### Comparators
-    /// - StringFilterComparator: `Equal`, `NotEqual`, `Like`, `NotLike`
-    /// - FilterComparator: `Equal`, `NotEqual`, `GreaterEqual`, `Greater`, `LessEqual`, `Less`
-    ///
-    /// Returns metadata about an existing component workers:
-    /// - `workers` list of workers metadata
-    /// - `cursor` cursor for next request, if cursor is empty/null, there are no other values
-    #[oai(
-        path = "/:component_id/workers/find",
-        method = "post",
-        operation_id = "find_workers_metadata"
-    )]
-    async fn find_workers_metadata(
-        &self,
-        component_id: Path<ComponentId>,
-        params: Json<WorkersMetadataRequest>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<model::WorkersMetadataResponse>> {
-        let record = recorded_http_api_request!(
-            "find_workers_metadata",
-            component_id = component_id.0.to_string()
-        );
-
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let response = self
-            .find_workers_metadata_internal(component_id.0, params.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn find_workers_metadata_internal(
-        &self,
-        component_id: ComponentId,
-        params: WorkersMetadataRequest,
-        auth: AuthCtx,
-    ) -> Result<Json<model::WorkersMetadataResponse>> {
-        let filter = match params.filter {
-            Some(filter) => {
-                // `serde_json` refuses JSON nested deeper than 128, which bounds the recursion
-                // of `validated` before the depth check.
-                Some(filter.validated().map_err(|e| {
-                    ApiEndpointError::bad_request(
-                        api::error_code::INVALID_AGENT_FILTER,
-                        golem_common::safe(e),
-                    )
-                })?)
-            }
-            None => None,
-        };
-
-        let (cursor, mut workers) = self
-            .worker_service
-            .find_metadata(
-                component_id,
-                filter,
-                params.cursor.clone().unwrap_or_default(),
-                params.count.unwrap_or(50),
-                params.precise.unwrap_or(false),
-                auth,
-            )
-            .await?;
-
-        redact_worker_metadata_for_external(&mut workers);
-
-        Ok(Json(model::WorkersMetadataResponse { workers, cursor }))
-    }
-
-    /// Resume a worker
-    #[oai(
-        path = "/:component_id/workers/:agent_name/resume",
+        path = "/:environment_id/agents/:agent_id/resume",
         method = "post",
         operation_id = "resume_worker"
     )]
     async fn resume_worker(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ResumeResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record = recorded_http_api_request!("resume_worker", agent_id = agent_id.to_string());
 
-        let response = self
-            .resume_worker_internal(agent_id, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            self.worker_service
+                .resume(&agent_id, false, expected_fingerprint.0, auth)
+                .await?;
+            Ok(Json(ResumeResponse {}))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
-    async fn resume_worker_internal(
-        &self,
-        agent_id: AgentId,
-        auth: AuthCtx,
-    ) -> Result<Json<ResumeResponse>> {
-        self.worker_service.resume(&agent_id, false, auth).await?;
-
-        Ok(Json(ResumeResponse {}))
-    }
-
-    /// Update a worker
+    /// Update an agent
     #[oai(
-        path = "/:component_id/workers/:agent_name/update",
+        path = "/:environment_id/agents/:agent_id/update",
         method = "post",
         operation_id = "update_worker"
     )]
     async fn update_worker(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
         params: Json<UpdateWorkerRequest>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<UpdateWorkerResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record = recorded_http_api_request!("update_worker", agent_id = agent_id.to_string());
 
-        let response = self
-            .update_worker_internal(agent_id, params.0, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            let update_attempt_index = self
+                .worker_service
+                .update(
+                    &agent_id,
+                    params.0.mode,
+                    params.0.target_revision,
+                    params.0.disable_wakeup,
+                    expected_fingerprint.0,
+                    auth,
+                )
+                .await?;
+            Ok(Json(UpdateWorkerResponse {
+                update_attempt_index: update_attempt_index.into(),
+            }))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
-    async fn update_worker_internal(
-        &self,
-        agent_id: AgentId,
-        params: UpdateWorkerRequest,
-        auth: AuthCtx,
-    ) -> Result<Json<UpdateWorkerResponse>> {
-        let update_attempt_index = self
-            .worker_service
-            .update(
-                &agent_id,
-                params.mode,
-                params.target_revision,
-                params.disable_wakeup,
-                auth,
-            )
-            .await?;
-
-        Ok(Json(UpdateWorkerResponse {
-            update_attempt_index: update_attempt_index.into(),
-        }))
-    }
-
-    /// Get the oplog of a worker
+    /// Get the oplog of an agent
     #[oai(
-        path = "/:component_id/workers/:agent_name/oplog",
+        path = "/:environment_id/agents/:agent_id/oplog",
         method = "get",
         operation_id = "get_oplog"
     )]
+    #[allow(clippy::too_many_arguments)]
     async fn get_oplog(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
         from: Query<Option<u64>>,
         count: Query<u64>,
         cursor: Query<Option<OplogCursor>>,
         query: Query<Option<String>>,
-        /// The last oplog index of a range read, inclusive. A range read reads no entry after
-        /// it, and the response reports its scan in `scan`. It needs `from`, and no `query`.
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
+        /// The inclusive last index of a range read. Requires `from` and no `query`.
         to: Query<Option<u64>>,
-        /// The scan allowance that a range read may still spend: the number of oplog entries.
-        /// It goes with `scanMillis`. Without them, the read gets the configured allowance of
-        /// the server; the server never grants more than its configured allowance.
+        /// The remaining entry allowance of a range read. Goes with `scanMillis`.
         #[oai(name = "scanEntries")]
         scan_entries: Query<Option<u64>>,
-        /// The scan allowance that a range read may still spend: the time in milliseconds. It
-        /// goes with `scanEntries`.
+        /// The remaining time allowance of a range read, in milliseconds.
         #[oai(name = "scanMillis")]
         scan_millis: Query<Option<u64>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetOplogResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record = recorded_http_api_request!("get_oplog", agent_id = agent_id.to_string());
 
         let response = async {
@@ -669,8 +343,17 @@ impl WorkerApi {
                 scan_entries.0,
                 scan_millis.0,
             )?;
-            self.get_oplog_internal(agent_id, from.0, count.0, cursor.0, query.0, range, auth)
-                .await
+            self.get_oplog_internal(
+                agent_id,
+                from.0,
+                count.0,
+                cursor.0,
+                query.0,
+                expected_fingerprint.0,
+                range,
+                auth,
+            )
+            .await
         }
         .instrument(record.span.clone())
         .await;
@@ -681,11 +364,12 @@ impl WorkerApi {
     #[allow(clippy::too_many_arguments)]
     async fn get_oplog_internal(
         &self,
-        agent_id: AgentId,
+        agent_id: OwnedAgentId,
         from: Option<u64>,
         count: u64,
         cursor: Option<OplogCursor>,
         query: Option<String>,
+        expected_fingerprint: Option<AgentFingerprint>,
         range: Option<OplogRangeRead>,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
@@ -698,26 +382,23 @@ impl WorkerApi {
                     ),
                 ));
             }
-            (Some(from), None) => {
+            (None, Some(query)) => {
+                self.worker_service
+                    .search_oplog(&agent_id, cursor, count, query, expected_fingerprint, auth)
+                    .await?
+            }
+            (from, None) => {
                 self.worker_service
                     .get_oplog(
                         &agent_id,
-                        OplogIndex::from_u64(from),
+                        from.map(OplogIndex::from_u64)
+                            .unwrap_or(OplogIndex::INITIAL),
                         cursor,
                         count,
+                        expected_fingerprint,
                         range,
                         auth,
                     )
-                    .await?
-            }
-            (None, Some(query)) => {
-                self.worker_service
-                    .search_oplog(&agent_id, cursor, count, query, auth)
-                    .await?
-            }
-            (None, None) => {
-                self.worker_service
-                    .get_oplog(&agent_id, OplogIndex::INITIAL, cursor, count, None, auth)
                     .await?
             }
         };
@@ -731,138 +412,111 @@ impl WorkerApi {
         Ok(Json(response))
     }
 
-    /// Get one oplog entry of a worker
+    /// Get one oplog entry of an agent
     ///
     /// Oplog pages omit entries whose encoded form is larger than a server limit, and describe
     /// them by their type, timestamp, size and component revision. This endpoint returns such an
     /// entry in full. Pass the component revision of the description to save the server from
     /// scanning the oplog for it.
     #[oai(
-        path = "/:component_id/workers/:agent_name/oplog/:oplog_index",
+        path = "/:environment_id/agents/:agent_id/oplog/:oplog_index",
         method = "get",
         operation_id = "get_oplog_entry"
     )]
     async fn get_oplog_entry(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
         oplog_index: Path<u64>,
         component_revision: Query<Option<ComponentRevision>>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<PublicOplogEntryWithIndex>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record = recorded_http_api_request!(
             "get_oplog_entry",
             agent_id = agent_id.to_string(),
             oplog_index = oplog_index.0
         );
 
-        let response = self
-            .get_oplog_entry_internal(
-                agent_id,
-                OplogIndex::from_u64(oplog_index.0),
-                component_revision.0,
-                auth,
-            )
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            let mut entry = self
+                .worker_service
+                .get_oplog_entry(
+                    &agent_id,
+                    OplogIndex::from_u64(oplog_index.0),
+                    component_revision.0,
+                    expected_fingerprint.0,
+                    auth,
+                )
+                .await?;
+            entry.entry.redact_host_managed_values_for_external();
+            Ok(Json(entry))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
-    async fn get_oplog_entry_internal(
-        &self,
-        agent_id: AgentId,
-        oplog_index: OplogIndex,
-        component_revision: Option<ComponentRevision>,
-        auth: AuthCtx,
-    ) -> Result<Json<PublicOplogEntryWithIndex>> {
-        let mut entry = self
-            .worker_service
-            .get_oplog_entry(&agent_id, oplog_index, component_revision, auth)
-            .await?;
-        entry.entry.redact_host_managed_values_for_external();
-        Ok(Json(entry))
-    }
-
-    /// List files in a worker
+    /// List files in an agent
     #[oai(
-        path = "/:component_id/workers/:agent_name/files/:file_name",
+        path = "/:environment_id/agents/:agent_id/files/:file_name",
         method = "get",
         operation_id = "get_files"
     )]
     async fn get_file(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
         file_name: Path<String>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetFilesResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record = recorded_http_api_request!("get_file", agent_id = agent_id.to_string());
 
-        let response = self
-            .get_file_internal(agent_id, file_name.0, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            let path = make_component_file_path(file_name.0)?;
+            let nodes = self
+                .worker_service
+                .get_file_system_node(&agent_id, path, expected_fingerprint.0, auth)
+                .await?;
+            Ok(Json(GetFilesResponse {
+                nodes: nodes.into_iter().map(|n| n.into()).collect(),
+            }))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
-    async fn get_file_internal(
-        &self,
-        agent_id: AgentId,
-        file_name: String,
-        auth: AuthCtx,
-    ) -> Result<Json<GetFilesResponse>> {
-        let path = make_component_file_path(file_name)?;
-
-        let nodes = self
-            .worker_service
-            .get_file_system_node(&agent_id, path, auth)
-            .await?;
-
-        Ok(Json(GetFilesResponse {
-            nodes: nodes.into_iter().map(|n| n.into()).collect(),
-        }))
-    }
-
-    /// Get the wallet (active permission cards) of a worker.
+    /// Get the wallet (active permission cards) of an agent.
     ///
-    /// Activates the worker if it is not already active.
+    /// Activates the agent if it is not already active.
     #[oai(
-        path = "/:component_id/workers/:agent_name/wallet",
+        path = "/:environment_id/agents/:agent_id/wallet",
         method = "get",
         operation_id = "get_agent_wallet"
     )]
     async fn get_agent_wallet(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<Vec<StoredCard>>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record =
             recorded_http_api_request!("get_agent_wallet", agent_id = agent_id.to_string());
 
         let response = self
             .worker_service
-            .get_agent_wallet(&agent_id, auth)
+            .get_agent_wallet(&agent_id, expected_fingerprint.0, auth)
             .instrument(record.span.clone())
             .await
             .map_err(Into::into);
@@ -870,241 +524,185 @@ impl WorkerApi {
         record.result(response).map(Json)
     }
 
-    /// Get contents of a file in a worker
+    /// Get contents of a file in an agent
     #[oai(
-        path = "/:component_id/workers/:agent_name/file-contents/:file_name",
+        path = "/:environment_id/agents/:agent_id/file-contents/:file_name",
         method = "get",
         operation_id = "get_file_content"
     )]
     async fn get_file_content(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
         file_name: Path<String>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Binary<Body>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record = recorded_http_api_request!("get_files", agent_id = agent_id.to_string());
 
-        let response = self
-            .get_file_content_internal(agent_id, file_name.0, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            let path = make_component_file_path(file_name.0)?;
+            let bytes = self
+                .worker_service
+                .get_file_contents(&agent_id, path, expected_fingerprint.0, auth)
+                .await?;
+            Ok(Binary(Body::from_bytes_stream(
+                bytes.map_err(|e| std::io::Error::other(e.to_string())),
+            )))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
-    async fn get_file_content_internal(
-        &self,
-        agent_id: AgentId,
-        file_name: String,
-        auth: AuthCtx,
-    ) -> Result<Binary<Body>> {
-        let path = make_component_file_path(file_name)?;
-
-        let bytes = self
-            .worker_service
-            .get_file_contents(&agent_id, path, auth)
-            .await?;
-
-        Ok(Binary(Body::from_bytes_stream(
-            bytes.map_err(|e| std::io::Error::other(e.to_string())),
-        )))
-    }
-
     /// Activate a plugin
     ///
-    /// The plugin must be one of the installed plugins for the worker's current component version.
+    /// The plugin must be one of the installed plugins for the agent's current component revision.
     #[oai(
-        path = "/:component_id/workers/:agent_name/activate-plugin",
+        path = "/:environment_id/agents/:agent_id/activate-plugin",
         method = "post",
         operation_id = "activate_plugin"
     )]
     async fn activate_plugin(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
-        #[oai(name = "plugin-priority")] plugin_installation_id: Query<PluginPriority>,
-        token: GolemSecurityScheme,
-    ) -> Result<Json<ActivatePluginResponse>> {
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
-        let record = recorded_http_api_request!(
-            "activate_plugin",
-            agent_id = agent_id.to_string(),
-            plugin_installation_id = plugin_installation_id.to_string()
-        );
-
-        let response = self
-            .activate_plugin_internal(agent_id, plugin_installation_id.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn activate_plugin_internal(
-        &self,
-        agent_id: AgentId,
-        plugin_priority: PluginPriority,
-        auth: AuthCtx,
-    ) -> Result<Json<ActivatePluginResponse>> {
-        self.worker_service
-            .activate_plugin(&agent_id, plugin_priority, auth)
-            .await?;
-
-        Ok(Json(ActivatePluginResponse {}))
-    }
-
-    /// Deactivate a plugin
-    ///
-    /// The plugin must be one of the installed plugins for the worker's current component version.
-    #[oai(
-        path = "/:component_id/workers/:agent_name/deactivate-plugin",
-        method = "post",
-        operation_id = "deactivate_plugin"
-    )]
-    async fn deactivate_plugin(
-        &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
         #[oai(name = "plugin-priority")] plugin_priority: Query<PluginPriority>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<DeactivatePluginResponse>> {
+    ) -> Result<Json<ActivatePluginResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record = recorded_http_api_request!(
             "activate_plugin",
             agent_id = agent_id.to_string(),
             plugin_priority = plugin_priority.to_string()
         );
 
-        let response = self
-            .deactivate_plugin_internal(agent_id, plugin_priority.0, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            self.worker_service
+                .activate_plugin(&agent_id, plugin_priority.0, expected_fingerprint.0, auth)
+                .await?;
+            Ok(Json(ActivatePluginResponse {}))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
-    async fn deactivate_plugin_internal(
+    /// Deactivate a plugin
+    ///
+    /// The plugin must be one of the installed plugins for the agent's current component revision.
+    #[oai(
+        path = "/:environment_id/agents/:agent_id/deactivate-plugin",
+        method = "post",
+        operation_id = "deactivate_plugin"
+    )]
+    async fn deactivate_plugin(
         &self,
-        agent_id: AgentId,
-        plugin_priority: PluginPriority,
-        auth: AuthCtx,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
+        #[oai(name = "plugin-priority")] plugin_priority: Query<PluginPriority>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
+        token: GolemSecurityScheme,
     ) -> Result<Json<DeactivatePluginResponse>> {
-        self.worker_service
-            .deactivate_plugin(&agent_id, plugin_priority, auth)
-            .await?;
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
+        let record = recorded_http_api_request!(
+            "deactivate_plugin",
+            agent_id = agent_id.to_string(),
+            plugin_priority = plugin_priority.to_string()
+        );
 
-        Ok(Json(DeactivatePluginResponse {}))
+        let response = async {
+            self.worker_service
+                .deactivate_plugin(&agent_id, plugin_priority.0, expected_fingerprint.0, auth)
+                .await?;
+            Ok(Json(DeactivatePluginResponse {}))
+        }
+        .instrument(record.span.clone())
+        .await;
+
+        record.result(response)
     }
 
-    /// Revert a worker
+    /// Revert an agent
     ///
-    /// Reverts a worker by undoing either the last few invocations or the last few recorded oplog entries.
+    /// Reverts an agent by undoing either the last few invocations or the last few recorded oplog entries.
     #[oai(
-        path = "/:component_id/workers/:agent_name/revert",
+        path = "/:environment_id/agents/:agent_id/revert",
         method = "post",
         operation_id = "revert_worker"
     )]
     async fn revert_worker(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
         target: Json<RevertWorkerTarget>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<RevertWorkerResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
+        let record = recorded_http_api_request!("revert_worker", agent_id = agent_id.to_string());
 
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
-        let record = recorded_http_api_request!("revert_worker", agent_id = agent_id.to_string(),);
-
-        let response = self
-            .revert_worker_internal(agent_id, target.0, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            self.worker_service
+                .revert_worker(&agent_id, target.0, expected_fingerprint.0, auth)
+                .await?;
+            Ok(Json(RevertWorkerResponse {}))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
-    async fn revert_worker_internal(
-        &self,
-        agent_id: AgentId,
-        target: RevertWorkerTarget,
-        auth: AuthCtx,
-    ) -> Result<Json<RevertWorkerResponse>> {
-        self.worker_service
-            .revert_worker(&agent_id, target, auth)
-            .await?;
-
-        Ok(Json(RevertWorkerResponse {}))
-    }
-
-    /// Fork a worker
+    /// Fork an agent
     ///
-    /// Fork a worker by creating a new worker with the oplog up to the provided index
+    /// Creates a new agent of the same type with the oplog of this agent up to the provided
+    /// index, and returns the ID of the new agent.
     #[oai(
-        path = "/:component_id/workers/:agent_name/fork",
+        path = "/:environment_id/agents/:agent_id/fork",
         method = "post",
         operation_id = "fork_worker"
     )]
     async fn fork_worker(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
         request: Json<ForkWorkerRequest>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ForkWorkerResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
+        let record = recorded_http_api_request!("fork_worker", agent_id = agent_id.to_string());
 
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
-        let record = recorded_http_api_request!("revert_worker", agent_id = agent_id.to_string(),);
-
-        let response = self
-            .fork_worker_internal(agent_id, request.0, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            let forked_agent_id = self
+                .worker_service
+                .fork_worker(
+                    &agent_id,
+                    None,
+                    request.0.oplog_index_cutoff,
+                    None,
+                    expected_fingerprint.0,
+                    auth,
+                )
+                .await?;
+            Ok(Json(ForkWorkerResponse {
+                agent_id: forked_agent_id,
+            }))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
-    }
-
-    async fn fork_worker_internal(
-        &self,
-        agent_id: AgentId,
-        request: ForkWorkerRequest,
-        auth: AuthCtx,
-    ) -> Result<Json<ForkWorkerResponse>> {
-        self.worker_service
-            .fork_worker(
-                &agent_id,
-                &request.target_agent_id,
-                request.oplog_index_cutoff,
-                None,
-                auth,
-            )
-            .await?;
-
-        Ok(Json(ForkWorkerResponse {}))
     }
 
     /// Cancels a pending invocation if it has not started yet
@@ -1112,70 +710,61 @@ impl WorkerApi {
     /// The invocation to be cancelled is identified by the idempotency key returned when the
     /// invoke API accepted it.
     #[oai(
-        path = "/:component_id/workers/:agent_name/invocations/:idempotency_key",
+        path = "/:environment_id/agents/:agent_id/invocations/:idempotency_key",
         method = "delete",
         operation_id = "cancel_invocation"
     )]
     async fn cancel_invocation(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
         idempotency_key: Path<IdempotencyKey>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<CancelInvocationResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id.0, agent_name.as_str())
-            .await?;
-
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
         let record = recorded_http_api_request!(
             "cancel_invocation",
             agent_id = agent_id.to_string(),
             idempotency_key = idempotency_key.0.to_string(),
         );
 
-        let response = self
-            .cancel_invocation_internal(agent_id, idempotency_key.0, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            let canceled = self
+                .worker_service
+                .cancel_invocation(&agent_id, &idempotency_key.0, expected_fingerprint.0, auth)
+                .await?;
+            Ok(Json(CancelInvocationResponse { canceled }))
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
-    async fn cancel_invocation_internal(
-        &self,
-        agent_id: AgentId,
-        idempotency_key: IdempotencyKey,
-        auth: AuthCtx,
-    ) -> Result<Json<CancelInvocationResponse>> {
-        let canceled = self
-            .worker_service
-            .cancel_invocation(&agent_id, &idempotency_key, auth)
-            .await?;
-
-        Ok(Json(CancelInvocationResponse { canceled }))
-    }
-
-    /// Connect to a worker using a websocket and stream events
+    /// Connect to an agent using a websocket and stream events
     #[oai(
-        path = "/:component_id/workers/:agent_name/connect",
+        path = "/:environment_id/agents/:agent_id/connect",
         method = "get",
         operation_id = "worker_connect"
     )]
     pub async fn worker_connect(
         &self,
-        component_id: Path<ComponentId>,
-        agent_name: Path<String>,
+        environment_id: Path<EnvironmentId>,
+        agent_id: Path<AgentId>,
+        #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
         websocket: WebSocket,
         token: WrappedGolemSecuritySchema,
     ) -> Result<BoxWebSocketUpgraded> {
-        let (agent_id, worker_stream) = self
-            .connect_to_worker(component_id.0, agent_name.0, token.0.secret())
+        let agent_id = OwnedAgentId::new(environment_id.0, &agent_id.0);
+        let worker_stream = self
+            .connect_to_worker(&agent_id, expected_fingerprint.0, token.0.secret())
             .await?;
 
         // The stream captured this when it was built, inside the request span.
         let origin = worker_stream.origin();
+        let agent_id = agent_id.agent_id;
 
         let upgraded: BoxWebSocketUpgraded = websocket
             .config(self.connect_websocket.websocket_config())
@@ -1201,115 +790,22 @@ impl WorkerApi {
 
     async fn connect_to_worker(
         &self,
-        component_id: ComponentId,
-        agent_name: String,
+        agent_id: &OwnedAgentId,
+        expected_fingerprint: Option<AgentFingerprint>,
         token: TokenSecret,
-    ) -> Result<(AgentId, ConnectWorkerStream)> {
+    ) -> Result<ConnectWorkerStream> {
         let auth = self.auth_service.authenticate_token(token).await?;
-
-        let agent_id = self
-            .normalize_agent_id(component_id, agent_name.as_str())
-            .await?;
-
         let record = recorded_http_api_request!("connect_worker", agent_id = agent_id.to_string());
 
         let response = self
-            .connect_to_worker_internal(agent_id.clone(), auth)
+            .worker_service
+            .connect(agent_id, expected_fingerprint, auth)
             .instrument(record.span.clone())
             .await
-            .map(|stream| (agent_id, stream));
+            .map_err(Into::into);
 
         record.result(response)
     }
-
-    async fn connect_to_worker_internal(
-        &self,
-        agent_id: AgentId,
-        auth: AuthCtx,
-    ) -> Result<ConnectWorkerStream> {
-        let stream = self.worker_service.connect(&agent_id, auth).await?;
-        Ok(stream)
-    }
-
-    async fn normalize_agent_id_by_latest_version(
-        &self,
-        component_id: ComponentId,
-        agent_id: &str,
-    ) -> Result<(AgentId, Component)> {
-        let latest_component = self
-            .component_service
-            .get_current_by_id_uncached(component_id)
-            .await
-            .map_err(|error| {
-                ApiEndpointError::not_found(
-                    api::error_code::COMPONENT_NOT_FOUND,
-                    golem_common::safe(format!(
-                        "Couldn't retrieve the component: {}. error: {}",
-                        component_id,
-                        error.to_safe_string()
-                    )),
-                )
-            })?;
-
-        let agent_id =
-            normalize_agent_name_with_latest_component(component_id, agent_id, &latest_component)?;
-        Ok((agent_id, latest_component))
-    }
-
-    async fn normalize_agent_id(
-        &self,
-        component_id: ComponentId,
-        agent_id: &str,
-    ) -> Result<AgentId> {
-        AgentId::from_agent_name_string(component_id, agent_id).map_err(|error| {
-            ApiEndpointError::bad_request(
-                api::error_code::INVALID_WORKER_ID,
-                golem_common::safe(format!("Invalid worker id: {error}")),
-            )
-        })
-    }
-}
-
-fn redact_worker_metadata_for_external(workers: &mut [AgentMetadataDto]) {
-    for worker in workers {
-        worker.redact_host_managed_values_for_external();
-    }
-}
-
-fn normalize_agent_name_with_latest_component(
-    component_id: ComponentId,
-    agent_id: &str,
-    latest_component: &Component,
-) -> Result<AgentId> {
-    if latest_component.metadata.is_agent()
-        && let Ok((parsed_agent_id, agent_type)) =
-            ParsedAgentKey::parse_and_resolve_type(agent_id, &latest_component.metadata)
-    {
-        let normalized_agent_id = ParsedAgentKey::new_auto_phantom(
-            parsed_agent_id.agent_type,
-            parsed_agent_id.parameters,
-            parsed_agent_id.phantom_id,
-            agent_type.mode,
-        )
-        .map_err(|error| {
-            ApiEndpointError::bad_request(
-                api::error_code::INVALID_WORKER_ID,
-                golem_common::safe(format!("Invalid worker id: {error}")),
-            )
-        })?;
-
-        return Ok(AgentId {
-            component_id,
-            agent_id: normalized_agent_id.to_string(),
-        });
-    }
-
-    AgentId::from_agent_name_string(component_id, agent_id).map_err(|error| {
-        ApiEndpointError::bad_request(
-            api::error_code::INVALID_WORKER_ID,
-            golem_common::safe(format!("Invalid worker id: {error}")),
-        )
-    })
 }
 
 fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
@@ -1321,9 +817,7 @@ fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
     })
 }
 
-/// The range read that the `to`, `scanEntries` and `scanMillis` parameters of an oplog read
-/// select, if any. A range read needs `from` and no `query`, and `to` at or after `from`; the
-/// two allowance parameters go together, and only with `to`.
+/// The range selected by `to`, with optional paired entry and time allowances.
 fn oplog_range_read(
     from: Option<u64>,
     query: Option<&str>,
@@ -1368,125 +862,5 @@ fn oplog_range_read(
             "The 'from' parameter of a range read must be at least 1 and at most 'to'",
         )),
         None => Err(invalid("The 'to' parameter needs the 'from' parameter")),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::normalize_agent_name_with_latest_component;
-    use chrono::Utc;
-    use golem_common::base_model::component_metadata::KnownExports;
-    use golem_common::model::AgentId;
-    use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
-    use golem_common::model::application::{ApplicationId, ApplicationName};
-    use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
-    use golem_common::model::component_metadata::ComponentMetadata;
-    use golem_common::model::diff::Hash;
-    use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-    use golem_common::schema::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
-        SchemaGraph,
-    };
-    use golem_schema::Empty;
-    use golem_service_base::model::component::Component;
-    use test_r::test;
-    use uuid::Uuid;
-
-    fn test_agent_type(mode: AgentMode) -> AgentTypeSchema {
-        AgentTypeSchema {
-            kind: golem_common::schema::agent::AgentTypeKind::Regular,
-            type_name: AgentTypeName("weather-agent".to_string()),
-            description: String::new(),
-            source_language: String::new(),
-            schema: SchemaGraph::empty(),
-            constructor: AgentConstructorSchema {
-                name: None,
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: InputSchema::Parameters(vec![]),
-            },
-            methods: vec![AgentMethodSchema {
-                name: "run".to_string(),
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: InputSchema::Parameters(vec![]),
-                output_schema: OutputSchema::Unit,
-                http_endpoint: vec![],
-                read_only: None,
-            }],
-            dependencies: vec![],
-            mode,
-            http_mount: None,
-            snapshotting: Snapshotting::Disabled(Empty {}),
-            config: vec![],
-        }
-    }
-
-    fn test_component(mode: AgentMode) -> Component {
-        Component {
-            id: ComponentId(Uuid::new_v4()),
-            revision: ComponentRevision::INITIAL,
-            environment_id: EnvironmentId(Uuid::new_v4()),
-            component_name: ComponentName("weather-component".to_string()),
-            hash: Hash::empty(),
-            application_id: ApplicationId(Uuid::new_v4()),
-            account_id: AccountId(Uuid::new_v4()),
-            account_email: golem_common::model::account::AccountEmail::new("weather@golem"),
-            application_name: ApplicationName::try_from("weather-app".to_string()).unwrap(),
-            environment_name: EnvironmentName::try_from("prod").unwrap(),
-            component_size: 0,
-            metadata: ComponentMetadata::from_parts(
-                KnownExports::default(),
-                vec![],
-                vec![test_agent_type(mode)],
-                std::collections::BTreeMap::new(),
-            ),
-            created_at: Utc::now(),
-            wasm_hash: Hash::empty(),
-            package_metadata: None,
-            object_store_key: String::new(),
-        }
-    }
-
-    fn phantom_id(agent_id: &AgentId) -> Option<Uuid> {
-        agent_id
-            .agent_id
-            .rsplit_once('[')
-            .and_then(|(_, phantom_id)| phantom_id.strip_suffix(']'))
-            .and_then(|phantom_id| Uuid::parse_str(phantom_id).ok())
-    }
-
-    #[test]
-    fn latest_component_normalization_auto_generates_phantom_for_ephemeral_agents() {
-        let component = test_component(AgentMode::Ephemeral);
-
-        let agent_id =
-            normalize_agent_name_with_latest_component(component.id, "weather-agent()", &component)
-                .unwrap();
-
-        assert!(phantom_id(&agent_id).is_some());
-    }
-
-    #[test]
-    fn latest_component_normalization_keeps_durable_agents_non_phantom() {
-        let component = test_component(AgentMode::Durable);
-
-        let agent_id =
-            normalize_agent_name_with_latest_component(component.id, "weather-agent()", &component)
-                .unwrap();
-
-        assert!(phantom_id(&agent_id).is_none());
-    }
-
-    #[test]
-    fn latest_component_normalization_preserves_non_agent_worker_names() {
-        let component = test_component(AgentMode::Ephemeral);
-
-        let agent_id =
-            normalize_agent_name_with_latest_component(component.id, "custom-worker", &component)
-                .unwrap();
-
-        assert_eq!(agent_id.agent_id, "custom-worker");
     }
 }

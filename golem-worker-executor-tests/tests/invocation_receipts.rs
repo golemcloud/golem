@@ -65,8 +65,11 @@ async fn same_key_callers_are_not_accepted_before_a_pending_commit_that_is_fence
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let name = agent_id!("Counter", "fenced-pending-receipt");
-    let id = executor.start_agent(&component.id, name.clone()).await?;
+    let name = agent_key!("Counter", "fenced-pending-receipt");
+    let id = executor
+        .start_agent(&component.id, name.clone())
+        .await?
+        .agent_id;
     assert_eq!(
         executor
             .invoke_and_await_agent(&component, &name, "increment", data_value!())
@@ -178,8 +181,11 @@ async fn finished_commit_receipt_gates_success_and_same_key_result_survives_reco
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let name = agent_id!("Counter", "finished-receipt");
-    let id = executor.start_agent(&component.id, name.clone()).await?;
+    let name = agent_key!("Counter", "finished-receipt");
+    let id = executor
+        .start_agent(&component.id, name.clone())
+        .await?
+        .agent_id;
     assert_eq!(
         executor
             .invoke_and_await_agent(&component, &name, "increment", data_value!())
@@ -274,7 +280,7 @@ async fn finished_commit_receipt_gates_success_and_same_key_result_survives_reco
     // Phase 6: reconstruct over the same storage and recover the same-key result.
     // This is a new executor and Worker, not a resident resume or cursor reset.
     let executor = start_with_overrides(deps, &context, commit_barrier_overrides()).await?;
-    executor.resume(&id, false).await?;
+    executor.resume(&owned, false).await?;
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     Worker::start_if_needed(worker.clone()).await?;
     let recovered = worker.clone().invoke_and_await(invocation).await?;
@@ -312,8 +318,11 @@ async fn commit_gate_observes_either_entry_from_both_pair_append_apis(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let name = agent_id!("Counter", "pair-commit-gate");
-    let id = executor.start_agent(&component.id, name.clone()).await?;
+    let name = agent_key!("Counter", "pair-commit-gate");
+    let id = executor
+        .start_agent(&component.id, name.clone())
+        .await?
+        .agent_id;
     executor
         .invoke_and_await_agent(&component, &name, "increment", data_value!())
         .await?;

@@ -21,7 +21,6 @@ use super::{
     AgentSnapshots, CallError, FilesystemSnapshotStore, ReadError, RestoreFailure, SaveError,
     SnapshotInfo, SnapshotName,
 };
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, OwnedAgentId, Timestamp};
 use std::collections::HashMap;
@@ -46,13 +45,7 @@ pub(super) fn retry_script() -> golem_common::model::RetryConfig {
 
 pub(super) fn new_scope() -> AgentSnapshots {
     AgentSnapshots::agent(
-        &OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "counter(\"contract\")".to_string(),
-            },
-        ),
+        &OwnedAgentId::new(EnvironmentId(Uuid::new_v4()), &AgentId::from_parts(7, 1)),
         golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
     )
 }

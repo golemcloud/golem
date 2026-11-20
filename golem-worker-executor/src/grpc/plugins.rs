@@ -37,7 +37,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let plugin_priority: PluginPriority = PluginPriority(request.plugin_priority);
 
-        Worker::<Ctx>::activate_plugin(self, &owned_agent_id, plugin_priority, caller).await
+        Worker::<Ctx>::activate_plugin(
+            self,
+            &owned_agent_id,
+            plugin_priority,
+            caller,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| golem_common::model::AgentFingerprint(fingerprint.into())),
+        )
+        .await
     }
 
     pub(super) async fn deactivate_plugin_internal(
@@ -53,7 +62,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let plugin_priority = PluginPriority(request.plugin_priority);
 
-        Worker::<Ctx>::deactivate_plugin(self, &owned_agent_id, plugin_priority, caller).await
+        Worker::<Ctx>::deactivate_plugin(
+            self,
+            &owned_agent_id,
+            plugin_priority,
+            caller,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| golem_common::model::AgentFingerprint(fingerprint.into())),
+        )
+        .await
     }
 
     pub(super) async fn process_oplog_entries_internal(
@@ -75,6 +93,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         auth_ctx
             .authorize_system_only("process oplog entries")
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+
+        let component_id: golem_common::model::component::ComponentId = request
+            .component_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "component_id not found",
+            ))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
 
         let component_revision: golem_common::model::component::ComponentRevision =
             request.component_revision.try_into().map_err(|e| {
@@ -111,6 +137,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         env.sort();
         let metadata = AgentMetadataForGuests {
             agent_id: metadata_dto.agent_id,
+            agent_type_name: metadata_dto.agent_type_name,
+            fingerprint: metadata_dto.fingerprint,
             args: vec![],
             env,
             config: TypedAgentConfigEntry::to_flat_map(&metadata_dto.config),
@@ -132,6 +160,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Worker::enqueue_oplog_processor(
             self,
             &owned_agent_id,
+            component_id,
             component_revision,
             AgentInvocation::ProcessOplogEntries {
                 idempotency_key,

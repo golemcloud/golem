@@ -2,6 +2,30 @@
 let resolved_reconnect : ReconnectPolicy = __RECONNECT__
 
 ///|
+/// The keyed recovery agent on the test peer. The environment ID is cached up
+/// front because the peer serves only the session endpoint.
+fn recovery_agent() -> ResolvedAgent {
+  let configuration : Configuration = {
+    server: Custom("http://127.0.0.1:__PORT__", "test"),
+    app_name: "app",
+    env_name: "env",
+    reconnect: resolved_reconnect,
+  }
+  environment_ids[(
+    configuration.server.url(),
+    configuration.server.token(),
+    configuration.app_name,
+    configuration.env_name,
+  )] = "env-id"
+  ResolvedAgent::new(
+    configuration,
+    "RecoveryAgent",
+    parameters=Some(TupleValue([])),
+    target=None,
+  )
+}
+
+///|
 async fn run_recovery() -> Unit {
   let codec = public_value_codec(
     "{\"root\":{\"kind\":\"tuple\",\"value\":{\"elements\":[]}}}",
@@ -12,19 +36,7 @@ async fn run_recovery() -> Unit {
   let output_codec = public_value_codec(
     "{\"root\":{\"kind\":\"stream\",\"value\":{\"inner\":{\"kind\":\"u8\",\"value\":{}}}}}",
   )
-  let resolved : ResolvedAgent = {
-    configuration: {
-      server: Custom("http://127.0.0.1:__PORT__", "test"),
-      app_name: "app",
-      env_name: "env",
-      reconnect: resolved_reconnect,
-    },
-    agent_type_name: "RecoveryAgent",
-    parameters: TupleValue([]),
-    phantom_id: None,
-    config: [],
-    agent_id: None,
-  }
+  let resolved = recovery_agent()
   let result = invoke_streaming_agent(
     StreamEncodeContext::new(),
     codec,
@@ -34,10 +46,7 @@ async fn run_recovery() -> Unit {
     "run",
     TupleValue([StringValue("x".repeat(__START_TEXT_BYTES__))]),
   )
-  assert_eq(result.agent_id, {
-    component_id: "component",
-    agent_id: "accepted-agent",
-  })
+  assert_eq(result.agent_id.to_string(), "00000000-0000-8000-8000-000000000abc")
   assert_eq(result.idempotency_key, "00000000-0000-0000-0000-000000000123")
   let session = stream_sessions["output"]
   let stream = open_output_stream(
@@ -183,19 +192,7 @@ async fn run_input_terminal_recovery(failed : Bool) -> Unit {
   let input_codec = public_value_codec(
     "{\"root\":{\"kind\":\"stream\",\"value\":{\"inner\":{\"kind\":\"string\",\"value\":{}}}}}",
   )
-  let resolved : ResolvedAgent = {
-    configuration: {
-      server: Custom("http://127.0.0.1:__PORT__", "test"),
-      app_name: "app",
-      env_name: "env",
-      reconnect: resolved_reconnect,
-    },
-    agent_type_name: "RecoveryAgent",
-    parameters: TupleValue([]),
-    phantom_id: None,
-    config: [],
-    agent_id: None,
-  }
+  let resolved = recovery_agent()
   ignore(
     invoke_streaming_agent(
       context, unit_codec, input_codec, unit_codec, resolved, "run", reference,
@@ -559,19 +556,7 @@ async fn run_prefetch_owner_recovery(before_attachment : Bool) -> Unit {
   let input_codec = public_value_codec(
     "{\"root\":{\"kind\":\"stream\",\"value\":{\"inner\":{\"kind\":\"u8\",\"value\":{}}}}}",
   )
-  let resolved : ResolvedAgent = {
-    configuration: {
-      server: Custom("http://127.0.0.1:__PORT__", "test"),
-      app_name: "app",
-      env_name: "env",
-      reconnect: resolved_reconnect,
-    },
-    agent_type_name: "RecoveryAgent",
-    parameters: TupleValue([]),
-    phantom_id: None,
-    config: [],
-    agent_id: None,
-  }
+  let resolved = recovery_agent()
   ignore(
     invoke_streaming_agent(
       context, unit, input_codec, unit, resolved, "run", reference,

@@ -566,8 +566,8 @@ export const infallibleTransaction = <A, E, R>(
             }
             const decision = yield* Effect.try({
               try: () => {
-                const id = host.getSelfMetadata().agentId
-                const noun = `urn:worker:${uuidToString(id.componentId.uuid)}/${id.agentId}`
+                const self = host.getSelfMetadata()
+                const noun = `urn:agent:${uuidToString(self.environmentId.uuid)}/${uuidToString(self.agentId.uuid)}`
                 const kind = exit.cause.reasons.some(Cause.isInterruptReason)
                   ? "interrupted"
                   : exit.cause.reasons.some(Cause.isDieReason)

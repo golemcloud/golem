@@ -8,9 +8,9 @@ Golem exposes four composable client approaches:
 - **Fully dynamic clients** use `DynamicAgentClient` or `DynamicToolClient` to transport caller-packed schema-native values without retaining a schema authority.
 
 The last three are reflection approaches. They compose: discovery can select
-schemas, canonical tool paths, and durable identities for later fully dynamic
-calls, while a durable `ParsedAgentId` can be rebound through a method-only,
-discovered, or fully dynamic client.
+schemas, canonical tool paths, and agent IDs for later fully dynamic
+calls, while the `@schema.AgentId` of an existing durable agent can be rebound
+through a method-only, discovered, or fully dynamic client.
 
 ## Discover and inspect schemas
 
@@ -24,10 +24,10 @@ guard counter_type.find_method("add") is Some(add) else {
 }
 ```
 
-Agent type names and reflection identity strings are environment-scoped.
-`AgentType` exposes the currently implementing component as deployment
-metadata, plus its lifecycle mode, constructor `SchemaRef`, and method schemas.
-Reflection clients do not pin that component ID. `SchemaRef::pack_json`
+Agent type names and agent IDs are environment-scoped.
+`AgentType` exposes its lifecycle mode, constructor `SchemaRef`, and method
+schemas. `get_agent_type_by_agent_id(agent_id)` returns the deployed agent type
+that the type tag of an agent ID names. `SchemaRef::pack_json`
 converts canonical JSON into a schema-native value; `unpack_json` performs the
 awaited conversion back. `to_json_schema()` projects the canonical JSON carrier
 for introspection, including named definitions and representable restrictions;
@@ -50,7 +50,7 @@ discover again when a newer deployment must be observed.
 JSON convenience automatically packs and unpacks:
 
 ```moonbit
-let counter = counter_type.get_json(Json::object({
+let counter = counter_type.upsert_json(Json::object({
   "name": Json::string("main"),
 }))
 let result = counter.invoke_json(
@@ -65,16 +65,24 @@ Reflected schema-native constructor and method inputs are checked locally
 against the selected schema graph before opening RPC. Declared native outputs
 are checked after invocation.
 
-Reflected factories accept optional creation-time overrides. Use
-`get_json_with_config(input, entries)` with `ReflectedConfigJsonValue` entries,
-or `get_value_with_config(input, entries)` with `ReflectedConfigValue` entries;
-known and fresh phantom factories provide corresponding `*_with_config`
-methods. The reflected type rejects unknown paths, secret fields, and values
-that do not match their declarations before creating transport. Component
-defaults may satisfy required declarations. The host validates the effective
-config when it creates the worker and supplies secrets. An existing durable
-worker retains its initial config; overrides supplied when reaching its ID do
-not reconfigure it.
+`upsert_json` and `upsert_value` connect to the keyed agent of the constructor
+value, which the host creates when it is missing. `get_by_id(agent_id)` connects
+to the existing agent of the type with the ID; an unknown ID, or the ID of an
+agent of another type, raises `Remote(NotFound(_))`. For an ephemeral type, use
+`ephemeral_json` or `ephemeral_value`: every invocation runs on a new one-shot
+instance, whose agent ID the invocation metadata returns. Every client has the
+async `agent_id()`.
+
+The async `create_json(input, keyed?, config?, env?)` and
+`create_value(input, keyed?, config?, env?)` create a new durable agent. Without
+`keyed=true` it has no key and a new agent ID; with it, it is the keyed agent,
+and an existing one raises `Remote(Conflict(_))`. Their `config` entries are
+`ReflectedConfigJsonValue` or `ReflectedConfigValue` creation-time overrides,
+and `env` adds environment variables. The reflected type rejects unknown paths,
+secret fields, and values that do not match their declarations before creating
+transport. Component defaults may satisfy required declarations. The host
+validates the effective config when it creates the agent and supplies secrets.
+`upsert` takes no overrides.
 
 For fully dynamic values, manually construct the positional record and use a dynamic
 client:
@@ -203,9 +211,9 @@ let reusable = @reflection.ToolClientDefinition::unnamed(
 let staging_reports = reusable.client_for("reports-staging")
 ```
 
-Method-only clients contain method codecs only. Bind a durable
-`ParsedAgentId`; its type name, constructor value, and phantom UUID supply the
-target. Do not add a standalone name to this form:
+Method-only clients contain method codecs only. Bind the existing agent with an
+`@schema.AgentId`; the type tag of the ID selects the agent type. Do not add a
+standalone name to this form. An unknown ID raises `Remote(NotFound(_))`:
 
 ```moonbit
 let counter = @reflection.MethodOnlyAgentClient::bind(existing_id)
@@ -226,71 +234,45 @@ struct AddInput { by : UInt }
 #derive.golem_schema
 struct AddOutput { value : UInt }
 
-let counter = @reflection.FullAgentClient::get(
+// The keyed agent; the host creates it when it is missing
+let counter = @reflection.FullAgentClient::upsert(
   "CounterAgent",
   CounterId::{ name: "main" },
 )
-let known = @reflection.FullAgentClient::get_phantom(
-  "CounterAgent",
-  CounterId::{ name: "main" },
-  phantom_id,
-)
-let fresh = @reflection.FullAgentClient::new_phantom(
+// A new agent without a key (async); `keyed=true` creates the keyed agent instead
+let fresh = @reflection.FullAgentClient::create(
   "CounterAgent",
   CounterId::{ name: "main" },
 )
-let reusable_id = @reflection.FullAgentClient::agent_id(
-  "CounterAgent",
-  CounterId::{ name: "main" },
-  phantom_id~,
-)
+let fresh_id : @schema.AgentId = fresh.agent_id()
+// The existing agent with the ID
+let bound = @reflection.FullAgentClient::get_by_id("CounterAgent", fresh_id)
 ```
 
-Bind an existing durable ID to a full client with a constructor type tag.
-This rejects both a different declared agent name and a constructor value that
-cannot be decoded as the declared ID shape before creating the RPC client:
+`get_by_id` never creates the agent; an unknown ID, or the ID of an agent of
+another type, raises `Remote(NotFound(_))`. `create` also takes `config?`, a
+typed carrier of `@rpc.AgentConfigOverrides`, and `env?`.
 
-```moonbit
-let bound = @reflection.FullAgentClient::bind(
-  "CounterAgent",
-  existing_id,
-  (@schema.type_tag() : @schema.TypeTag[CounterId]),
-)
-```
-
-`bind_with_config` accepts the same typed override carrier after
-checking the full identity. A method-only client uses `bind_with_config`
-with raw `TypedAgentConfigValue` entries; it has no declarations to validate
-those entries against locally.
-
-For ephemeral full clients, use `ephemeral` for a logical fresh target or
-`ephemeral_phantom` for a known phantom UUID. There is no generic full
-ephemeral binding operation:
+For ephemeral full clients, use `ephemeral`: every invocation runs on a new
+one-shot instance, whose agent ID the invocation metadata returns. There is no
+ephemeral `create` or `get_by_id`:
 
 ```moonbit
 let logical = @reflection.FullAgentClient::ephemeral(
   "ResearchRequest",
   ResearchRequestId::{ route: "live" },
 )
-let known = @reflection.FullAgentClient::ephemeral_phantom(
-  "ResearchRequest",
-  ResearchRequestId::{ route: "live" },
-  phantom_id,
-)
 ```
 
 Ordinary RPC `*Override` records implement `@rpc.AgentConfigOverrides`, so the
-same typed carrier accepted by a normal RPC client can be passed to
-`get_with_config`, `get_phantom_with_config`, `new_phantom_with_config`,
-`ephemeral_with_config`, or `ephemeral_phantom_with_config`. Secret config
-fields are deliberately absent from generated override records. Custom callers
-may implement `AgentConfigOverrides` using `@rpc.typed_config_value`.
+same typed carrier accepted by a normal RPC client's `create` can be passed to
+`FullAgentClient::create`. Secret config fields are deliberately absent from
+generated override records. Custom callers may implement
+`AgentConfigOverrides` using `@rpc.typed_config_value`.
 
-The type name is resolved to its current implementing component in the
-environment; callers do not pin component metadata. Normal RPC `#derive.agent`
-clients expose the same durable ordinary/known/fresh phantom and ephemeral
-logical/known phantom construction matrix. Caller codecs remain authoritative
-for payload encoding and decoding.
+Normal RPC `#derive.agent` clients expose the same `upsert`, `create` and
+`get_by_id` construction for durable agents, and only `upsert` for ephemeral
+agents. Caller codecs remain authoritative for payload encoding and decoding.
 
 For trigger or scheduled caller-codec calls, pass an output type tag so the
 SDK can reject live streams in either direction:
@@ -305,22 +287,23 @@ counter.trigger(
 
 ## Identity and lifecycle boundaries
 
-- Use a supplied `ParsedAgentId` with `DynamicAgentClient::from_agent_id`, or
-  inspect it with `ParsedAgentId::parts`.
-- Use `DynamicAgentClient::lookup` for a manually packed durable identity
-  without a phantom UUID.
-- Use `resume_phantom` with a known UUID.
-- Use `new_phantom` to generate a UUID and receive the client, reusable
-  `ParsedAgentId`, and phantom UUID together.
-- Use `DynamicAgentClient::ephemeral` for a raw invocation address built from
-  the type name and manually packed constructor values.
+- An `@schema.AgentId` is an opaque UUID that Golem issues;
+  `@schema.AgentId::parse` reads its text form. It does not hold the agent type
+  or the constructor parameters, so it cannot be computed offline: ask a client
+  with `agent_id()`, or read it from agent metadata.
+- Use `DynamicAgentClient::get_by_id(type_name, agent_id)` for an existing agent.
+- Use `DynamicAgentClient::upsert(type_name, constructor_value)` for the keyed
+  agent of a manually packed constructor value; for an ephemeral type, every
+  invocation runs on a new one-shot instance.
+- Use the async `DynamicAgentClient::create(type_name, constructor_value, keyed?,
+  config?, env?)` to create a new durable agent.
 
 Fully dynamic address helpers perform no discovery, schema validation, lifecycle-mode
 verification, or local factory checks. The runtime is authoritative.
 
-A bound method-only or fully dynamic client exposes no lifecycle factories.
-The associated dynamic helpers above construct raw addresses rather than
-validated lifecycle factories. Packed streams and owned handles still follow
+A bound method-only client exposes no lifecycle factories. The dynamic
+helpers above construct raw addresses rather than validated lifecycle
+factories. Packed streams and owned handles still follow
 the MoonBit SDK's transfer and cleanup rules.
 
 An ephemeral address has no guaranteed reusable pre-invocation identity. The

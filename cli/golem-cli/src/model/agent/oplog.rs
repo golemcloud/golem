@@ -32,9 +32,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::agent_id_display::SourceLanguage;
 #[cfg(test)]
-use crate::model::agent::{
-    AgentGetView, AgentMetadataView, AgentsMetadataResponseView, RawAgentId,
-};
+use crate::model::agent::{AgentGetView, AgentMetadataView, AgentsMetadataResponseView};
 #[cfg(test)]
 use golem_common::model::AgentStatus;
 #[cfg(test)]
@@ -1593,10 +1591,15 @@ mod tests {
         assert_eq!(json["divergence"]["mismatched"][0], "function-name");
     }
 
-    fn agent_metadata(agent_id: &str) -> AgentMetadataView {
+    fn agent_metadata(agent_key: &str) -> AgentMetadataView {
         AgentMetadataView {
             component_name: ComponentName("shop:cart".to_string()),
-            agent_id: RawAgentId(agent_id.to_string()),
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
+            agent_type: agent_key.split_once('(').map(|(agent_type, _)| {
+                golem_common::model::agent::AgentTypeName(agent_type.to_string())
+            }),
+            agent_key: Some(agent_key.to_string()),
+            fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
             created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
             env: HashMap::new(),
@@ -1975,10 +1978,7 @@ mod tests {
             },
             result: Ok(()),
             audit: SecretRevealAudit {
-                calling_agent: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-                    agent_id: "secret-reveal-auditor".to_string(),
-                },
+                calling_agent: golem_common::model::AgentId::from_parts(7, 1),
                 config_key: Some(vec!["database".to_string(), "password".to_string()]),
                 timestamp: SerializableDateTime {
                     seconds: 1_700_000_005,
@@ -1998,7 +1998,7 @@ mod tests {
             &rendered,
             &[
                 &secret_id.to_string(),
-                "secret-reveal-auditor",
+                &golem_common::model::AgentId::from_parts(7, 1).to_string(),
                 "database",
                 "password",
                 "1700000004",

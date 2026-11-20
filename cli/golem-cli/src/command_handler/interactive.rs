@@ -19,7 +19,6 @@ use crate::error::{
     HintError, InputRequired, NonSuccessfulExit, PromptAnswer, PromptKind, ShowClapHelpTarget,
 };
 use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln, message_for_output};
-use crate::model::agent::RawAgentId;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
 use anyhow::bail;
@@ -275,7 +274,7 @@ impl InteractiveHandler {
 
     pub fn confirm_revert_agent(
         &self,
-        agent_id: &RawAgentId,
+        agent: &str,
         last_oplog_index: Option<u64>,
         number_of_invocations: Option<u64>,
     ) -> anyhow::Result<bool> {
@@ -296,7 +295,7 @@ impl InteractiveHandler {
 
                 This permanently discards recorded agent state after the revert target.
                 External side effects already performed by reverted invocations may not be undone.",
-                agent_id.0.log_color_highlight(),
+                agent.log_color_highlight(),
             },
             None,
         )
@@ -344,21 +343,14 @@ impl InteractiveHandler {
     pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
-        agent_id: &RawAgentId,
-        parsed_agent_id: Option<&golem_common::model::agent::ParsedAgentKey>,
-        source_language: &crate::agent_id_display::SourceLanguage,
+        agent: &str,
         target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
-        let rendered_agent_id = crate::agent_id_display::render_agent_id_or_raw(
-            parsed_agent_id,
-            source_language,
-            &agent_id.0,
-        );
         self.confirm(
             true,
             format!("Agent {}/{} will be updated to the current component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
-                    rendered_agent_id.log_color_highlight(),
+                    agent.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()
             ),
             None,

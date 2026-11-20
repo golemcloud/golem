@@ -88,17 +88,34 @@ async fn test_go_principal() {
     let direct = invoke("LedgerAgent(\"direct\")", "whoami", &[]).await;
     assert!(direct.contains("method=account agent=account"), "{direct}");
 
-    // A relay creates the second ledger over RPC: both roles are the relay.
+    // A relay creates the second ledger over RPC: both principals are the relay, named by its
+    // agent ID.
     let created = invoke("RelayAgent(\"r\")", "ask", &["\"created\""]).await;
+    let relay = ctx
+        .cli([
+            flag::YES,
+            flag::FORMAT,
+            "json",
+            cmd::AGENT,
+            cmd::GET,
+            "RelayAgent(\"r\")",
+        ])
+        .await;
+    assert!(relay.success_or_dump());
+    let relay_id = relay
+        .stdout_json::<serde_json::Value>()
+        .into_iter()
+        .find_map(|document| document["metadata"]["agentId"].as_str().map(str::to_string))
+        .expect("agent get prints the agent ID");
     assert!(
-        created.contains(r#"method=agent:RelayAgent("r") agent=agent:RelayAgent("r")"#),
+        created.contains(&format!("method=agent:{relay_id} agent=agent:{relay_id}")),
         "{created}"
     );
 
     // Calling the CLI's ledger through the relay makes the relay the caller, in both roles.
     let relayed = invoke("RelayAgent(\"r\")", "ask", &["\"direct\""]).await;
     assert!(
-        relayed.contains(r#"method=agent:RelayAgent("r") agent=agent:RelayAgent("r")"#),
+        relayed.contains(&format!("method=agent:{relay_id} agent=golem-user")),
         "{relayed}"
     );
 }

@@ -476,7 +476,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                             resolved_at: entry.resolved_at.into(),
                             result: Err(error),
                             audit: SecretRevealAudit {
-                                calling_agent: self.owned_agent_id.agent_id.clone(),
+                                calling_agent: self.owned_agent_id.agent_id,
                                 config_key: None,
                                 timestamp: Utc::now().into(),
                             },
@@ -501,7 +501,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                                 resolved_at: entry.resolved_at.into(),
                                 result: Err(error),
                                 audit: SecretRevealAudit {
-                                    calling_agent: self.owned_agent_id.agent_id.clone(),
+                                    calling_agent: self.owned_agent_id.agent_id,
                                     config_key: entry.config_key.clone(),
                                     timestamp: Utc::now().into(),
                                 },
@@ -567,7 +567,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                         resolved_at: entry.resolved_at.into(),
                         result,
                         audit: SecretRevealAudit {
-                            calling_agent: self.owned_agent_id.agent_id.clone(),
+                            calling_agent: self.owned_agent_id.agent_id,
                             config_key: entry.config_key.clone(),
                             timestamp: Utc::now().into(),
                         },

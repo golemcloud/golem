@@ -448,6 +448,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     component_id,
                     agent_type_name,
                     canonical_key,
+                    constructor_parameters,
                     agent_id,
                     owner_kind,
                     agent_mode,
@@ -460,7 +461,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     initial_total_linear_memory_size,
                     initial_active_plugins,
                     local_agent_config,
-                    original_phantom_id,
                     instance_id,
                     create_request,
                     never_live,
@@ -469,6 +469,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     component_id: Some(component_id.into()),
                     agent_type_name: agent_type_name.map(|name| name.0),
                     canonical_key,
+                    constructor_parameters,
                     agent_id: Some(agent_id.into()),
                     owner_kind: owner_kind.into(),
                     agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
@@ -491,7 +492,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                         .into_iter()
                         .map(|e| crate::serialization::serialize(&e))
                         .collect::<Result<Vec<_>, _>>()?,
-                    original_phantom_id: original_phantom_id.map(Into::into),
                     instance_id: Some(instance_id.into()),
                     create_request: Some(create_request_to_proto(create_request)),
                     never_live,
@@ -1122,10 +1122,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     .into_iter()
                     .map(|bytes| crate::serialization::deserialize(&bytes))
                     .collect::<Result<Vec<_>, _>>()?;
-                let original_phantom_id: Option<uuid::Uuid> = p.original_phantom_id.map(|u| {
-                    let proto_uuid: golem_schema::proto::golem::common::Uuid = u;
-                    uuid::Uuid::from(proto_uuid)
-                });
                 let instance_id = p.instance_id.ok_or("Missing instance_id")?.into();
 
                 Ok(OplogEntry::Create {
@@ -1134,6 +1130,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         component_id: p.component_id.ok_or("Missing component_id")?.try_into()?,
                         agent_type_name: p.agent_type_name.map(crate::model::agent::AgentTypeName),
                         canonical_key: p.canonical_key,
+                        constructor_parameters: p.constructor_parameters,
                         agent_id,
                         owner_kind,
                         agent_mode,
@@ -1146,7 +1143,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         initial_total_linear_memory_size: p.initial_total_linear_memory_size,
                         initial_active_plugins,
                         local_agent_config,
-                        original_phantom_id,
                         instance_id,
                         create_request: create_request_from_proto(
                             p.create_request.ok_or("Missing create_request")?,
@@ -1771,7 +1767,7 @@ fn create_request_to_proto(
         kind: match kind {
             CreateRequestKind::GetOrCreate => RawCreateRequestKind::GetOrCreate,
             CreateRequestKind::Exclusive => RawCreateRequestKind::Exclusive,
-            CreateRequestKind::Phantom => RawCreateRequestKind::Phantom,
+            CreateRequestKind::Unkeyed => RawCreateRequestKind::Unkeyed,
             CreateRequestKind::Fork => RawCreateRequestKind::Fork,
         } as i32,
         idempotency_key: idempotency_key.map(Into::into),
@@ -1795,7 +1791,7 @@ fn create_request_from_proto(
     {
         RawCreateRequestKind::GetOrCreate => CreateRequestKind::GetOrCreate,
         RawCreateRequestKind::Exclusive => CreateRequestKind::Exclusive,
-        RawCreateRequestKind::Phantom => CreateRequestKind::Phantom,
+        RawCreateRequestKind::Unkeyed => CreateRequestKind::Unkeyed,
         RawCreateRequestKind::Fork => CreateRequestKind::Fork,
     };
     Ok(CreateRequest {

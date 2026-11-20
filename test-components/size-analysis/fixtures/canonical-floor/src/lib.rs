@@ -149,7 +149,17 @@ unsafe fn trap_save() -> i32 {
 }
 unsafe fn post_empty(_: *mut u8) {}
 
-unsafe fn load(payload: *mut u8, len: usize, mime: *mut u8, mime_len: usize) -> i32 {
+// The constructor value tree owns nested allocations of the node variants. The call
+// always fails, so the floor leaves the tree allocated instead of walking it.
+unsafe fn load(
+    payload: *mut u8,
+    len: usize,
+    mime: *mut u8,
+    mime_len: usize,
+    _nodes: *mut u8,
+    _nodes_len: usize,
+    _root: i32,
+) -> i32 {
     #[link(wasm_import_module = "[export]golem:api/load-snapshot@1.5.0")]
     unsafe extern "C" {
         #[link_name = "[task-return]load"]
@@ -175,7 +185,7 @@ export!(agent_discover() -> *mut u8, "golem:agent/guest@2.0.0#discover-agent-typ
 export!(agent_discover_post(p: *mut u8) -> (), "cabi_post_golem:agent/guest@2.0.0#discover-agent-types", post_empty);
 export!(save() -> i32, "[async-lift]golem:api/save-snapshot@1.5.0#save", trap_save);
 export!(save_callback(a: u32, b: u32, c: u32) -> u32, "[callback][async-lift]golem:api/save-snapshot@1.5.0#save", callback);
-export!(load_snapshot(p: *mut u8, n: usize, m: *mut u8, l: usize) -> i32, "[async-lift]golem:api/load-snapshot@1.5.0#load", load);
+export!(load_snapshot(p: *mut u8, n: usize, m: *mut u8, l: usize, v: *mut u8, w: usize, r: i32) -> i32, "[async-lift]golem:api/load-snapshot@1.5.0#load", load);
 export!(load_snapshot_callback(a: u32, b: u32, c: u32) -> u32, "[callback][async-lift]golem:api/load-snapshot@1.5.0#load", callback);
 export!(tool_discover() -> *mut u8, "golem:tool/guest@0.1.0#discover-tools", empty);
 export!(tool_discover_post(p: *mut u8) -> (), "cabi_post_golem:tool/guest@0.1.0#discover-tools", post_empty);

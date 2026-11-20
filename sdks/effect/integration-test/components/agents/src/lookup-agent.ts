@@ -14,7 +14,7 @@
  * void-success method the success arm uses an empty-record stand-in
  * substituted automatically by the SDK.
  *
- * `LookupCaller` drives `Lookup` over `Lookup.client.get(...)`
+ * `LookupCaller` drives `Lookup` over `Lookup.client.upsert(...)`
  * (intra-component RPC) and reports — as plain `Schema.String` — what
  * the typed-E channel actually delivered. The integration harness then
  * just regex-matches the printed string. Each scenario specifically
@@ -104,7 +104,7 @@ export const LookupCaller = defineAgent({
   methods: (realm) => ({
     fetchAndReport: ({ id }) =>
       Effect.gen(function* () {
-        const lookup = yield* Lookup.client.get({ realm })
+        const lookup = yield* Lookup.client.upsert({ realm })
         return yield* lookup.fetch({ id }).pipe(Effect.map((n) => `ok:${n}`))
       }).pipe(
         Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
@@ -112,7 +112,7 @@ export const LookupCaller = defineAgent({
       ),
     cmdAndReport: ({ fail }) =>
       Effect.gen(function* () {
-        const lookup = yield* Lookup.client.get({ realm })
+        const lookup = yield* Lookup.client.upsert({ realm })
         return yield* lookup.cmd({ fail }).pipe(Effect.map(() => "ok:void"))
       }).pipe(
         Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),

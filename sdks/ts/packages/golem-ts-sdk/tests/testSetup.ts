@@ -15,11 +15,15 @@
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentClassName } from '../src/agentClassName';
 
-// The production runtime boundary now targets `golem:agent/host@2.0.0`. Mock its
-// registry and RPC surfaces; tests that inspect an agent ID configure the exact
-// canonical host result they expect.
+// The production runtime boundary targets `golem:agent/host@2.0.0`. Mock its registry
+// and RPC surfaces; tests that inspect an agent ID configure the host result they expect.
+export const MOCK_REMOTE_AGENT_ID = {
+  uuid: { highBits: 0x00000007_0000_8000n, lowBits: 0x8000_0000_0000_0004n },
+};
+
 function makeWasmRpc() {
   return {
+    agentId: vi.fn(async () => MOCK_REMOTE_AGENT_ID),
     invokeAndAwait: vi.fn(),
     invoke: vi.fn(),
     asyncInvokeAndAwait: vi.fn(),
@@ -28,9 +32,11 @@ function makeWasmRpc() {
   };
 }
 
-const MockWasmRpc = Object.assign(vi.fn(makeWasmRpc), {
+const MockWasmRpc = Object.assign(vi.fn(), {
   bindSelf: vi.fn(),
-  create: vi.fn(makeWasmRpc),
+  upsert: vi.fn(makeWasmRpc),
+  getById: vi.fn(makeWasmRpc),
+  create: vi.fn(async () => ({ client: makeWasmRpc(), agentId: MOCK_REMOTE_AGENT_ID })),
 });
 
 vi.mock('golem:agent/durable-streams@2.0.0', () => ({
@@ -46,33 +52,12 @@ vi.mock('golem:agent/host@2.0.0', () => ({
       if (!agentType) {
         throw new Error('Missing FooAgent in registry');
       }
-      return {
-        agentType,
-        implementedBy: { uuid: { lowBits: BigInt(0), highBits: BigInt(0) } },
-      };
+      return { agentType };
     }
     return undefined;
   }),
   getAgentTypeByAgentId: vi.fn(() => undefined),
-  makeAgentId: vi.fn(() => 'MockAgent()'),
-  parseAgentId: vi.fn((agentId: string) => {
-    const match = agentId.match(/^(.*)\((.*)\)(\[(\d+)-(\d+)])?$/);
-    if (!match) {
-      throw new Error(`Invalid agent ID: ${agentId}`);
-    }
-    const [, typeName, inputJson, , hiBits, loBits] = match;
-    // The graph is a structurally-required placeholder; the SDK only reads the
-    // value tree and re-derives types from its own registry.
-    const typed = {
-      graph: { typeNodes: [], defs: [], root: 0 },
-      value: JSON.parse(inputJson),
-    };
-    let phantomId: { highBits: bigint; lowBits: bigint } | undefined = undefined;
-    if (hiBits !== undefined) {
-      phantomId = { highBits: BigInt(hiBits), lowBits: BigInt(loBits) };
-    }
-    return [typeName, typed, phantomId];
-  }),
+  lookupAgentId: vi.fn(() => undefined),
   getConfigValue: vi.fn(() => {
     throw new Error('getConfigValue is not mocked in this test setup');
   }),
@@ -140,10 +125,9 @@ vi.mock('golem:core/types@2.0.0', () => ({
 
 vi.mock('golem:api/host@1.5.0', () => ({
   getSelfMetadata: vi.fn(() => ({
-    agentId: {
-      componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-      agentId: 'TestAgent()',
-    },
+    agentId: { uuid: { highBits: 0x00000007_0000_8000n, lowBits: 0x8000_0000_0000_0001n } },
+    agentTypeName: 'TestAgent',
+    fingerprint: { highBits: 0n, lowBits: 3n },
     args: [],
     env: [],
     config: [],
@@ -174,13 +158,17 @@ vi.mock('golem:secrets/reveal@0.1.0', () => ({
   }),
 }));
 
-(globalThis as any).currentAgentId = 'foo-agent(123)';
+(globalThis as any).currentAgentId = '00000007-0000-8000-8000-000000000001';
+(globalThis as any).currentAgentType = 'FooAgent';
 
 vi.mock('wasi:cli/environment@0.3.0', () => ({
-  getEnvironment: () => {
-    const agentId = (globalThis as any).currentAgentId;
-    return agentId === undefined ? [] : [['GOLEM_AGENT_ID', agentId]];
-  },
+  getEnvironment: () =>
+    (
+      [
+        ['GOLEM_AGENT_ID', (globalThis as any).currentAgentId],
+        ['GOLEM_AGENT_TYPE', (globalThis as any).currentAgentType],
+      ] as [string, string | undefined][]
+    ).filter((entry): entry is [string, string] => entry[1] !== undefined),
 }));
 
 // Load the package barrel so its side-effecting imports register the schema

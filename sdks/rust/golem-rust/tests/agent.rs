@@ -617,7 +617,7 @@ mod tests {
         }
 
         fn get_id(&self) -> String {
-            self.get_agent_id()
+            self.get_agent_id().uuid.to_string()
         }
 
         fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()> {
@@ -818,7 +818,7 @@ mod tests {
         }
 
         async fn get_id(&self) -> String {
-            self.get_agent_id()
+            self.get_agent_id().uuid.to_string()
         }
 
         async fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()> {
@@ -860,17 +860,17 @@ mod tests {
         }
 
         async fn rpc_call(&self, string: String) -> String {
-            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
+            let client = EchoClient::upsert(self.id.clone(), self.llm_config.clone());
             client.echo(string).await
         }
 
         fn rpc_call_trigger(&self, string: String) {
-            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
+            let client = EchoClient::upsert(self.id.clone(), self.llm_config.clone());
             client.trigger_echo(string);
         }
 
         fn rpc_call_schedule(&self, string: String) {
-            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
+            let client = EchoClient::upsert(self.id.clone(), self.llm_config.clone());
             client
                 .schedule_echo(
                     string,
@@ -887,9 +887,9 @@ mod tests {
     trait AgentWithReservedMethods {
         fn new(init: String) -> Self;
 
-        fn get(&self) -> String;
+        fn upsert(&self) -> String;
 
-        async fn remote_get(&mut self) -> String;
+        async fn remote_upsert(&mut self) -> String;
     }
 
     struct AgentWithGetFunctionImpl {}
@@ -900,14 +900,14 @@ mod tests {
             AgentWithGetFunctionImpl {}
         }
 
-        fn get(&self) -> String {
+        fn upsert(&self) -> String {
             "foo".to_string()
         }
 
-        async fn remote_get(&mut self) -> String {
-            let client = AgentWithReservedMethodsClient::get_("increment".to_string());
+        async fn remote_upsert(&mut self) -> String {
+            let client = AgentWithReservedMethodsClient::upsert1("increment".to_string());
 
-            client.get().await
+            client.upsert().await
         }
     }
 
@@ -1321,6 +1321,28 @@ mod tests {
         fn new(#[agent_config] _config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self {
             Self
         }
+    }
+
+    #[allow(dead_code)]
+    async fn generated_clients_create_with_config_and_env(
+        agent_id: &golem_rust::AgentId,
+    ) -> Result<(), golem_rust::GolemReflectError> {
+        let created = ConfigAgentClient::create(golem_rust::CreateOptions {
+            keyed: true,
+            config: ConfigAgentConfigRpc {
+                url: Some("http://localhost".to_string()),
+                port: Some(8080),
+                nested: Default::default(),
+            },
+            env: vec![("MODE".to_string(), "test".to_string())],
+        })
+        .await?;
+        let _: golem_rust::AgentId = created.agent_id().await?;
+        let _ = ConfigAgentClient::create(Default::default()).await?;
+        let _ = ConfigAgentClient::get_by_id(agent_id)?;
+        let _ = ConfigAgentClient::upsert();
+        let _ = ConfigAgentClient::bind_self()?;
+        Ok(())
     }
 
     #[test]
@@ -1776,17 +1798,21 @@ mod tests {
         }
 
         async fn foo(&self, name: String) -> String {
-            AgentWithContextInjection1Client::get(name.clone())
+            AgentWithPrincipalAutoInjection1Client::upsert(name.clone())
                 .foo(name.clone())
                 .await;
 
-            AgentWithContextInjection2Client::get(name.clone(), 1, "required".into())
+            AgentWithPrincipalAutoInjection2Client::upsert(name.clone(), 1, "required".into())
                 .foo(name.clone(), 1, "required".into())
                 .await;
 
-            AgentWithContextInjection3Client::get(name.clone(), 1, Some("not-undefined".into()))
-                .foo_without_context_1("name".into(), 1)
-                .await;
+            AgentWithPrincipalAutoInjection3Client::upsert(
+                name.clone(),
+                1,
+                Some("not-undefined".into()),
+            )
+            .foo_without_principal_1("name".into(), 1)
+            .await;
 
             "finished".into()
         }
@@ -2039,9 +2065,11 @@ mod tests {
     trait CustomSnapshotAgent {
         fn new(data: String) -> Self;
         fn get_data(&self) -> String;
+        fn get_constructor(&self) -> String;
     }
 
     struct CustomSnapshotAgentImpl {
+        constructor: String,
         data: String,
     }
 
@@ -2049,18 +2077,29 @@ mod tests {
     impl CustomSnapshotAgent for CustomSnapshotAgentImpl {
         fn new(data: String) -> Self {
             CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
-            Self { data }
+            Self {
+                constructor: data.clone(),
+                data,
+            }
         }
         fn get_data(&self) -> String {
             self.data.clone()
         }
+        fn get_constructor(&self) -> String {
+            self.constructor.clone()
+        }
 
         async fn load_snapshot(
             bytes: Vec<u8>,
-            _context: golem_rust::agentic::SnapshotRestoreContext,
+            context: golem_rust::agentic::SnapshotRestoreContext,
         ) -> Result<Self, String> {
             CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.fetch_add(1, Ordering::SeqCst);
+            let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+                .map_err(|e| e.to_string())?;
+            let constructor = parameters.take::<String>().map_err(|e| e.to_string())?;
+            parameters.finish().map_err(|e| e.to_string())?;
             Ok(Self {
+                constructor,
                 data: String::from_utf8(bytes).map_err(|e| e.to_string())?,
             })
         }
@@ -2123,7 +2162,7 @@ mod tests {
         let context = SnapshotRestoreContext {
             agent_type: agent_type.0.clone(),
             parameters: wire_input(vec![SchemaValue::String("created".to_string())]),
-            phantom_id: None,
+            agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
         let restored = with_agent_initiator(
             |initiator| async move {
@@ -2176,8 +2215,10 @@ mod tests {
         use golem_rust::agentic::{
             BaseAgent, SnapshotRestoreContext, get_resolved_agent, with_agent_initiator,
         };
+        use golem_rust::schema::wit::direct;
 
         let agent = CustomSnapshotAgentImpl {
+            constructor: "hello".to_string(),
             data: "hello-world".to_string(),
         };
 
@@ -2196,7 +2237,7 @@ mod tests {
         let context = || SnapshotRestoreContext {
             agent_type: agent_type.0.clone(),
             parameters: wire_input(vec![SchemaValue::String("original".to_string())]),
-            phantom_id: None,
+            agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
 
         let failed_context = context();
@@ -2237,6 +2278,23 @@ mod tests {
             panic!("expected bytes");
         };
         assert_eq!(saved, b"new-data");
+
+        #[derive(IntoWire)]
+        struct NoArguments {}
+        let constructor = restored
+            .agent
+            .borrow_mut()
+            .invoke(
+                "get_constructor".to_string(),
+                direct::encode(&NoArguments {}).unwrap(),
+                Principal::Anonymous,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            direct::decode::<String>(constructor.value.unwrap()).unwrap(),
+            "original"
+        );
     }
 
     #[test]
@@ -3423,7 +3481,7 @@ mod tests {
         let context = || SnapshotRestoreContext {
             agent_type: agent_type.0.clone(),
             parameters: wire_input(vec![SchemaValue::U32(0)]),
-            phantom_id: None,
+            agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
         for wrong in [
             SnapshotData::Json(b"null".to_vec()),

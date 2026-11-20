@@ -524,7 +524,7 @@ func refNames(refs []toolCommon.Ref) string {
 // travel for what fill leaves alone.
 func TestToolCallRoundTripsInCanonicalOrder(t *testing.T) {
 	v, r, d := newVcs(t)
-	agent := golem.AgentPrincipal{AgentID: golem.AgentID{AgentID: "caller()"}}
+	agent := golem.AgentPrincipal{AgentID: golem.AgentIDFromUUID(golem.UUID{15: 3})}
 	loopback(t, r, d, golem.Caller{Original: agent, Immediate: agent})
 
 	res, err := v.commit.Call(func(a *CommitArgs) {
@@ -548,7 +548,7 @@ func TestToolCallRoundTripsInCanonicalOrder(t *testing.T) {
 		!slices.Equal(seen.Include, []string{"x"}) || seen.Author.IsSome() {
 		t.Errorf("arguments did not arrive: %+v", seen)
 	}
-	if p, ok := v.seenCaller.Immediate.(golem.AgentPrincipal); !ok || p.AgentID.AgentID != "caller()" {
+	if p, ok := v.seenCaller.Immediate.(golem.AgentPrincipal); !ok || p.AgentID != golem.AgentIDFromUUID(golem.UUID{15: 3}) {
 		t.Errorf("caller %+v", v.seenCaller)
 	}
 }

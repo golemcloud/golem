@@ -12622,18 +12622,6 @@ components:
             - Any
           value:
             $ref: '#/components/schemas/Empty'
-    AgentId:
-      type: object
-      title: AgentId
-      required:
-      - componentId
-      - agentId
-      properties:
-        componentId:
-          type: string
-          format: uuid
-        agentId:
-          type: string
     AgentMethodSchema:
       type: object
       required:
@@ -13857,7 +13845,8 @@ components:
           type: string
           format: uuid
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         invocationKey:
           type: string
           format: uuid

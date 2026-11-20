@@ -51,10 +51,10 @@ let data : Bytes = promise_result.get()
 
 A `PromiseId` contains an `agent_id`, a `fingerprint` and an `oplog_idx`. The `fingerprint` is a `@types.Uuid` that identifies the agent incarnation that created the promise: a deleted and re-created agent keeps its agent ID but gets a new fingerprint, so a promise ID of the deleted incarnation does not reach the new one. Golem displays a promise ID as `<agent-id>/<fingerprint>/<oplog-idx>`.
 
-To let an external system complete the promise via the Golem REST API, the agent must expose the agent ID, the fingerprint and the oplog index. `@schema.Uuid::from_wit(promise_id.fingerprint).to_string()` gives the fingerprint as a UUID string. The external caller then sends:
+To let an external system complete the promise via the Golem REST API, the agent must expose the agent ID, the fingerprint and the oplog index. `@schema.AgentId::from_wit(promise_id.agent_id).to_string()` gives the agent ID, the `{agent_id}` path segment, and `@schema.Uuid::from_wit(promise_id.fingerprint).to_string()` gives the fingerprint, both as UUID strings. The external caller then sends:
 
 ```
-POST /v1/components/{component_id}/workers/{agent_name}/complete
+POST /v1/runtime/envs/{environment_id}/agents/{agent_id}/complete
 Content-Type: application/json
 Authorization: Bearer <token-with-agent-invoke-permission>
 
@@ -69,6 +69,7 @@ All three body fields are required.
 /// The values an external caller needs to complete the approval promise
 #derive.golem_schema
 pub(all) struct ApprovalRequest {
+  agent_id : String
   oplog_idx : UInt64
   fingerprint : String
 }
@@ -88,8 +89,9 @@ fn WorkflowAgent::new(name : String) -> WorkflowAgent {
 pub fn WorkflowAgent::start_approval(self : Self) -> ApprovalRequest {
   let promise_id = @api.create_promise()
   self.pending = Some(promise_id)
-  // Return the oplog index and the fingerprint so the external caller can complete the promise
+  // Return the agent ID, the oplog index and the fingerprint so the external caller can complete the promise
   {
+    agent_id: @schema.AgentId::from_wit(promise_id.agent_id).to_string(),
     oplog_idx: promise_id.oplog_idx,
     fingerprint: @schema.Uuid::from_wit(promise_id.fingerprint).to_string(),
   }

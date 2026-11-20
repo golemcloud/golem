@@ -16,11 +16,11 @@ use crate::Tracing;
 use crate::active_agents::{ComponentLoadGate, GatedComponentService};
 use axum::{Json, Router, routing::post};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CreateWorkerRequest, ProcessOplogEntriesRequest, create_worker_response,
-    process_oplog_entries_response,
+    CreateWorkerRequest, ForkWorkerRequest, ProcessOplogEntriesRequest, create_worker_response,
+    fork_worker_response, process_oplog_entries_response,
 };
-use golem_common::agent_id;
-use golem_common::model::agent::{AgentMode, OwnerKind};
+use golem_common::agent_key;
+use golem_common::model::agent::{AgentKey, AgentMode, OwnerKind};
 use golem_common::model::component::{InstalledPlugin, PluginPriority};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -29,6 +29,7 @@ use golem_common::model::{AgentId, AgentStatus, InvocationId, OwnedAgentId};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::{HasOplogProcessorPlugin, UsesAllDeps};
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_overrides, test_component,
@@ -120,25 +121,27 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let source_id = executor
-        .start_agent(&source.id, agent_id!("Clock", "processor-source"))
-        .await?;
+    let source_key = agent_key!("Clock", "processor-source");
+    let source_id = executor.start_agent(&source.id, source_key.clone()).await?;
     executor
         .wait_for_status(&source_id, AgentStatus::Idle, Duration::from_secs(20))
         .await?;
     let metadata = executor.get_worker_metadata(&source_id).await?;
-    let source_entries = executor.stored_oplog(&source_id).await;
-    let target = AgentId {
-        component_id: processor.id,
-        agent_id: OwnerKind::oplog_processor_instance_name(Uuid::new_v4()),
-    };
+    let source_entries = executor.stored_oplog(&source_id.agent_id).await;
+    let reserved = OwnedAgentId::new(context.default_environment_id, &AgentId::random_reserved());
 
     // Ordinary ingress must not turn a reserved processor identity into an agent.
     let creation = executor
         .client
         .clone()
         .create_worker(CreateWorkerRequest {
-            agent_id: Some(target.clone().into()),
+            constructor: Some(
+                AgentKey::new(source_key.agent_type.clone(), source_key.parameters.clone())?
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            ),
+            unkeyed_id: Some(reserved.agent_id.into()),
+            component_id: Some(source.id.into()),
             component_owner_account_id: Some(context.account_id.into()),
             environment_id: Some(context.default_environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -151,7 +154,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
         creation.result,
         Some(create_worker_response::Result::Failure(_))
     ));
-    assert!(executor.get_worker_metadata(&target).await.is_err());
+    assert!(executor.get_worker_metadata(&reserved).await.is_err());
 
     let (callbacks_tx, mut callbacks) = tokio::sync::mpsc::unbounded_channel();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -174,12 +177,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     });
     // Abort the in-process listener even if an assertion fails.
     let _server_guard = tokio_util::task::AbortOnDropHandle::new(server);
-    let source_owned = OwnedAgentId::new(context.default_environment_id, &source_id);
-    let seed = executor
-        .active_agent(&source_owned)
-        .await
-        .unwrap()
-        .primary();
+    let seed = executor.active_agent(&source_id).await.unwrap().primary();
     let source_metadata = seed.get_latest_worker_metadata().await;
     let dispatcher = seed.all().oplog_processor_plugin();
     drop(seed);
@@ -197,8 +195,10 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
         .resolve_target(context.default_environment_id, &plugin)
         .await?;
     assert!(dispatcher.is_local(&target).await?);
+    let target_owned = OwnedAgentId::new(context.default_environment_id, &target);
     let mut request = ProcessOplogEntriesRequest {
-        agent_id: Some(target.clone().into()),
+        agent_id: Some(target.into()),
+        component_id: Some(processor.id.into()),
         environment_id: Some(context.default_environment_id.into()),
         component_revision: processor.revision.into(),
         idempotency_key: Some(InvocationId(Uuid::new_v4()).into()),
@@ -226,7 +226,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
         rejected.result,
         Some(process_oplog_entries_response::Result::Failure(_))
     ));
-    assert!(executor.get_worker_metadata(&target).await.is_err());
+    assert!(executor.get_worker_metadata(&target_owned).await.is_err());
 
     // The service acknowledges durable acceptance before loading the component.
     gate.arm();
@@ -236,7 +236,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
             &plugin,
             &target,
             OplogIndex::INITIAL,
-            vec![executor.stored_oplog(&source_id).await.remove(0)],
+            vec![executor.stored_oplog(&source_id.agent_id).await.remove(0)],
         )
         .await?;
     drop(dispatcher);
@@ -269,43 +269,58 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     let callback = tokio::time::timeout(Duration::from_secs(30), callbacks.recv())
         .await?
         .unwrap();
-    assert_eq!(callback["source_worker_id"], source_id.agent_id);
-    assert_eq!(callback["component_id"], source_id.component_id.to_string());
+    assert_eq!(callback["source_worker_id"], source_id.agent_id.to_string());
+    assert_eq!(callback["agent_type"], "Clock");
     assert_eq!(callback["account_id"], context.account_id.to_string());
     assert_eq!(callback["first_entry_index"], 1);
     assert_eq!(callback["entry_count"], 1);
     executor
-        .wait_for_status(&target, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&target_owned, AgentStatus::Idle, Duration::from_secs(20))
         .await?;
     let completed = executor.stored_oplog(&target).await;
     assert_execution_count(&completed, &key, 1);
 
-    let fork_target = AgentId {
-        component_id: processor.id,
-        agent_id: agent_id!("Clock", "processor-fork-target").to_string(),
-    };
     let cut = OplogIndex::from_u64(completed.len() as u64);
     assert!(cut >= OplogIndex::INITIAL.next());
-    let error = executor
-        .fork_worker(&target, &fork_target.agent_id, cut)
-        .await
-        .expect_err("oplog-processor owners must not be forked");
+    // A processor ID carries the reserved tag, so no component-agent ID of any type can be
+    // its fork target.
+    let fork_target = OwnedAgentId::new(
+        context.default_environment_id,
+        &AgentId::random(source_id.agent_id.type_id().unwrap()),
+    );
+    let fork = executor
+        .client
+        .clone()
+        .fork_worker(ForkWorkerRequest {
+            source_agent_id: Some(target.into()),
+            target_agent_id: Some(fork_target.agent_id.into()),
+            oplog_index_cutoff: cut.into(),
+            environment_id: Some(context.default_environment_id.into()),
+            component_owner_account_id: Some(context.account_id.into()),
+            component_owner_account_email: "test@golem".to_string(),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
+            expected_fingerprint: None,
+        })
+        .await?
+        .into_inner();
+    let Some(fork_worker_response::Result::Failure(error)) = fork.result else {
+        panic!("oplog-processor owners must not be forked: {fork:?}")
+    };
     let error = format!("{error:?}");
     assert!(error.contains("InvalidRequest"), "{error}");
     assert!(
-        error.contains("Only component-agent owners can be forked"),
+        error.contains("Source and target must have the same agent type"),
         "{error}"
     );
     assert!(executor.get_worker_metadata(&fork_target).await.is_err());
-    assert!(executor.stored_oplog(&fork_target).await.is_empty());
     assert!(
-        !executor
-            .worker_is_cached(&OwnedAgentId::new(
-                context.default_environment_id,
-                &fork_target
-            ))
+        executor
+            .stored_oplog(&fork_target.agent_id)
             .await
+            .is_empty()
     );
+    assert!(!executor.worker_is_cached(&fork_target).await);
 
     deliver(&executor, request.clone()).await?;
     let mut changed = request.clone();
@@ -330,7 +345,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
         .unwrap();
     assert_eq!(next, callback);
     executor
-        .wait_for_status(&target, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&target_owned, AgentStatus::Idle, Duration::from_secs(20))
         .await?;
     let completed = executor.stored_oplog(&target).await;
     assert_execution_count(&completed, &key, 1);
@@ -359,7 +374,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
         .unwrap();
     assert_eq!(after_restart_callback, callback);
     executor
-        .wait_for_status(&target, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&target_owned, AgentStatus::Idle, Duration::from_secs(20))
         .await?;
     let reconstructed = executor.stored_oplog(&target).await;
     assert_execution_count(&reconstructed, &key, 1);
@@ -419,27 +434,19 @@ async fn processor_committed_admission_survives_owner_retirement(
     let source = executor
         .start_agent(
             &source_component.id,
-            agent_id!("Clock", "provisional-admission-source"),
+            agent_key!("Clock", "provisional-admission-source"),
         )
         .await?;
     executor
         .wait_for_status(&source, AgentStatus::Idle, Duration::from_secs(20))
         .await?;
-    let source_owned = OwnedAgentId::new(context.default_environment_id, &source);
-    let seed = executor
-        .active_agent(&source_owned)
-        .await
-        .unwrap()
-        .primary();
+    let seed = executor.active_agent(&source).await.unwrap().primary();
     let metadata = seed.get_latest_worker_metadata().await;
     seed.stop_if_idle().await;
     // Keep the service graph, but make the processor the only cached owner that the
     // public environment-unload boundary will retire.
-    executor.active_agents().remove(&source_owned).await;
-    let target = AgentId {
-        component_id: processor.id,
-        agent_id: OwnerKind::oplog_processor_instance_name(Uuid::new_v4()),
-    };
+    executor.active_agents().remove(&source).await;
+    let target = AgentId::random_reserved();
     let target_owned = OwnedAgentId::new(context.default_environment_id, &target);
     let key = InvocationId(Uuid::new_v4());
     // Recovery-index publication follows the durable PendingAgentInvocation commit,
@@ -452,6 +459,7 @@ async fn processor_committed_admission_survives_owner_retirement(
             activator
                 .enqueue_oplog_processor(
                     &target_owned,
+                    processor.id,
                     processor.revision,
                     AgentInvocation::ProcessOplogEntries {
                         idempotency_key: key,

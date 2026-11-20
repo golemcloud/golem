@@ -110,8 +110,9 @@ Split a portion of your quota to pass to a child agent:
 ```rust
 let mut token = QuotaToken::new("api-calls", 1000);
 let child_token: QuotaToken = token.split(200);
-// For a SummarizerAgent whose constructor identity is name: String:
-let child_agent = SummarizerAgentClient::new_phantom("summary".to_string());
+// For a SummarizerAgent whose constructor parameter is name: String,
+// create a new agent without a key:
+let child_agent = SummarizerAgentClient::create("summary".to_string(), Default::default()).await?;
 let summary = child_agent.summarize(text, child_token).await;
 ```
 

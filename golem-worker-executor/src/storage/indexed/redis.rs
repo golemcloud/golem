@@ -155,14 +155,14 @@ return 1
     fn epoch_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:oplog-epoch:{key}")
             }
             IndexedStorageNamespace::CompressedOpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
                 level,
             } => {
@@ -170,7 +170,7 @@ return 1
                 format!("worker:{mode}:c{level}-oplog-epoch:{key}")
             }
             IndexedStorageNamespace::BlobOplogManifest {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
                 level,
             } => {
@@ -180,7 +180,7 @@ return 1
             // A stage is hidden and has one writer, so it never asserts an epoch; the key exists
             // only to keep this total.
             IndexedStorageNamespace::StagedOpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
@@ -262,21 +262,21 @@ return 1
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:oplog:{key}")
             }
             IndexedStorageNamespace::StagedOpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:staged-oplog:{key}")
             }
             IndexedStorageNamespace::CompressedOpLog {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
                 level,
             } => {
@@ -284,7 +284,7 @@ return 1
                 format!("worker:{mode}:c{level}-oplog:{key}")
             }
             IndexedStorageNamespace::BlobOplogManifest {
-                agent_id: _,
+                owned_agent_id: _,
                 agent_mode,
                 level,
             } => {
@@ -916,9 +916,8 @@ impl IndexedStorage for RedisIndexedStorage {
 mod tests {
     use super::*;
     use fred::prelude::{Config, Pool, ReconnectPolicy};
-    use golem_common::model::AgentId;
     use golem_common::model::agent::AgentMode;
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::{AgentId, OwnedAgentId};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -1113,10 +1112,10 @@ mod tests {
 
     fn blob_manifest() -> IndexedStorageNamespace {
         IndexedStorageNamespace::BlobOplogManifest {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "lost-reply".to_string(),
-            },
+            owned_agent_id: OwnedAgentId::new(
+                golem_common::model::environment::EnvironmentId(uuid::Uuid::from_u128(1)),
+                &AgentId::from_parts(7, 1),
+            ),
             agent_mode: AgentMode::Durable,
             level: 1,
         }

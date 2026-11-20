@@ -32,7 +32,7 @@ use crate::services::oplog::UnreadableOplog;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::AgentId;
-use golem_common::model::agent::{AgentMode, ParsedAgentKey};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::tool::{ToolActivationSnapshot, ToolName};
@@ -956,11 +956,11 @@ fn unreadable_oplog_in(error: &wasmtime::Error) -> Option<(AgentId, WorkerExecut
         .chain()
         .find_map(|cause| match cause.downcast_ref::<WorkerExecutorError>() {
             Some(error @ WorkerExecutorError::OplogFailed { agent_id, .. }) => {
-                Some((agent_id.clone(), error.clone()))
+                Some((*agent_id, error.clone()))
             }
             _ => cause
                 .downcast_ref::<UnreadableOplog>()
-                .map(|error| (error.agent_id.clone(), error.clone().into())),
+                .map(|error| (error.agent_id, error.clone().into())),
         })
 }
 
@@ -1452,12 +1452,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
-        PreparedCall::LoadSnapshot { snapshot } => {
+        PreparedCall::LoadSnapshot { snapshot, input } => {
             let guest = load_load_snapshot_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, true).await?;
             let result = run_guest_call_settled(store, async |accessor| {
                 attribution
-                    .armed(invocation_key, guest.call_load(accessor, snapshot))
+                    .armed(invocation_key, guest.call_load(accessor, snapshot, input))
                     .await
             })
             .await;
@@ -1479,7 +1479,6 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         PreparedCall::ProcessOplogEntries {
             account_info,
             config,
-            component_id,
             agent_id,
             metadata,
             first_entry_index,
@@ -1495,7 +1494,6 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                             accessor,
                             account_info,
                             config,
-                            component_id,
                             agent_id,
                             metadata,
                             first_entry_index,
@@ -2116,11 +2114,11 @@ enum LoweredCall {
     SaveSnapshot,
     LoadSnapshot {
         snapshot: golem_api_1_x::host::Snapshot,
+        input: SchemaValue,
     },
     ProcessOplogEntries {
         account_info: oplog_processor_exports::AccountInfo,
         config: Vec<(String, String)>,
-        component_id: core_wire::ComponentId,
         agent_id: core_wire::AgentId,
         metadata: golem_api_1_x::host::AgentMetadata,
         first_entry_index: u64,
@@ -2158,11 +2156,11 @@ enum PreparedCall {
     SaveSnapshot,
     LoadSnapshot {
         snapshot: golem_api_1_x::host::Snapshot,
+        input: core_wire::SchemaValueTree,
     },
     ProcessOplogEntries {
         account_info: oplog_processor_exports::AccountInfo,
         config: Vec<(String, String)>,
-        component_id: core_wire::ComponentId,
         agent_id: core_wire::AgentId,
         metadata: golem_api_1_x::host::AgentMetadata,
         first_entry_index: u64,
@@ -2252,11 +2250,18 @@ fn materialize_call<Ctx: WorkerCtx>(
             }
         }
         LoweredCall::SaveSnapshot => PreparedCall::SaveSnapshot,
-        LoweredCall::LoadSnapshot { snapshot } => PreparedCall::LoadSnapshot { snapshot },
+        LoweredCall::LoadSnapshot { snapshot, input } => {
+            let input =
+                encode_value_with(&input, store.data_mut().durable_ctx_mut()).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to encode load-snapshot constructor input: {e}"
+                    ))
+                })?;
+            PreparedCall::LoadSnapshot { snapshot, input }
+        }
         LoweredCall::ProcessOplogEntries {
             account_info,
             config,
-            component_id,
             agent_id,
             metadata,
             first_entry_index,
@@ -2264,7 +2269,6 @@ fn materialize_call<Ctx: WorkerCtx>(
         } => PreparedCall::ProcessOplogEntries {
             account_info,
             config,
-            component_id,
             agent_id,
             metadata,
             first_entry_index,
@@ -2295,8 +2299,9 @@ fn materialize_call<Ctx: WorkerCtx>(
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentKey>,
+    owner_context: &ResolvedOwnerContext,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
+    let agent_id = owner_context.agent();
     match invocation {
         AgentInvocation::AgentInitialization { input, caller, .. } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
@@ -2397,13 +2402,25 @@ pub fn lower_invocation(
             read_only_method: None,
             call: LoweredCall::SaveSnapshot,
         }),
-        AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(LoweredInvocation {
-            display_name: "load-snapshot".to_string(),
-            read_only_method: Some("load-snapshot".to_string()),
-            call: LoweredCall::LoadSnapshot {
-                snapshot: snapshot.into(),
-            },
-        }),
+        AgentInvocation::LoadSnapshot { snapshot, .. } => {
+            let input = match owner_context {
+                ResolvedOwnerContext::Agent(agent) => agent.parameters.value().clone(),
+                ResolvedOwnerContext::OplogProcessor => SchemaValue::Record { fields: Vec::new() },
+                ResolvedOwnerContext::ComponentBaseline => {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "load-snapshot needs an agent with constructor parameters".to_string(),
+                    ));
+                }
+            };
+            Ok(LoweredInvocation {
+                display_name: "load-snapshot".to_string(),
+                read_only_method: Some("load-snapshot".to_string()),
+                call: LoweredCall::LoadSnapshot {
+                    snapshot: snapshot.into(),
+                    input,
+                },
+            })
+        }
         AgentInvocation::ProcessOplogEntries {
             account_id,
             config,
@@ -2412,8 +2429,7 @@ pub fn lower_invocation(
             entries,
             ..
         } => {
-            let component_id: core_wire::ComponentId = metadata.agent_id.component_id.into();
-            let agent_id: core_wire::AgentId = metadata.agent_id.clone().into();
+            let agent_id: core_wire::AgentId = metadata.agent_id.into();
             let account_info = oplog_processor_exports::AccountInfo {
                 account_id: account_id.into(),
             };
@@ -2434,7 +2450,6 @@ pub fn lower_invocation(
                 call: LoweredCall::ProcessOplogEntries {
                     account_info,
                     config,
-                    component_id,
                     agent_id,
                     metadata,
                     first_entry_index: u64::from(first_entry_index),
@@ -2717,10 +2732,7 @@ mod tests {
                 kind: InterruptKind::ShardLost,
             },
             WorkerExecutorError::OplogFenced {
-                agent_id: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId::new(),
-                    agent_id: "fenced".into(),
-                },
+                agent_id: golem_common::model::AgentId::from_parts(7, 1),
                 expected_epoch: 1,
                 actual_epoch: Some(2),
             },
@@ -3009,7 +3021,7 @@ mod tests {
             SchemaGraph::anonymous(SchemaType::record(Vec::new())),
             SchemaValue::Record { fields: Vec::new() },
         );
-        ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
+        ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters)
     }
 
     fn method_invocation(input: SchemaValue) -> AgentInvocation {
@@ -3030,30 +3042,109 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
         };
-        let lowered = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-            .expect("valid input should lower");
+        let lowered = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+        )
+        .expect("valid input should lower");
         assert_eq!(lowered.display_name, METHOD_NAME);
         assert!(lowered.read_only_method.is_none());
     }
 
-    #[test]
-    fn load_snapshot_uses_read_only_strictness() {
-        let lowered = lower_invocation(
-            AgentInvocation::LoadSnapshot {
-                idempotency_key: InvocationId(Uuid::from_u128(2)),
-                snapshot: RawSnapshotData {
-                    data: vec![1, 2, 3],
-                    mime_type: "application/octet-stream".to_string(),
-                },
-                caller: Caller::anonymous(),
+    fn load_snapshot_invocation() -> AgentInvocation {
+        AgentInvocation::LoadSnapshot {
+            idempotency_key: InvocationId(Uuid::from_u128(2)),
+            caller: crate::test_callers::sample_caller(),
+            snapshot: RawSnapshotData {
+                data: vec![1, 2, 3],
+                mime_type: "application/octet-stream".to_string(),
             },
+        }
+    }
+
+    #[test]
+    fn load_snapshot_uses_read_only_strictness_and_passes_the_agents_constructor_input() {
+        let constructor_input = SchemaValue::Record {
+            fields: vec![SchemaValue::String("restored-key".to_string())],
+        };
+        let agent_id = ParsedAgentKey::new(
+            AgentTypeName(AGENT_TYPE.to_string()),
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                constructor_input.clone(),
+            ),
+        );
+        let lowered = lower_invocation(
+            load_snapshot_invocation(),
             &metadata(),
-            Some(&agent_id()),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
         )
         .expect("snapshot load should lower");
 
         assert_eq!(lowered.display_name, "load-snapshot");
         assert_eq!(lowered.read_only_method.as_deref(), Some("load-snapshot"));
+        let LoweredCall::LoadSnapshot { input, .. } = lowered.call else {
+            panic!("snapshot load must lower to a load-snapshot call");
+        };
+        assert_eq!(input, constructor_input);
+    }
+
+    #[test]
+    fn load_snapshot_without_an_agent_key_is_rejected() {
+        let Err(err) = lower_invocation(
+            load_snapshot_invocation(),
+            &metadata(),
+            &ResolvedOwnerContext::ComponentBaseline,
+        ) else {
+            panic!("an owner without constructor parameters cannot load a snapshot");
+        };
+        assert!(
+            err.to_string().contains("load-snapshot needs an agent"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn load_snapshot_for_a_processor_passes_an_empty_constructor_record() {
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports {
+                oplog_processor_interface: Some("golem:api/oplog-processor@1.5.0".into()),
+                save_snapshot_interface: Some("golem:api/save-snapshot@1.5.0".into()),
+                load_snapshot_interface: Some("golem:api/load-snapshot@1.5.0".into()),
+                ..Default::default()
+            },
+            vec![],
+            vec![],
+            Default::default(),
+        );
+        assert!(
+            metadata.has_oplog_processor()
+                && metadata.has_save_snapshot()
+                && metadata.has_load_snapshot()
+        );
+        let lowered = lower_invocation(
+            load_snapshot_invocation(),
+            &metadata,
+            &ResolvedOwnerContext::OplogProcessor,
+        )
+        .expect("a snapshot-capable processor must be able to restore its snapshot");
+        let LoweredCall::LoadSnapshot { input, .. } = lowered.call else {
+            panic!("expected load-snapshot");
+        };
+        assert_eq!(input, SchemaValue::Record { fields: Vec::new() });
+    }
+
+    #[test]
+    fn component_agent_without_recorded_parameters_cannot_resolve_an_owner() {
+        let error = ResolvedOwnerContext::from_authoritative_kind(
+            golem_common::model::agent::OwnerKind::ComponentAgent,
+            &AgentId::from_parts(42, 1),
+            None,
+            &metadata(),
+        )
+        .unwrap_err();
+        assert!(error.contains("no agent type"), "{error}");
     }
 
     #[test]
@@ -3064,7 +3155,7 @@ mod tests {
                 caller: Caller::anonymous(),
             },
             &metadata(),
-            Some(&agent_id()),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id())),
         )
         .expect("snapshot save should lower");
 
@@ -3079,7 +3170,7 @@ mod tests {
         let Err(err) = lower_invocation(
             method_invocation(SchemaValue::U32(1)),
             &metadata,
-            Some(&agent_id),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
         ) else {
             panic!("non-record input must be rejected");
         };
@@ -3097,8 +3188,11 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7)],
         };
-        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-        else {
+        let Err(err) = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+        ) else {
             panic!("arity mismatch must be rejected");
         };
         assert!(
@@ -3115,8 +3209,11 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7), SchemaValue::Bool(true)],
         };
-        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-        else {
+        let Err(err) = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+        ) else {
             panic!("field type mismatch must be rejected");
         };
         assert!(
@@ -3141,7 +3238,7 @@ mod tests {
         let result = lower_invocation(
             method_invocation(SchemaValue::Record { fields: Vec::new() }),
             &metadata,
-            Some(&agent_id()),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id())),
         );
         if let Err(error) = result {
             panic!("unexpected error: {error}");
@@ -3280,7 +3377,12 @@ mod tests {
                 invocation_uses_streams(&invocation, &metadata, Some(&agent_id())),
                 expected
             );
-            let lowered = lower_invocation(invocation, &metadata, Some(&agent_id())).unwrap();
+            let lowered = lower_invocation(
+                invocation,
+                &metadata,
+                &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+            )
+            .unwrap();
             let LoweredCall::Invoke {
                 expected_output, ..
             } = lowered.call
@@ -3444,10 +3546,7 @@ mod tests {
 
     /// The agent whose guest calls the tests settle.
     fn own_agent_id() -> AgentId {
-        AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-            agent_id: "own".to_string(),
-        }
+        AgentId::from_parts(7, 2)
     }
 
     /// A host call whose oplog read failed fails the agent, not the guest call: the read failure,
@@ -3491,12 +3590,9 @@ mod tests {
     /// this agent with the cause of the other.
     #[test]
     fn an_unreadable_oplog_of_another_agent_fails_only_the_call() {
-        let other = AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-            agent_id: "other".to_string(),
-        };
+        let other = AgentId::from_parts(7, 3);
         let unreadable = |error| UnreadableOplog {
-            agent_id: other.clone(),
+            agent_id: other,
             error,
         };
         let corrupt = unreadable(crate::services::oplog::OplogReadError::Gap {

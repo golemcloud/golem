@@ -457,7 +457,7 @@ fn MoonbitStreamingRpcCaller::new(
 pub async fn MoonbitStreamingRpcCaller::run(
   self : Self,
 ) -> MoonbitStreamingRpcReport {
-  MoonbitStreamingRpcCrossTargetClient::scoped(self.target_name, async fn(
+  MoonbitStreamingRpcCrossTargetClient::scoped_upsert(self.target_name, async fn(
     target,
   ) {
     let consumed = target.consume(uint_stream([1U, 2U, 3U]))
@@ -531,7 +531,7 @@ pub async fn MoonbitStreamingRpcCaller::run(
 pub async fn MoonbitStreamingRpcCaller::call_producer_failure(
   self : Self,
 ) -> Array[UInt32] {
-  MoonbitStreamingRpcCrossTargetClient::scoped(self.target_name, async fn(
+  MoonbitStreamingRpcCrossTargetClient::scoped_upsert(self.target_name, async fn(
     target,
   ) {
     collect_uint_stream(target.produce_failure())
@@ -542,7 +542,7 @@ pub async fn MoonbitStreamingRpcCaller::call_producer_failure(
 pub async fn MoonbitStreamingRpcCaller::call_producer_cancellation(
   self : Self,
 ) -> (UInt32, String) {
-  MoonbitStreamingRpcCrossTargetClient::scoped(self.target_name, async fn(
+  MoonbitStreamingRpcCrossTargetClient::scoped_upsert(self.target_name, async fn(
     target,
   ) {
     let stream = target.produce_cancellable()
@@ -556,7 +556,7 @@ pub async fn MoonbitStreamingRpcCaller::call_producer_cancellation(
 pub async fn MoonbitStreamingRpcCaller::call_server_cancellation(
   self : Self,
 ) -> (UInt32, Bool, String) {
-  MoonbitStreamingRpcCrossTargetClient::scoped(self.target_name, async fn(
+  MoonbitStreamingRpcCrossTargetClient::scoped_upsert(self.target_name, async fn(
     target,
   ) {
     let (producer_outcome, producer_completion) = @asyncCore.Future::new()
@@ -577,7 +577,7 @@ pub async fn MoonbitStreamingRpcCaller::call_server_cancellation(
 pub async fn MoonbitStreamingRpcCaller::drop_output_early(
   self : Self,
 ) -> (UInt32, String) {
-  MoonbitStreamingRpcCrossTargetClient::scoped(self.target_name, async fn(
+  MoonbitStreamingRpcCrossTargetClient::scoped_upsert(self.target_name, async fn(
     target,
   ) {
     let stream = target.produce_many()
@@ -589,7 +589,7 @@ pub async fn MoonbitStreamingRpcCaller::drop_output_early(
 
 ///|
 pub async fn MoonbitStreamingRpcCaller::call_scalar(self : Self) -> UInt64 {
-  MoonbitStreamingRpcCrossTargetClient::scoped(self.target_name, async fn(
+  MoonbitStreamingRpcCrossTargetClient::scoped_upsert(self.target_name, async fn(
     target,
   ) {
     target.increment()

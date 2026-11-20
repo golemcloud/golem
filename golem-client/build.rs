@@ -591,10 +591,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::base_model::worker::RevertWorkerTarget",
             ),
             (
-                "AgentCreationRequest",
-                "golem_common::base_model::worker::AgentCreationRequest",
-            ),
-            (
                 "AgentConfigEntryDto",
                 "golem_common::base_model::worker::AgentConfigEntryDto",
             ),
@@ -733,7 +729,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("Tool", "golem_common::schema::tool::Tool"),
         ],
         &[
-            "/v1/components/{component_id}/workers/{agent_name}/connect",
+            "/v1/runtime/envs/{environment_id}/agents/{agent_id}/connect",
             "/v1/login/oauth2/web/callback",
         ],
     )

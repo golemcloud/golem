@@ -129,16 +129,8 @@ impl DurableStreamStore {
             crate::metrics::durable_stream::record_limit_violation("streams_per_session");
             return Err(StreamStoreError::StreamLimit);
         }
-        StreamId::derive(
-            self.environment_id,
-            &self.producer,
-            self.producer_fingerprint,
-            OplogIndex::INITIAL,
-        )
-        .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?;
-
         let environment_id = self.environment_id;
-        let producer = self.producer.clone();
+        let producer = self.producer;
         let producer_fingerprint = self.producer_fingerprint;
         let entity_parent_start_index = request.entity_parent_start_index;
         let request_for_entry = request.clone();
@@ -182,15 +174,12 @@ impl DurableStreamStore {
         )?;
         let registered = index
             .registrations
-            .get(
-                &StreamId::derive(
-                    self.environment_id,
-                    &self.producer,
-                    self.producer_fingerprint,
-                    oplog_index,
-                )
-                .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?,
-            )
+            .get(&StreamId::derive(
+                self.environment_id,
+                &self.producer,
+                self.producer_fingerprint,
+                oplog_index,
+            ))
             .expect("applied registration is missing")
             .clone();
         self.buses
@@ -520,7 +509,7 @@ impl DurableStreamStore {
         }
 
         let environment_id = self.environment_id;
-        let producer = self.producer.clone();
+        let producer = self.producer;
         let producer_fingerprint = self.producer_fingerprint;
         let mut handle_local_ids = index
             .registrations
@@ -543,7 +532,7 @@ impl DurableStreamStore {
                     let record = registration_record(
                         oplog_index,
                         environment_id,
-                        producer.clone(),
+                        producer,
                         producer_fingerprint,
                         request,
                         None,
@@ -894,7 +883,7 @@ pub(super) fn registered_stream(
         registration_record(
             oplog_index,
             environment_id,
-            producer.clone(),
+            producer,
             producer_fingerprint,
             request,
             None,

@@ -28,8 +28,8 @@ mod acceptance_tests;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalOwner {
-    pub component_id: Uuid,
-    pub agent_name: String,
+    pub environment_id: Uuid,
+    pub agent_id: Uuid,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -570,10 +570,11 @@ async fn deliver_callback(
         })?
         .extend([
             "v1",
-            "components",
-            &record.request.owner.component_id.to_string(),
-            "workers",
-            &record.request.owner.agent_name,
+            "runtime",
+            "envs",
+            &record.request.owner.environment_id.to_string(),
+            "agents",
+            &record.request.owner.agent_id.to_string(),
             "complete",
         ]);
     let callback = serde_json::to_vec(&ApprovalCallback {
@@ -631,8 +632,8 @@ mod tests {
         ApprovalRequest {
             request_id: Uuid::from_u128(1),
             owner: ApprovalOwner {
-                component_id: Uuid::from_u128(2),
-                agent_name: "agent/owner".to_string(),
+                environment_id: Uuid::from_u128(2),
+                agent_id: Uuid::from_u128(4),
             },
             promise_oplog_idx: 42,
             promise_fingerprint: Uuid::from_u128(3),
@@ -697,8 +698,8 @@ mod tests {
         let request = request();
         store.register(request.clone()).unwrap();
         let wrong_owner = ApprovalOwner {
-            component_id: Uuid::from_u128(3),
-            agent_name: request.owner.agent_name.clone(),
+            environment_id: Uuid::from_u128(3),
+            agent_id: request.owner.agent_id,
         };
         assert!(matches!(
             store.decide(

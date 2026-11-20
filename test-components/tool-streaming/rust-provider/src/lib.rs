@@ -536,8 +536,8 @@ impl Artifact for MatrixArtifactImpl {
                 .rev()
                 .collect::<Vec<_>>()
                 .join("|"),
-            principal: matrix_principal(context.caller().immediate()),
-            owner_agent_id: metadata.agent_id.agent_id,
+            principal: matrix_principal(&principal),
+            owner_agent_id: metadata.agent_id.uuid.to_string(),
         })
     }
 }
@@ -650,7 +650,8 @@ impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
         let owner_agent_id = golem_rust::get_self_metadata()
             .expect("matrix permission issuer owner metadata")
             .agent_id
-            .agent_id;
+            .uuid
+            .to_string();
         PermissionIssue {
             card,
             issuer: "rust".to_string(),
@@ -705,7 +706,8 @@ fn matrix_resource_evidence(principal: &Principal) -> (String, String, String) {
     let owner_agent_id = golem_rust::get_self_metadata()
         .expect("matrix resource owner metadata")
         .agent_id
-        .agent_id;
+        .uuid
+        .to_string();
     (
         "rust".to_string(),
         matrix_principal(principal),

@@ -36,6 +36,7 @@ use crate::mcp::session::{
 };
 use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::agent_resolution_cache::AgentResolutionCache;
+use crate::service::agent_types::AgentTypeResolver;
 use crate::service::auth::{AuthService, RemoteAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
 use crate::service::limit::{LimitService, RemoteLimitService};
@@ -72,6 +73,7 @@ pub struct Services {
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
     pub registry_service: Arc<dyn RegistryService>,
     pub agent_resolution_cache: Arc<AgentResolutionCache>,
+    pub agent_types: Arc<AgentTypeResolver>,
     pub route_resolver: Arc<RouteResolver>,
     pub identity_provider: Arc<dyn IdentityProvider>,
     pub session_store: Arc<dyn SessionStore>,
@@ -164,12 +166,20 @@ impl Services {
             config.agent_resolution_cache.eviction_period,
         ));
 
+        let agent_types = Arc::new(AgentTypeResolver::new(
+            registry_service_client.clone(),
+            config.agent_resolution_cache.max_capacity,
+            config.agent_resolution_cache.ttl,
+            config.agent_resolution_cache.eviction_period,
+        ));
+
         let worker_service: Arc<WorkerService> = Arc::new(WorkerService::new(
             component_service.clone(),
             auth_service.clone(),
             limit_service.clone(),
             worker_client.clone(),
             agent_resolution_cache.clone(),
+            agent_types.clone(),
             golem_issuer.clone(),
         ));
 
@@ -239,6 +249,7 @@ impl Services {
             mcp_capability_lookup,
             registry_service: registry_service_client,
             agent_resolution_cache,
+            agent_types,
             route_resolver,
             identity_provider,
             session_store,

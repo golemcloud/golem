@@ -17,7 +17,7 @@
 package golem.runtime.guest
 
 import golem.host.{SchemaWireInterop, ToolWireInterop}
-import golem.host.js.{JsSnapshot, LegacySnapshotPrincipal}
+import golem.host.js.{JsAgentId, JsSnapshot, LegacySnapshotPrincipal}
 import golem.host.js.schema.{
   JsAgentError,
   JsMetadataEnvelope,
@@ -31,7 +31,6 @@ import golem.host.js.schema.{
 import golem.host.js.tool.{JsInvocationResult, JsTool}
 import golem.config.ConfigHolder
 import golem.runtime.autowire.AgentRegistry
-import golem.runtime.rpc.AgentIdentity
 import golem.runtime.rpc.host.AgentHostApi
 import golem.runtime.tool.{JsToolInputStream, JsToolOutputStream, ToolRegistry}
 import golem.schema.AgentStreamOwnership
@@ -526,40 +525,33 @@ object Guest {
     }
 
   object LoadSnapshot {
-    def load(snapshot: JsSnapshot): js.Promise[Unit] =
+    def load(snapshot: JsSnapshot, constructorInput: JsSchemaValueTree): js.Promise[Unit] =
       if (!js.isUndefined(resolved)) {
         js.Promise.reject(customError("Agent is already initialized in this container"))
       } else {
-        val ambientAgentId = AgentHostApi.getSelfMetadata().agentId.agentId
-        AgentIdentity.parse(ambientAgentId) match {
-          case Left(error)         => js.Promise.reject(invalidAgentId(error))
-          case Right(agentIdParts) =>
-            AgentRegistry.get(agentIdParts.agentTypeName) match {
-              case None                                        => js.Promise.reject(invalidType(s"Invalid agent '${agentIdParts.agentTypeName}'"))
-              case Some(defn) if defn.snapshotHandlers.isEmpty =>
-                js.Promise.reject(customError(s"Agent '${agentIdParts.agentTypeName}' has no snapshot handlers"))
-              case Some(defn) =>
-                decodeSnapshotPayload(fromUint8Array(snapshot.payload), snapshot.mimeType) match {
-                  case Left(error)       => js.Promise.reject(error)
-                  case Right(agentState) =>
-                    FutureInterop.toPromise(
-                      FutureInterop
-                        .fromPromise(
-                          defn.restoreAny(
-                            agentState,
-                            ambientAgentId,
-                            agentIdParts.payload.value,
-                            agentIdParts.phantom
-                          )
-                        )
-                        .map { restored =>
-                          val newResolved = Resolved(defn, restored.instance)
-                          restored.config.foreach(ConfigHolder.set)
-                          resolved = newResolved
-                          ()
-                        }
+        val self          = AgentHostApi.getSelfMetadata()
+        val agentId       = JsAgentId.toAgentId(self.agentId)
+        val agentTypeName = self.agentTypeName.getOrElse("")
+        AgentRegistry.get(agentTypeName) match {
+          case None                                        => js.Promise.reject(invalidType(s"Invalid agent '$agentTypeName'"))
+          case Some(defn) if defn.snapshotHandlers.isEmpty =>
+            js.Promise.reject(customError(s"Agent '$agentTypeName' has no snapshot handlers"))
+          case Some(defn) =>
+            decodeSnapshotPayload(fromUint8Array(snapshot.payload), snapshot.mimeType) match {
+              case Left(error)       => js.Promise.reject(error)
+              case Right(agentState) =>
+                FutureInterop.toPromise(
+                  FutureInterop
+                    .fromPromise(
+                      defn.restoreAny(agentState, agentId, constructorInput)
                     )
-                }
+                    .map { restored =>
+                      val newResolved = Resolved(defn, restored.instance)
+                      restored.config.foreach(ConfigHolder.set)
+                      resolved = newResolved
+                      ()
+                    }
+                )
             }
         }
       }

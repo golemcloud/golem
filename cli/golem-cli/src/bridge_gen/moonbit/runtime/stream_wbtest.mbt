@@ -21,13 +21,13 @@ test "accepted invocation identity is final and stable across resume" {
   let message = expect_object(
     @json.parse(
       (
-        #|{"version":1,"type":"invocationAccepted","attemptId":"attempt","agentId":{"componentId":"component","agentId":"accepted-agent"},"idempotencyKey":"00000000-0000-0000-0000-000000000123","mappings":[],"sessionToken":"session"}
+        #|{"version":1,"type":"invocationAccepted","attemptId":"attempt","agentId":"0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d","idempotencyKey":"00000000-0000-0000-0000-000000000123","mappings":[],"sessionToken":"session"}
       ),
     ),
   )
   validate_message_fields(message, "invocationAccepted")
   let identity = validate_acceptance_identity(message, "attempt", None)
-  assert_eq(identity.0.agent_id, "accepted-agent")
+  assert_eq(identity.0.to_string(), "0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d")
   assert_eq(identity.1, "00000000-0000-0000-0000-000000000123")
   message["attemptId"] = Json::string("resume")
   assert_eq(
@@ -39,14 +39,10 @@ test "accepted invocation identity is final and stable across resume" {
   )
   for
     owner in [
-      obj([
-        ("componentId", Json::string("other")),
-        ("agentId", Json::string("accepted-agent")),
-      ]),
-      obj([
-        ("componentId", Json::string("component")),
-        ("agentId", Json::string("other")),
-      ]),
+      Json::string("1a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
+      Json::string("0A1B2C3D-4E5F-8A6B-9C7D-0E1F2A3B4C5D"),
+      Json::string("accepted-agent"),
+      obj([("uuid", Json::string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))]),
     ] {
     message["agentId"] = owner
     assert_true(
@@ -55,10 +51,7 @@ test "accepted invocation identity is final and stable across resume" {
       }),
     )
   }
-  message["agentId"] = obj([
-    ("componentId", Json::string("component")),
-    ("agentId", Json::string("accepted-agent")),
-  ])
+  message["agentId"] = Json::string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d")
   message["idempotencyKey"] = Json::string(
     "00000000-0000-0000-0000-000000000124",
   )
@@ -757,4 +750,215 @@ async test "cancelled prefetch owner cannot admit a late diagnostic" {
   assert_eq(context.replay_bytes.val, 0)
   assert_eq(input.failure.bytes, 0)
   assert_eq(input.failure.diagnostic, "")
+}
+
+///|
+/// Serves each request with `answer`, given its path, on a local port while
+/// `body` runs with that port.
+async fn with_lookup_server(
+  answer : async (String, @http.ServerConnection) -> Unit,
+  body : async (Int32) -> Unit,
+) -> Unit {
+  let server = @http.Server(@socket.Addr::parse("127.0.0.1:0"))
+  defer server.close()
+  @async.with_task_group(group => {
+    group.spawn_bg(no_wait=true, () => {
+      server.run_forever(allow_failure=true, (request, _, conn) => {
+        answer(request.path, conn)
+      })
+    })
+    body(server.addr.port())
+  })
+}
+
+///|
+/// The error of a streaming call to a method without parameters, with the
+/// environment ID of `app` and `env` on the server on `port` not cached.
+async fn uncached_streaming_call_error(
+  port : Int32,
+  reconnect : ReconnectPolicy,
+) -> Error {
+  let unit_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"tuple\",\"value\":{\"elements\":[]}}}",
+  )
+  let configuration : Configuration = {
+    server: Custom("http://127.0.0.1:\{port}", "token"),
+    app_name: "app",
+    env_name: "env",
+    reconnect,
+  }
+  ignore(
+    invoke_streaming_agent(
+      StreamEncodeContext::new(),
+      unit_codec,
+      unit_codec,
+      unit_codec,
+      ResolvedAgent::new(
+        configuration,
+        "LookupAgent",
+        parameters=Some(TupleValue([])),
+        target=None,
+      ),
+      "run",
+      TupleValue([]),
+    ),
+  ) catch {
+    error => return error
+  }
+  fail("the streaming call succeeded")
+}
+
+///|
+async test "environment lookup on a closed port is retried until unreachable" {
+  let closed = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let port = closed.addr.port()
+  closed.close()
+  let start = @async.now()
+  let error = uncached_streaming_call_error(port, Within(1000))
+  assert_true(@async.now() - start >= 1000L)
+  guard error is Unreachable(endpoint~, window_ms~, last_cause~) else {
+    fail("expected an unreachable error, got \{error}")
+  }
+  assert_eq(endpoint, "http://127.0.0.1:\{port}")
+  assert_eq(window_ms, 1000)
+  // A refused connection can take longer than what is left of the window.
+  assert_true(
+    last_cause.has_prefix("no complete answer to the environment lookup: ") ||
+    last_cause.has_prefix("no answer to the environment lookup within "),
+    msg=last_cause,
+  )
+}
+
+///|
+async test "environment lookup answered with 503 is retried until unreachable" {
+  with_lookup_server(
+    (_, conn) => {
+      conn.send_response(503, "Service Unavailable")
+      conn.write("unavailable")
+    },
+    port => {
+      let start = @async.now()
+      let error = uncached_streaming_call_error(port, Within(500))
+      assert_true(@async.now() - start >= 500L)
+      guard error is Unreachable(endpoint~, window_ms~, last_cause~) else {
+        fail("expected an unreachable error, got \{error}")
+      }
+      assert_eq(endpoint, "http://127.0.0.1:\{port}")
+      assert_eq(window_ms, 500)
+      assert_eq(
+        last_cause, "Golem resolve-environment request failed with HTTP 503: unavailable",
+      )
+    },
+  )
+}
+
+///|
+/// The status alone makes the lookup temporary: a proxy can answer 503 with a
+/// body that is not UTF-8.
+async test "environment lookup answered with 503 is retried until the server answers it" {
+  let requests : Array[String] = []
+  with_lookup_server(
+    (path, conn) => {
+      requests.push(path)
+      if requests.length() <= 2 {
+        conn.send_response(503, "Service Unavailable")
+        conn.write(b"\xff\xfe\xfd")
+      } else {
+        conn.send_response(200, "OK")
+        if path.has_prefix("/v1/me/token") {
+          conn.write("{\"accountId\":\"me\"}")
+        } else {
+          conn.write("{\"values\":[]}")
+        }
+      }
+    },
+    port => {
+      let error = uncached_streaming_call_error(port, Within(60000))
+      assert_true(error is NotFound(_), msg=error.to_string())
+      assert_eq(requests, [
+        "/v1/me/token", "/v1/me/token", "/v1/me/token", "/v1/me/visible-environments?app_name=app&env_name=env",
+      ])
+    },
+  )
+}
+
+///|
+/// An answer whose body cannot be read is no complete answer, whatever its
+/// status says.
+async test "environment lookup with an unreadable answer is retried until the server answers it" {
+  let server = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  defer server.close()
+  let requests : Array[String] = []
+  @async.with_task_group(group => {
+    group.spawn_bg(no_wait=true, () => {
+      server.run_forever(allow_failure=true, (conn, _) => {
+        guard conn.read_until("\r\n\r\n") is Some(head) else { return }
+        let path = head.split(" ").drop(1).next().unwrap().to_owned()
+        requests.push(path)
+        let answer = if requests.length() == 1 {
+          "HTTP/1.1 503 Service Unavailable\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\nzz\r\nunavailable\r\n0\r\n\r\n"
+        } else if requests.length() == 2 {
+          "HTTP/1.1 503 Service Unavailable\r\nContent-Encoding: gzip\r\nContent-Length: 11\r\nConnection: close\r\n\r\nunavailable"
+        } else {
+          let body = if path.has_prefix("/v1/me/token") {
+            "{\"accountId\":\"me\"}"
+          } else {
+            "{\"values\":[]}"
+          }
+          "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \{body.length()}\r\nConnection: close\r\n\r\n\{body}"
+        }
+        conn.write(answer)
+      })
+    })
+    let error = uncached_streaming_call_error(server.addr.port(), Within(60000))
+    assert_true(error is NotFound(_), msg=error.to_string())
+    assert_eq(requests, [
+      "/v1/me/token", "/v1/me/token", "/v1/me/token", "/v1/me/visible-environments?app_name=app&env_name=env",
+    ])
+  })
+}
+
+///|
+async test "unanswered environment lookup is abandoned within the window" {
+  with_lookup_server((_, _) => @async.sleep(60000), port => {
+    let start = @async.now()
+    let error = uncached_streaming_call_error(port, Within(500))
+    assert_true(@async.now() - start < 30000L)
+    guard error is Unreachable(endpoint~, last_cause~, ..) else {
+      fail("expected an unreachable error, got \{error}")
+    }
+    assert_eq(endpoint, "http://127.0.0.1:\{port}")
+    assert_true(
+      last_cause.has_prefix("no answer to the environment lookup within "),
+    )
+  })
+}
+
+///|
+async test "environment missing from the account fails at once as not found" {
+  let requests : Array[String] = []
+  with_lookup_server(
+    (path, conn) => {
+      requests.push(path)
+      conn.send_response(200, "OK")
+      if path.has_prefix("/v1/me/token") {
+        conn.write("{\"accountId\":\"me\"}")
+      } else {
+        conn.write("{\"values\":[]}")
+      }
+    },
+    port => {
+      let error = uncached_streaming_call_error(port, Within(60000))
+      assert_eq(
+        error.to_string(),
+        NotFound(
+          "Environment 'env' of application 'app' does not exist in the account of the token",
+        ).to_string(),
+      )
+      assert_true(error is NotFound(_))
+      assert_eq(requests, [
+        "/v1/me/token", "/v1/me/visible-environments?app_name=app&env_name=env",
+      ])
+    },
+  )
 }

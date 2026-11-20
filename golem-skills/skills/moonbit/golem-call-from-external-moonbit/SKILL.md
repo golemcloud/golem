@@ -87,15 +87,15 @@ import {
 }
 ```
 
-Then call the agent. All generated constructors and methods are `async` and run on the `moonbitlang/async` event loop:
+Then call the agent. The generated `create`, `get_by_id`, `agent_id` and methods are `async` and run on the `moonbitlang/async` event loop; `upsert` returns the client at once:
 
 ```moonbit
 async fn main {
   // Configure the Golem server connection
   @client.MyAgent::configure(@runtime.Local, "my-app", "local")
 
-  // Get or create an agent instance
-  let agent = @client.MyAgent::get("my-instance")
+  // The keyed agent of the constructor parameters; the first call creates it when it is missing
+  let agent = @client.MyAgent::upsert("my-instance")
 
   // Call methods — fully typed parameters and return values
   let result = agent.do_something("input")
@@ -135,19 +135,22 @@ A streaming call reconnects with a growing delay (50 ms up to 3 s) while the ser
 @client.MyAgent::configure(@runtime.Local, "my-app", "local", reconnect=@runtime.Within(30000))
 ```
 
-## Phantom Agents
+## Creating Agents and Addressing Them by ID
 
-To create multiple agent instances that share the same constructor parameters, use phantom agents. The phantom id is the last argument, after the constructor parameters:
-
-```moonbit
-let agent = @client.MyAgent::get_phantom("my-instance", "shared-phantom-id")
-```
-
-Or generate a random phantom id automatically:
+A durable agent's client also has `create`, `get_by_id` and `agent_id`. `create` creates an agent and returns after its constructor has finished: without `keyed=true` each call makes a new agent with a new agent ID and no key, so you can have many agent instances that share the same constructor parameters; with `keyed=true` it creates the keyed agent, and fails when that agent already exists. `env` adds environment variables to the ones the manifest defines:
 
 ```moonbit
-let agent = @client.MyAgent::new_phantom("my-instance")
+let agent = @client.MyAgent::create("my-instance", env=[("MODE", "test")])
+
+// Save the agent ID (a UUID) to reach the same agent again later
+let id : @runtime.AgentId = agent.agent_id()
+let same = @client.MyAgent::get_by_id(id)
+
+// Read an agent ID back from its text form
+let restored = @client.MyAgent::get_by_id(@runtime.AgentId::parse(id.to_string()))
 ```
+
+`get_by_id` never creates the agent: an unknown ID, or the ID of an agent of another type, fails with not-found. An ephemeral agent's client has only `upsert`; every call runs on a new one-shot instance.
 
 ## Triggering and Scheduling
 
@@ -164,24 +167,17 @@ agent.schedule_do_something("2026-01-01T00:00:00Z", "input")
 
 ## Overriding Configuration
 
-If the agent declares locally overridable configuration, the generated client
-also exposes `*_with_config` constructor variants. Each declared config value
-becomes an optional parameter (named `config_<path>`) appended after the
-constructor parameters; pass `Some(..)` to override a value or `None` to leave it
-at its default:
+If the agent declares locally overridable configuration, the generated
+`create` takes one optional labelled argument per declared config value, named
+`config_<path>`; omit it to leave the value at its default. `upsert` takes no
+overrides: an agent it creates gets its provisioned configuration.
 
 ```moonbit
-// Durable: override config when getting/creating the agent
-let agent = @client.MyAgent::get_with_config("my-instance", Some("override-value"))
-
-// With an explicit phantom id (the phantom id comes before the config overrides)
-let p = @client.MyAgent::get_phantom_with_config("my-instance", "phantom-id", Some("v"))
-
-// With a fresh random phantom id
-let np = @client.MyAgent::new_phantom_with_config("my-instance", None)
+// Create the keyed agent with an overridden config value `greeting`
+let agent = @client.MyAgent::create("my-instance", keyed=true, config_greeting="override-value")
 ```
 
-These variants are only generated when the agent declares overridable
+These labelled arguments are only generated when the agent declares overridable
 (non-secret) configuration.
 
 ## Multimodal Methods

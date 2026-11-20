@@ -86,6 +86,7 @@ pub mod status;
 pub mod status_checkpointer;
 pub mod status_flusher;
 pub(crate) mod suspension;
+pub mod target;
 pub(crate) mod tasks;
 
 #[cfg(test)]
@@ -192,7 +193,7 @@ use golem_common::model::RetryConfig;
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::model::agent::{
     AgentMode, InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, ResolvedOwnerContext,
-    Snapshotting, SnapshottingConfig, ephemeral_invocation_phantom_id,
+    Snapshotting, SnapshottingConfig,
 };
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::CanonicalFilePath;
@@ -254,51 +255,127 @@ pub(crate) enum WorkerCreationMode {
     OplogProcessor,
 }
 
+/// The owner that a request creates when the owner it names does not exist yet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewOwner {
+    /// The component that implements the agent type, or that a fresh external-tool owner or
+    /// oplog processor runs.
+    pub component_id: ComponentId,
+    /// The type and constructor parameters of a component agent. Other owners have none.
+    pub constructor: Option<ParsedAgentKey>,
+    /// Whether the agent owns the key of `constructor`. Its ID then derives from the key.
+    pub keyed: bool,
+}
+
+impl NewOwner {
+    pub fn keyed(component_id: ComponentId, key: ParsedAgentKey) -> Self {
+        Self {
+            component_id,
+            constructor: Some(key),
+            keyed: true,
+        }
+    }
+
+    pub fn unkeyed(component_id: ComponentId, constructor: ParsedAgentKey) -> Self {
+        Self {
+            component_id,
+            constructor: Some(constructor),
+            keyed: false,
+        }
+    }
+
+    /// An owner without an agent type: an external-tool owner or an oplog processor.
+    pub fn untyped(component_id: ComponentId) -> Self {
+        Self {
+            component_id,
+            constructor: None,
+            keyed: false,
+        }
+    }
+
+    /// The key that the owner owns. Only a keyed durable agent owns its key.
+    pub(crate) fn canonical_key(&self, agent_mode: AgentMode) -> Option<String> {
+        self.constructor
+            .as_ref()
+            .filter(|_| self.keyed && agent_mode == AgentMode::Durable)
+            .map(ToString::to_string)
+    }
+
+    pub(crate) fn ensure_owns_key(
+        &self,
+        agent_id: AgentId,
+        agent_mode: AgentMode,
+        stored_key: Option<&str>,
+    ) -> Result<(), WorkerExecutorError> {
+        if !self.keyed {
+            return Ok(());
+        }
+        let requested_key = self.canonical_key(agent_mode);
+        if stored_key == requested_key.as_deref() {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::AgentKeyCollision {
+                agent_id,
+                requested_key: requested_key.unwrap_or_default(),
+            })
+        }
+    }
+}
+
 /// What a caller asks for when it may create an owner. Only the request that actually writes the
 /// Create entry is recorded; a caller that finds the owner existing records nothing.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CreateIntent {
+    /// Reaches only an owner that exists. A missing owner is not found.
+    Existing,
     /// The owner is created as a side effect of an invocation. The invocation's idempotency key
-    /// identifies the create only for an owner whose phantom ID is derived from that key.
+    /// is recorded only for an owner without a key, whose ID the caller may derive from it.
     Invocation {
+        owner: NewOwner,
         idempotency_key: Option<IdempotencyKey>,
     },
     /// An explicit create request.
     Create {
+        owner: NewOwner,
         exclusive: bool,
         idempotency_key: Option<IdempotencyKey>,
     },
 }
 
 impl CreateIntent {
-    pub const UNKEYED_INVOCATION: Self = Self::Invocation {
-        idempotency_key: None,
-    };
+    pub fn owner(&self) -> Option<&NewOwner> {
+        match self {
+            Self::Existing => None,
+            Self::Invocation { owner, .. } | Self::Create { owner, .. } => Some(owner),
+        }
+    }
 
     fn request(
         &self,
-        phantom_id: Option<Uuid>,
         caller: Caller,
         invocation_context: &InvocationContextStack,
     ) -> CreateRequest {
         let (kind, idempotency_key) = match self {
-            Self::Invocation { idempotency_key } if phantom_id.is_some() => (
-                CreateRequestKind::Phantom,
-                idempotency_key
-                    .clone()
-                    .filter(|key| phantom_id == Some(ephemeral_invocation_phantom_id(key))),
-            ),
+            Self::Existing => (CreateRequestKind::GetOrCreate, None),
+            Self::Invocation {
+                owner,
+                idempotency_key,
+            } if !owner.keyed => (CreateRequestKind::Unkeyed, idempotency_key.clone()),
             Self::Invocation { .. } => (CreateRequestKind::GetOrCreate, None),
             Self::Create {
-                idempotency_key, ..
-            } if phantom_id.is_some() => (CreateRequestKind::Phantom, idempotency_key.clone()),
+                owner,
+                idempotency_key,
+                ..
+            } if !owner.keyed => (CreateRequestKind::Unkeyed, idempotency_key.clone()),
             Self::Create {
                 exclusive: true,
                 idempotency_key,
+                ..
             } => (CreateRequestKind::Exclusive, idempotency_key.clone()),
             Self::Create {
                 exclusive: false,
                 idempotency_key,
+                ..
             } => (CreateRequestKind::GetOrCreate, idempotency_key.clone()),
         };
         CreateRequest::new(kind, idempotency_key, caller, invocation_context)

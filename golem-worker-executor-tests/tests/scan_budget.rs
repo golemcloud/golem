@@ -23,13 +23,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::worker_filter::StringFilterComparator;
 use golem_common::config::RedisConfig;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{
     OplogCursor as CommonOplogCursor, OplogIndex, PublicOplogEntry, PublicOplogPageEntry,
 };
-use golem_common::model::{AgentFilter, AgentId, PromiseId, ScanCursor};
+use golem_common::model::{AgentFilter, AgentId, OwnedAgentId, PromiseId, ScanCursor};
 use golem_common::schema::{FromSchema, SchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::{IndexedStorageConfig, ScanBudget};
 use golem_worker_executor_test_utils::{
@@ -80,12 +81,12 @@ async fn oplog_with_a_rare_match_at_the_end(
     host_api_tests: &PrecompiledComponent,
     name: &str,
     calls: u64,
-) -> anyhow::Result<(ComponentDto, AgentId, u64)> {
+) -> anyhow::Result<(ComponentDto, OwnedAgentId, u64)> {
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", name.to_string());
+    let agent_id = agent_key!("GolemHostApi", name.to_string());
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -97,6 +98,7 @@ async fn oplog_with_a_rare_match_at_the_end(
     // The promise is complete before the agent waits for it, so the agent does not suspend.
     executor
         .complete_promise(
+            &worker_id.environment_id,
             &PromiseId::from_value(&promise_id).expect("create_promise must return a promise id"),
             vec![1],
         )
@@ -127,15 +129,15 @@ async fn oplog_with_a_rare_match_at_the_end(
 
 async fn search_page(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     cursor: Option<OplogCursor>,
 ) -> anyhow::Result<SearchOplogSuccessResponse> {
     let response = executor
         .client
         .clone()
         .search_oplog(SearchOplogRequest {
-            agent_id: Some(worker_id.clone().into()),
-            environment_id: Some(executor.context.default_environment_id.into()),
+            agent_id: Some(worker_id.agent_id.into()),
+            environment_id: Some(worker_id.environment_id.into()),
             cursor,
             count: 100,
             query: RARE_QUERY.to_string(),
@@ -310,7 +312,7 @@ async fn a_guest_search_of_its_own_oplog_ends_with_a_budget_of_one_entry(
         let batches = executor
             .invoke_and_await_agent(
                 &component,
-                &agent_id!("GolemHostApi", NAME.to_string()),
+                &agent_key!("GolemHostApi", NAME.to_string()),
                 "search_own_oplog_to_end",
                 data_value!("message:__missing__", MAX_BATCHES),
             )
@@ -366,7 +368,7 @@ async fn a_reconstructed_guest_search_keeps_the_end_of_its_first_batch(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent = agent_id!("GolemHostApi", "scan-budget-kept-search");
+    let agent = agent_key!("GolemHostApi", "scan-budget-kept-search");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
 
     // The first batch reads one entry and fixes the end of the search.
@@ -456,17 +458,19 @@ async fn agent_list_with_an_unbounded_count_stops_at_the_scan_budget(
             format!("scan-budget-other-{i}")
         };
         let worker_id = executor
-            .start_agent(&component.id, agent_id!("GolemHostApi", name.clone()))
+            .start_agent(&component.id, agent_key!("GolemHostApi", name.clone()))
             .await?;
         if name.contains("match") {
             expected.insert(worker_id.agent_id);
         }
     }
-    let filter = AgentFilter::new_name(StringFilterComparator::Like, "scan-budget-match".into());
+    let filter = AgentFilter::new_key(StringFilterComparator::Like, "scan-budget-match".into());
+    let agent_type = AgentTypeName("GolemHostApi".to_string());
 
     let (first_cursor, first_agents) = executor
         .get_workers_metadata(
-            &component.id,
+            &component.environment_id,
+            &agent_type,
             Some(filter.clone()),
             ScanCursor::default(),
             i64::MAX as u64,
@@ -476,13 +480,14 @@ async fn agent_list_with_an_unbounded_count_stops_at_the_scan_budget(
     let mut cursor = first_cursor.expect("a listing that the scan budget stops returns a cursor");
     let mut found = first_agents
         .into_iter()
-        .map(|agent| agent.agent_id.agent_id)
+        .map(|agent| agent.agent_id)
         .collect::<BTreeSet<_>>();
     let mut calls = 1;
     loop {
         let (next, agents) = executor
             .get_workers_metadata(
-                &component.id,
+                &component.environment_id,
+                &agent_type,
                 Some(filter.clone()),
                 cursor,
                 i64::MAX as u64,
@@ -490,7 +495,7 @@ async fn agent_list_with_an_unbounded_count_stops_at_the_scan_budget(
             )
             .await?;
         calls += 1;
-        found.extend(agents.into_iter().map(|agent| agent.agent_id.agent_id));
+        found.extend(agents.into_iter().map(|agent| agent.agent_id));
         match next {
             Some(next) => cursor = next,
             None => break,
@@ -554,24 +559,26 @@ async fn agent_list_on_redis_stops_after_a_batch_larger_than_the_scan_budget(
         let worker_id = executor
             .start_agent(
                 &component.id,
-                agent_id!("GolemHostApi", format!("redis-scan-budget-{i}")),
+                agent_key!("GolemHostApi", format!("redis-scan-budget-{i}")),
             )
             .await?;
         expected.insert(worker_id.agent_id);
     }
 
-    let mut pages: Vec<Vec<String>> = Vec::new();
+    let mut pages: Vec<Vec<AgentId>> = Vec::new();
     let mut cursor = ScanCursor::default();
     loop {
         let (next, agents) = executor
-            .get_workers_metadata(&component.id, None, cursor, i64::MAX as u64, false)
+            .get_workers_metadata(
+                &component.environment_id,
+                &AgentTypeName("GolemHostApi".to_string()),
+                None,
+                cursor,
+                i64::MAX as u64,
+                false,
+            )
             .await?;
-        pages.push(
-            agents
-                .into_iter()
-                .map(|agent| agent.agent_id.agent_id)
-                .collect(),
-        );
+        pages.push(agents.into_iter().map(|agent| agent.agent_id).collect());
         match next {
             Some(next) => cursor = next,
             None => break,
@@ -600,7 +607,7 @@ async fn agent_list_on_redis_stops_after_a_batch_larger_than_the_scan_budget(
 
 async fn get_oplog(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     cursor: Option<OplogCursor>,
     count: u64,
 ) -> anyhow::Result<get_oplog_response::Result> {
@@ -608,8 +615,8 @@ async fn get_oplog(
         .client
         .clone()
         .get_oplog(GetOplogRequest {
-            agent_id: Some(worker_id.clone().into()),
-            environment_id: Some(executor.context.default_environment_id.into()),
+            agent_id: Some(worker_id.agent_id.into()),
+            environment_id: Some(worker_id.environment_id.into()),
             from_oplog_index: 1,
             cursor,
             count,
@@ -625,7 +632,7 @@ async fn get_oplog(
 
 async fn search_oplog(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     cursor: Option<OplogCursor>,
     query: &str,
     count: u64,
@@ -634,8 +641,8 @@ async fn search_oplog(
         .client
         .clone()
         .search_oplog(SearchOplogRequest {
-            agent_id: Some(worker_id.clone().into()),
-            environment_id: Some(executor.context.default_environment_id.into()),
+            agent_id: Some(worker_id.agent_id.into()),
+            environment_id: Some(worker_id.environment_id.into()),
             cursor,
             count,
             query: query.to_string(),
@@ -650,7 +657,7 @@ async fn search_oplog(
 /// The reason of a stale cursor failure for `worker_id` and the cursor index `next`.
 fn stale_reason(
     failure: &WorkerExecutionError,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     next: u64,
 ) -> Option<stale_cursor::Reason> {
     match &failure.error {
@@ -658,7 +665,7 @@ fn stale_reason(
             agent_id: Some(agent_id),
             next_oplog_index,
             reason,
-        })) if *agent_id == worker_id.clone().into() && *next_oplog_index == next => *reason,
+        })) if *agent_id == worker_id.agent_id.into() && *next_oplog_index == next => *reason,
         _ => None,
     }
 }
@@ -678,7 +685,7 @@ async fn a_cursor_past_the_end_of_the_oplog_is_refused_as_stale(
         .store()
         .await?;
     let worker_id = executor
-        .start_agent(&component.id, agent_id!("GolemHostApi", "stale-cursor"))
+        .start_agent(&component.id, agent_key!("GolemHostApi", "stale-cursor"))
         .await?;
     let last_index = executor.get_oplog_last_index(&worker_id).await?;
     let cursor_at = |next_oplog_index, query| OplogCursor {
@@ -744,7 +751,7 @@ async fn a_cursor_of_another_query_is_refused_as_stale(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "query-cursor");
+    let agent_id = agent_key!("GolemHostApi", "query-cursor");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -825,10 +832,10 @@ async fn a_cursor_of_another_query_is_refused_as_stale(
     // The query check comes before the executor resolves the agent, so it reads no storage. For an
     // agent that was never created, the resolution fails: a cursor of the same query fails with
     // it, and a cursor of another query is refused as stale first.
-    let missing_id = AgentId {
-        component_id: worker_id.component_id,
-        agent_id: r#"GolemHostApi("never-created")"#.to_string(),
-    };
+    let missing_id = crate::agent::keyed_agent_id(
+        worker_id.environment_id,
+        &agent_key!("GolemHostApi", "never-created"),
+    );
     let missing_same_query = search_oplog(
         &executor,
         &missing_id,

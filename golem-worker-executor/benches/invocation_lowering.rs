@@ -141,7 +141,7 @@ fn parsed_agent_id() -> ParsedAgentKey {
             fields: vec![SchemaValue::U64(1)],
         },
     );
-    ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters, None)
+    ParsedAgentKey::new(AgentTypeName(AGENT_TYPE.to_string()), parameters)
 }
 
 fn method_input_value() -> SchemaValue {

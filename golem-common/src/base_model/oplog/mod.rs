@@ -18,7 +18,7 @@ mod oplog_macro;
 pub(crate) mod public_types;
 mod replay_divergence;
 
-use crate::base_model::agent::{AgentMode, OwnerKind};
+use crate::base_model::agent::{AgentMode, AgentTypeName, OwnerKind};
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
@@ -84,6 +84,7 @@ oplog_entry! {
         }
         public {
             agent_id: AgentId,
+            agent_type_name: Option<AgentTypeName>,
             owner_kind: OwnerKind,
             agent_mode: AgentMode,
             component_revision: ComponentRevision,
@@ -95,7 +96,6 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
             local_agent_config: Vec<PublicTypedAgentConfigEntry>,
-            original_phantom_id: Option<Uuid>,
             instance_id: Uuid,
             never_live: bool
         }

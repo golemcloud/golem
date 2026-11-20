@@ -76,14 +76,20 @@ pub fn save() -> Int32 {
 }
 
 ///|
+/// Snapshot `load` takes a snapshot and the constructor schema value tree,
+/// which flatten to seven core parameters.
 pub fn load(
   payload : Int32,
   _payload_length : Int32,
   mime : Int32,
   _mime_length : Int32,
+  value_nodes : Int32,
+  _value_nodes_length : Int32,
+  _root : Int32,
 ) -> Int32 {
   free(payload)
   free(mime)
+  free(value_nodes)
   let error = "Component defines no agents"
   let ptr = string_ptr(error)
   return_load(1, ptr, error.length())

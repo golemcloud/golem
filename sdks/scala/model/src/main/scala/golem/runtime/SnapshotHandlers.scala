@@ -16,18 +16,20 @@
 
 package golem.runtime
 
+import golem.AgentId
 import golem.config.Config
 
-import java.util.UUID
 import scala.concurrent.Future
 
 /**
  * Information available while constructing a fresh instance from a snapshot.
+ *
+ * `identityFields` are the agent's decoded constructor parameters, in
+ * declaration order.
  */
 final case class SnapshotRestoreContext(
   identityFields: Vector[Any],
-  agentId: String,
-  phantomId: Option[UUID],
+  agentId: AgentId,
   private val freshConfig: Option[Config[_]]
 ) {
   def identity[A](index: Int): A = identityFields(index).asInstanceOf[A]

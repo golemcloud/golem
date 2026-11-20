@@ -59,7 +59,7 @@ golem agent update <AGENT_ID> [MODE] [TARGET_REVISION]
 
 | Argument | Description |
 |----------|-------------|
-| `<AGENT_ID>` | The agent identifier (e.g., `Counter("my-counter")`) |
+| `<AGENT_ID>` | The agent address: a key (e.g., `Counter("my-counter")`), `Counter[<agent-id>]`, or a bare agent ID |
 | `[MODE]` | `auto` (default) or `manual` |
 | `[TARGET_REVISION]` | Target component revision number. Defaults to the current deployed revision if omitted. |
 

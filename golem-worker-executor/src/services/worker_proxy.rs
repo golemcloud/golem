@@ -14,6 +14,7 @@
 
 use super::golem_config::WorkerServiceGrpcConfig;
 use super::rpc::DurableStreamRemoteError;
+use crate::worker::target::ResolvedTarget;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use desert_rust::BinaryCodec;
@@ -46,7 +47,7 @@ use golem_common::model::agent::{
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition};
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
@@ -94,11 +95,43 @@ fn invoke_agent_session_once<'a>(
     }
 }
 
+/// The component, constructor and pre-allocated ID with which the worker service creates the
+/// owner of `target`.
+fn launch_target(
+    target: &ResolvedTarget,
+) -> Result<
+    (
+        ComponentId,
+        golem_api_grpc::proto::golem::worker::AgentKey,
+        Option<golem_api_grpc::proto::golem::worker::AgentId>,
+    ),
+    WorkerProxyError,
+> {
+    let missing = || {
+        WorkerProxyError::InternalError(WorkerExecutorError::invalid_request(format!(
+            "agent {} cannot be created without a constructor",
+            target.owned_agent_id
+        )))
+    };
+    let owner = target.new_owner.as_ref().ok_or_else(missing)?;
+    let constructor = target.to_proto().map_err(WorkerProxyError::InternalError)?;
+    let (constructor, unkeyed_id) = match (constructor.target.target, constructor.constructor) {
+        (Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Key(key)), _) => {
+            (key, None)
+        }
+        (Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Id(id)), Some(key)) => {
+            (key, Some(id))
+        }
+        _ => return Err(missing()),
+    };
+    Ok((owner.component_id, constructor, unkeyed_id))
+}
+
 #[async_trait]
 pub trait WorkerProxy: Send + Sync {
     async fn prepare(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: &ResolvedTarget,
         method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
@@ -112,7 +145,8 @@ pub trait WorkerProxy: Send + Sync {
 
     async fn create(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: &ResolvedTarget,
+        exclusive: bool,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -124,7 +158,7 @@ pub trait WorkerProxy: Send + Sync {
 
     async fn invoke_agent(
         &self,
-        agent_id: &AgentId,
+        target: &ResolvedTarget,
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
@@ -199,14 +233,14 @@ pub trait WorkerProxy: Send + Sync {
 
     async fn resume(
         &self,
-        owned_agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         force: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError>;
 
     async fn fork_worker(
         &self,
-        source_agent_id: &AgentId,
+        source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
         caller: Caller,
@@ -215,7 +249,7 @@ pub trait WorkerProxy: Send + Sync {
 
     async fn revert(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
         auth_ctx: &AuthCtx,
@@ -223,6 +257,7 @@ pub trait WorkerProxy: Send + Sync {
 
     async fn complete_promise(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
         auth_ctx: &AuthCtx,
@@ -230,7 +265,7 @@ pub trait WorkerProxy: Send + Sync {
 
     async fn cancel_invocation(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         idempotency_key: InvocationId,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError>;
@@ -256,6 +291,7 @@ pub trait WorkerProxy: Send + Sync {
         &self,
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         idempotency_key: InvocationId,
         account_id: AccountId,
@@ -383,7 +419,7 @@ impl RemoteWorkerProxy {
 impl WorkerProxy for RemoteWorkerProxy {
     async fn prepare(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: &ResolvedTarget,
         method_name: &str,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
@@ -394,7 +430,8 @@ impl WorkerProxy for RemoteWorkerProxy {
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
-        debug!(owned_agent_id=%owned_agent_id, "Preparing remote worker");
+        debug!(owned_agent_id=%target.owned_agent_id, "Preparing remote worker");
+        let (component_id, constructor, unkeyed_id) = launch_target(target)?;
 
         let first_dispatch = AtomicBool::new(true);
         let response: LaunchNewWorkerResponse = self
@@ -407,14 +444,15 @@ impl WorkerProxy for RemoteWorkerProxy {
                     InvocationFreshnessDisposition::MayExist
                 };
                 Box::pin(client.prepare_worker(LaunchNewWorkerRequest {
-                    component_id: Some(owned_agent_id.component_id().into()),
-                    name: owned_agent_id.agent_name(),
+                    component_id: Some(component_id.into()),
+                    constructor: Some(constructor.clone()),
+                    unkeyed_id,
                     env: caller_env.clone(),
                     config: config.clone().into_iter().map(Into::into).collect(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                        parent: Some(caller_agent_id.clone().into()),
+                        parent: Some((*caller_agent_id).into()),
                         env: caller_env,
                         tracing: Some(caller_stack.clone().into()),
                     }),
@@ -448,7 +486,8 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn create(
         &self,
-        owned_agent_id: &OwnedAgentId,
+        target: &ResolvedTarget,
+        exclusive: bool,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -457,21 +496,23 @@ impl WorkerProxy for RemoteWorkerProxy {
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
-        debug!(owned_agent_id=%owned_agent_id, "Creating remote worker");
+        debug!(owned_agent_id=%target.owned_agent_id, "Creating remote worker");
+        let (component_id, constructor, unkeyed_id) = launch_target(target)?;
 
         let response: LaunchNewWorkerResponse = self
             .worker_service_client
             .call("launch_new_worker", move |client| {
                 let caller_env = caller_env.clone();
                 Box::pin(client.launch_new_worker(LaunchNewWorkerRequest {
-                    component_id: Some(owned_agent_id.component_id().into()),
-                    name: owned_agent_id.agent_name(),
+                    component_id: Some(component_id.into()),
+                    constructor: Some(constructor.clone()),
+                    unkeyed_id,
                     env: caller_env.clone(),
                     config: config.clone().into_iter().map(Into::into).collect(),
-                    ignore_already_existing: true,
+                    ignore_already_existing: !exclusive,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                        parent: Some(caller_agent_id.clone().into()),
+                        parent: Some((*caller_agent_id).into()),
                         env: caller_env,
                         tracing: Some(caller_stack.clone().into()),
                     }),
@@ -502,7 +543,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn invoke_agent(
         &self,
-        agent_id: &AgentId,
+        target: &ResolvedTarget,
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
@@ -519,7 +560,9 @@ impl WorkerProxy for RemoteWorkerProxy {
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerProxyError> {
+        let agent_id = &target.owned_agent_id.agent_id;
         debug!("Invoking remote agent method {method_name} on worker {agent_id}");
+        let proto_target = target.to_proto().map_err(WorkerProxyError::InternalError)?;
 
         let proto_mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode = mode.into();
         let proto_mode = proto_mode as i32;
@@ -567,7 +610,9 @@ impl WorkerProxy for RemoteWorkerProxy {
                     }
                 };
                 Box::pin(client.invoke_agent(InvokeAgentRequest {
-                    agent_id: Some(agent_id.clone().into()),
+                    target: Some(proto_target.target.clone()),
+                    constructor: proto_target.constructor.clone(),
+                    component_id: proto_target.component_id,
                     method_name: Some(method_name.clone()),
                     method_parameters: Some(proto_method_parameters.clone()),
                     mode: proto_mode,
@@ -575,7 +620,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     idempotency_key: idempotency_key.clone().map(|k| k.into()),
                     request_key: Some(request_key.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                        parent: Some(caller_agent_id.clone().into()),
+                        parent: Some(caller_agent_id.into()),
                         env: caller_env.clone(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
@@ -686,11 +731,11 @@ impl WorkerProxy for RemoteWorkerProxy {
     ) -> Result<bool, DurableStreamRemoteError<WorkerProxyError>> {
         let key = request.operation.key();
         let (target_agent_id, target_environment_id) = if request.operation.targets_consumer() {
-            (key.consumer.clone(), key.consumer_environment_id)
+            (key.consumer, key.consumer_environment_id)
         } else {
-            (key.producer.clone(), key.producer_environment_id)
+            (key.producer, key.producer_environment_id)
         };
-        let consumer_agent_id = key.consumer.clone();
+        let consumer_agent_id = key.consumer;
         let consumer_environment_id = key.consumer_environment_id;
         let expected_consumer_fingerprint = key.expected_consumer_fingerprint;
         let payload = golem_common::serialization::serialize(&request).map_err(|error| {
@@ -701,11 +746,11 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("control_durable_stream_attachment", move |client| {
                 Box::pin(client.control_durable_stream_attachment(
                     DurableStreamAttachmentControlRequest {
-                        producer_agent_id: Some(target_agent_id.clone().into()),
+                        producer_agent_id: Some(target_agent_id.into()),
                         producer_environment_id: Some(target_environment_id.into()),
                         payload: payload.clone(),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        consumer_agent_id: Some(consumer_agent_id.clone().into()),
+                        consumer_agent_id: Some(consumer_agent_id.into()),
                         consumer_environment_id: Some(consumer_environment_id.into()),
                         expected_consumer_fingerprint: Some(expected_consumer_fingerprint.0.into()),
                     },
@@ -745,17 +790,17 @@ impl WorkerProxy for RemoteWorkerProxy {
             DurableStreamReadRequest::AttachedConsumer(request) => {
                 let key = &request.attachment;
                 (
-                    key.producer.clone(),
+                    key.producer,
                     key.producer_environment_id,
                     Some((
-                        key.consumer.clone(),
+                        key.consumer,
                         key.consumer_environment_id,
                         key.expected_consumer_fingerprint,
                     )),
                 )
             }
             DurableStreamReadRequest::AuthorizedExport(request) => (
-                request.handle.producer.clone(),
+                request.handle.producer,
                 request.handle.producer_environment_id,
                 None,
             ),
@@ -776,11 +821,11 @@ impl WorkerProxy for RemoteWorkerProxy {
             .call("read_durable_stream_segment", move |client| {
                 Box::pin(
                     client.read_durable_stream_segment(DurableStreamSegmentReadRequest {
-                        producer_agent_id: Some(producer_agent_id.clone().into()),
+                        producer_agent_id: Some(producer_agent_id.into()),
                         producer_environment_id: Some(producer_environment_id.into()),
                         payload: payload.clone(),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        consumer_agent_id: consumer_agent_id.clone(),
+                        consumer_agent_id,
                         consumer_environment_id,
                         expected_consumer_fingerprint,
                     }),
@@ -829,7 +874,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("deliver_card_transfer", move |client| {
                 Box::pin(client.deliver_card_transfer(DeliverCardTransferRequest {
-                    target_agent_id: Some(target_agent_id.clone().into()),
+                    target_agent_id: Some((*target_agent_id).into()),
                     environment_id: Some(environment_id.into()),
                     transfer_id: Some(transfer_id.into()),
                     card: card.clone(),
@@ -868,6 +913,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     mode: mode as i32,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     disable_wakeup,
+                    environment_id: Some(owned_agent_id.environment_id.into()),
                 }))
             })
             .await?
@@ -884,7 +930,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn resume(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         force: bool,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
@@ -894,9 +940,10 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("resume_worker", move |client| {
                 Box::pin(client.resume_worker(ResumeWorkerRequest {
-                    agent_id: Some(agent_id.clone().into()),
+                    agent_id: Some(owned_agent_id.agent_id().into()),
                     force: Some(force),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    environment_id: Some(owned_agent_id.environment_id.into()),
                 }))
             })
             .await?
@@ -913,7 +960,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn fork_worker(
         &self,
-        source_agent_id: &AgentId,
+        source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
         caller: Caller,
@@ -925,11 +972,12 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("fork_worker", move |client| {
                 Box::pin(client.fork_worker(ForkWorkerRequest {
-                    source_agent_id: Some(source_agent_id.clone().into()),
-                    target_agent_id: Some(target_agent_id.clone().into()),
+                    source_agent_id: Some(source_agent_id.agent_id().into()),
+                    target_agent_id: Some((*target_agent_id).into()),
                     oplog_index_cutoff: u64::from(*oplog_index_cutoff),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     caller: Some(caller.clone().into()),
+                    environment_id: Some(source_agent_id.environment_id.into()),
                 }))
             })
             .await?
@@ -948,7 +996,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn revert(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
         auth_ctx: &AuthCtx,
@@ -957,7 +1005,8 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("revert_worker", move |client| {
                 Box::pin(client.revert_worker(RevertWorkerRequest {
-                    agent_id: Some(agent_id.clone().into()),
+                    agent_id: Some(owned_agent_id.agent_id().into()),
+                    environment_id: Some(owned_agent_id.environment_id.into()),
                     target: Some(target.clone().into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     resolved_revert: resolved_revert.clone().map(|resolved| {
@@ -982,6 +1031,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn complete_promise(
         &self,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
         data: Vec<u8>,
         auth_ctx: &AuthCtx,
@@ -990,13 +1040,14 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("complete_promise", move |client| {
                 Box::pin(client.complete_promise(CompletePromiseRequest {
-                    agent_id: Some(promise_id.agent_id.clone().into()),
+                    agent_id: Some(promise_id.agent_id.into()),
                     complete_parameters: Some(CompleteParameters {
                         oplog_idx: promise_id.oplog_idx.into(),
                         fingerprint: Some(promise_id.fingerprint.0.into()),
                         data: data.clone(),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    environment_id: Some(environment_id.into()),
                 }))
             })
             .await?
@@ -1013,20 +1064,21 @@ impl WorkerProxy for RemoteWorkerProxy {
 
     async fn cancel_invocation(
         &self,
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         idempotency_key: InvocationId,
         auth_ctx: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
-        debug!(agent_id=%agent_id, idempotency_key=%idempotency_key, "Cancelling invocation on remote agent");
+        debug!(agent_id=%owned_agent_id, idempotency_key=%idempotency_key, "Cancelling invocation on remote agent");
 
         let response: CancelInvocationResponse = self
             .worker_service_client
             .call("cancel_invocation", move |client| {
                 Box::pin(client.cancel_invocation(CancelInvocationRequest {
-                    agent_id: Some(agent_id.clone().into()),
+                    agent_id: Some(owned_agent_id.agent_id().into()),
                     idempotency_key: Some(idempotency_key.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     scheduled: None,
+                    environment_id: Some(owned_agent_id.environment_id.into()),
                 }))
             })
             .await?
@@ -1058,11 +1110,12 @@ impl WorkerProxy for RemoteWorkerProxy {
                     auth_ctx: Some(auth.clone().into()),
                     scheduled: Some(
                         golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
-                            owner_agent_id: Some(owner.clone().into()),
+                            owner_agent_id: Some((*owner).into()),
                             schedule_id: Some(receipt.id.into()),
                             target_environment_id: Some(target.environment_id.into()),
                         },
                     ),
+                    environment_id: Some(target.environment_id.into()),
                 }))
             })
             .await?
@@ -1091,7 +1144,15 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("lookup_invocation_status", move |client| {
                 Box::pin(client.invoke_agent(InvokeAgentRequest {
-                    agent_id: Some(agent_id.clone().into()),
+                    target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
+                        target: Some(
+                            golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
+                                (*agent_id).into(),
+                            ),
+                        ),
+                    }),
+                    constructor: None,
+                    component_id: None,
                     method_name: None,
                     method_parameters: None,
                     mode: proto_mode,
@@ -1132,6 +1193,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         target_agent_id: &AgentId,
         environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         idempotency_key: InvocationId,
         account_id: AccountId,
@@ -1147,7 +1209,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("process_oplog_entries", move |client| {
                 Box::pin(client.process_oplog_entries(ProcessOplogEntriesRequest {
-                    agent_id: Some(target_agent_id.clone().into()),
+                    agent_id: Some((*target_agent_id).into()),
                     environment_id: Some(environment_id.into()),
                     component_revision: component_revision.into(),
                     idempotency_key: Some(idempotency_key.into()),
@@ -1157,6 +1219,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     first_entry_index: first_entry_index.into(),
                     entries: entries.clone(),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    component_id: Some(component_id.into()),
                 }))
             })
             .await?
@@ -1189,7 +1252,6 @@ mod tests {
         invocation_session_result,
     };
     use golem_common::model::InvocationId;
-    use golem_common::model::agent::AgentTarget;
     use golem_common::model::component::ComponentId;
     use golem_schema::proto::golem::schema::{
         SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
@@ -1202,8 +1264,116 @@ mod tests {
     use tonic::{Request, Response, Status};
     use uuid::Uuid;
 
+    /// A keyed target reaches another executor as its key, which derives the same ID there; an
+    /// unkeyed target as its pre-allocated ID with the constructor; an existing-only target is
+    /// never created.
+    #[test]
+    fn launch_target_carries_the_identity_the_receiver_derives() {
+        let environment_id = golem_common::model::environment::EnvironmentId::new();
+        let component_id = ComponentId(Uuid::from_u128(3));
+        let type_id = golem_common::model::type_id::TypeId::try_from(7u32).unwrap();
+        let constructor = golem_common::model::agent::ParsedAgentKey::try_new(
+            golem_common::model::agent::AgentTypeName("counter".to_string()),
+            golem_common::data_value!("first"),
+        )
+        .unwrap();
+
+        let keyed = crate::worker::target::keyed_target(
+            environment_id,
+            type_id,
+            component_id,
+            constructor.clone(),
+        )
+        .unwrap();
+        let (launched_component, key, unkeyed_id) = launch_target(&keyed).unwrap();
+        assert_eq!(launched_component, component_id);
+        assert_eq!(unkeyed_id, None);
+        let key = golem_common::model::agent::AgentKey::try_from(key).unwrap();
+        assert_eq!(
+            AgentId::keyed(environment_id, type_id, &key),
+            keyed.owned_agent_id.agent_id
+        );
+
+        let allocated = AgentId::from_parts(7, 42);
+        let unkeyed = crate::worker::target::unkeyed_target(
+            environment_id,
+            allocated,
+            component_id,
+            constructor.clone(),
+            golem_common::model::agent::AgentMode::Durable,
+        );
+        let (launched_component, key, unkeyed_id) = launch_target(&unkeyed).unwrap();
+        assert_eq!(launched_component, component_id);
+        assert_eq!(
+            unkeyed_id.map(AgentId::try_from).transpose().unwrap(),
+            Some(allocated)
+        );
+        let key = golem_common::model::agent::AgentKey::try_from(key).unwrap();
+        assert_eq!(
+            golem_common::model::agent::ParsedAgentKey::from(key),
+            constructor
+        );
+
+        let existing = ResolvedTarget::existing(OwnedAgentId::new(environment_id, &allocated));
+        assert!(launch_target(&existing).is_err());
+
+        for mode in [
+            golem_common::model::agent::AgentMode::Durable,
+            golem_common::model::agent::AgentMode::Ephemeral,
+        ] {
+            let constructor = golem_common::model::agent::ParsedAgentKey::try_new(
+                golem_common::model::agent::AgentTypeName("counter".into()),
+                golem_common::data_value!("é".repeat(520)),
+            )
+            .unwrap();
+            let target = crate::worker::target::unkeyed_target(
+                environment_id,
+                allocated,
+                component_id,
+                constructor.clone(),
+                mode,
+            );
+            let (_, encoded, unkeyed_id) = launch_target(&target).unwrap();
+            assert_eq!(
+                unkeyed_id.map(AgentId::try_from).transpose().unwrap(),
+                Some(allocated)
+            );
+            assert_eq!(
+                golem_common::model::agent::ParsedAgentKey::try_from(encoded).unwrap(),
+                constructor
+            );
+        }
+    }
+
     fn accepted_invocation_id() -> InvocationId {
         InvocationId(Uuid::from_u128(18))
+    }
+
+    /// A target that creates the keyed agent `owned_agent_id` when it is missing.
+    fn creating_target(owned_agent_id: OwnedAgentId) -> ResolvedTarget {
+        let constructor = golem_common::model::agent::ParsedAgentKey::try_new(
+            golem_common::model::agent::AgentTypeName("counter".to_string()),
+            golem_common::data_value!("constructor"),
+        )
+        .unwrap();
+        ResolvedTarget {
+            owned_agent_id,
+            new_owner: Some(crate::worker::NewOwner::keyed(
+                ComponentId(Uuid::from_u128(5)),
+                constructor,
+            )),
+            agent_mode: Some(golem_common::model::agent::AgentMode::Durable),
+        }
+    }
+
+    /// The agent ID of the ID target of an invocation `Start`.
+    fn start_agent_id(
+        start: &golem_api_grpc::proto::golem::worker::InvocationStart,
+    ) -> Option<golem_api_grpc::proto::golem::worker::AgentId> {
+        match start.target.as_ref()?.target.as_ref()? {
+            golem_api_grpc::proto::golem::worker::agent_target::Target::Id(id) => Some(*id),
+            golem_api_grpc::proto::golem::worker::agent_target::Target::Key(_) => None,
+        }
     }
 
     #[derive(Clone, Default)]
@@ -1373,7 +1543,7 @@ mod tests {
                     let accepted = InvocationResponse {
                         response: Some(invocation_response::Response::Accepted(
                             InvocationAccepted {
-                                agent_id: start.agent_id.clone(),
+                                agent_id: start_agent_id(&start),
                                 idempotency_key: Some(accepted_invocation_id().into()),
                                 component_revision: Some(0),
                                 attachment_id: (!self.joined_origin_observer)
@@ -1399,7 +1569,7 @@ mod tests {
                                         ProtoSchemaValue::try_from(SchemaValue::U64(42)).unwrap(),
                                     )),
                                     component_revision: Some(0),
-                                    agent_id: start.agent_id,
+                                    agent_id: start_agent_id(&start),
                                     idempotency_key: Some(accepted_invocation_id().into()),
                                     agent_fingerprint: start.expected_callee_fingerprint,
                                     ..Default::default()
@@ -1452,7 +1622,7 @@ mod tests {
                     let accepted = InvocationResponse {
                         response: Some(invocation_response::Response::Accepted(
                             InvocationAccepted {
-                                agent_id: resume.agent_id.clone(),
+                                agent_id: resume.agent_id,
                                 idempotency_key: resume.idempotency_key,
                                 component_revision: Some(0),
                                 attachment_id: resume.attachment_id,
@@ -1526,14 +1696,11 @@ mod tests {
 
         let service = FlakyWorkerService::default();
         let requests = service.created_workers.clone();
-        let caller = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "caller".to_string(),
-        };
-        let target = OwnedAgentId::new(EnvironmentId::new(), &caller);
+        let caller = AgentId::from_parts(7, 1);
+        let target = creating_target(OwnedAgentId::new(EnvironmentId::new(), &caller));
         let fingerprint = AgentFingerprint::new();
         let creation_error =
-            WorkerExecutorError::worker_creation_failed(caller.clone(), "constructor failed");
+            WorkerExecutorError::worker_creation_failed(caller, "constructor failed");
         service.create_responses.lock().unwrap().extend([
             Err(Status::unavailable("creation response lost")),
             Ok(LaunchNewWorkerResponse {
@@ -1594,6 +1761,7 @@ mod tests {
             let result = proxy
                 .create(
                     &target,
+                    false,
                     &caller,
                     HashMap::new(),
                     InvocationContextStack::fresh(),
@@ -1662,11 +1830,8 @@ mod tests {
         config.client_config.retries_on_unavailable.min_delay = std::time::Duration::from_millis(1);
         config.client_config.retries_on_unavailable.max_delay = std::time::Duration::from_millis(1);
         let proxy = RemoteWorkerProxy::new(&config);
-        let caller = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "caller".to_string(),
-        };
-        let target = OwnedAgentId::new(EnvironmentId::new(), &caller);
+        let caller = AgentId::from_parts(7, 2);
+        let target = creating_target(OwnedAgentId::new(EnvironmentId::new(), &caller));
         let key = IdempotencyKey::fresh();
         assert_eq!(
             proxy
@@ -1742,7 +1907,7 @@ mod tests {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             stream_id: StreamId(uuid::Uuid::new_v4()),
             producer_environment_id: identity.environment_id,
-            producer: identity.agent_id.clone(),
+            producer: identity.agent_id,
             expected_producer_fingerprint: identity.fingerprint,
             producer_generation: OplogIndex::NONE,
             source_invocation: identity.invocation.clone(),
@@ -1836,10 +2001,7 @@ mod tests {
                     actual.payload,
                     golem_common::serialization::serialize(&request).unwrap()
                 );
-                assert_eq!(
-                    actual.producer_agent_id,
-                    Some(identity.agent_id.clone().into())
-                );
+                assert_eq!(actual.producer_agent_id, Some(identity.agent_id.into()));
                 assert_eq!(
                     actual.consumer_agent_id.is_some(),
                     matches!(request, DurableStreamReadRequest::AttachedConsumer(_))
@@ -1902,7 +2064,7 @@ mod tests {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 stream_id,
                 producer_environment_id: identity.environment_id,
-                producer: identity.agent_id.clone(),
+                producer: identity.agent_id,
                 expected_producer_fingerprint: identity.fingerprint,
                 producer_generation: OplogIndex::NONE,
                 source_invocation: identity.invocation.clone(),
@@ -1997,11 +2159,8 @@ mod tests {
         let recorded = std::mem::take(&mut *requests.lock().unwrap());
         assert_eq!(recorded.len(), 4);
         for actual in &recorded {
-            assert_eq!(
-                actual.producer_agent_id,
-                Some(identity.agent_id.clone().into())
-            );
-            assert_eq!(actual.consumer_agent_id, Some(key.consumer.clone().into()));
+            assert_eq!(actual.producer_agent_id, Some(identity.agent_id.into()));
+            assert_eq!(actual.consumer_agent_id, Some(key.consumer.into()));
             assert_eq!(actual.payload, recorded[0].payload);
         }
         assert!(responses.lock().unwrap().is_empty());
@@ -2092,14 +2251,12 @@ mod tests {
             port,
             ..Default::default()
         });
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "retry-freshness".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 3);
+        let environment_id = EnvironmentId::new();
 
         proxy
             .invoke_agent(
-                &agent_id,
+                &ResolvedTarget::existing(OwnedAgentId::new(environment_id, &agent_id)),
                 "run".to_string(),
                 SchemaValue::Tuple { elements: vec![] },
                 AgentInvocationMode::Await,
@@ -2107,12 +2264,12 @@ mod tests {
                 None,
                 InvocationFreshnessDisposition::KnownFresh,
                 None,
-                agent_id.clone(),
+                agent_id,
                 HashMap::new(),
                 InvocationContextStack::fresh(),
                 vec![],
                 Caller::anonymous(),
-                EnvironmentId::new(),
+                environment_id,
                 &AuthCtx::System,
                 Some(ScopeCard {
                     scope_card_id: CardId::new(),
@@ -2165,20 +2322,13 @@ mod tests {
             ..Default::default()
         }));
         let rpc = RemoteInvocationRpc::new(proxy, Arc::new(ShardServiceDefault::new()));
-        let callee = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "pinned-callee".to_string(),
-        };
-        let caller = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "caller".to_string(),
-        };
+        let callee = AgentId::from_parts(7, 4);
+        let caller = AgentId::from_parts(7, 5);
         let fingerprint = AgentFingerprint(uuid::Uuid::new_v4());
 
         // The first attempt fails as unavailable, so the fire-and-forget call is sent twice.
         rpc.invoke(
-            AgentTarget::Current(callee.clone()),
-            EnvironmentId::new(),
+            ResolvedTarget::existing(OwnedAgentId::new(EnvironmentId::new(), &callee)),
             Some(IdempotencyKey::fresh()),
             InvocationFreshnessDisposition::MayExist,
             Some(fingerprint),
@@ -2195,8 +2345,7 @@ mod tests {
         .await
         .unwrap();
         rpc.invoke_and_await(
-            AgentTarget::Current(callee),
-            EnvironmentId::new(),
+            ResolvedTarget::existing(OwnedAgentId::new(EnvironmentId::new(), &callee)),
             Some(IdempotencyKey::fresh()),
             InvocationFreshnessDisposition::MayExist,
             Some(fingerprint),
@@ -2284,14 +2433,8 @@ mod tests {
             ..Default::default()
         }));
         let rpc = RemoteInvocationRpc::new(proxy, Arc::new(ShardServiceDefault::new()));
-        let callee = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "remote-callee".to_string(),
-        };
-        let caller = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "local-caller".to_string(),
-        };
+        let callee = AgentId::from_parts(7, 6);
+        let caller = AgentId::from_parts(7, 7);
         let caller_environment = EnvironmentId::new();
         let caller_fingerprint = AgentFingerprint::new();
         let input = ProtoSchemaValue {
@@ -2305,12 +2448,12 @@ mod tests {
                 format_version: 1,
                 stream_id: Some(uuid::Uuid::new_v4().into()),
                 producer_environment_id: Some(caller_environment.into()),
-                producer: Some(caller.clone().into()),
+                producer: Some(caller.into()),
                 expected_producer_fingerprint: Some(caller_fingerprint.0.into()),
                 producer_generation: 0,
                 source_invocation: Some(StreamInvocationIdentity {
                     callee_environment_id: Some(caller_environment.into()),
-                    callee: Some(caller.clone().into()),
+                    callee: Some(caller.into()),
                     callee_fingerprint: Some(caller_fingerprint.0.into()),
                     idempotency_key: Some(InvocationId(Uuid::new_v4()).into()),
                 }),
@@ -2324,22 +2467,21 @@ mod tests {
 
         let origin = StreamInvocationIdentity {
             callee_environment_id: Some(caller_environment.into()),
-            callee: Some(caller.clone().into()),
+            callee: Some(caller.into()),
             callee_fingerprint: Some(caller_fingerprint.0.into()),
             idempotency_key: Some(InvocationId(Uuid::from_u128(1)).into()),
         };
         let (accepted_sender, accepted_receiver) = tokio::sync::oneshot::channel();
         let result = rpc
             .invoke_and_await_streaming(
-                AgentTarget::Current(callee.clone()),
-                EnvironmentId::new(),
+                ResolvedTarget::existing(OwnedAgentId::new(EnvironmentId::new(), &callee)),
                 IdempotencyKey::fresh(),
                 "streaming-method".to_string(),
                 input,
                 vec![input_mapping],
                 AgentFingerprint::new(),
                 uuid::Uuid::new_v4(),
-                origin.clone(),
+                origin,
                 accepted_sender,
                 AccountId::new(),
                 &caller,
@@ -2373,7 +2515,7 @@ mod tests {
         };
         assert_eq!(first_start, replayed_start);
         assert_eq!(first_start.origin_invocation, Some(origin));
-        assert_eq!(accepted.agent_id, first_start.agent_id);
+        assert_eq!(accepted.agent_id, start_agent_id(first_start));
         assert_eq!(
             accepted.idempotency_key,
             Some(accepted_invocation_id().into())
@@ -2407,7 +2549,7 @@ mod tests {
             panic!("third request was not ResumeAttach");
         };
         assert_eq!(resume.idempotency_key, accepted.idempotency_key);
-        assert_eq!(resume.agent_id, first_start.agent_id);
+        assert_eq!(resume.agent_id, start_agent_id(first_start));
         assert_eq!(resume.environment_id, first_start.environment_id);
         assert_eq!(
             resume.expected_callee_fingerprint,

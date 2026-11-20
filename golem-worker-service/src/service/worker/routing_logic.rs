@@ -18,7 +18,6 @@ use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::SafeDisplay;
 use golem_common::model::RetryConfig;
-use golem_common::model::agent::AgentTarget;
 use golem_common::model::{AgentId, Pod, ShardId};
 use golem_common::retriable_error::{IsRetriableError, is_grpc_message_size_limit};
 use golem_common::retries::get_delay;
@@ -216,44 +215,6 @@ where
                 })?),
                 Some(*pod),
             ))
-        }
-    }
-}
-
-#[async_trait]
-impl<Out: Send + 'static> CallOnExecutor<Out> for AgentTarget {
-    type ResultOut = Out;
-
-    async fn call_on_worker_executor<F>(
-        &self,
-        description: impl AsRef<str> + Send,
-        context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
-        f: F,
-    ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
-    where
-        F: for<'a> Fn(
-                &'a mut WorkerExecutorClient<OtelGrpcService<Channel>>,
-            )
-                -> Pin<Box<dyn Future<Output = Result<Out, Status>> + 'a + Send>>
-            + Send
-            + Sync
-            + Clone
-            + 'static,
-    {
-        match self {
-            AgentTarget::Current(agent_id) => {
-                agent_id
-                    .call_on_worker_executor(description, context, f)
-                    .await
-            }
-        }
-    }
-
-    fn tracing_kind(&self) -> &'static str {
-        match self {
-            AgentTarget::Current(agent_id) => {
-                <AgentId as CallOnExecutor<Out>>::tracing_kind(agent_id)
-            }
         }
     }
 }

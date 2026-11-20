@@ -113,7 +113,7 @@ pub const SKILL_BINDINGS: &[SkillBinding] = &[
     SkillBinding { cli_path: &["server", "clean"], basename: "golem-local-dev-server", kind: SkillKind::Common, summary: "Clean local Golem dev server state." },
 
     // ── agents (top-level grouping) ──────────────────────────────────────
-    SkillBinding { cli_path: &["agent", "new"],         basename: "golem-create-agent-instance", kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Create a new agent instance." },
+    SkillBinding { cli_path: &["agent", "create"],      basename: "golem-create-agent-instance", kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Create a new agent instance." },
     SkillBinding { cli_path: &["agent", "invoke"],      basename: "golem-invoke-agent",          kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Invoke a method on an agent." },
     SkillBinding { cli_path: &["agent", "invoke"],      basename: "golem-trigger-agent",         kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Trigger a fire-and-forget invocation." },
     SkillBinding { cli_path: &["agent", "invoke"],      basename: "golem-schedule-agent",        kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Schedule a future invocation." },

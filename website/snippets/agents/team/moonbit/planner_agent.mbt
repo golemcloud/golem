@@ -9,10 +9,10 @@ fn PlannerAgent::new(topic : String) -> PlannerAgent {
 
 pub async fn PlannerAgent::plan(self : Self) -> Plan {
   // wait for a typed result from a Rust ResearchAgent:
-  let facts = @research.ResearchAgentClient::get(self.topic) //@
+  let facts = @research.ResearchAgentClient::upsert(self.topic) //@
     .gather() //@
   // send now, without waiting for a result:
-  @slack.SlackAgentClient::get("ops").trigger_post(facts.summary) //@
+  @slack.SlackAgentClient::upsert("ops").trigger_post(facts.summary) //@
   // discover agents, their methods, and available tools:
   let agents = @reflection.get_all_agent_types().map(a => //@
     "\{a.name()}: \{a.methods().map(m => m.name()).join(", ")}") //@

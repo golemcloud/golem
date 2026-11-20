@@ -98,7 +98,7 @@ object AgentClientTypeEndToEndSpec extends ZIOSpecDefault {
         val resolvedAgent =
           AgentClientRuntime.ResolvedAgent(
             agentType.asInstanceOf[golem.runtime.AgentType[AsyncEchoAgent, Any]],
-            RemoteAgentClient("e2e-client-async", "fake-id", rpc)
+            RemoteAgentClient("e2e-client-async", rpc)
           )
 
         val echo = agentType.methods.collectFirst { case m: AgentMethod[AsyncEchoAgent, String, String] @unchecked =>

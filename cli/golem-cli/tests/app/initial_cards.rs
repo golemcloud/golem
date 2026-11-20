@@ -6,17 +6,20 @@ use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(Tracing);
 
-const AGENT_ID_WARNING: &str = "the initialCard does not allow the agent to read GOLEM_AGENT_ID, which the Golem SDKs need, so the agent fails at its first call or at snapshot load. Grant env(?agent) @ ?agent : read : GOLEM_AGENT_ID in the card, and do not exclude it in the upper bound.";
+const IDENTITY_WARNING: &str = "the initialCard does not allow the agent to read GOLEM_AGENT_ID and GOLEM_AGENT_TYPE, which the Golem SDKs need, so the agent fails at its first call, at snapshot load or when it binds a client to itself. Grant env(?agent) @ ?agent : read : GOLEM_AGENT_ID and env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE in the card, and do not exclude them in the upper bound.";
+const AGENT_TYPE_WARNING: &str = "the initialCard does not allow the agent to read GOLEM_AGENT_TYPE, which the Golem SDKs need, so the agent fails at its first call, at snapshot load or when it binds a client to itself. Grant env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE in the card, and do not exclude it in the upper bound.";
+const ANY_IDENTITY_WARNING: &str = "the initialCard does not allow the agent to read";
 const AGENT_ID_NOT_READABLE: &str = "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID";
 const FILESYSTEM_READ: &str = "filesystem(?agent) @ ?agent : read : /**";
 const AGENT_ID_READ: &str = "env(?agent) @ ?agent : read : GOLEM_AGENT_ID";
+const AGENT_TYPE_READ: &str = "env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE";
 
 #[test]
 #[timeout("20 minutes")]
-async fn rust_initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_call(
+async fn rust_initial_card_without_identity_read_warns_on_deploy_and_fails_at_first_call(
     _tracing: &Tracing,
 ) {
-    initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_call(
+    initial_card_without_identity_read_warns_on_deploy_and_fails_at_first_call(
         "rust",
         "Rust syntax",
     )
@@ -25,17 +28,17 @@ async fn rust_initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_fi
 
 #[test]
 #[timeout("20 minutes")]
-async fn typescript_initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_call(
+async fn typescript_initial_card_without_identity_read_warns_on_deploy_and_fails_at_first_call(
     _tracing: &Tracing,
 ) {
-    initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_call(
+    initial_card_without_identity_read_warns_on_deploy_and_fails_at_first_call(
         "ts",
         "TypeScript syntax",
     )
     .await;
 }
 
-async fn initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_call(
+async fn initial_card_without_identity_read_warns_on_deploy_and_fails_at_first_call(
     template: &str,
     result_format: &str,
 ) {
@@ -60,7 +63,7 @@ async fn initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_c
     assert!(
         contains(
             &deploy,
-            &format!("Agent type CounterAgent: {AGENT_ID_WARNING}")
+            &format!("Agent type CounterAgent: {IDENTITY_WARNING}")
         ),
         "deploy did not warn about the card of CounterAgent"
     );
@@ -85,8 +88,11 @@ async fn initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_c
     let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(deploy.success_or_dump());
     assert!(
-        !contains(&deploy, AGENT_ID_WARNING),
-        "deploy warned about a card that has the grant"
+        contains(
+            &deploy,
+            &format!("Agent type CounterAgent: {AGENT_TYPE_WARNING}")
+        ),
+        "deploy did not warn about the missing GOLEM_AGENT_TYPE read"
     );
 
     let shown = "CounterAgent(\"shown\")";
@@ -107,6 +113,18 @@ async fn initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_c
     assert_eq!(results.len(), 1, "expected one invocation result");
     assert_eq!(results[0].result.as_deref(), Some("1"));
     assert_eq!(results[0].result_format.as_deref(), Some(result_format));
+
+    write_counter_agent_card(
+        &ctx,
+        &manifest,
+        &[FILESYSTEM_READ, AGENT_ID_READ, AGENT_TYPE_READ],
+    );
+    let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deploy.success_or_dump());
+    assert!(
+        !contains(&deploy, ANY_IDENTITY_WARNING),
+        "deploy warned about a card that has both grants"
+    );
 }
 
 fn write_counter_agent_card(ctx: &TestContext, manifest: &str, grants: &[&str]) {

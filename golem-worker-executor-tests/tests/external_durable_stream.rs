@@ -29,7 +29,7 @@ use golem_common::model::oplog::payload::{
 };
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
@@ -240,7 +240,7 @@ async fn completed_read_replays_without_http_and_preserves_json_lexemes(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("ExternalDurableStreams", "read-replay");
+    let agent = agent_key!("ExternalDurableStreams", "read-replay");
     executor.start_agent(&component.id, agent.clone()).await?;
     let expected = vec![
         "[7,3]".to_string(),
@@ -293,8 +293,8 @@ async fn external_streams_forward_through_native_agent_rpc_and_replay(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let caller = agent_id!("ExternalDurableStreams", "forward-caller");
-    let source = agent_id!("ExternalDurableStreams", "forward-source");
+    let caller = agent_key!("ExternalDurableStreams", "forward-caller");
+    let source = agent_key!("ExternalDurableStreams", "forward-source");
     executor.start_agent(&component.id, caller.clone()).await?;
     executor.start_agent(&component.id, source.clone()).await?;
     let json = executor
@@ -355,7 +355,7 @@ async fn append_crash_after_remote_commit_reuses_tuple_and_body(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("ExternalDurableStreams", "append-crash");
+    let agent = agent_key!("ExternalDurableStreams", "append-crash");
     let id = executor.start_agent(&component.id, agent.clone()).await?;
     let pending = {
         let executor = executor.clone();
@@ -379,7 +379,7 @@ async fn append_crash_after_remote_commit_reuses_tuple_and_body(
         })
     };
     server.peer.accepted.notified().await;
-    executor.commit_oplog(&id).await?;
+    executor.commit_oplog(&id.agent_id).await?;
     executor.simulated_crash(&id).await?;
     let receipts = pending
         .await??
@@ -488,7 +488,7 @@ async fn ordinary_forks_recover_exact_read_prefix_and_pending_batch(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("ExternalDurableStreams", "fork-reader");
+    let agent = agent_key!("ExternalDurableStreams", "fork-reader");
     let id = executor.start_agent(&component.id, agent.clone()).await?;
     let key = IdempotencyKey::fresh();
     let parameters = data_value!(server.url.clone(), "-1", "catch-up", 10u32, 25u64);
@@ -570,17 +570,12 @@ async fn ordinary_forks_recover_exact_read_prefix_and_pending_batch(
         (buffered_cut, 0),
     ] {
         let before = server.peer.reads.load(Ordering::SeqCst);
-        let fork = golem_common::phantom_agent_id!(
-            "ExternalDurableStreams",
-            uuid::Uuid::new_v4(),
-            "fork-reader"
-        );
-        executor.fork_worker(&id, &fork.to_string(), cut).await?;
+        let fork = executor.fork_worker(&id, cut).await?;
         let result = executor
-            .invoke_and_await_agent_with_key(
+            .invoke_and_await_agent_by_id(
                 &component,
                 &fork,
-                &key,
+                Some(&key),
                 "consume_json_delayed",
                 parameters.clone(),
             )
@@ -615,7 +610,7 @@ async fn concurrent_reads_keep_request_identity_in_both_completion_orders(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let agent = agent_id!("ExternalDurableStreams", "concurrent-reads");
+        let agent = agent_key!("ExternalDurableStreams", "concurrent-reads");
         let id = executor.start_agent(&component.id, agent.clone()).await?;
         let pending = {
             let executor = executor.clone();
@@ -637,7 +632,7 @@ async fn concurrent_reads_keep_request_identity_in_both_completion_orders(
         server.peer.accepted.notified().await;
         // Release the slower response only after the other completion reached the guest.
         loop {
-            executor.commit_oplog(&id).await?;
+            executor.commit_oplog(&id.agent_id).await?;
             let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             let read_starts: Vec<_> = history
                 .iter()
@@ -706,7 +701,7 @@ async fn cancelled_append_retains_exact_pending_body(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("ExternalDurableStreams", "cancel-append");
+    let agent = agent_key!("ExternalDurableStreams", "cancel-append");
     executor.start_agent(&component.id, agent.clone()).await?;
     let result = executor
         .invoke_and_await_agent(
@@ -764,7 +759,7 @@ async fn authentication_stays_on_wire_and_completed_replay_skips_secret_fetch(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("AuthenticatedDurableStreams", "auth");
+    let agent = agent_key!("AuthenticatedDurableStreams", "auth");
     let id = executor.start_agent(&component.id, agent.clone()).await?;
     for method in ["read", "append"] {
         let result = executor
@@ -821,7 +816,7 @@ async fn concurrent_appends_keep_identity_in_both_completion_orders(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let agent = agent_id!("ExternalDurableStreams", "concurrent-appends");
+        let agent = agent_key!("ExternalDurableStreams", "concurrent-appends");
         let id = executor.start_agent(&component.id, agent.clone()).await?;
         let pending = {
             let executor = executor.clone();
@@ -842,7 +837,7 @@ async fn concurrent_appends_keep_identity_in_both_completion_orders(
         };
         server.peer.accepted.notified().await;
         loop {
-            executor.commit_oplog(&id).await?;
+            executor.commit_oplog(&id.agent_id).await?;
             let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
             let starts: Vec<_> = history
                 .iter()

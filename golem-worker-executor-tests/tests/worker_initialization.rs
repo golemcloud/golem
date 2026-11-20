@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 use futures::poll;
-use golem_common::model::agent::{AgentMode, AgentTarget, InvocationFreshnessDisposition};
+use golem_common::model::agent::{AgentMode, InvocationFreshnessDisposition, ParsedAgentKey};
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::*;
@@ -25,13 +25,14 @@ use golem_common::model::oplog::{
 use golem_common::model::{
     AgentId, AgentInvocationPayload, AgentInvocationResult, IdempotencyKey, OwnedAgentId, Timestamp,
 };
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_schema::schema::SchemaFingerprintV1;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::storage::blob::agent_path_segment;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::model::LookupResult;
+use golem_worker_executor::services::agent_types::local_type_id;
 use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor::services::rpc::Rpc;
 use golem_worker_executor::services::{
@@ -42,7 +43,8 @@ use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
 use golem_worker_executor::storage::keyvalue::fault_injecting::{
     FaultInjectingKeyValueStorage, KeyValueStorageFaults,
 };
-use golem_worker_executor::worker::Worker;
+use golem_worker_executor::worker::target::{ResolvedTarget, ephemeral_invocation_target};
+use golem_worker_executor::worker::{CreateIntent, NewOwner, Worker};
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerCtx,
@@ -86,7 +88,8 @@ async fn warm_get_or_create_does_not_wait_for_oplog_maintenance(
     let response = tokio::time::timeout(
         Duration::from_secs(5),
         executor.client.clone().prepare_worker(CreateWorkerRequest {
-            agent_id: Some(seed.agent_id().into()),
+            constructor: Some(crate::agent::proto_agent_key(&seed_key())?),
+            component_id: Some(metadata.component_id.into()),
             component_owner_account_id: Some(metadata.created_by.into()),
             environment_id: Some(metadata.environment_id.into()),
             ignore_already_existing: true,
@@ -115,29 +118,29 @@ async fn fresh_ephemeral_streaming_preparation_skips_the_existence_lookup(
 ) -> anyhow::Result<()> {
     let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
     let key = IdempotencyKey::fresh();
-    let parsed = agent_id!("EphemeralCounter", "fresh-streaming-preparation")
-        .with_ephemeral_invocation_phantom(
-            &golem_common::model::InvocationRequestKey::Internal(key.clone())
-                .owner_key("increment"),
-        )
-        .map_err(anyhow::Error::msg)?;
-    let target = OwnedAgentId::new(
-        seed.get_initial_worker_metadata().environment_id,
-        &AgentId::from_agent_id(seed.agent_id().component_id, &parsed)
-            .map_err(anyhow::Error::msg)?,
+    let resolved = ephemeral_target(
+        &seed,
+        "fresh-streaming-preparation",
+        &golem_common::model::InvocationRequestKey::Internal(key.clone()).owner_key("increment"),
     );
+    let target = resolved.owned_agent_id.clone();
     let demand = seed
         .all()
         .rpc()
         .create_demand(
-            AgentTarget::Current(target.agent_id()),
-            target.environment_id,
+            resolved.clone(),
             "increment",
             seed.get_initial_worker_metadata().created_by,
             &seed.agent_id(),
             &[],
             InvocationContextStack::fresh(),
-            &callers::agent(seed.agent_id()),
+            &callers::agent(
+                seed.agent_id(),
+                seed.get_initial_worker_metadata()
+                    .agent_type_name
+                    .clone()
+                    .unwrap(),
+            ),
             vec![],
             &AuthCtx::System,
             Some(key.clone()),
@@ -163,14 +166,19 @@ async fn fresh_ephemeral_streaming_preparation_skips_the_existence_lookup(
         .all()
         .rpc()
         .create_demand(
-            AgentTarget::Current(target.agent_id()),
-            target.environment_id,
+            resolved,
             "increment",
             seed.get_initial_worker_metadata().created_by,
             &seed.agent_id(),
             &[],
             InvocationContextStack::fresh(),
-            &callers::agent(seed.agent_id()),
+            &callers::agent(
+                seed.agent_id(),
+                seed.get_initial_worker_metadata()
+                    .agent_type_name
+                    .clone()
+                    .unwrap(),
+            ),
             vec![],
             &AuthCtx::System,
             Some(key),
@@ -203,13 +211,15 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
 
     let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
     let key = IdempotencyKey::fresh();
-    let parsed = agent_id!("EphemeralCounter", "fresh-grpc-streaming-preparation")
-        .with_ephemeral_invocation_phantom(&key)
-        .map_err(anyhow::Error::msg)?;
-    let target = AgentId::from_agent_id(seed.agent_id().component_id, &parsed)
-        .map_err(anyhow::Error::msg)?;
+    let resolved = ephemeral_target(&seed, "fresh-grpc-streaming-preparation", &key);
+    let target = resolved.owned_agent_id.agent_id;
     let mut request = CreateWorkerRequest {
-        agent_id: Some(target.clone().into()),
+        constructor: Some(crate::agent::proto_agent_key(&agent_key!(
+            "EphemeralCounter",
+            "fresh-grpc-streaming-preparation"
+        ))?),
+        unkeyed_id: Some(target.into()),
+        component_id: Some(seed.get_initial_worker_metadata().component_id.into()),
         component_owner_account_id: Some(seed.get_initial_worker_metadata().created_by.into()),
         environment_id: Some(seed.get_initial_worker_metadata().environment_id.into()),
         ignore_already_existing: true,
@@ -258,7 +268,7 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
     .await?
     .expect("the prepared agent exists")
     .create_request;
-    assert_eq!(recorded.kind, CreateRequestKind::Phantom);
+    assert_eq!(recorded.kind, CreateRequestKind::Unkeyed);
     assert_eq!(recorded.idempotency_key, Some(key));
 
     request.freshness_disposition = ProtoFreshness::MayExist as i32;
@@ -282,32 +292,35 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
     // An RPC caller derives a fresh ephemeral target from the child key's owner key. When the
     // target lives on another executor, the remote preparation must pass that same check.
     let child_key = IdempotencyKey::fresh();
-    let parsed = agent_id!("EphemeralCounter", "fresh-remote-rpc-preparation")
-        .with_ephemeral_invocation_phantom(
-            &golem_common::model::InvocationRequestKey::Internal(child_key.clone())
-                .owner_key("increment"),
-        )
-        .map_err(anyhow::Error::msg)?;
-    let rpc_target = AgentId::from_agent_id(seed.agent_id().component_id, &parsed)
-        .map_err(anyhow::Error::msg)?;
+    let rpc_resolved = ephemeral_target(
+        &seed,
+        "fresh-remote-rpc-preparation",
+        &golem_common::model::InvocationRequestKey::Internal(child_key.clone())
+            .owner_key("increment"),
+    );
+    let rpc_target = rpc_resolved.owned_agent_id.agent_id;
     let metadata = seed.get_initial_worker_metadata();
     let remote = crate::fork::remote_rpc_preparing_on(
         &executor,
-        metadata.environment_id,
         metadata.created_by,
         seed.all().worker_proxy(),
         seed.all().shard_service(),
     );
     remote
         .create_demand(
-            AgentTarget::Current(rpc_target.clone()),
-            metadata.environment_id,
+            rpc_resolved,
             "increment",
             metadata.created_by,
             &seed.agent_id(),
             &[],
             InvocationContextStack::fresh(),
-            &callers::agent(seed.agent_id()),
+            &callers::agent(
+                seed.agent_id(),
+                seed.get_initial_worker_metadata()
+                    .agent_type_name
+                    .clone()
+                    .unwrap(),
+            ),
             vec![],
             &AuthCtx::System,
             Some(child_key),
@@ -334,7 +347,7 @@ async fn grpc_create_records_its_kind_key_and_caller(
     };
     let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
     let metadata = seed.get_initial_worker_metadata();
-    let caller = callers::agent(seed.agent_id());
+    let caller = callers::agent(seed.agent_id(), metadata.agent_type_name.clone().unwrap());
     for (name, ignore_already_existing, kind) in [
         ("exclusive-create", false, CreateRequestKind::Exclusive),
         ("joining-create", true, CreateRequestKind::GetOrCreate),
@@ -345,7 +358,8 @@ async fn grpc_create_records_its_kind_key_and_caller(
             .client
             .clone()
             .create_worker(CreateWorkerRequest {
-                agent_id: Some(id.agent_id.clone().into()),
+                constructor: Some(crate::agent::proto_agent_key(&id.key)?),
+                component_id: Some(metadata.component_id.into()),
                 component_owner_account_id: Some(metadata.created_by.into()),
                 environment_id: Some(metadata.environment_id.into()),
                 ignore_already_existing,
@@ -399,12 +413,12 @@ async fn grpc_create_waits_for_prepared_constructor(
         .store()
         .await?;
     let seed = seed_worker(&executor, &stored).await?;
-    let name = agent_id!("ConstructorProbe", "grpc-constructor-gate", false, true);
-    let id =
-        AgentId::from_agent_id(seed.agent_id().component_id, &name).map_err(anyhow::Error::msg)?;
+    let name = agent_key!("ConstructorProbe", "grpc-constructor-gate", false, true);
     let metadata = seed.get_initial_worker_metadata();
+    let id = crate::agent::keyed_agent_id(metadata.environment_id, &name);
     let request = CreateWorkerRequest {
-        agent_id: Some(id.clone().into()),
+        constructor: Some(crate::agent::proto_agent_key(&name)?),
+        component_id: Some(metadata.component_id.into()),
         component_owner_account_id: Some(metadata.created_by.into()),
         environment_id: Some(metadata.environment_id.into()),
         ignore_already_existing: true,
@@ -449,8 +463,9 @@ async fn grpc_create_waits_for_prepared_constructor(
     );
     executor
         .complete_promise(
+            &id.environment_id,
             &PromiseId {
-                agent_id: id.clone(),
+                agent_id: id.agent_id,
                 fingerprint: executor.get_worker_metadata(&id).await?.fingerprint,
                 oplog_idx: OplogIndex::from_u64(promise_index),
             },
@@ -471,7 +486,7 @@ async fn grpc_create_waits_for_prepared_constructor(
     assert!(
         matches!(retried.result, Some(create_worker_response::Result::Success(success)) if success.instance_id == fingerprint)
     );
-    let history = executor.stored_oplog(&id).await;
+    let history = executor.stored_oplog(&id.agent_id).await;
     assert_eq!(
         history
             .iter()
@@ -521,7 +536,7 @@ async fn grpc_create_waits_for_prepared_constructor(
     // Create observes the durable constructor result, not the runtime's readiness.
     executor.resume(&id, false).await?;
     tokio::time::timeout(Duration::from_secs(20), load.entered()).await?;
-    let before_create = executor.stored_oplog(&id).await;
+    let before_create = executor.stored_oplog(&id.agent_id).await;
     let retried = tokio::time::timeout(
         Duration::from_secs(20),
         executor.client.clone().create_worker(request),
@@ -531,13 +546,13 @@ async fn grpc_create_waits_for_prepared_constructor(
     assert!(
         matches!(retried.result, Some(create_worker_response::Result::Success(success)) if success.instance_id == fingerprint)
     );
-    assert_eq!(executor.stored_oplog(&id).await, before_create);
+    assert_eq!(executor.stored_oplog(&id.agent_id).await, before_create);
     load.release();
     let result = executor
         .invoke_and_await_agent(&stored, &name, "increment", data_value!())
         .await?;
     assert_eq!(result.into_typed::<u32>()?, 1);
-    let settled = executor.stored_oplog(&id).await;
+    let settled = executor.stored_oplog(&id.agent_id).await;
     assert_eq!(
         settled
             .iter()
@@ -597,11 +612,12 @@ async fn grpc_create_keeps_startup_failure_out_of_constructor_results(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let id = AgentId::from_agent_id(stored.id, &agent_id!("Counter", "grpc-startup-failure"))
-        .map_err(anyhow::Error::msg)?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let name = agent_key!("Counter", "grpc-startup-failure");
+    let owned = crate::agent::keyed_agent_id(stored.environment_id, &name);
+    let id = owned.agent_id;
     let request = CreateWorkerRequest {
-        agent_id: Some(id.clone().into()),
+        constructor: Some(crate::agent::proto_agent_key(&name)?),
+        component_id: Some(stored.id.into()),
         component_owner_account_id: Some(context.account_id.into()),
         environment_id: Some(context.default_environment_id.into()),
         ignore_already_existing: true,
@@ -735,12 +751,12 @@ async fn grpc_create_reports_recorded_constructor_failure(
     use golem_common::model::AgentStatus;
 
     let (mut executor, seed, _) = setup(last_unique_id, deps, component).await?;
-    let name = agent_id!("ConstructorProbe", "grpc-constructor-failure", true, false);
-    let id =
-        AgentId::from_agent_id(seed.agent_id().component_id, &name).map_err(anyhow::Error::msg)?;
+    let name = agent_key!("ConstructorProbe", "grpc-constructor-failure", true, false);
     let metadata = seed.get_initial_worker_metadata();
+    let id = crate::agent::keyed_agent_id(metadata.environment_id, &name);
     let request = CreateWorkerRequest {
-        agent_id: Some(id.clone().into()),
+        constructor: Some(crate::agent::proto_agent_key(&name)?),
+        component_id: Some(metadata.component_id.into()),
         component_owner_account_id: Some(metadata.created_by.into()),
         environment_id: Some(metadata.environment_id.into()),
         ignore_already_existing: true,
@@ -773,7 +789,7 @@ async fn grpc_create_reports_recorded_constructor_failure(
         };
         match &error {
             WorkerExecutorError::AgentCreationFailed { agent_id, details } => {
-                assert_eq!(agent_id, &id);
+                assert_eq!(agent_id, &id.agent_id);
                 assert!(
                     details.contains("constructor-probe:rejected:grpc-constructor-failure"),
                     "{details}"
@@ -789,7 +805,7 @@ async fn grpc_create_reports_recorded_constructor_failure(
         executor
             .wait_for_status(&id, AgentStatus::Failed, Duration::from_secs(20))
             .await?;
-        let history = executor.stored_oplog(&id).await;
+        let history = executor.stored_oplog(&id.agent_id).await;
         if let Some(expected) = &recorded_history {
             assert_eq!(
                 &history, expected,
@@ -802,7 +818,7 @@ async fn grpc_create_reports_recorded_constructor_failure(
     executor
         .wait_for_status(&id, AgentStatus::Failed, Duration::from_secs(20))
         .await?;
-    let history = executor.stored_oplog(&id).await;
+    let history = executor.stored_oplog(&id.agent_id).await;
     assert_eq!(
         history
             .iter()
@@ -839,10 +855,11 @@ async fn grpc_create_keeps_constructor_success_after_a_later_method_failure(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let name = agent_id!("FailingCounter", "constructor-outcome-after-method-failure");
-    let id = AgentId::from_agent_id(component.id, &name).map_err(anyhow::Error::msg)?;
+    let name = agent_key!("FailingCounter", "constructor-outcome-after-method-failure");
+    let id = crate::agent::keyed_agent_id(component.environment_id, &name);
     let request = CreateWorkerRequest {
-        agent_id: Some(id.clone().into()),
+        constructor: Some(crate::agent::proto_agent_key(&name)?),
+        component_id: Some(component.id.into()),
         component_owner_account_id: Some(context.account_id.into()),
         environment_id: Some(context.default_environment_id.into()),
         ignore_already_existing: true,
@@ -868,7 +885,7 @@ async fn grpc_create_keeps_constructor_success_after_a_later_method_failure(
     executor
         .wait_for_status(&id, AgentStatus::Failed, Duration::from_secs(20))
         .await?;
-    let settled = executor.stored_oplog(&id).await;
+    let settled = executor.stored_oplog(&id.agent_id).await;
     for cold in [false, true] {
         if cold {
             executor.shutdown_and_wait_for_invocation_loops().await?;
@@ -887,7 +904,7 @@ async fn grpc_create_keeps_constructor_success_after_a_later_method_failure(
             if success.instance_id == fingerprint),
             "a later method failure replaced constructor success (cold={cold})"
         );
-        assert_eq!(executor.stored_oplog(&id).await, settled);
+        assert_eq!(executor.stored_oplog(&id.agent_id).await, settled);
     }
     Ok(())
 }
@@ -910,10 +927,11 @@ async fn grpc_create_reports_constructor_exit_without_restarting_it(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let name = agent_id!("ConstructorExitProbe", "constructor-exit");
-    let id = AgentId::from_agent_id(component.id, &name).map_err(anyhow::Error::msg)?;
+    let name = agent_key!("ConstructorExitProbe", "constructor-exit");
+    let id = crate::agent::keyed_agent_id(component.environment_id, &name);
     let request = CreateWorkerRequest {
-        agent_id: Some(id.clone().into()),
+        constructor: Some(crate::agent::proto_agent_key(&name)?),
+        component_id: Some(component.id.into()),
         component_owner_account_id: Some(context.account_id.into()),
         environment_id: Some(context.default_environment_id.into()),
         ignore_already_existing: true,
@@ -944,10 +962,10 @@ async fn grpc_create_reports_constructor_exit_without_restarting_it(
         };
         assert!(
             matches!(&error, WorkerExecutorError::AgentCreationFailed { agent_id, details }
-            if agent_id == &id && details.contains("Constructor exited")),
+            if agent_id == &id.agent_id && details.contains("Constructor exited")),
             "{error:?}"
         );
-        let recorded = executor.stored_oplog(&id).await;
+        let recorded = executor.stored_oplog(&id.agent_id).await;
         if let Some(history) = &history {
             assert_eq!(&recorded, history);
         } else {
@@ -994,16 +1012,17 @@ async fn grpc_create_preserves_interrupted_constructor_retry_across_restart(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let name = agent_id!(
+    let name = agent_key!(
         "ConstructorProbe",
         "grpc-constructor-interrupted-retry",
         false,
         true
     );
-    let id = AgentId::from_agent_id(component.id, &name).map_err(anyhow::Error::msg)?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let id = crate::agent::keyed_agent_id(component.environment_id, &name);
+    let owned = id.clone();
     let request = CreateWorkerRequest {
-        agent_id: Some(id.clone().into()),
+        constructor: Some(crate::agent::proto_agent_key(&name)?),
+        component_id: Some(component.id.into()),
         component_owner_account_id: Some(context.account_id.into()),
         environment_id: Some(context.default_environment_id.into()),
         ignore_already_existing: true,
@@ -1045,7 +1064,7 @@ async fn grpc_create_preserves_interrupted_constructor_retry_across_restart(
         .expect("the constructor retry is resident")
         .primary();
     let status = worker.get_last_known_status().await;
-    let history = executor.stored_oplog(&id).await;
+    let history = executor.stored_oplog(&id.agent_id).await;
     let init_key = history
         .iter()
         .find_map(|entry| match entry {
@@ -1100,7 +1119,7 @@ async fn grpc_create_preserves_interrupted_constructor_retry_across_restart(
     assert_eq!(status.status, AgentStatus::Interrupted);
     assert_eq!(status.current_idempotency_key.as_ref(), Some(&init_key));
     assert_eq!(status.invocation_results.get(&init_key), Some(&error_index));
-    let interrupted = executor.stored_oplog(&id).await;
+    let interrupted = executor.stored_oplog(&id.agent_id).await;
     assert!(
         !interrupted
             .iter()
@@ -1132,7 +1151,7 @@ async fn grpc_create_preserves_interrupted_constructor_retry_across_restart(
     .await??
     .into_inner();
     assert_interrupted(response)?;
-    assert_eq!(executor.stored_oplog(&id).await, interrupted);
+    assert_eq!(executor.stored_oplog(&id.agent_id).await, interrupted);
     Ok(())
 }
 
@@ -1153,30 +1172,22 @@ async fn grpc_create_joins_an_initialized_fork_with_the_source_constructor_key(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let source = agent_id!("ConstructorProbe", "grpc-constructor-fork", false, false);
+    let source = agent_key!("ConstructorProbe", "grpc-constructor-fork", false, false);
     let source_id = executor.start_agent(&component.id, source.clone()).await?;
-    let prefix = executor.stored_oplog(&source_id).await;
+    let prefix = executor.stored_oplog(&source_id.agent_id).await;
     let cut = prefix
         .iter()
         .rposition(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { .. }))
         .map(|index| OplogIndex::from_u64(index as u64 + 1))
         .expect("the source constructor completed");
-    let fork = golem_common::phantom_agent_id!(
-        "ConstructorProbe",
-        uuid::Uuid::new_v4(),
-        "grpc-constructor-fork",
-        false,
-        false
-    );
-    let fork_id = AgentId::from_agent_id(component.id, &fork).map_err(anyhow::Error::msg)?;
-    executor
-        .fork_worker(&source_id, &fork.to_string(), cut)
-        .await?;
+    let fork_id = executor.fork_worker(&source_id, cut).await?;
     let result = executor
         .client
         .clone()
         .create_worker(CreateWorkerRequest {
-            agent_id: Some(fork_id.clone().into()),
+            constructor: Some(crate::agent::proto_agent_key(&source)?),
+            unkeyed_id: Some(fork_id.agent_id.into()),
+            component_id: Some(component.id.into()),
             component_owner_account_id: Some(context.account_id.into()),
             environment_id: Some(context.default_environment_id.into()),
             ignore_already_existing: true,
@@ -1194,7 +1205,7 @@ async fn grpc_create_joins_an_initialized_fork_with_the_source_constructor_key(
         ),
         "create must observe the fork's retained initialization: {result:?}"
     );
-    let fork_history = executor.stored_oplog(&fork_id).await;
+    let fork_history = executor.stored_oplog(&fork_id.agent_id).await;
     let source_initialization = prefix
         .iter()
         .find_map(|entry| match entry {
@@ -1227,9 +1238,15 @@ async fn grpc_create_joins_an_initialized_fork_with_the_source_constructor_key(
             1
         );
     }
-    let result = executor
-        .invoke_and_await_agent(&component, &fork, "increment", data_value!())
-        .await?;
+    let result = crate::agent::invoke_and_await_agent_by_id(
+        &executor,
+        &component,
+        &fork_id,
+        None,
+        "increment",
+        data_value!(),
+    )
+    .await?;
     assert_eq!(result.into_typed::<u32>()?, 1);
     Ok(())
 }
@@ -1249,13 +1266,12 @@ async fn rpc_create_waits_for_constructor_before_returning_the_child(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let parent = agent_id!("ConstructorProbeParent", "rpc-constructor-gate-parent");
+    let parent = agent_key!("ConstructorProbeParent", "rpc-constructor-gate-parent");
     executor.start_agent(&stored.id, parent.clone()).await?;
-    let child = AgentId::from_agent_id(
-        stored.id,
-        &agent_id!("ConstructorProbe", "rpc-constructor-gate", false, true),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let child = crate::agent::keyed_agent_id(
+        stored.environment_id,
+        &agent_key!("ConstructorProbe", "rpc-constructor-gate", false, true),
+    );
     let create = executor.invoke_and_await_agent(
         &stored,
         &parent,
@@ -1302,16 +1318,20 @@ async fn rpc_create_waits_for_constructor_before_returning_the_child(
     assert!(poll!(create.as_mut()).is_pending());
     executor
         .complete_promise(
+            &child.environment_id,
             &PromiseId {
-                agent_id: child.clone(),
+                agent_id: child.agent_id,
                 fingerprint: executor.get_worker_metadata(&child).await?.fingerprint,
                 oplog_idx: OplogIndex::from_u64(promise_index),
             },
             vec![],
         )
         .await?;
-    assert_eq!(create.await?.into_typed::<String>()?, child.agent_id);
-    let history = executor.stored_oplog(&child).await;
+    assert_eq!(
+        create.await?.into_typed::<String>()?,
+        child.agent_id.to_string()
+    );
+    let history = executor.stored_oplog(&child.agent_id).await;
     assert_eq!(
         history
             .iter()
@@ -1336,7 +1356,7 @@ async fn rpc_create_reports_constructor_failure_before_a_child_method(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let parent = agent_id!("ConstructorProbeParent", "rpc-constructor-failure-parent");
+    let parent = agent_key!("ConstructorProbeParent", "rpc-constructor-failure-parent");
     executor.start_agent(&component.id, parent.clone()).await?;
     let result = executor
         .invoke_and_await_agent(
@@ -1354,11 +1374,10 @@ async fn rpc_create_reports_constructor_failure_before_a_child_method(
             .contains("constructor-probe:rejected:rpc-constructor-failure"),
         "{error}"
     );
-    let child = AgentId::from_agent_id(
-        component.id,
-        &agent_id!("ConstructorProbe", "rpc-constructor-failure", true, false),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let child = crate::agent::keyed_agent_id(
+        component.environment_id,
+        &agent_key!("ConstructorProbe", "rpc-constructor-failure", true, false),
+    );
     executor
         .wait_for_status(
             &child,
@@ -1366,7 +1385,7 @@ async fn rpc_create_reports_constructor_failure_before_a_child_method(
             Duration::from_secs(20),
         )
         .await?;
-    let history = executor.stored_oplog(&child).await;
+    let history = executor.stored_oplog(&child.agent_id).await;
     assert_eq!(
         history
             .iter()
@@ -1397,16 +1416,15 @@ async fn rpc_create_replays_completed_success_and_failure_without_contacting_the
             .component_dep(&context.default_environment_id, component)
             .store()
             .await?;
-        let parent_name = agent_id!("ConstructorProbeParent", format!("recorded-create-{fail}"));
+        let parent_name = agent_key!("ConstructorProbeParent", format!("recorded-create-{fail}"));
         let parent = executor
             .start_agent(&stored.id, parent_name.clone())
             .await?;
         let child_name = format!("recorded-child-{fail}");
-        let child = AgentId::from_agent_id(
-            stored.id,
-            &agent_id!("ConstructorProbe", child_name.clone(), fail, false),
-        )
-        .map_err(anyhow::Error::msg)?;
+        let child = crate::agent::keyed_agent_id(
+            stored.environment_id,
+            &agent_key!("ConstructorProbe", child_name.clone(), fail, false),
+        );
         let mut events = executor.capture_output(&parent).await?;
         let key = IdempotencyKey::fresh();
         executor
@@ -1447,7 +1465,7 @@ async fn rpc_create_replays_completed_success_and_failure_without_contacting_the
                 Duration::from_secs(30),
             )
             .await?;
-        let child_history = executor.stored_oplog(&child).await;
+        let child_history = executor.stored_oplog(&child.agent_id).await;
         assert_eq!(
             child_history
                 .iter()
@@ -1478,8 +1496,9 @@ async fn rpc_create_replays_completed_success_and_failure_without_contacting_the
         .await?;
         executor
             .complete_promise(
+                &parent.environment_id,
                 &PromiseId {
-                    agent_id: parent.clone(),
+                    agent_id: parent.agent_id,
                     fingerprint: executor.get_worker_metadata(&parent).await?.fingerprint,
                     oplog_idx: OplogIndex::from_u64(promise_index),
                 },
@@ -1505,9 +1524,12 @@ async fn rpc_create_replays_completed_success_and_failure_without_contacting_the
                 "{error}"
             );
         } else {
-            assert_eq!(result.map_err(anyhow::Error::msg)?, child.agent_id);
+            assert_eq!(
+                result.map_err(anyhow::Error::msg)?,
+                child.agent_id.to_string()
+            );
         }
-        assert_eq!(executor.stored_oplog(&child).await, child_history);
+        assert_eq!(executor.stored_oplog(&child.agent_id).await, child_history);
         executor.shutdown_and_wait_for_invocation_loops().await?;
         assert_eq!(
             replay_call_count.get().unwrap().load(Ordering::Relaxed),
@@ -1526,8 +1548,6 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] component: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_worker_executor::worker::CreateIntent;
-
     let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
     for (scenario, first_exclusive, second_exclusive, keyed, identical) in [
         ("exclusive-exclusive", true, true, false, false),
@@ -1549,7 +1569,13 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
             let first_caller = if reverse {
                 callers::anonymous()
             } else {
-                callers::agent(seed.agent_id())
+                callers::agent(
+                    seed.agent_id(),
+                    seed.get_initial_worker_metadata()
+                        .agent_type_name
+                        .clone()
+                        .unwrap(),
+                )
             };
             let key = keyed.then(IdempotencyKey::fresh);
             let create = |value: &'static str,
@@ -1569,10 +1595,7 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
                         &InvocationContextStack::fresh(),
                         caller,
                         InvocationFreshnessDisposition::MayExist,
-                        CreateIntent::Create {
-                            exclusive,
-                            idempotency_key: key,
-                        },
+                        id.create(exclusive, key),
                     )
                     .await
                 }
@@ -1585,7 +1608,13 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
             let second_caller = if identical {
                 first_caller.clone()
             } else if reverse {
-                callers::agent(seed.agent_id())
+                callers::agent(
+                    seed.agent_id(),
+                    seed.get_initial_worker_metadata()
+                        .agent_type_name
+                        .clone()
+                        .unwrap(),
+                )
             } else {
                 callers::anonymous()
             };
@@ -1677,7 +1706,8 @@ async fn grpc_create_reports_typed_conflicts_and_keeps_the_winner(
     let metadata = seed.get_initial_worker_metadata();
     let id = target(&seed, "grpc-create-conflicts");
     let request = CreateWorkerRequest {
-        agent_id: Some(id.agent_id.clone().into()),
+        constructor: Some(crate::agent::proto_agent_key(&id.key)?),
+        component_id: Some(metadata.component_id.into()),
         component_owner_account_id: Some(metadata.created_by.into()),
         environment_id: Some(metadata.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
@@ -1809,8 +1839,6 @@ async fn exclusive_create_admission_checks_warm_and_cold_stored_identity(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] component: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_worker_executor::worker::CreateIntent;
-
     let (_executor, seed, _) = setup(last_unique_id, deps, component).await?;
     for keyed in [false, true] {
         let id = target(
@@ -1836,10 +1864,7 @@ async fn exclusive_create_admission_checks_warm_and_cold_stored_identity(
                     &InvocationContextStack::fresh(),
                     callers::anonymous(),
                     InvocationFreshnessDisposition::MayExist,
-                    CreateIntent::Create {
-                        exclusive,
-                        idempotency_key: key,
-                    },
+                    id.create(exclusive, key),
                 )
                 .await
             }
@@ -1953,22 +1978,14 @@ async fn seed_worker(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
 ) -> anyhow::Result<Arc<Worker<TestWorkerCtx>>> {
-    let context = &executor.context;
-    let name = agent_id!("Counter", "initialization-test-seed");
-    let id = AgentId::from_agent_id(component.id, &name).map_err(anyhow::Error::msg)?;
+    let name = seed_key();
+    let id = crate::agent::keyed_agent_id(component.environment_id, &name);
     executor
         .invoke_and_await_agent(component, &name, "increment", data_value!())
         .await?;
-    let seed = executor
-        .active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
-        .await
-        .unwrap()
-        .primary();
+    let seed = executor.active_agent(&id).await.unwrap().primary();
     tokio::time::timeout(Duration::from_secs(20), async {
-        while executor
-            .worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &id))
-            .await
-        {
+        while executor.worker_is_loaded(&id).await {
             seed.stop_if_idle().await;
             tokio::task::yield_now().await;
         }
@@ -1977,21 +1994,91 @@ async fn seed_worker(
     Ok(seed)
 }
 
-fn target(seed: &Worker<TestWorkerCtx>, name: &str) -> OwnedAgentId {
-    OwnedAgentId::new(
-        seed.get_initial_worker_metadata().environment_id,
-        &AgentId {
-            component_id: seed.agent_id().component_id,
-            agent_id: agent_id!("Counter", name.to_string()).to_string(),
-        },
+/// The instance of the ephemeral `EphemeralCounter` agent with key parameter `name` that runs
+/// the invocation with owner key `owner_key`.
+fn ephemeral_target(
+    seed: &Worker<TestWorkerCtx>,
+    name: &str,
+    owner_key: &IdempotencyKey,
+) -> ResolvedTarget {
+    let metadata = seed.get_initial_worker_metadata();
+    let key = agent_key!("EphemeralCounter", name.to_string());
+    ephemeral_invocation_target(
+        metadata.environment_id,
+        local_type_id(metadata.environment_id, &key.agent_type),
+        metadata.component_id,
+        key,
+        owner_key,
     )
+}
+
+fn seed_key() -> ParsedAgentKey {
+    agent_key!("Counter", "initialization-test-seed")
+}
+
+/// An agent that a test creates: its ID, its constructor and the owner that creates it.
+#[derive(Clone, Debug)]
+struct Target {
+    id: OwnedAgentId,
+    key: ParsedAgentKey,
+    owner: NewOwner,
+}
+
+impl std::ops::Deref for Target {
+    type Target = OwnedAgentId;
+
+    fn deref(&self) -> &OwnedAgentId {
+        &self.id
+    }
+}
+
+impl Target {
+    fn invocation(&self) -> CreateIntent {
+        CreateIntent::Invocation {
+            owner: self.owner.clone(),
+            idempotency_key: None,
+        }
+    }
+
+    fn create(&self, exclusive: bool, idempotency_key: Option<IdempotencyKey>) -> CreateIntent {
+        CreateIntent::Create {
+            owner: self.owner.clone(),
+            exclusive,
+            idempotency_key,
+        }
+    }
+}
+
+/// The keyed `Counter` agent with key parameter `name`.
+fn target(seed: &Worker<TestWorkerCtx>, name: &str) -> Target {
+    let metadata = seed.get_initial_worker_metadata();
+    let key = agent_key!("Counter", name.to_string());
+    Target {
+        id: crate::agent::keyed_agent_id(metadata.environment_id, &key),
+        owner: NewOwner::keyed(metadata.component_id, key.clone()),
+        key,
+    }
+}
+
+/// A new agent of `agent_type` without a key, with key parameter `name`.
+fn unkeyed_target(seed: &Worker<TestWorkerCtx>, agent_type: &str, name: &str) -> Target {
+    let metadata = seed.get_initial_worker_metadata();
+    let key = agent_key!(agent_type, name.to_string());
+    Target {
+        id: OwnedAgentId::new(
+            metadata.environment_id,
+            &AgentId::random(local_type_id(metadata.environment_id, &key.agent_type)),
+        ),
+        owner: NewOwner::unkeyed(metadata.component_id, key.clone()),
+        key,
+    }
 }
 
 async fn acquire(
     seed: &Arc<Worker<TestWorkerCtx>>,
-    target: &OwnedAgentId,
+    target: &Target,
 ) -> Result<Arc<Worker<TestWorkerCtx>>, WorkerExecutorError> {
-    Worker::get_or_create_suspended(
+    Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         target,
         Some(vec![("OWNER".into(), "original".into())]),
@@ -2000,6 +2087,8 @@ async fn acquire(
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        InvocationFreshnessDisposition::MayExist,
+        target.invocation(),
     )
     .await
 }
@@ -2009,7 +2098,7 @@ async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<Durab
     let index = worker.oplog().current_oplog_index().await.next();
     let source_invocation = StreamInvocationId {
         callee_environment_id: metadata.environment_id,
-        callee: metadata.agent_id.clone(),
+        callee: metadata.agent_id,
         callee_fingerprint: metadata.fingerprint,
         idempotency_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
     };
@@ -2020,7 +2109,7 @@ async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<Durab
             &metadata.agent_id,
             metadata.fingerprint,
             index,
-        )?,
+        ),
         producer_environment_id: metadata.environment_id,
         producer: metadata.agent_id,
         expected_producer_fingerprint: metadata.fingerprint,
@@ -2162,8 +2251,6 @@ async fn exclusive_retry_after_partial_construction_uses_the_persisted_identity(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] component: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_worker_executor::worker::CreateIntent;
-
     let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
     for keyed in [false, true] {
         let id = target(
@@ -2190,10 +2277,7 @@ async fn exclusive_retry_after_partial_construction_uses_the_persisted_identity(
                     &InvocationContextStack::fresh(),
                     callers::anonymous(),
                     InvocationFreshnessDisposition::MayExist,
-                    CreateIntent::Create {
-                        exclusive: true,
-                        idempotency_key: key,
-                    },
+                    id.create(true, key),
                 )
                 .await
             }
@@ -2257,8 +2341,11 @@ async fn partial_creation_reloads_identity_and_original_initialization(
     let (executor, seed, faults) = setup(last_unique_id, deps, component).await?;
     let all = seed.all().clone();
     for agent_type in ["Counter", "EphemeralCounter"] {
-        let mut id = target(&seed, "partial-creation");
-        id.agent_id.agent_id = agent_id!(agent_type, "partial-creation").to_string();
+        let id = if agent_type == "Counter" {
+            target(&seed, "partial-creation")
+        } else {
+            unkeyed_target(&seed, agent_type, "partial-creation")
+        };
         faults.fail(
             "read_cached_agent_mode",
             1,
@@ -2274,7 +2361,13 @@ async fn partial_creation_reloads_identity_and_original_initialization(
         );
         assert!(Worker::get_latest_metadata(&all, &id).await?.is_none());
         let context = InvocationContextStack::fresh();
-        let caller = callers::agent(seed.agent_id());
+        let caller = callers::agent(
+            seed.agent_id(),
+            seed.get_initial_worker_metadata()
+                .agent_type_name
+                .clone()
+                .unwrap(),
+        );
         let payload_directory = deps
             .blob_storage_root()
             .join("oplog_payload")
@@ -2293,7 +2386,7 @@ async fn partial_creation_reloads_identity_and_original_initialization(
             tokio::fs::write(&payload_directory, b"block payload directory creation").await?;
             "Failed to upload invocation payload"
         };
-        let failure = Worker::get_or_create_suspended(
+        let failure = Worker::get_or_create_suspended_with_freshness(
             &all,
             &id,
             Some(vec![("OWNER".into(), "first-creator".into())]),
@@ -2302,6 +2395,8 @@ async fn partial_creation_reloads_identity_and_original_initialization(
             None,
             &context,
             caller.clone(),
+            InvocationFreshnessDisposition::MayExist,
+            id.invocation(),
         )
         .await
         .err()
@@ -2401,7 +2496,13 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
         .await?;
     let seed = seed_worker(&executor, &stored).await?;
     let creator_context = InvocationContextStack::fresh();
-    let creator = callers::agent(seed.agent_id());
+    let creator = callers::agent(
+        seed.agent_id(),
+        seed.get_initial_worker_metadata()
+            .agent_type_name
+            .clone()
+            .unwrap(),
+    );
     let loaders = ["get-or-create", "existing-only"];
     for loader in loaders {
         let id = target(&seed, &format!("restart-creator-{loader}"));
@@ -2410,7 +2511,7 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
             1,
             KeyValueStorageError::Other("initial status outage".into()),
         );
-        let failure = Worker::get_or_create_suspended(
+        let failure = Worker::get_or_create_suspended_with_freshness(
             seed.all(),
             &id,
             None,
@@ -2419,6 +2520,8 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
             None,
             &creator_context,
             creator.clone(),
+            InvocationFreshnessDisposition::MayExist,
+            id.invocation(),
         )
         .await
         .err()
@@ -2452,7 +2555,7 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
     for loader in loaders {
         let id = target(&seed, &format!("restart-creator-{loader}"));
         if loader == "existing-only" {
-            Worker::interrupt(seed.all(), &id, false, callers::anonymous()).await?;
+            Worker::interrupt(seed.all(), &id, false, callers::anonymous(), None).await?;
         }
         let worker = acquire(&seed, &id).await?;
         let entries = worker
@@ -2540,7 +2643,7 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
     let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
     let id = target(&seed, "cancelled-creator");
     let all = seed.all().clone();
-    Worker::interrupt(&all, &id, false, callers::anonymous()).await?;
+    Worker::interrupt(&all, &id, false, callers::anonymous(), None).await?;
     assert!(!executor.worker_is_cached(&id).await);
     assert!(
         !seed
@@ -2553,14 +2656,20 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
         .gate_next_agent_initialization_enqueue(&id.agent_id)
         .await;
     let context = InvocationContextStack::fresh();
-    let original_caller = callers::agent(seed.agent_id());
+    let original_caller = callers::agent(
+        seed.agent_id(),
+        seed.get_initial_worker_metadata()
+            .agent_type_name
+            .clone()
+            .unwrap(),
+    );
     let creating = tokio::spawn({
         let all = all.clone();
         let id = id.clone();
         let context = context.clone();
         let caller = original_caller.clone();
         async move {
-            Worker::get_or_create_suspended(
+            Worker::get_or_create_suspended_with_freshness(
                 &all,
                 &id,
                 Some(vec![("OWNER".into(), "creator".into())]),
@@ -2569,6 +2678,8 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
                 None,
                 &context,
                 caller,
+                InvocationFreshnessDisposition::MayExist,
+                id.invocation(),
             )
             .await
         }
@@ -2578,7 +2689,13 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
         .expect("creator must reach the initialization enqueue");
     creating.abort();
     assert!(creating.await.err().unwrap().is_cancelled());
-    let mut existing = Box::pin(Worker::interrupt(&all, &id, false, callers::anonymous()));
+    let mut existing = Box::pin(Worker::interrupt(
+        &all,
+        &id,
+        false,
+        callers::anonymous(),
+        None,
+    ));
     let mut competing = Box::pin(acquire(&seed, &id));
     assert!(poll!(&mut existing).is_pending());
     assert!(poll!(&mut competing).is_pending());
@@ -2647,7 +2764,7 @@ async fn prepare_foreign_topology(
         epoch: 1,
         session_key: session_key.clone(),
         producer_environment_id: source.producer_environment_id,
-        producer: source.producer.clone(),
+        producer: source.producer,
         expected_producer_fingerprint: source.expected_producer_fingerprint,
         consumer_environment_id: metadata.environment_id,
         consumer: metadata.agent_id,
@@ -2816,7 +2933,7 @@ async fn prepare_session(
     let metadata = worker.get_initial_worker_metadata();
     let session_key = StreamInvocationId {
         callee_environment_id: metadata.environment_id,
-        callee: metadata.agent_id.clone(),
+        callee: metadata.agent_id,
         callee_fingerprint: metadata.fingerprint,
         idempotency_key,
     };
@@ -3201,7 +3318,12 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
     ));
 
     // A late stop continuation after deletion must not await stopped actors or publish a failure.
-    executor.delete_worker(&worker.agent_id()).await?;
+    executor
+        .delete_worker(&OwnedAgentId::new(
+            worker.get_initial_worker_metadata().environment_id,
+            &worker.agent_id(),
+        ))
+        .await?;
     tokio::time::timeout(
         Duration::from_secs(1),
         worker.test_fail_pending_invocations(),
@@ -3390,12 +3512,12 @@ async fn failure_handler_status_read_follows_concurrent_jump(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let name = agent_id!("FailingCounter", "failure-status-jump");
+    let name = agent_key!("FailingCounter", "failure-status-jump");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &name, "add", data_value!(5u64))
         .await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let owned = OwnedAgentId::new(context.default_environment_id, &id.agent_id);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     assert_eq!(
         worker.get_last_known_status().await.status,

@@ -19,35 +19,34 @@ package golem
 import java.util.UUID
 
 /**
- * Identifies one invocation of an agent: the agent ID in its text form and the
- * UUID of the invocation within that agent.
+ * Identifies one invocation of an agent: the agent ID and the UUID of the
+ * invocation within that agent.
  *
- * The text form is `<agent-id>.<uuid>`. The agent ID can itself contain `.`, so
- * [[InvocationId.parse]] splits off the fixed-length `.<uuid>` suffix. The UUID
- * must be in the hyphenated 8-4-4-4-12 layout; its hexadecimal digits can be in
- * either case and are normalized to lower case.
+ * The text form is `<agent-id>.<uuid>`, where both parts are hyphenated
+ * 8-4-4-4-12 UUIDs. [[InvocationId.parse]] accepts hexadecimal digits in either
+ * case and normalizes them to lower case.
  */
-final case class InvocationId(agentId: String, uuid: UUID) {
+final case class InvocationId(agentId: AgentId, uuid: UUID) {
   override def toString: String = s"$agentId.$uuid"
 }
 
 object InvocationId {
-  private val SuffixLength = 37
+  private val UuidLength = 36
 
   def parse(text: String): Either[String, InvocationId] =
-    if (text.length <= SuffixLength)
+    if (text.length != 2 * UuidLength + 1 || text.charAt(UuidLength) != '.')
       Left(s"Invalid invocation ID, expected <agent-id>.<uuid>: $text")
-    else {
-      val separator = text.length - SuffixLength
-      if (text.charAt(separator) != '.')
-        Left(s"Invalid invocation ID, missing '.' before the UUID: $text")
-      else
-        CanonicalUuid
-          .parse(asciiLowerCase(text.substring(separator + 1)))
-          .left
-          .map(_ => s"Invalid invocation ID, expected a hyphenated UUID after the last '.': $text")
-          .map(uuid => InvocationId(text.substring(0, separator), uuid))
-    }
+    else
+      for {
+        agentId <- AgentId
+                     .parse(text.substring(0, UuidLength))
+                     .left
+                     .map(_ => s"Invalid invocation ID, expected a hyphenated agent ID before the '.': $text")
+        uuid <- CanonicalUuid
+                  .parse(asciiLowerCase(text.substring(UuidLength + 1)))
+                  .left
+                  .map(_ => s"Invalid invocation ID, expected a hyphenated UUID after the '.': $text")
+      } yield InvocationId(agentId, uuid)
 
   private def asciiLowerCase(text: String): String =
     text.map(c => if (c >= 'A' && c <= 'Z') (c + ('a' - 'A')).toChar else c)

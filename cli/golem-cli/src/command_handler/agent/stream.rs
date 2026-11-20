@@ -16,6 +16,7 @@ use crate::client::raw_reqwest_client_builder;
 use crate::command_handler::agent::parse_worker_error;
 use crate::command_handler::agent::stream_output::AgentStreamOutput;
 use crate::config::HttpClientConfig;
+use crate::context::Context as CliContext;
 use crate::model::agent::AgentLogStreamOptions;
 use crate::model::format::Format;
 use anyhow::{Context, anyhow};
@@ -25,7 +26,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt, future};
 use golem_common::model::InvocationId;
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentEvent, AgentId, LogLevel, Timestamp};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::WebPkiSupportedAlgorithms;
@@ -47,7 +48,6 @@ use tokio_tungstenite::{
 use tokio_util::task::AbortOnDropHandle;
 use tracing::{debug, error, info, trace};
 use url::Url;
-use uuid::Uuid;
 
 #[derive(Debug)]
 struct InsecureServerCertVerifier {
@@ -132,6 +132,95 @@ impl InvocationGoal {
 
     fn is_reached(&self) -> bool {
         self.reached.load(Ordering::Acquire)
+    }
+}
+
+/// The live output of one invocation. The connection opens once the agent of the invocation is
+/// known, such as when the server accepts the invocation. A new connection first receives the
+/// agent's recent events, so a connection that opens at the acceptance still shows the output
+/// of the invocation from its start.
+pub struct LiveOutput {
+    ctx: Arc<CliContext>,
+    environment_id: EnvironmentId,
+    options: AgentLogStreamOptions,
+    goal: Option<InvocationGoal>,
+    connection: std::sync::Mutex<Option<task::JoinHandle<anyhow::Result<()>>>>,
+}
+
+impl LiveOutput {
+    /// With `wait_for_invocation`, the output ends with the invocation's `InvocationFinished`.
+    pub fn new(
+        ctx: Arc<CliContext>,
+        environment_id: EnvironmentId,
+        options: AgentLogStreamOptions,
+        wait_for_invocation: bool,
+    ) -> Self {
+        Self {
+            ctx,
+            environment_id,
+            options,
+            goal: wait_for_invocation.then(InvocationGoal::new),
+            connection: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn invocation_goal(&self) -> Option<InvocationGoal> {
+        self.goal.clone()
+    }
+
+    /// Targets the accepted invocation, and opens the connection to its agent unless it is open.
+    pub async fn accepted(
+        &self,
+        agent_id: &AgentId,
+        agent_name: &str,
+        invocation_id: InvocationId,
+    ) -> anyhow::Result<()> {
+        if let Some(goal) = &self.goal {
+            goal.set_target(invocation_id);
+        }
+        self.open(agent_id, agent_name).await
+    }
+
+    /// Opens the connection to `agent_id` unless it is open.
+    pub async fn open(&self, agent_id: &AgentId, agent_name: &str) -> anyhow::Result<()> {
+        if self.connection.lock().unwrap().is_some() {
+            return Ok(());
+        }
+        let mut connection = AgentConnection::new(
+            self.ctx.worker_service_url().clone(),
+            self.ctx.auth_token().await?,
+            &self.environment_id,
+            agent_id,
+            agent_name.to_string(),
+            self.options.clone(),
+            self.ctx.allow_insecure(),
+            self.ctx.format(),
+            self.ctx.agent_stream_ping_interval(),
+            false,
+        )
+        .await?;
+        connection.goal = self.goal.clone();
+        let mut slot = self.connection.lock().unwrap();
+        if slot.is_none() {
+            *slot = Some(tokio::spawn(connection.run_forever()));
+        }
+        Ok(())
+    }
+
+    /// Marks the caller's own output as written, then gives the connection a short time to show
+    /// the rest of the invocation's output.
+    pub async fn finish(&self) {
+        if let Some(goal) = &self.goal {
+            goal.set_output_written();
+        }
+        let handle = self.connection.lock().unwrap().take();
+        if let Some(mut handle) = handle
+            && time::timeout(Duration::from_secs(3), &mut handle)
+                .await
+                .is_err()
+        {
+            handle.abort();
+        }
     }
 }
 
@@ -246,11 +335,13 @@ pub struct AgentConnection {
 
 impl AgentConnection {
     /// Initializes a worker stream. Use `run_forever` to connect and output worker events.
+    /// `agent_name` is the agent's display form, which the events show.
     pub async fn new(
         worker_service_url: Url,
         auth_token: TokenSecret,
-        component_id: &ComponentId,
-        agent_id: String,
+        environment_id: &EnvironmentId,
+        agent_id: &AgentId,
+        agent_name: String,
         connect_options: AgentLogStreamOptions,
         allow_insecure: bool,
         format: Format,
@@ -260,8 +351,8 @@ impl AgentConnection {
         let (request, connector) = Self::create_request(
             worker_service_url,
             auth_token.secret().to_string(),
-            component_id.0,
-            agent_id.clone(),
+            environment_id,
+            agent_id,
             allow_insecure,
         )?;
         let output = AgentStreamOutput::new(connect_options, format);
@@ -276,13 +367,14 @@ impl AgentConnection {
             .redirect(reqwest::redirect::Policy::none())
             .build()?,
             output,
-            agent_name: agent_id,
+            agent_name,
             goal: wait_for_invocation.then(InvocationGoal::new),
             ping_interval,
         })
     }
 
     /// The goal of a connection created with `wait_for_invocation`.
+    #[cfg(test)]
     pub fn invocation_goal(&self) -> Option<InvocationGoal> {
         self.goal.clone()
     }
@@ -495,12 +587,10 @@ impl AgentConnection {
     fn create_request(
         worker_service_url: Url,
         auth_token: String,
-        component_id: Uuid,
-        agent_id: String,
+        environment_id: &EnvironmentId,
+        agent_id: &AgentId,
         allow_insecure: bool,
     ) -> anyhow::Result<(Request, Option<Connector>)> {
-        AgentId::validate_length(&agent_id).map_err(|err| anyhow!(err))?;
-
         let mut url = worker_service_url;
 
         let ws_schema = if url.scheme() == "http" { "ws" } else { "wss" };
@@ -510,10 +600,11 @@ impl AgentConnection {
         url.path_segments_mut()
             .map_err(|()| anyhow!("Failed to get url path for ws url".to_string()))?
             .push("v1")
-            .push("components")
-            .push(&component_id.to_string())
-            .push("workers")
-            .push(&agent_id)
+            .push("runtime")
+            .push("envs")
+            .push(&environment_id.to_string())
+            .push("agents")
+            .push(&agent_id.to_string())
             .push("connect");
 
         debug!(url = url.as_str(), "Worker stream connect");
@@ -688,12 +779,14 @@ mod tests {
     use test_r::test;
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
+    use uuid::Uuid;
 
     async fn connection(url: Url) -> anyhow::Result<AgentConnection> {
         AgentConnection::new(
             url,
             TokenSecret::new(),
-            &ComponentId(Uuid::new_v4()),
+            &EnvironmentId(Uuid::new_v4()),
+            &AgentId::from_parts(7, 1),
             "test-agent".into(),
             AgentLogStreamOptions {
                 colors: false,

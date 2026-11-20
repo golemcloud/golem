@@ -22,7 +22,8 @@ use crate::durable_host::stream_bus::LiveStreamEventPayload;
 use crate::durable_host::stream_transport::{output_stream_pair, test_output_stream_pair};
 use crate::services::oplog::{CommitLevel, DurableStreamOplogRecord};
 use crate::services::rpc::{DurableStreamRemoteError, RpcDemand, RpcError};
-use golem_common::base_model::component::{ComponentId, ComponentRevision};
+use crate::worker::target::ResolvedTarget;
+use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::durable_stream::{
     AttachmentId, LocalStreamId, LocalStreamReaderId, MAX_STREAM_VALUE_TRAVERSAL_DEPTH,
     PersistedInvocationTarget, PersistedStreamInvocationDescriptor, ResumeAttemptDescriptor,
@@ -34,7 +35,6 @@ use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::{AgentInvocationPayload, OplogIndex, OwnedAgentId};
@@ -224,7 +224,7 @@ async fn quiet_durable_source_stop_preserves_journal_and_same_key_continuation()
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -395,7 +395,7 @@ async fn source_selected_item_finishes_consumer_commit_before_later_stop() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -584,7 +584,7 @@ async fn recorded_input_observation() -> (
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -807,7 +807,7 @@ async fn durable_read_wait_explicit_interrupt_wins_committed_suspension() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -875,7 +875,7 @@ async fn assert_local_source_wait_provenance(source_kind: StreamSourceKind, expe
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -940,7 +940,7 @@ async fn assert_local_source_wait_provenance(source_kind: StreamSourceKind, expe
             DurableStreamStore::load(
                 oplog.clone(),
                 identity.environment_id,
-                identity.agent_id.clone(),
+                identity.agent_id,
                 identity.fingerprint,
                 None,
             )
@@ -1053,7 +1053,7 @@ async fn assert_fork_consumer_payloads(overlay_before_fork: bool) {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -1159,7 +1159,7 @@ async fn assert_fork_consumer_payloads(overlay_before_fork: bool) {
         );
     }
     let mut target = identity.invocation.clone();
-    target.callee.agent_id = "fork".into();
+    target.callee = crate::test_agent_id("fork");
     target.callee_fingerprint = AgentFingerprint(Uuid::from_u128(999));
     let cut = StreamForkCutRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -1201,7 +1201,7 @@ async fn assert_fork_consumer_payloads(overlay_before_fork: bool) {
     let cold = DurableStreamStore::load(
         oplog.clone(),
         target.callee_environment_id,
-        target.callee.clone(),
+        target.callee,
         target.callee_fingerprint,
         None,
     )
@@ -1300,7 +1300,7 @@ async fn assert_fork_consumer_payloads(overlay_before_fork: bool) {
     let recovered = DurableStreamStore::load(
         streams.oplog.clone(),
         target.callee_environment_id,
-        target.callee.clone(),
+        target.callee,
         target.callee_fingerprint,
         None,
     )
@@ -1358,7 +1358,7 @@ async fn session_payload_reader_rejects_malformed_records_and_wrong_locators() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -1413,7 +1413,7 @@ async fn unbound_rpc_inputs_cancel_only_local_inputs_and_release_empty_drains() 
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -1455,7 +1455,7 @@ async fn unbound_rpc_inputs_cancel_only_local_inputs_and_release_empty_drains() 
         }
         let mut foreign = mappings[0].clone();
         foreign.transport_stream_id = 4;
-        foreign.handle.producer.agent_id = "foreign".into();
+        foreign.handle.producer = crate::test_agent_id("foreign");
         foreign.handle.stream_id = StreamId(Uuid::new_v4());
         mappings.push(foreign);
         let mut bindings = Vec::new();
@@ -1580,7 +1580,7 @@ async fn cancelled_owned_input_replays_committed_items_before_closing() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -1674,7 +1674,7 @@ async fn session_value_maps_canonical_indices_to_binding_local_transport_ids() {
     let producer = DurableStreamStore::load(
         Arc::new(TestOplog::default()),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -1892,7 +1892,7 @@ async fn mapping_records_preserve_construction_and_insertion_rules() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -1969,7 +1969,7 @@ async fn output_coordinator_collects_cancelled_children_after_suspension_commit(
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -2047,7 +2047,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -2153,7 +2153,7 @@ async fn output_drains_preserve_typed_terminals_authors_and_source_origin() {
                 let producer = DurableStreamStore::load(
                     oplog.clone(),
                     identity.environment_id,
-                    identity.agent_id.clone(),
+                    identity.agent_id,
                     identity.fingerprint,
                     None,
                 )
@@ -2384,7 +2384,7 @@ async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix()
     let source = DurableStreamStore::load(
         source_oplog.clone(),
         source_identity.environment_id,
-        source_identity.agent_id.clone(),
+        source_identity.agent_id,
         source_identity.fingerprint,
         None,
     )
@@ -2425,7 +2425,7 @@ async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix()
     let retained = original[1].offset;
     let cut_index = retained.producer_oplog_index();
     let mut target_identity = identity();
-    target_identity.agent_id.agent_id = "fork".into();
+    target_identity.agent_id = crate::test_agent_id("fork");
     target_identity.fingerprint = AgentFingerprint(Uuid::from_u128(4));
     let source_owner = OwnedAgentId::new(source_identity.environment_id, &source_identity.agent_id);
     let target_owner = OwnedAgentId::new(source_identity.environment_id, &target_identity.agent_id);
@@ -2521,7 +2521,7 @@ async fn materialized_output_releases_admission_and_survives_abandoned_response(
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -2626,7 +2626,7 @@ async fn invocation_owned_output_abort_is_not_a_durable_terminal() {
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -2712,7 +2712,7 @@ async fn invocation_owned_materialization_revokes_work_waiting_for_admission() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -2877,7 +2877,7 @@ async fn result_drains_buffered_nested_streams_without_a_guest_driver() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -2965,7 +2965,7 @@ async fn nested_output_drain_recovers_transport_ids_allocated_by_another_runtime
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -3066,7 +3066,7 @@ async fn concurrent_nested_mapping_reuses_identity_before_commit_callback_finish
     let producer = DurableStreamStore::load_with_commit(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
         commit,
@@ -3145,7 +3145,7 @@ async fn activate_test_root_attachment(
     handle: &DurableStreamHandle,
 ) {
     let mut consumer_invocation = identity.invocation.clone();
-    consumer_invocation.callee.agent_id = "distinct-root-consumer".to_string();
+    consumer_invocation.callee = crate::test_agent_id("distinct-root-consumer");
     let attachment = StreamAttachmentKey {
         attachment_id: AttachmentId::primary(
             identity.environment_id,
@@ -3157,10 +3157,10 @@ async fn activate_test_root_attachment(
         epoch: 1,
         session_key: identity.invocation.clone(),
         producer_environment_id: handle.producer_environment_id,
-        producer: handle.producer.clone(),
+        producer: handle.producer,
         expected_producer_fingerprint: handle.expected_producer_fingerprint,
         consumer_environment_id: consumer_invocation.callee_environment_id,
-        consumer: consumer_invocation.callee.clone(),
+        consumer: consumer_invocation.callee,
         expected_consumer_fingerprint: consumer_invocation.callee_fingerprint,
         consumer_invocation,
     };
@@ -3178,7 +3178,7 @@ async fn assert_local_nested_stream_drains_after_root_admission(root_kind: Strea
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -3414,8 +3414,8 @@ struct AttachedProducerRpc {
 impl Rpc for AttachedProducerRpc {
     async fn create_and_initialize(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
+        _exclusive: bool,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
@@ -3514,8 +3514,7 @@ impl Rpc for AttachedProducerRpc {
 
     async fn create_demand(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
@@ -3532,8 +3531,7 @@ impl Rpc for AttachedProducerRpc {
 
     async fn invoke_and_await(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: InvocationFreshnessDisposition,
         _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -3603,8 +3601,7 @@ impl Rpc for AttachedProducerRpc {
 
     async fn invoke(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: InvocationFreshnessDisposition,
         _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -3629,7 +3626,7 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
     let producer = DurableStreamStore::load(
         Arc::new(TestOplog::default()),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -3841,7 +3838,7 @@ pub(super) async fn backpressured_session_input() -> (
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         Some(1),
     )
@@ -3945,7 +3942,7 @@ async fn byte_output_replay_checks_bytes_and_terminal_without_rewriting_history(
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -3990,7 +3987,7 @@ async fn byte_output_replay_checks_bytes_and_terminal_without_rewriting_history(
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -4114,7 +4111,7 @@ async fn output_reconstruction_distinguishes_source_and_control_terminals() {
                 let producer = DurableStreamStore::load(
                     oplog.clone(),
                     identity.environment_id,
-                    identity.agent_id.clone(),
+                    identity.agent_id,
                     identity.fingerprint,
                     None,
                 )
@@ -4342,7 +4339,7 @@ async fn scalar_source_failures_reproduce_their_recorded_terminal() {
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -4481,7 +4478,7 @@ async fn bug_finder_byte_control_terminal_during_batch_is_successful_stop() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -4551,7 +4548,7 @@ async fn scalar_reconstruction_cannot_cancel_unvalidated_open_history() {
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -4647,7 +4644,7 @@ async fn bug_finder_scalar_source_terminal_rejects_extra_item_after_exact_prefix
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -4741,7 +4738,7 @@ async fn byte_output_requires_a_terminal_but_recovers_consumer_cancellation_with
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -4855,7 +4852,7 @@ async fn native_tool_results_bind_early_output_after_reconstruction_and_reject_c
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -4915,7 +4912,7 @@ async fn native_tool_results_bind_early_output_after_reconstruction_and_reject_c
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -5035,13 +5032,13 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
     for remote_session in [false, true] {
         let local = identity();
         let mut remote = identity();
-        remote.agent_id.agent_id.push_str("-remote");
-        remote.invocation.callee = remote.agent_id.clone();
+        remote.agent_id = crate::test_agent_id(&format!("{}-remote", remote.agent_id));
+        remote.invocation.callee = remote.agent_id;
         let remote_oplog = Arc::new(TestOplog::default());
         let remote_producer = DurableStreamStore::load(
             remote_oplog.clone(),
             remote.environment_id,
-            remote.agent_id.clone(),
+            remote.agent_id,
             remote.fingerprint,
             None,
         )
@@ -5067,7 +5064,7 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
         let producer = DurableStreamStore::load(
             oplog.clone(),
             local.environment_id,
-            local.agent_id.clone(),
+            local.agent_id,
             local.fingerprint,
             None,
         )
@@ -5114,7 +5111,7 @@ async fn foreign_cancellation_recovery_applies_persisted_intent_without_delete_r
         let producer = DurableStreamStore::load(
             oplog.clone(),
             local.environment_id,
-            local.agent_id.clone(),
+            local.agent_id,
             local.fingerprint,
             None,
         )
@@ -5221,12 +5218,12 @@ async fn foreign_preparation_releases_local_owner_when_rpc_requests_retirement()
 async fn a_fenced_oplog_refuses_a_foreign_mapping_and_releases_the_session() {
     let local = identity();
     let mut remote = identity();
-    remote.agent_id.agent_id.push_str("-remote");
-    remote.invocation.callee = remote.agent_id.clone();
+    remote.agent_id = crate::test_agent_id(&format!("{}-remote", remote.agent_id));
+    remote.invocation.callee = remote.agent_id;
     let remote_producer = DurableStreamStore::load(
         Arc::new(TestOplog::default()),
         remote.environment_id,
-        remote.agent_id.clone(),
+        remote.agent_id,
         remote.fingerprint,
         None,
     )
@@ -5253,7 +5250,7 @@ async fn a_fenced_oplog_refuses_a_foreign_mapping_and_releases_the_session() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         local.environment_id,
-        local.agent_id.clone(),
+        local.agent_id,
         local.fingerprint,
         None,
     )
@@ -5352,12 +5349,12 @@ async fn a_fenced_oplog_refuses_a_foreign_mapping_and_releases_the_session() {
 async fn retirement_from_foreign_rpc(prepare: bool) {
     let local = identity();
     let mut remote = identity();
-    remote.agent_id.agent_id.push_str("-remote");
-    remote.invocation.callee = remote.agent_id.clone();
+    remote.agent_id = crate::test_agent_id(&format!("{}-remote", remote.agent_id));
+    remote.invocation.callee = remote.agent_id;
     let remote_producer = DurableStreamStore::load(
         Arc::new(TestOplog::default()),
         remote.environment_id,
-        remote.agent_id.clone(),
+        remote.agent_id,
         remote.fingerprint,
         None,
     )
@@ -5383,7 +5380,7 @@ async fn retirement_from_foreign_rpc(prepare: bool) {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         local.environment_id,
-        local.agent_id.clone(),
+        local.agent_id,
         local.fingerprint,
         None,
     )
@@ -5520,7 +5517,7 @@ async fn completed_output_reconstruction_does_not_require_an_attachment() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -5595,7 +5592,7 @@ async fn same_owner_foreign_cancellation_requires_routed_authority() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -5677,7 +5674,7 @@ async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -6029,7 +6026,7 @@ async fn protocol_failure_preserves_author_and_terminal_after_cold_reconstructio
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -6367,13 +6364,13 @@ async fn cancelled_forwarded_result_persists_intent_without_remote_activation() 
     drop(reader);
     streams.cancel_session_streams().await.unwrap();
     let mut remote = identity();
-    remote.agent_id.agent_id.push_str("-remote");
-    remote.invocation.callee = remote.agent_id.clone();
+    remote.agent_id = crate::test_agent_id(&format!("{}-remote", remote.agent_id));
+    remote.invocation.callee = remote.agent_id;
     let remote_oplog = Arc::new(TestOplog::default());
     let remote_producer = DurableStreamStore::load(
         remote_oplog.clone(),
         remote.environment_id,
-        remote.agent_id.clone(),
+        remote.agent_id,
         remote.fingerprint,
         None,
     )
@@ -6730,7 +6727,7 @@ async fn root_union_stream_coordinates_use_the_selected_branch_and_survive_reloa
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -6847,7 +6844,7 @@ async fn owned_tail_backlog_uses_source_history() {
     let producer = DurableStreamStore::load(
         oplog,
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -6903,7 +6900,7 @@ async fn attached_preexisting_journal_lag_counts_committed_source_events() {
     let producer = DurableStreamStore::load(
         oplog,
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -6935,14 +6932,11 @@ async fn attached_preexisting_journal_lag_counts_committed_source_events() {
         .await
         .unwrap();
     let consumer_environment_id = EnvironmentId(Uuid::from_u128(41));
-    let consumer = AgentId {
-        component_id: ComponentId(Uuid::from_u128(42)),
-        agent_id: "journal-lag-consumer".to_string(),
-    };
+    let consumer = AgentId::from_parts(7, 1);
     let consumer_fingerprint = AgentFingerprint(Uuid::from_u128(43));
     let consumer_invocation = StreamInvocationId {
         callee_environment_id: consumer_environment_id,
-        callee: consumer.clone(),
+        callee: consumer,
         callee_fingerprint: consumer_fingerprint,
         idempotency_key: uuid::Uuid::from_u128(402).into(),
     };
@@ -7010,10 +7004,10 @@ async fn use_attached_lag_spy(
         epoch: 1,
         session_key: identity.invocation.clone(),
         producer_environment_id: identity.environment_id,
-        producer: identity.agent_id.clone(),
+        producer: identity.agent_id,
         expected_producer_fingerprint: identity.fingerprint,
         consumer_environment_id: identity.environment_id,
-        consumer: identity.agent_id.clone(),
+        consumer: identity.agent_id,
         expected_consumer_fingerprint: identity.fingerprint,
         consumer_invocation: identity.invocation.clone(),
     };
@@ -7058,7 +7052,7 @@ async fn consumer_value_is_committed_before_delivery_and_replay_is_a_no_op() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -7257,20 +7251,20 @@ async fn cold_consumer_replays_nested_history_without_a_producer_connection() {
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
         .await
         .unwrap();
         let mut source = identity.invocation.clone();
-        source.callee.agent_id = "unavailable-producer".into();
+        source.callee = crate::test_agent_id("unavailable-producer");
         source.callee_fingerprint = AgentFingerprint(Uuid::from_u128(501));
         let handle = |number| DurableStreamHandle {
             format_version: 1,
             stream_id: StreamId(Uuid::from_u128(number)),
             producer_environment_id: source.callee_environment_id,
-            producer: source.callee.clone(),
+            producer: source.callee,
             expected_producer_fingerprint: source.callee_fingerprint,
             producer_generation: OplogIndex::NONE,
             source_invocation: source.clone(),
@@ -7382,7 +7376,7 @@ async fn cold_consumer_replays_nested_history_without_a_producer_connection() {
         let recovered = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -7437,20 +7431,20 @@ async fn cold_replay_keeps_two_readers_of_one_source_independent() {
     let store = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
     .await
     .unwrap();
     let mut source = identity.invocation.clone();
-    source.callee.agent_id = "offline-source".into();
+    source.callee = crate::test_agent_id("offline-source");
     source.callee_fingerprint = AgentFingerprint(Uuid::from_u128(601));
     let handle = DurableStreamHandle {
         format_version: 1,
         stream_id: StreamId(Uuid::from_u128(602)),
         producer_environment_id: source.callee_environment_id,
-        producer: source.callee.clone(),
+        producer: source.callee,
         expected_producer_fingerprint: source.callee_fingerprint,
         producer_generation: OplogIndex::NONE,
         source_invocation: source,
@@ -7614,7 +7608,7 @@ async fn consumer_journal_lag_sampling_is_deadline_gated_and_failure_is_throttle
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -7750,7 +7744,7 @@ async fn packed_consumer_samples_after_final_queued_offset_and_terminal_forces_s
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -7878,7 +7872,7 @@ async fn guest_byte_journal_covers_only_observed_bytes_after_reconstruction() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -8107,7 +8101,7 @@ async fn packed_u8_consumer_values_share_one_durable_journal_record() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -8274,7 +8268,7 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -8520,14 +8514,14 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
     .await
     .unwrap();
     let mut source = identity.invocation.clone();
-    source.callee.agent_id = "offline-disposal-source".into();
+    source.callee = crate::test_agent_id("offline-disposal-source");
     source.callee_fingerprint = AgentFingerprint(Uuid::from_u128(701));
     let session = StreamRegistrationInvocation::Local(identity.invocation.idempotency_key);
     let mut bindings = Vec::new();
@@ -8539,7 +8533,7 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
                 format_version: 1,
                 stream_id: StreamId(Uuid::from_u128(700 + u128::from(transport_stream_id))),
                 producer_environment_id: source.callee_environment_id,
-                producer: source.callee.clone(),
+                producer: source.callee,
                 expected_producer_fingerprint: source.callee_fingerprint,
                 producer_generation: OplogIndex::NONE,
                 source_invocation: source.clone(),
@@ -8620,7 +8614,7 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
         ReplayState::new_for_owner(
             OwnedAgentId {
                 environment_id: identity.environment_id,
-                agent_id: identity.agent_id.clone(),
+                agent_id: identity.agent_id,
             },
             oplog.clone(),
             skipped,
@@ -8791,7 +8785,7 @@ async fn check_dropped_input_cancellation(dropped: DroppedInput) {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -8966,7 +8960,7 @@ async fn dropped_input_cancellation_is_skipped_once_the_attachment_is_fenced() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -9077,7 +9071,7 @@ async fn guest_authored_input_cancellation_targets_the_current_attachment_epoch(
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -9256,7 +9250,7 @@ async fn dropping_input_producer_during_runtime_teardown_does_not_schedule_cance
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -9319,7 +9313,7 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
         let producer = DurableStreamStore::load(
             Arc::new(TestOplog::default()),
             source.environment_id,
-            source.agent_id.clone(),
+            source.agent_id,
             source.fingerprint,
             None,
         )
@@ -9363,9 +9357,9 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
             .unwrap()
             .value;
         let mut consumer = identity();
-        consumer.agent_id.agent_id = "reverted-caller".into();
+        consumer.agent_id = crate::test_agent_id("reverted-caller");
         consumer.fingerprint = AgentFingerprint::new();
-        consumer.invocation.callee = consumer.agent_id.clone();
+        consumer.invocation.callee = consumer.agent_id;
         consumer.invocation.callee_fingerprint = consumer.fingerprint;
         let owner = OwnedAgentId::new(consumer.environment_id, &consumer.agent_id);
         let oplog = Arc::new(TestOplog::default());
@@ -9373,7 +9367,7 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
         let local = DurableStreamStore::load(
             oplog.clone(),
             consumer.environment_id,
-            consumer.agent_id.clone(),
+            consumer.agent_id,
             consumer.fingerprint,
             None,
         )
@@ -9497,7 +9491,7 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
         let local = DurableStreamStore::load(
             oplog.clone(),
             consumer.environment_id,
-            consumer.agent_id.clone(),
+            consumer.agent_id,
             consumer.fingerprint,
             None,
         )
@@ -9571,14 +9565,14 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
     for revert in [true, false] {
         let consumer = identity();
         let mut source = identity();
-        source.agent_id.agent_id = "input-producer".into();
+        source.agent_id = crate::test_agent_id("input-producer");
         source.fingerprint = AgentFingerprint::new();
-        source.invocation.callee = source.agent_id.clone();
+        source.invocation.callee = source.agent_id;
         source.invocation.callee_fingerprint = source.fingerprint;
         let remote = DurableStreamStore::load(
             Arc::new(TestOplog::default()),
             source.environment_id,
-            source.agent_id.clone(),
+            source.agent_id,
             source.fingerprint,
             None,
         )
@@ -9628,7 +9622,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
         let local = DurableStreamStore::load(
             oplog.clone(),
             consumer.environment_id,
-            consumer.agent_id.clone(),
+            consumer.agent_id,
             consumer.fingerprint,
             None,
         )
@@ -9690,7 +9684,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
         let source_owner = OwnedAgentId::new(consumer.environment_id, &consumer.agent_id);
         let mut target = consumer.invocation.clone();
         if !revert {
-            target.callee.agent_id = "forked-callee".into();
+            target.callee = crate::test_agent_id("forked-callee");
             target.callee_fingerprint = AgentFingerprint::new();
         } else {
             oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
@@ -9727,7 +9721,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
         let local = DurableStreamStore::load(
             oplog.clone(),
             target.callee_environment_id,
-            target.callee.clone(),
+            target.callee,
             target.callee_fingerprint,
             None,
         )
@@ -9811,7 +9805,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
         let recovered = DurableStreamStore::load(
             oplog.clone(),
             target.callee_environment_id,
-            target.callee.clone(),
+            target.callee,
             target.callee_fingerprint,
             None,
         )
@@ -9851,7 +9845,7 @@ async fn closed_foreign_journal_replays_after_source_finalization_and_epoch_chan
     let producer = DurableStreamStore::load(
         source_oplog.clone(),
         source.environment_id,
-        source.agent_id.clone(),
+        source.agent_id,
         source.fingerprint,
         None,
     )
@@ -9874,15 +9868,15 @@ async fn closed_foreign_journal_replays_after_source_finalization_and_epoch_chan
         .unwrap()
         .value;
     let mut consumer = identity();
-    consumer.agent_id.agent_id = "closed-journal-consumer".into();
+    consumer.agent_id = crate::test_agent_id("closed-journal-consumer");
     consumer.fingerprint = AgentFingerprint::new();
-    consumer.invocation.callee = consumer.agent_id.clone();
+    consumer.invocation.callee = consumer.agent_id;
     consumer.invocation.callee_fingerprint = consumer.fingerprint;
     let oplog = Arc::new(TestOplog::default());
     let local = DurableStreamStore::load(
         oplog.clone(),
         consumer.environment_id,
-        consumer.agent_id.clone(),
+        consumer.agent_id,
         consumer.fingerprint,
         None,
     )
@@ -10045,7 +10039,7 @@ async fn mapped_source_unavailable_replays_as_permanent_without_cancelling_sourc
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -10196,7 +10190,7 @@ async fn durable_projection_preserves_typed_outcomes_from_live_and_consumer_hist
             let producer = DurableStreamStore::load(
                 oplog.clone(),
                 identity.environment_id,
-                identity.agent_id.clone(),
+                identity.agent_id,
                 identity.fingerprint,
                 None,
             )
@@ -10305,7 +10299,7 @@ async fn projected_durable_output_rematerializes_system_cancellation_as_permanen
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -10503,7 +10497,7 @@ async fn mapped_durable_target_drop_cancels_once_and_teardown_suppresses_cancel(
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -10601,7 +10595,7 @@ async fn projected_durable_store_loss_only_publishes_a_selected_body_trap() {
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -10740,7 +10734,7 @@ async fn resume_cursors_cannot_name_input_streams() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -10790,7 +10784,7 @@ async fn output_resume_cursor_is_not_shadowed_by_same_handle_input_mapping() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -10858,7 +10852,7 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -11251,7 +11245,7 @@ async fn nested_consumer_mappings_preserve_the_parent_input_or_output_role() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -11453,17 +11447,11 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
     let consumer = identity();
     let producer_identity = TestIdentity {
         environment_id: EnvironmentId(Uuid::from_u128(21)),
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::from_u128(22)),
-            agent_id: "remote-producer".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 2),
         fingerprint: AgentFingerprint(Uuid::from_u128(23)),
         invocation: StreamInvocationId {
             callee_environment_id: EnvironmentId(Uuid::from_u128(21)),
-            callee: AgentId {
-                component_id: ComponentId(Uuid::from_u128(22)),
-                agent_id: "remote-producer".to_string(),
-            },
+            callee: AgentId::from_parts(7, 2),
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(23)),
             idempotency_key: uuid::Uuid::from_u128(405).into(),
         },
@@ -11472,7 +11460,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
     let remote_producer = DurableStreamStore::load(
         producer_oplog.clone(),
         producer_identity.environment_id,
-        producer_identity.agent_id.clone(),
+        producer_identity.agent_id,
         producer_identity.fingerprint,
         None,
     )
@@ -11498,7 +11486,7 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
     let consumer_producer = DurableStreamStore::load(
         consumer_oplog.clone(),
         consumer.environment_id,
-        consumer.agent_id.clone(),
+        consumer.agent_id,
         consumer.fingerprint,
         None,
     )
@@ -11531,10 +11519,10 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         epoch: 1,
         session_key: consumer.invocation.clone(),
         producer_environment_id: producer_identity.environment_id,
-        producer: producer_identity.agent_id.clone(),
+        producer: producer_identity.agent_id,
         expected_producer_fingerprint: producer_identity.fingerprint,
         consumer_environment_id: consumer.environment_id,
-        consumer: consumer.agent_id.clone(),
+        consumer: consumer.agent_id,
         expected_consumer_fingerprint: consumer.fingerprint,
         consumer_invocation: consumer.invocation.clone(),
     };
@@ -11991,7 +11979,7 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -11999,17 +11987,11 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
     .unwrap();
     let remote_identity = TestIdentity {
         environment_id: EnvironmentId(Uuid::from_u128(21)),
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::from_u128(22)),
-            agent_id: "remote-producer".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 2),
         fingerprint: AgentFingerprint(Uuid::from_u128(23)),
         invocation: StreamInvocationId {
             callee_environment_id: EnvironmentId(Uuid::from_u128(21)),
-            callee: AgentId {
-                component_id: ComponentId(Uuid::from_u128(22)),
-                agent_id: "remote-producer".to_string(),
-            },
+            callee: AgentId::from_parts(7, 2),
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(23)),
             idempotency_key: uuid::Uuid::from_u128(405).into(),
         },
@@ -12017,7 +11999,7 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
     let remote_producer = DurableStreamStore::load(
         Arc::new(TestOplog::default()),
         remote_identity.environment_id,
-        remote_identity.agent_id.clone(),
+        remote_identity.agent_id,
         remote_identity.fingerprint,
         None,
     )
@@ -12093,10 +12075,10 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
         epoch: 1,
         session_key: identity.invocation.clone(),
         producer_environment_id: remote_identity.environment_id,
-        producer: remote_identity.agent_id.clone(),
+        producer: remote_identity.agent_id,
         expected_producer_fingerprint: remote_identity.fingerprint,
         consumer_environment_id: identity.environment_id,
-        consumer: identity.agent_id.clone(),
+        consumer: identity.agent_id,
         expected_consumer_fingerprint: identity.fingerprint,
         consumer_invocation: identity.invocation.clone(),
     };
@@ -12181,7 +12163,7 @@ async fn oversized_remote_result_is_rejected_before_any_session_write() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -12254,7 +12236,7 @@ async fn remote_result_schema_mismatch_is_rejected_before_caller_mutation() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -12320,7 +12302,7 @@ async fn remote_result_schema_validation_accepts_a_stream_in_union_branch_one() 
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -12458,7 +12440,7 @@ async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_with
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -12592,7 +12574,7 @@ async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_with
     let reloaded = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -12667,7 +12649,7 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -13140,8 +13122,7 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
     assert_eq!(replayed.mappings, received_children);
     assert!(replayed.terminal_cursor);
 
-    let mut child_owner = identity.agent_id.clone();
-    child_owner.agent_id = "forked-stream-owner".into();
+    let child_owner = crate::test_agent_id("forked-stream-owner");
     let child_producer = DurableStreamStore::load(
         Arc::new(TestOplog::default()),
         identity.environment_id,
@@ -13166,17 +13147,11 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
     let consumer = identity();
     let producer_identity = TestIdentity {
         environment_id: EnvironmentId(Uuid::from_u128(71)),
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::from_u128(72)),
-            agent_id: "resumed-foreign-producer".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 3),
         fingerprint: AgentFingerprint(Uuid::from_u128(73)),
         invocation: StreamInvocationId {
             callee_environment_id: EnvironmentId(Uuid::from_u128(71)),
-            callee: AgentId {
-                component_id: ComponentId(Uuid::from_u128(72)),
-                agent_id: "resumed-foreign-producer".to_string(),
-            },
+            callee: AgentId::from_parts(7, 3),
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(73)),
             idempotency_key: uuid::Uuid::from_u128(406).into(),
         },
@@ -13185,7 +13160,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
     let remote_producer = DurableStreamStore::load(
         producer_oplog,
         producer_identity.environment_id,
-        producer_identity.agent_id.clone(),
+        producer_identity.agent_id,
         producer_identity.fingerprint,
         None,
     )
@@ -13271,7 +13246,7 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
     let consumer_producer = DurableStreamStore::load(
         consumer_oplog.clone(),
         consumer.environment_id,
-        consumer.agent_id.clone(),
+        consumer.agent_id,
         consumer.fingerprint,
         None,
     )
@@ -13596,7 +13571,7 @@ async fn session_control_metadata_pages_history_and_reads_only_raw_suffix_after_
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -13669,7 +13644,7 @@ async fn session_mapping_recovery_pages_once_and_shares_coverage_with_clones() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -13709,7 +13684,7 @@ async fn suspended_control_metadata_reader_does_not_reserve_the_shared_permit() 
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -13742,7 +13717,7 @@ async fn invocation_winner_drops_queued_persisted_result_waiter_before_followup(
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -13824,7 +13799,7 @@ async fn finalization_after_retirement_requires_matching_committed_finished() {
         let producer = DurableStreamStore::load(
             oplog.clone(),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             None,
         )
@@ -13890,7 +13865,7 @@ async fn finished_in_raw_suffix_is_visible_and_cached() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -13939,7 +13914,7 @@ async fn caller_attempt_is_random_v4_persisted_and_reused_after_restart() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -13976,7 +13951,7 @@ async fn completed_input_reconstruction_reuses_only_matching_registrations() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         owner.environment_id,
-        owner.agent_id.clone(),
+        owner.agent_id,
         owner.fingerprint,
         None,
     )
@@ -14053,7 +14028,7 @@ async fn root_forwarding_records_original_reader_before_local_and_rpc_destinatio
         let producer = DurableStreamStore::load(
             oplog.clone(),
             owner.environment_id,
-            owner.agent_id.clone(),
+            owner.agent_id,
             owner.fingerprint,
             None,
         )
@@ -14266,7 +14241,7 @@ async fn local_reader_forwarding_reuses_only_retained_destinations_after_fork_an
                 let producer = DurableStreamStore::load(
                     oplog.clone(),
                     owner.environment_id,
-                    owner.agent_id.clone(),
+                    owner.agent_id,
                     owner.fingerprint,
                     None,
                 )
@@ -14355,7 +14330,8 @@ async fn local_reader_forwarding_reuses_only_retained_destinations_after_fork_an
                 let target_fingerprint = if revert {
                     owner.fingerprint
                 } else {
-                    target_owner.agent_id.agent_id.push_str("-fork");
+                    target_owner.agent_id =
+                        crate::test_agent_id(&format!("{}-fork", target_owner.agent_id));
                     AgentFingerprint(Uuid::from_u128(456))
                 };
                 let cut = DurableStreamStore::prepare_fork_cut(
@@ -14537,7 +14513,7 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                 let producer = DurableStreamStore::load(
                     oplog.clone(),
                     owner.environment_id,
-                    owner.agent_id.clone(),
+                    owner.agent_id,
                     owner.fingerprint,
                     None,
                 )
@@ -14713,7 +14689,8 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                 let fingerprint = if revert {
                     owner.fingerprint
                 } else {
-                    target_owner.agent_id.agent_id.push_str("-fork");
+                    target_owner.agent_id =
+                        crate::test_agent_id(&format!("{}-fork", target_owner.agent_id));
                     AgentFingerprint(Uuid::from_u128(456))
                 };
                 let cut = DurableStreamStore::prepare_fork_cut(
@@ -14914,7 +14891,7 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
         let source = DurableStreamStore::load(
             remote_oplog.clone(),
             remote.environment_id,
-            remote.agent_id.clone(),
+            remote.agent_id,
             remote.fingerprint,
             None,
         )
@@ -14944,13 +14921,13 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
             .unwrap()
             .value;
         let mut owner = identity();
-        owner.agent_id.agent_id.push_str("-consumer");
-        owner.invocation.callee = owner.agent_id.clone();
+        owner.agent_id = crate::test_agent_id(&format!("{}-consumer", owner.agent_id));
+        owner.invocation.callee = owner.agent_id;
         let oplog = Arc::new(TestOplog::default());
         let producer = DurableStreamStore::load(
             oplog.clone(),
             owner.environment_id,
-            owner.agent_id.clone(),
+            owner.agent_id,
             owner.fingerprint,
             None,
         )
@@ -15159,7 +15136,7 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
             let recovered = DurableStreamStore::load(
                 oplog.clone(),
                 owner.environment_id,
-                owner.agent_id.clone(),
+                owner.agent_id,
                 owner.fingerprint,
                 None,
             )
@@ -15305,7 +15282,7 @@ async fn forwarded_root_input_and_direct_result_preserve_the_complete_handle() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -15468,7 +15445,7 @@ async fn schema_mismatch_does_not_consume_forwarded_stream() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -15669,7 +15646,7 @@ async fn recovered_forward_reservation_does_not_publish_or_reallocate_its_slot()
     let producer = DurableStreamStore::load(
         oplog.clone(),
         owner.environment_id,
-        owner.agent_id.clone(),
+        owner.agent_id,
         owner.fingerprint,
         None,
     )
@@ -15771,7 +15748,7 @@ async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registra
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -16018,7 +15995,7 @@ async fn a_session_write_through_a_retired_producer_is_an_error_not_a_panic() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         source.environment_id,
-        source.agent_id.clone(),
+        source.agent_id,
         source.fingerprint,
         None,
     )
@@ -16171,7 +16148,7 @@ async fn external_inline_source_for_test() -> (StreamSession, DurableInputProduc
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -16453,7 +16430,7 @@ async fn external_inline_demand_interrupt_preserves_ordinal_and_journal() {
     let reloaded = DurableStreamStore::load(
         streams.oplog.clone(),
         handle.producer_environment_id,
-        handle.producer.clone(),
+        handle.producer,
         handle.expected_producer_fingerprint,
         None,
     )

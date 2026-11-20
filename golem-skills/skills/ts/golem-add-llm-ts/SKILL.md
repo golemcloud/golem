@@ -136,7 +136,7 @@ export const ChatAgent = defineAgent({
 });
 
 export const ChatAgentImpl = ChatAgent.implement({
-  // `init` receives a context with `id`, `config`, `principal`, `phantomId`.
+  // `init` receives a context with `id`, `config`, `principal`.
   init: ({ id, config }) => {
     const client = new OpenAI({ apiKey: config.apiKey.get() });
     const messages: OpenAI.ChatCompletionMessageParam[] = [

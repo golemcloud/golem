@@ -44,9 +44,11 @@ pub async fn invoke_tool_middleware(
   // A result that holds a stream keeps the caller for its producer.
   context.end(
     returned_stream=result is Ok(invocation) &&
-      (invocation.stdout is Some(_) ||
-      invocation.stderr is Some(_) ||
-      (invocation.result is Some(typed) && @caller.holds_stream(typed.value))),
+      (
+        invocation.stdout is Some(_) ||
+        invocation.stderr is Some(_) ||
+        (invocation.result is Some(typed) && @caller.holds_stream(typed.value))
+      ),
   )
   result
 }
