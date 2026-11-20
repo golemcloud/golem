@@ -260,21 +260,22 @@ async fn mcp_deployment_is_served_on_the_custom_request_port(
     Ok(())
 }
 
-/// Each port has its own MCP endpoint with its own replica memory, over one session store. The
-/// session record alone carries the session from the port that issued it to the other.
+/// Each port has its own MCP endpoint, and the endpoint keeps no session: `initialize` on one
+/// port and the calls on the other port need nothing from each other.
 #[test]
 #[tag(db_postgres)]
 #[tracing::instrument]
-async fn mcp_session_survives_across_ports(
+async fn any_port_serves_any_request(
     #[tagged_as("postgres")] ctx: &McpTestContext,
 ) -> anyhow::Result<()> {
     let on_mcp_port = McpClient::initialize(
         reqwest::Client::new(),
         &ctx.mcp_url(ctx.mcp_port),
         &ctx.domain.0,
+        "2025-06-18",
     )
     .await?;
-    assert!(on_mcp_port.session_id().is_some());
+    assert_eq!(on_mcp_port.revision(), Some("2025-06-18"));
 
     let on_custom_request_port = on_mcp_port.at(&ctx.mcp_url(ctx.custom_request_port));
     on_custom_request_port
@@ -298,6 +299,150 @@ async fn mcp_session_survives_across_ports(
         json!("Agent across-ports: This is a weather report for Sydney")
     );
 
+    Ok(())
+}
+
+/// An rmcp client of the endpoint at `port`, which sends the deployment's domain as `Host`.
+async fn rmcp_client(
+    ctx: &McpTestContext,
+    port: u16,
+    revision: rmcp::model::ProtocolVersion,
+) -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientConfig>> {
+    use rmcp::model::{ClientCapabilities, ClientConfig, Implementation, ProtocolVersion};
+    use rmcp::transport::StreamableHttpClientTransport;
+    use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+    use rmcp::{ClientLifecycleMode, ClientServiceExt, ServiceExt};
+
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(ctx.mcp_url(port)).custom_headers(
+            [(
+                http::header::HOST,
+                http::HeaderValue::from_str(&ctx.domain.0)?,
+            )]
+            .into(),
+        ),
+    );
+    let config = ClientConfig::new(
+        ClientCapabilities::default(),
+        Implementation::new("golem-mcp-era-test", "1"),
+    );
+    Ok(if revision.has_initialize() {
+        config
+            .with_protocol_version(revision)
+            .serve(transport)
+            .await?
+    } else {
+        config
+            .serve_with_lifecycle(
+                transport,
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                },
+            )
+            .await?
+    })
+}
+
+/// A 2026-07-28 client and a 2025-06-18 client list and call the same tools.
+#[test]
+#[tracing::instrument]
+async fn a_2026_client_and_a_2025_client_list_and_call_the_same_tools(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
+    use rmcp::model::{CallToolRequestParams, ProtocolVersion};
+
+    let modern = rmcp_client(ctx, ctx.mcp_port, ProtocolVersion::V_2026_07_28).await?;
+    let legacy = rmcp_client(ctx, ctx.custom_request_port, ProtocolVersion::V_2025_06_18).await?;
+    let names = |tools: Vec<rmcp::model::Tool>| {
+        tools
+            .into_iter()
+            .map(|tool| tool.name.into_owned())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let modern_tools = names(modern.list_all_tools().await?);
+    let legacy_tools = names(legacy.list_all_tools().await?);
+    assert_eq!(modern_tools, legacy_tools);
+    assert!(
+        modern_tools.contains("WeatherAgent-get_weather_report_for_city"),
+        "{modern_tools:?}"
+    );
+
+    let call = |name: &str| {
+        CallToolRequestParams::new("WeatherAgent-get_weather_report_for_city".to_string())
+            .with_arguments(
+                json!({ "name": name, "city": "Sydney" })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+    };
+    let results = [
+        modern.call_tool(call("era-2026")).await?,
+        legacy.call_tool(call("era-2025")).await?,
+    ];
+    results
+        .iter()
+        .zip(["era-2026", "era-2025"])
+        .for_each(|(result, name)| {
+            assert_eq!(result.is_error, Some(false), "{result:?}");
+            assert_eq!(
+                result
+                    .structured_content
+                    .as_ref()
+                    .map(|content| &content["value"]),
+                Some(&json!(format!(
+                    "Agent {name}: This is a weather report for Sydney"
+                )))
+            );
+        });
+    modern.cancel().await?;
+    legacy.cancel().await?;
+    Ok(())
+}
+
+/// `GET` and `DELETE` get `405`, an `initialize` that asks for 2024-11-05 gets a served revision,
+/// and a `tools/list` that names 2024-11-05 gets `400`. None of them issues a session ID.
+#[test]
+#[tracing::instrument]
+async fn session_methods_and_unserved_revisions_create_nothing(
+    #[dimension(db)] ctx: &McpTestContext,
+) -> anyhow::Result<()> {
+    let http = reqwest::Client::new();
+    let url = ctx.mcp_url(ctx.mcp_port);
+    let request = |method: reqwest::Method| {
+        http.request(method, &url)
+            .header("Host", &ctx.domain.0)
+            .header("Accept", "application/json, text/event-stream")
+    };
+
+    let session_methods = [
+        request(reqwest::Method::GET).send().await?,
+        request(reqwest::Method::GET)
+            .header("Last-Event-ID", "0")
+            .send()
+            .await?,
+        request(reqwest::Method::DELETE)
+            .header("Mcp-Session-Id", "a-session")
+            .send()
+            .await?,
+    ];
+    session_methods.iter().for_each(|response| {
+        assert_eq!(response.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(response.headers()["Allow"], "POST");
+        assert!(!response.headers().contains_key("mcp-session-id"));
+    });
+
+    let old = McpClient::initialize(http.clone(), &url, &ctx.domain.0, "2024-11-05").await?;
+    assert_eq!(old.revision(), Some("2025-11-25"));
+
+    let listed = request(reqwest::Method::POST)
+        .header("Content-Type", "application/json")
+        .header("MCP-Protocol-Version", "2024-11-05")
+        .json(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+        .send()
+        .await?;
+    assert_eq!(listed.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(!listed.headers().contains_key("mcp-session-id"));
     Ok(())
 }
 

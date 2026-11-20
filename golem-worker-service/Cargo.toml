@@ -127,6 +127,7 @@ pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
 rsa = { workspace = true }
 rustls = { workspace = true, features = ["ring"] }
 rustls-pemfile = { workspace = true }

@@ -14,6 +14,7 @@
 
 use crate::mcp::agent_mcp_resource::McpResourceUri;
 use crate::mcp::agent_mcp_tool::AgentMcpTool;
+use crate::mcp::revision::SERVED_REVISIONS;
 use crate::mcp::serving::{McpServing, ServeKind, ServeRefusal, Serving};
 use crate::mcp::{McpCapabilityLookup, McpDeployment, invoke};
 use crate::service::worker::WorkerService;
@@ -21,6 +22,7 @@ use golem_service_base::mcp::CompiledMcp;
 use poem::http;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, model::*, service::RequestContext};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Serves the MCP requests of one deployment domain. It keeps no state between requests: every
 /// request is served with the deployment that the [`McpServing`] in its extensions names.
@@ -70,19 +72,18 @@ impl GolemAgentMcpServer {
                 export,
                 input,
                 stdin,
-                context.ct.clone(),
+                // A closed response stream does not cancel the call.
+                CancellationToken::new(),
                 None,
             )
             .await;
-            // A cancelled call failed because of its cancel, not because the deployment changed.
-            if result.is_err() && !context.ct.is_cancelled() {
+            if result.is_err() {
                 self.mcp_definitions_lookup
                     .invalidate(&compiled.domain)
                     .await;
                 if let Ok(current) = self.mcp_definitions_lookup.get(&compiled.domain).await
                     && !same_deployment(compiled, &current.compiled)
                 {
-                    let _ = context.peer.notify_tool_list_changed().await;
                     return Err(changed_tool_set());
                 }
             }
@@ -151,10 +152,7 @@ async fn serve(
         })?;
     match serving.serve(kind, &context.ct).await {
         Ok(serving) => Ok(serving),
-        Err(ServeRefusal::ToolSetChanged) => {
-            let _ = context.peer.notify_tool_list_changed().await;
-            Err(changed_tool_set())
-        }
+        Err(ServeRefusal::ToolSetChanged) => Err(changed_tool_set()),
         Err(ServeRefusal::Gone) => Err(ErrorData::invalid_request("MCP session ended", None)),
         Err(ServeRefusal::Unavailable) => Err(ErrorData::internal_error(
             "MCP session could not be read",
@@ -193,14 +191,13 @@ impl ServerHandler for GolemAgentMcpServer {
                 .enable_prompts()
                 .enable_resources()
                 .enable_tools()
-                .enable_tool_list_changed()
                 .build(),
         )
-        .with_protocol_version(ProtocolVersion::V_2025_03_26)
+        .with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
     }
 
     fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
-        std::borrow::Cow::Borrowed(ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_03_26))
+        std::borrow::Cow::Borrowed(SERVED_REVISIONS)
     }
 
     async fn list_tools(
@@ -304,11 +301,11 @@ impl ServerHandler for GolemAgentMcpServer {
 
     async fn initialize(
         &self,
-        _request: InitializeRequestParams,
+        request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         serve(&context, ServeKind::Initialize).await?;
-        Ok(self.get_info())
+        self.negotiate_initialize(&request)
     }
 }
 
@@ -430,6 +427,7 @@ mod tests {
             InvocationHarness, McpCapabilitiesLookupError, McpCapabilityLookup, McpDeployment,
             mcp_http_transport_config,
         };
+        use futures::StreamExt;
         use golem_common::model::agent::{AgentMode, InvocationFreshnessDisposition};
         use golem_common::model::deployment::DeploymentRevision;
         use golem_common::model::domain_registration::Domain;
@@ -540,17 +538,16 @@ mod tests {
         }
 
         #[test]
-        async fn tool_set_changed_gives_the_error_and_tools_list_changed() {
+        async fn tool_set_changed_gives_the_error_and_no_notification() {
             let harness = InvocationHarness::with_run_method(AgentMode::Durable);
             let refused = messages(
                 &endpoint(&harness),
                 post(call(1, "mcp-agent-run"), Arc::new(ToolSetChanged)),
             )
             .await;
-            assert_eq!(refused.len(), 2, "{refused:?}");
-            assert_eq!(refused[0]["method"], "notifications/tools/list_changed");
+            assert_eq!(refused.len(), 1, "{refused:?}");
             assert_eq!(
-                refused[1]["error"]["message"],
+                refused[0]["error"]["message"],
                 "tool set changed; list tools again"
             );
         }
@@ -591,12 +588,60 @@ mod tests {
         }
 
         #[test]
-        fn supported_protocol_versions_stay_up_to_2025_03_26() {
+        fn supported_protocol_versions_are_the_served_revisions() {
             let harness = InvocationHarness::with_run_method(AgentMode::Durable);
             assert_eq!(
                 server(&harness).supported_protocol_versions().as_ref(),
-                ProtocolVersion::known_up_to(&ProtocolVersion::V_2025_03_26)
+                [
+                    ProtocolVersion::V_2025_03_26,
+                    ProtocolVersion::V_2025_06_18,
+                    ProtocolVersion::V_2025_11_25,
+                    ProtocolVersion::V_2026_07_28,
+                ]
             );
+        }
+
+        #[test]
+        fn get_info_advertises_no_list_changed_and_no_logging() {
+            let harness = InvocationHarness::with_run_method(AgentMode::Durable);
+            let info = serde_json::to_value(server(&harness).get_info()).unwrap();
+            let capabilities = &info["capabilities"];
+            assert!(capabilities["tools"].is_object(), "{info}");
+            assert!(capabilities["tools"].get("listChanged").is_none(), "{info}");
+            assert!(capabilities.get("logging").is_none(), "{info}");
+        }
+
+        fn initialize(id: i64, revision: &str) -> Value {
+            json!({"jsonrpc": "2.0", "id": id, "method": "initialize", "params": {
+                "protocolVersion": revision, "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1"}
+            }})
+        }
+
+        #[test]
+        async fn initialize_echoes_a_served_revision_and_names_2025_11_25_for_others() {
+            let harness = InvocationHarness::with_run_method(AgentMode::Durable);
+            let endpoint = endpoint(&harness);
+            let negotiated =
+                |messages: Vec<Value>| messages[0]["result"]["protocolVersion"].clone();
+            let cases = [
+                ("2025-03-26", "2025-03-26"),
+                ("2025-06-18", "2025-06-18"),
+                ("2025-11-25", "2025-11-25"),
+                ("2024-11-05", "2025-11-25"),
+                ("2026-07-28", "2025-11-25"),
+            ];
+            let answers: Vec<(Value, &str)> = futures::stream::iter(cases)
+                .then(|(asked, expected)| {
+                    let request = post(initialize(1, asked), stateless(&harness, false));
+                    let endpoint = &endpoint;
+                    async move { (negotiated(messages(endpoint, request).await), expected) }
+                })
+                .collect()
+                .await;
+            answers
+                .iter()
+                .for_each(|(negotiated, expected)| assert_eq!(negotiated, expected));
         }
     }
 }
