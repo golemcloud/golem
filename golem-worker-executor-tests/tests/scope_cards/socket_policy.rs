@@ -506,7 +506,7 @@ async fn a_hostname_grant_with_a_port_allows_the_lookup_and_only_that_port(
         &[format!("localhost:{}", granted.address.port())],
     )
     .await?;
-    let agent = agent_id!("Networking", "socket-policy-port-grant-lookup");
+    let agent = agent_key!("Networking", "socket-policy-port-grant-lookup");
     configure_scope_card_root(&authority, &component, &agent)?;
     executor.start_agent(&component.id, agent.clone()).await?;
 
