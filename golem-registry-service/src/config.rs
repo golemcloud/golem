@@ -1320,6 +1320,7 @@ mod tests {
     #[test]
     pub async fn mcp_import_resolver_rejects_unrepresentable_operation_timeout() {
         use crate::bootstrap::Services;
+        use crate::services::builtin_artifact::BuiltinArtifactShutdown;
         use golem_common::config::{DbConfig, DbSqliteConfig};
 
         let mut config = RegistryServiceConfig::default();
@@ -1337,6 +1338,7 @@ mod tests {
             &config,
             &mut tasks,
             &crate::startup::StartupProgress::default(),
+            BuiltinArtifactShutdown::never(),
         )
         .await
         .err()
@@ -1379,6 +1381,7 @@ mod tests {
     #[test]
     pub async fn mcp_oauth_config_validates_before_bootstrap() {
         use crate::bootstrap::Services;
+        use crate::services::builtin_artifact::BuiltinArtifactShutdown;
         use golem_common::config::{DbConfig, DbSqliteConfig};
         use serde_json::json;
         use std::time::Duration;
@@ -1416,6 +1419,7 @@ mod tests {
             &config,
             &mut tasks,
             &crate::startup::StartupProgress::default(),
+            BuiltinArtifactShutdown::never(),
         )
         .await
         .err()
