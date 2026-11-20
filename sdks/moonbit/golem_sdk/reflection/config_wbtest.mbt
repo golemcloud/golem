@@ -110,19 +110,23 @@ test "agent snapshot accessors return defensive nested copies" {
 }
 
 ///|
-test "reflected config preserves absent, null, and canonical JSON defaults" {
+test "reflected config preserves absent, null, and native defaults" {
   let graph = @model.schema_graph_to_wit({
     defs: [],
     root: @model.schema_type(Option(@model.schema_type(String))),
   })
-  let defaults : Array[String?] = [None, Some("null"), Some("\"árvíz\\n\"")]
+  let defaults : Array[@model.SchemaValue?] = [
+    None,
+    Some(@model.Option(None)),
+    Some(@model.Option(Some(@model.String("árvíz\n")))),
+  ]
   let config : Array[@common.AgentConfigDeclaration] = []
   for i, default_value in defaults {
     config.push({
       source: @common.AgentConfigSource::LOCAL,
       path: ["nested", "field\{i}"],
       value_type: graph.root,
-      default_value,
+      default_value: default_value.map(@model.schema_value_to_wit),
     })
   }
   let reflected = decode_agent_type({

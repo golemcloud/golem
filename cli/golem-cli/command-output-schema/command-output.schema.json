@@ -4686,7 +4686,7 @@
         "source": { "type": "string", "enum": ["Local", "Secret"] },
         "path": { "type": "array", "items": { "type": "string" } },
         "value_type": { "$ref": "#/definitions/SchemaType" },
-        "default_value": { "type": "string", "description": "Canonical schema JSON for a static code default." }
+        "default_value": { "$ref": "#/definitions/SchemaValue", "description": "Native schema value for a static declaration default." }
       },
       "additionalProperties": false
     },
@@ -8116,7 +8116,7 @@
         "source": { "type": "string", "enum": ["Local", "Secret"] },
         "path": { "type": "array", "items": { "type": "string" } },
         "value_type": { "$ref": "#/definitions/SchemaType" },
-        "default_value": { "type": "string", "description": "Canonical schema JSON for a static code default." }
+        "default_value": { "$ref": "#/definitions/SchemaValue", "description": "Native schema value for a static declaration default." }
       },
       "additionalProperties": false
     },

@@ -13,7 +13,7 @@ pub struct ReflectedConfigDeclaration {
   path : Array[String]
   source : @common.AgentConfigSource
   schema : SchemaRef
-  default_value : String?
+  default_value : @model.SchemaValue?
 } derive(Debug, Eq)
 
 ///|
@@ -88,10 +88,10 @@ pub fn ReflectedConfigDeclaration::schema(
 }
 
 ///|
-/// The canonical schema JSON default, or `None` when no default is declared.
+/// Native static data, or `None` when no default is declared.
 pub fn ReflectedConfigDeclaration::default_value(
   self : ReflectedConfigDeclaration,
-) -> String? {
+) -> @model.SchemaValue? {
   self.default_value
 }
 
@@ -227,7 +227,11 @@ fn decode_agent_type(
         defs: decoded.graph.defs,
         root: decode_root_type(decoded, declaration.value_type),
       }),
-      default_value: declaration.default_value,
+      default_value: declaration.default_value.map(value => {
+        @model_host.schema_value_from_wit(value) catch {
+          error => raise Schema("invalid config default: " + repr(error))
+        }
+      }),
     })
   }
   {

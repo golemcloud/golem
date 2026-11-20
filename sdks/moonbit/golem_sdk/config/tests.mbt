@@ -91,7 +91,7 @@ test "collect_entries_of - Option field is a LOCAL declaration" {
     default_value="null",
   )
   assert_eq(entries[0].default_value, None)
-  assert_eq(defaulted[0].default_value, Some("null"))
+  assert_eq(defaulted[0].default_value, Some(@model.Option(None)))
   assert_eq(defaulted[0].path, entries[0].path)
   assert_eq(defaulted[0].value_type, entries[0].value_type)
 }
@@ -130,7 +130,11 @@ test "wire configuration declarations share one type pool and preserve secret wr
     ["limits", "cleared"],
     default_value="null",
   )
-  assert_eq(defaulted[0].default_value, Some("null"))
+  let expected_default : @model.SchemaValue? = Some(Option(None))
+  assert_eq(
+    defaulted[0].default_value.map(@model_host.schema_value_from_wit),
+    expected_default,
+  )
   assert_eq(defaulted[0].path, ["limits", "cleared"])
   guard encoder.nodes[defaulted[0].value_type].body is @types.OptionType(inner) else {
     fail("defaulted optional declaration lost its option type")

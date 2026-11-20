@@ -23,13 +23,24 @@ pub fn[T : @schema.WireSchema] wire_local_entry(
   path : Array[String],
   default_value? : String,
 ) -> Array[@common.AgentConfigDeclaration] {
-  let graph = canonical_config_graph(@schema.wire_schema(tag))
+  let graph = @schema.canonical_config_graph(@schema.wire_schema(tag))
+  let value = default_value.map(json => {
+    let model = @model.schema_graph_from_wit(graph) catch {
+      error => abort("invalid config schema: " + repr(error))
+    }
+    let value = @reflection.SchemaRef::new(model).pack_json(@json.parse(json)) catch {
+      error => abort("invalid config default: " + repr(error))
+    }
+    @model.schema_value_to_wit(value) catch {
+      error => abort("invalid config default: " + repr(error))
+    }
+  })
   [
     {
       source: @common.AgentConfigSource::LOCAL,
       path,
       value_type: append_config_type(encoder, graph, graph.root),
-      default_value,
+      default_value: value,
     },
   ]
 }

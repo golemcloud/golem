@@ -12,6 +12,8 @@ import {
 // Values
 pub fn[T : WireSchema] append_wire_type_with(WireTypeEncoder, TypeTag[T]) -> Int32
 
+pub fn canonical_config_graph(@types.SchemaGraph) -> @types.SchemaGraph
+
 pub fn check_case_index(UInt32, UInt32, String) -> Unit raise FromSchemaError
 
 pub fn empty_wire_metadata() -> @types.MetadataEnvelope

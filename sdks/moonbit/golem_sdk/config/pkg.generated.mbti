@@ -11,8 +11,6 @@ import {
 // Values
 pub fn[T : WireConfigField] append_wire_entries_with(@schema.WireTypeEncoder, @schema.TypeTag[T], Array[String]) -> Array[@common.AgentConfigDeclaration]
 
-pub fn canonical_config_graph(@types.SchemaGraph) -> @types.SchemaGraph
-
 pub fn[T : ConfigField] collect_entries_of(@schema.TypeTag[T], Array[String]) -> Array[@agents.AgentConfigDef] raise @common.AgentError
 
 pub fn[T : ConfigField] load_config(@schema.TypeTag[T]) -> Config[T] raise @common.AgentError

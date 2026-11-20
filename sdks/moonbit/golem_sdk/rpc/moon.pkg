@@ -8,7 +8,6 @@ import {
   "golemcloud/golem_sdk/permissions",
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model" @model,
-  "golemcloud/golem_sdk/config",
 }
 
 // Test host buffers use the same allocator as the generated bindings.
