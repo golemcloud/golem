@@ -69,9 +69,16 @@ struct JsonRpcMethod<'a> {
     method: Option<Cow<'a, str>>,
 }
 
-/// Answers `400 Bad Request` to a `POST` that is not `initialize` and whose
-/// `MCP-Protocol-Version` header names a revision that the endpoint does not serve. Every other
-/// request goes on unchanged, so `GET` and `DELETE` always reach rmcp.
+/// Answers `400 Bad Request` to a `POST` when both of these are true:
+///
+/// - The body is a JSON object with no `method`, a `null` `method`, or a string `method` other
+///   than `initialize`. Each JSON-RPC request, notification and response other than `initialize`
+///   has this form.
+/// - The `MCP-Protocol-Version` header has a value that is not UTF-8, or that names a revision
+///   that the endpoint does not serve.
+///
+/// Every other request goes on unchanged to rmcp. This includes each `GET` and `DELETE`, and each
+/// `POST` with a body that does not parse.
 ///
 /// The middleware reads the whole body of a `POST`, so it must sit inside the request body limit.
 pub(crate) struct ServedRevisions;
@@ -169,9 +176,11 @@ mod tests {
         assert_eq!(admit_post(INITIALIZE, old), Ok(()));
         assert!(admit_post(LIST, old).is_err());
         assert!(admit_post(notification, old).is_err());
+        assert!(admit_post(br#"{"jsonrpc":"2.0","id":1,"result":{}}"#, old).is_err());
         assert_eq!(admit_post(LIST, Some(b"2025-06-18")), Ok(()));
         assert_eq!(admit_post(LIST, None), Ok(()));
         assert_eq!(admit_post(b"not json", old), Ok(()));
+        assert_eq!(admit_post(br#"{"jsonrpc":"#, old), Ok(()));
         assert_eq!(admit_post(b"[]", old), Ok(()));
     }
 

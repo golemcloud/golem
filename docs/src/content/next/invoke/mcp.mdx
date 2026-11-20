@@ -34,7 +34,7 @@ After `golem deploy`, the MCP server is available at `http://mcp-demo.localhost:
 
 The MCP server serves the protocol revisions `2025-03-26`, `2025-06-18`, `2025-11-25` and `2026-07-28`. It keeps no session. It serves each request with the deployment of the request's domain alone, so any server replica can serve any request.
 
-- `initialize` negotiates the revision from its body. When the client asks for a revision that the server does not serve, for example `2024-11-05`, the result names `2025-11-25`. The client then continues with that revision or stops.
+- `initialize` negotiates the revision from its body. When the client asks for a revision that the server does not serve, for example `2024-11-05`, the result names `2025-11-25`. The client then continues with that revision or stops. When the client asks for `2026-07-28`, the result also names `2025-11-25`, because `2026-07-28` has no `initialize` handshake. A `2026-07-28` client sends its requests without `initialize`.
 - The response to `initialize` has no `Mcp-Session-Id` header. The server ignores an `Mcp-Session-Id` header that a client sends.
 - Every other request uses the revision of its `MCP-Protocol-Version` header, or `2025-03-26` when the request has no header. A request whose header names a revision that the server does not serve gets `400 Bad Request`.
 - `server/discover` returns the served revisions and the capabilities of the server. A `2026-07-28` client starts with `server/discover`, and each of its requests names its revision in `_meta`.

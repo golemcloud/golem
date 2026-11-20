@@ -139,7 +139,7 @@ fn mcp_routes(
 /// The rmcp service for `handler`s behind [`ServedRevisions`]. It serves every request
 /// statelessly and has no event store, so `GET` and `DELETE` get `405`. Each request must carry
 /// its `Arc<McpDeployment>` and an `McpServing` extension.
-pub(crate) fn stateless_transport<S, H>(
+fn stateless_transport<S, H>(
     handler: H,
     config: &crate::config::McpConfig,
 ) -> impl Endpoint<Output = Response> + use<S, H>
