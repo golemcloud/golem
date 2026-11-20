@@ -145,8 +145,12 @@ object AgentTypeEncoderV2 {
 
     val configJs: js.Array[JsAgentConfigDeclaration] =
       req.config.map { c =>
-        JsAgentConfigDeclaration(c.source, c.path.toJSArray, rootIndex(c.graph),
-          c.defaultValue.map(v => SchemaWireInterop.valueTreeToJs(SchemaWire.schemaValueToWit(v))).orUndefined)
+        JsAgentConfigDeclaration(
+          c.source,
+          c.path.toJSArray,
+          rootIndex(c.graph),
+          c.defaultValue.map(v => SchemaWireInterop.valueTreeToJs(SchemaWire.schemaValueToWit(v))).orUndefined
+        )
       }.toJSArray
 
     // 4. Finish the single graph (placeholder structural root) and convert to JS.

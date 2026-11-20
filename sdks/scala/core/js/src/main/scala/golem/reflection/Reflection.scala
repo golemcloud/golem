@@ -206,7 +206,9 @@ object Reflection {
               declaration.path.toList,
               declaration.source,
               SchemaRef(decoded.graph, decoded.at(declaration.valueType)),
-              declaration.defaultValue.toOption.map(v => SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(v)))
+              declaration.defaultValue.toOption.map(v =>
+                SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(v))
+              )
             )
           }
         )

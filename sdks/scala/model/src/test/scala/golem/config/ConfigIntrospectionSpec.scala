@@ -95,7 +95,11 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
         )
         val wire = WireAgentMetadata.fromModel(metadata)
         assertTrue(
-          wire.config.map(_.defaultValue) == List(Some(golem.schema.SchemaValue.StringValue("db.example")), Some(golem.schema.SchemaValue.OptionValue(None)), None),
+          wire.config.map(_.defaultValue) == List(
+            Some(golem.schema.SchemaValue.StringValue("db.example")),
+            Some(golem.schema.SchemaValue.OptionValue(None)),
+            None
+          ),
           wire.reflected.config == declarations
         )
       },

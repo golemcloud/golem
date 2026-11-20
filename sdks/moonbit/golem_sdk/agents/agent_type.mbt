@@ -58,7 +58,7 @@ pub(all) struct AgentConfigDef {
   source : @common.AgentConfigSource
   path : Array[String]
   value_type : @model.SchemaGraph
-  default_value : String?
+  default_value : @model.SchemaValue?
 }
 
 ///|
@@ -183,7 +183,11 @@ pub fn AgentTypeDef::to_agent_type(
       source: decl.source,
       path: decl.path,
       value_type: encoder.encode_type(decl.value_type.root),
-      default_value: decl.default_value,
+      default_value: decl.default_value.map(value => {
+        @model.schema_value_to_wit(value) catch {
+          error => abort("invalid config default: " + repr(error))
+        }
+      }),
     })
   }
   let schema = encoder.finish()

@@ -142,9 +142,9 @@ object JsAgentMethod {
 
 @js.native
 sealed trait JsAgentConfigDeclaration extends js.Object {
-  def source: JsAgentConfigSource      = js.native
-  def path: js.Array[String]           = js.native
-  def valueType: Int                   = js.native
+  def source: JsAgentConfigSource                 = js.native
+  def path: js.Array[String]                      = js.native
+  def valueType: Int                              = js.native
   def defaultValue: js.UndefOr[JsSchemaValueTree] = js.native
 }
 object JsAgentConfigDeclaration {
