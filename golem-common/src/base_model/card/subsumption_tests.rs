@@ -216,6 +216,189 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
     }
 }
 
+/// The agents of one type as Golem builds their owners: each has an ID from one of the
+/// derivations Golem issues and the trusted type name. Keyed, unkeyed, ephemeral and forked
+/// agents, and an imported 1.6 phantom agent, are all agents of the type.
+fn agents_of_type(agent_type: &str, type_tag: u32) -> Vec<(&'static str, AgentOwnerLeafPattern)> {
+    use crate::base_model::environment::EnvironmentId;
+    use crate::base_model::type_id::TypeId;
+    use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
+    use crate::model::agent::{AgentKey, AgentTypeName};
+    use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+
+    let environment = EnvironmentId(Uuid::from_u128(1));
+    let type_id = TypeId::try_from(type_tag).unwrap();
+    let type_name = AgentTypeName(agent_type.to_string());
+    let key = AgentKey::new(
+        type_name.clone(),
+        TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+            SchemaValue::Record { fields: Vec::new() },
+        ),
+    )
+    .unwrap();
+    let keyed = AgentId::keyed(environment, type_id, &key);
+    let idempotency_key = |value: &str| IdempotencyKey::new(value.to_string());
+    [
+        ("keyed", keyed),
+        ("unkeyed", AgentId::random(type_id)),
+        (
+            "unkeyed with an idempotency key",
+            AgentId::idempotent_create(environment, type_id, "user:acct", &idempotency_key("k")),
+        ),
+        (
+            "ephemeral",
+            AgentId::ephemeral_invocation(environment, type_id, &idempotency_key("owner")),
+        ),
+        (
+            "allocated inside an agent",
+            AgentId::allocated(
+                environment,
+                type_tag,
+                keyed,
+                AgentFingerprint(Uuid::from_u128(5)),
+                &idempotency_key("call"),
+            ),
+        ),
+        (
+            "forked",
+            AgentId::durable_stream_fork(environment, keyed, "route:api/stream", "fork"),
+        ),
+        (
+            "imported 1.6 phantom",
+            AgentId::imported_phantom(
+                environment,
+                type_id,
+                &format!("{agent_type}()[550e8400-e29b-41d4-a716-446655440000]"),
+            ),
+        ),
+    ]
+    .into_iter()
+    .map(|(kind, agent_id)| {
+        (
+            kind,
+            AgentOwnerLeafPattern::agent(agent_id, Some(type_name.clone())),
+        )
+    })
+    .collect()
+}
+
+/// Replaces the leaf of the agent owner of `target`.
+fn with_agent_leaf(mut target: PermissionTarget, leaf: &AgentOwnerLeafPattern) -> PermissionTarget {
+    let owner = match &mut target {
+        PermissionTarget::Filesystem(target) => &mut target.owner,
+        PermissionTarget::Env(target) => &mut target.owner,
+        PermissionTarget::Oplog(target) => &mut target.owner,
+        PermissionTarget::Config(target) => &mut target.owner,
+        PermissionTarget::Agent(target) => &mut target.owner,
+        _ => panic!("not an agent-owned target"),
+    };
+    let AgentOwnerPattern::Agent { agent, .. } = owner else {
+        panic!("not a concrete agent owner");
+    };
+    *agent = leaf.clone();
+    target
+}
+
+/// These tests guard the type-name match of `Type(*)` owners for every kind of agent of the type.
+#[test]
+fn type_wildcard_grants_cover_every_agent_of_the_type_in_every_agent_owned_class() {
+    let holder = RecipientPattern::parse("acme/shop/prod/cart/Caller").unwrap();
+    let classes = [
+        ("agent", "invoke", "add-item"),
+        ("env", "read", "GOLEM_AGENT_ID"),
+        ("filesystem", "read", "/data/a.txt"),
+        ("oplog", "read", "*"),
+        ("config", "read", "model.retry-count"),
+    ];
+    let untyped = AgentOwnerLeafPattern::agent(crate::base_model::AgentId::from_parts(7, 1), None);
+
+    for (class, verb, resource) in classes {
+        let grant = |owner: &str| {
+            parse_permission(&format!(
+                "{class}(acme/shop/prod/cart/{owner}) @ * : {verb} : {resource}"
+            ))
+            .unwrap()
+        };
+        let target = |leaf: &AgentOwnerLeafPattern| {
+            with_agent_leaf(
+                grant("00000007-0000-8000-8000-000000000001").to_target(),
+                leaf,
+            )
+        };
+        let surface =
+            EffectiveSurface::from_grants(&[grant("Cart(*)")], &[], &[], &[], &holder).unwrap();
+
+        for (kind, agent) in agents_of_type("Cart", 7) {
+            assert!(
+                surface.authorize(&target(&agent)).unwrap(),
+                "{class} grant on Cart(*) must cover the {kind} Cart agent"
+            );
+        }
+        for (kind, agent) in agents_of_type("CartX", 8) {
+            assert!(
+                !surface.authorize(&target(&agent)).unwrap(),
+                "{class} grant on Cart(*) must not cover the {kind} CartX agent"
+            );
+        }
+        assert!(
+            !surface.authorize(&target(&untyped)).unwrap(),
+            "{class} grant on Cart(*) must not cover an agent without its type name"
+        );
+    }
+}
+
+#[test]
+fn type_wildcard_denials_cover_every_agent_of_the_type() {
+    let holder = RecipientPattern::parse("acme/shop/prod/cart/Caller").unwrap();
+    let grant = |owner: &str| {
+        parse_permission(&format!(
+            "agent(acme/shop/prod/cart/{owner}) @ * : invoke : add-item"
+        ))
+        .unwrap()
+    };
+    let target = |leaf: &AgentOwnerLeafPattern| {
+        with_agent_leaf(
+            grant("00000007-0000-8000-8000-000000000001").to_target(),
+            leaf,
+        )
+    };
+    let all_agents = grant("*");
+    let denied_type = grant("Cart(*)");
+
+    let with_upper_denial = EffectiveSurface::from_grants(
+        std::slice::from_ref(&all_agents),
+        &[],
+        &[],
+        std::slice::from_ref(&denied_type),
+        &holder,
+    )
+    .unwrap();
+    let with_lower_denial = EffectiveSurface::from_grants(
+        std::slice::from_ref(&all_agents),
+        std::slice::from_ref(&denied_type),
+        &[],
+        &[],
+        &holder,
+    )
+    .unwrap();
+
+    for surface in [with_upper_denial, with_lower_denial] {
+        for (kind, agent) in agents_of_type("Cart", 7) {
+            assert!(
+                !surface.authorize(&target(&agent)).unwrap(),
+                "a denial on Cart(*) must deny the {kind} Cart agent"
+            );
+        }
+        for (kind, agent) in agents_of_type("CartX", 8) {
+            assert!(
+                surface.authorize(&target(&agent)).unwrap(),
+                "a denial on Cart(*) must not deny the {kind} CartX agent"
+            );
+        }
+    }
+}
+
 #[test]
 fn invalid_owner_paths_fail_subsumption() {
     assert_matches!(
