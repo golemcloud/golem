@@ -32,7 +32,7 @@ use golem_common::model::invocation_session_public::{
     DecimalU64, INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
     PublicClientMessage, PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult,
     PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamOutcome,
-    decode_server_text, encode_text,
+    decode_server_text, encode_client_text,
 };
 use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey, RoutingTable};
 use golem_common::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
@@ -117,7 +117,7 @@ pub(crate) async fn send_public_request(
     request: &PublicClientMessage,
 ) -> anyhow::Result<()> {
     socket
-        .send(Message::Text(encode_text(request)?.into()))
+        .send(Message::Text(encode_client_text(request)?.into()))
         .await?;
     Ok(())
 }
@@ -155,7 +155,7 @@ fn public_start(
         attempt_id: uuid::Uuid::new_v4(),
         config: Vec::new(),
         idempotency_key: IdempotencyKey::fresh().value,
-        method_parameters,
+        method_parameters: method_parameters.try_into().unwrap(),
         selector: Box::new(InvocationSelector {
             agent_type: "StreamingRpcTarget".to_string(),
             application: application_name.to_string(),

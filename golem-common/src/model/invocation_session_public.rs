@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::de::{MapAccess, Visitor};
+use serde::de::{DeserializeOwned, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -341,7 +341,64 @@ pub enum PublicResumeOperation {
     Takeover,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Bounded structural JSON; numbers retain their JSON representation until dispatch.
+#[derive(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct JsonMethodInput {
+    value: String,
+}
+
+impl std::fmt::Debug for JsonMethodInput {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JsonMethodInput")
+            .field("bytes", &self.value.len())
+            .finish()
+    }
+}
+
+impl JsonMethodInput {
+    pub fn capture(bytes: &[u8]) -> Result<Self, PublicProtocolError> {
+        let too_large = || {
+            PublicProtocolError::new(
+                PublicErrorCode::ResourceExhausted,
+                "method input exceeds the 16 MiB logical value limit",
+            )
+        };
+        if bytes.len() > MAX_LOGICAL_VALUE_SIZE {
+            return Err(too_large());
+        }
+        let value = canonicalize_structural_json(bytes)?;
+        if value.len() > MAX_LOGICAL_VALUE_SIZE {
+            return Err(too_large());
+        }
+        Ok(Self { value })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.value
+    }
+}
+
+impl Serialize for JsonMethodInput {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let raw: &serde_json::value::RawValue =
+            serde_json::from_str(&self.value).map_err(serde::ser::Error::custom)?;
+        raw.serialize(serializer)
+    }
+}
+
+impl TryFrom<Value> for JsonMethodInput {
+    type Error = PublicProtocolError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        Self::capture(encode_json_value(&value)?.as_bytes())
+    }
+}
+
+/// Client frames are decoded with [`decode_client_text`] and canonically encoded with
+/// [`encode_client_text`], preserving the original method JSON independently of envelope controls.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum PublicClientMessage {
     #[serde(rename = "invocationStart")]
@@ -352,7 +409,7 @@ pub enum PublicClientMessage {
         #[serde(rename = "idempotencyKey")]
         idempotency_key: String,
         #[serde(rename = "methodParameters")]
-        method_parameters: Value,
+        method_parameters: JsonMethodInput,
         selector: Box<InvocationSelector>,
         version: u8,
     },
@@ -401,6 +458,13 @@ pub enum PublicClientMessage {
         outcome: PublicStreamOutcome,
         version: u8,
     },
+}
+
+impl<'de> Deserialize<'de> for PublicClientMessage {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = Box::<serde_json::value::RawValue>::deserialize(deserializer)?;
+        decode_client_text(raw.get().as_bytes()).map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -804,15 +868,135 @@ pub struct BinaryMessage {
 
 pub fn decode_client_text(bytes: &[u8]) -> Result<PublicClientMessage, PublicProtocolError> {
     validate_message_size(bytes.len())?;
-    let value = parse_strict_json(bytes)?;
+    let canonical = canonicalize_structural_json(bytes)?;
+    let StrictRawJsonObject(mut raw_fields) =
+        serde_json::from_str(&canonical).map_err(|_| invalid_client_message())?;
+    let method_parameters = if raw_fields.get("type").is_some_and(|value| {
+        serde_json::from_str::<String>(value.get()).is_ok_and(|kind| kind == "invocationStart")
+    }) {
+        raw_fields.remove("methodParameters")
+    } else {
+        None
+    };
+    let controls = serde_json::to_vec(&raw_fields).map_err(|_| invalid_client_message())?;
+    let value: Value = serde_json::from_slice(&controls).map_err(|_| invalid_client_message())?;
     check_version(&value)?;
     prevalidate_decimal_fields(&value)?;
     prevalidate_uuid_fields(&value)?;
-    let message: PublicClientMessage = serde_json::from_value(value).map_err(|_| {
-        PublicProtocolError::new(PublicErrorCode::MalformedMessage, "invalid client message")
-    })?;
+    let Value::Object(mut fields) = value else {
+        return Err(invalid_client_message());
+    };
+    let kind: String = take_client_field(&mut fields, "type")?;
+    let message = match kind.as_str() {
+        "invocationStart" => PublicClientMessage::InvocationStart {
+            attempt_id: take_client_field(&mut fields, "attemptId")?,
+            config: take_client_field(&mut fields, "config")?,
+            idempotency_key: take_client_field(&mut fields, "idempotencyKey")?,
+            method_parameters: JsonMethodInput::capture(
+                method_parameters
+                    .ok_or_else(invalid_client_message)?
+                    .get()
+                    .as_bytes(),
+            )?,
+            selector: take_client_field(&mut fields, "selector")?,
+            version: take_client_field(&mut fields, "version")?,
+        },
+        "toolStart" => PublicClientMessage::ToolStart {
+            attempt_id: take_client_field(&mut fields, "attemptId")?,
+            application: take_client_field(&mut fields, "application")?,
+            environment: take_client_field(&mut fields, "environment")?,
+            idempotency_key: take_client_field(&mut fields, "idempotencyKey")?,
+            tool_name: take_client_field(&mut fields, "toolName")?,
+            command_path: take_client_field(&mut fields, "commandPath")?,
+            target: take_client_field(&mut fields, "target")?,
+            input: take_client_field(&mut fields, "input")?,
+            stdin: take_client_field(&mut fields, "stdin")?,
+            stdout: take_client_field(&mut fields, "stdout")?,
+            stderr: take_client_field(&mut fields, "stderr")?,
+            version: take_client_field(&mut fields, "version")?,
+        },
+        "resumeAttach" => PublicClientMessage::ResumeAttach {
+            attempt_id: take_client_field(&mut fields, "attemptId")?,
+            operation: take_client_field(&mut fields, "operation")?,
+            output_cursors: take_client_field(&mut fields, "outputCursors")?,
+            session_token: take_client_field(&mut fields, "sessionToken")?,
+            version: take_client_field(&mut fields, "version")?,
+        },
+        "inputStreamItem" => PublicClientMessage::InputStreamItem {
+            channel: take_client_field(&mut fields, "channel")?,
+            sequence: take_client_field(&mut fields, "sequence")?,
+            value: take_client_field(&mut fields, "value")?,
+            version: take_client_field(&mut fields, "version")?,
+        },
+        "stream-end" => PublicClientMessage::StreamEnd {
+            channel: take_client_field(&mut fields, "channel")?,
+            direction: take_client_field(&mut fields, "direction")?,
+            sequence: take_client_field(&mut fields, "sequence")?,
+            outcome: take_client_field(&mut fields, "outcome")?,
+            version: take_client_field(&mut fields, "version")?,
+        },
+        _ => return Err(invalid_client_message()),
+    };
+    if !fields.is_empty() {
+        return Err(invalid_client_message());
+    }
     validate_client_message(&message)?;
     Ok(message)
+}
+
+fn invalid_client_message() -> PublicProtocolError {
+    PublicProtocolError::new(PublicErrorCode::MalformedMessage, "invalid client message")
+}
+
+fn take_client_field<T: DeserializeOwned>(
+    fields: &mut serde_json::Map<String, Value>,
+    name: &str,
+) -> Result<T, PublicProtocolError> {
+    serde_json::from_value(fields.remove(name).ok_or_else(invalid_client_message)?)
+        .map_err(|_| invalid_client_message())
+}
+
+pub fn encode_client_text(message: &PublicClientMessage) -> Result<String, PublicProtocolError> {
+    let PublicClientMessage::InvocationStart {
+        attempt_id,
+        config,
+        idempotency_key,
+        method_parameters,
+        selector,
+        version,
+    } = message
+    else {
+        return encode_text(message);
+    };
+    let controls = encode_json_value(&serde_json::json!({
+        "attemptId": attempt_id,
+        "config": config,
+        "idempotencyKey": idempotency_key,
+        "selector": selector,
+        "type": "invocationStart",
+        "version": version,
+    }))?;
+    let StrictRawJsonObject(mut fields) = serde_json::from_str(&controls).map_err(|_| {
+        PublicProtocolError::new(
+            PublicErrorCode::InternalError,
+            "failed to encode client message",
+        )
+    })?;
+    let input = serde_json::from_str(method_parameters.as_str()).map_err(|_| {
+        PublicProtocolError::new(
+            PublicErrorCode::InternalError,
+            "invalid captured method input",
+        )
+    })?;
+    fields.insert("methodParameters".to_string(), input);
+    let encoded = serde_json::to_string(&fields).map_err(|_| {
+        PublicProtocolError::new(
+            PublicErrorCode::InternalError,
+            "failed to encode client message",
+        )
+    })?;
+    validate_message_size(encoded.len())?;
+    Ok(encoded)
 }
 
 pub fn decode_server_text(bytes: &[u8]) -> Result<PublicServerMessage, PublicProtocolError> {
@@ -1587,8 +1771,8 @@ mod tests {
         BinaryMessageKind, InvocationSelector, MAX_WEBSOCKET_MESSAGE_SIZE, PublicAgentTarget,
         PublicByteStreamRole, PublicClientMessage, PublicErrorCode, PublicInvocationResult,
         PublicNativeToolTarget, PublicServerMessage, PublicTypedValue, decode_binary_message,
-        decode_client_text, decode_server_text, encode_text, validate_durable_stream_session_id,
-        validate_message_size,
+        decode_client_text, decode_server_text, encode_client_text, encode_text,
+        validate_durable_stream_session_id, validate_message_size,
     };
     use crate::schema::{SchemaGraph, SchemaType};
     use serde::Deserialize;
@@ -1615,13 +1799,168 @@ mod tests {
         .unwrap();
         for vector in fixture.vectors {
             let encoded = match vector.direction.as_str() {
-                "client" => encode_text(&decode_client_text(vector.canonical.as_bytes()).unwrap()),
+                "client" => {
+                    encode_client_text(&decode_client_text(vector.canonical.as_bytes()).unwrap())
+                }
                 "server" => encode_text(&decode_server_text(vector.canonical.as_bytes()).unwrap()),
                 other => panic!("unexpected fixture direction {other}"),
             }
             .unwrap();
             assert_eq!(encoded, vector.canonical);
         }
+    }
+
+    fn invocation_start_json(input: &str) -> String {
+        r#"{"attemptId":"11111111-1111-4111-8111-111111111111","config":[],"idempotencyKey":"raw-input","methodParameters":INPUT,"selector":{"agentType":"agent","application":"app","environment":"env","method":"run","target":{"constructorParameters":{},"kind":"key"}},"type":"invocationStart","version":1}"#
+            .replace("INPUT", input)
+    }
+
+    #[test]
+    fn client_method_json_retains_number_lexemes_without_changing_control_numbers() {
+        for input in [
+            "1e400",
+            "-1e999",
+            "1.00000000000000001",
+            "1",
+            "1.0",
+            "1e0",
+            "-0",
+            "-0.0",
+            "null",
+            r#"{"a":1e400,"b":[1.00000000000000001,-0.0]}"#,
+        ] {
+            let encoded = invocation_start_json(input);
+            let message = decode_client_text(encoded.as_bytes()).unwrap();
+            let PublicClientMessage::InvocationStart {
+                method_parameters, ..
+            } = &message
+            else {
+                panic!("expected invocation start");
+            };
+            assert_eq!(method_parameters.as_str(), input);
+            assert_eq!(encode_client_text(&message).unwrap(), encoded);
+            assert_eq!(
+                decode_client_text(encode_client_text(&message).unwrap().as_bytes()).unwrap(),
+                message
+            );
+            assert_eq!(
+                serde_json::from_reader::<_, PublicClientMessage>(std::io::Cursor::new(
+                    encoded.as_bytes()
+                ))
+                .unwrap(),
+                message
+            );
+            assert_eq!(
+                decode_client_text(serde_json::to_string(&message).unwrap().as_bytes()).unwrap(),
+                message
+            );
+        }
+        let control = PublicClientMessage::InputStreamItem {
+            channel: 1,
+            sequence: super::DecimalU64(0),
+            value: serde_json::json!(-0.0),
+            version: 1,
+        };
+        assert_eq!(
+            encode_client_text(&control).unwrap(),
+            r#"{"channel":1,"sequence":"0","type":"inputStreamItem","value":-0,"version":1}"#
+        );
+        let encoded = invocation_start_json("-0.0").replace(
+            r#""config":[]"#,
+            r#""config":[{"path":["x"],"value":-0.0}]"#,
+        );
+        assert!(
+            encode_client_text(&decode_client_text(encoded.as_bytes()).unwrap())
+                .unwrap()
+                .contains(r#""value":-0}"#)
+        );
+        for encoded in [
+            invocation_start_json("0").replace(r#""version":1"#, r#""version":1e400"#),
+            invocation_start_json("0").replace(
+                r#""config":[]"#,
+                r#""config":[{"path":["x"],"value":1e400}]"#,
+            ),
+            invocation_start_json("0").replace(
+                r#""constructorParameters":{}"#,
+                r#""constructorParameters":1e400"#,
+            ),
+            r#"{"channel":1,"sequence":"0","type":"inputStreamItem","value":1e400,"version":1}"#
+                .into(),
+        ] {
+            assert_eq!(
+                decode_client_text(encoded.as_bytes()).unwrap_err().code,
+                PublicErrorCode::MalformedMessage
+            );
+        }
+    }
+
+    #[test]
+    fn raw_client_method_input_preserves_structural_and_envelope_limits() {
+        let input_at_depth_limit = format!("{}0{}", "[".repeat(63), "]".repeat(63));
+        assert!(
+            decode_client_text(invocation_start_json(&input_at_depth_limit).as_bytes()).is_ok()
+        );
+        let too_deep = format!("[{input_at_depth_limit}]");
+        assert_eq!(
+            decode_client_text(invocation_start_json(&too_deep).as_bytes())
+                .unwrap_err()
+                .code,
+            PublicErrorCode::ResourceExhausted
+        );
+        for input in [r#"{"a":1,"\u0061":2}"#, r#"{"x":{"a":1,"a":2}}"#] {
+            assert_eq!(
+                decode_client_text(invocation_start_json(input).as_bytes())
+                    .unwrap_err()
+                    .code,
+                PublicErrorCode::MalformedMessage
+            );
+        }
+        for duplicate in [
+            invocation_start_json("0").replace(r#""version":1"#, r#""version":1,"\u0076ersion":1"#),
+            invocation_start_json("0").replace(
+                r#""config":[]"#,
+                r#""config":[{"path":["x"],"value":{"a":1,"\u0061":2}}]"#,
+            ),
+        ] {
+            assert_eq!(
+                decode_client_text(duplicate.as_bytes()).unwrap_err().code,
+                PublicErrorCode::MalformedMessage
+            );
+        }
+        let missing = invocation_start_json("null").replace(r#""methodParameters":null,"#, "");
+        assert_eq!(
+            decode_client_text(missing.as_bytes()).unwrap_err().code,
+            PublicErrorCode::MalformedMessage
+        );
+        let oversized_input = format!("\"{}\"", "x".repeat(super::MAX_LOGICAL_VALUE_SIZE - 1));
+        assert_eq!(
+            decode_client_text(invocation_start_json(&oversized_input).as_bytes())
+                .unwrap_err()
+                .code,
+            PublicErrorCode::ResourceExhausted
+        );
+        let at_limit = format!("\"{}\"", "x".repeat(super::MAX_LOGICAL_VALUE_SIZE - 2));
+        let mut message = decode_client_text(invocation_start_json(&at_limit).as_bytes()).unwrap();
+        assert!(encode_client_text(&message).is_ok());
+        if let PublicClientMessage::InvocationStart { config, .. } = &mut message {
+            config.push(super::PublicConfigEntry {
+                path: vec!["x".into()],
+                value: Value::String("x".repeat(super::MAX_LOGICAL_VALUE_SIZE)),
+            });
+        }
+        assert_eq!(
+            encode_client_text(&message).unwrap_err().code,
+            PublicErrorCode::ResourceExhausted
+        );
+        let at_collection_limit = format!("[{}]", vec!["0"; super::MAX_COLLECTION_SIZE].join(","));
+        assert!(decode_client_text(invocation_start_json(&at_collection_limit).as_bytes()).is_ok());
+        let too_many = at_collection_limit.replacen('[', "[0,", 1);
+        assert_eq!(
+            decode_client_text(invocation_start_json(&too_many).as_bytes())
+                .unwrap_err()
+                .code,
+            PublicErrorCode::ResourceExhausted
+        );
     }
 
     #[test]

@@ -74,7 +74,7 @@ use golem_common::model::filesystem::{
 };
 use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::invocation_session_public::{
-    InvocationSelector, PublicAgentTarget, PublicConfigEntry, PublicErrorCode,
+    InvocationSelector, JsonMethodInput, PublicAgentTarget, PublicConfigEntry, PublicErrorCode,
     PublicNativeToolTarget, PublicTypedValue,
 };
 use golem_common::model::oplog::OplogCursor;
@@ -670,7 +670,7 @@ pub struct PublicAgentSessionStart {
     pub config: Vec<PublicConfigEntry>,
     pub idempotency_key: String,
     pub attempt_id: uuid::Uuid,
-    pub method_parameters: serde_json::Value,
+    pub method_parameters: JsonMethodInput,
 }
 
 pub struct PublicToolSessionStart {
@@ -2929,10 +2929,12 @@ impl WorkerService {
                 ))
             })?;
         let input_graph = public_input_graph(&invocation_agent_type.schema, &method.input_schema);
+        let method_json = serde_json::from_str(start.method_parameters.as_str())
+            .map_err(|error| WorkerServiceError::TypeChecker(error.to_string()))?;
         let method_parameters = decode_public_json_schema_value(
             &input_graph,
             &input_graph.root,
-            &start.method_parameters,
+            &method_json,
             PublicStreamReferencePolicy::Provisional,
             &mut resolve_stream,
         )?;
@@ -5919,7 +5921,9 @@ mod tests {
                 method_parameters: serde_json::json!({
                     "kind": "record",
                     "value": {"fields": []}
-                }),
+                })
+                .try_into()
+                .unwrap(),
                 idempotency_key: idempotency_key.value,
                 attempt_id: Uuid::new_v4(),
             }
@@ -7633,7 +7637,9 @@ mod tests {
                 "kind": "stream",
                 "value": {"provisionalRef": provisional_ref}
             }]}
-        });
+        })
+        .try_into()
+        .unwrap();
 
         let _responses = harness
             .worker_service

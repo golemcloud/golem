@@ -39,6 +39,8 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::SafeDisplay;
 use golem_common::model::InvocationId;
+#[cfg(test)]
+use golem_common::model::invocation_session_public::encode_client_text;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64, MAX_LOGICAL_VALUE_SIZE,
     MAX_STREAM_MAPPINGS, MAX_WEBSOCKET_MESSAGE_SIZE, PublicAttachmentRevokedReason,
@@ -5204,7 +5206,7 @@ mod tests {
             version: 1,
         };
         let budgets = SessionBudgets::new();
-        let message = Message::text(encode_text(&message).unwrap());
+        let message = Message::text(encode_client_text(&message).unwrap());
         let admission = budgets
             .admit_inbound_frame(message_size(&message))
             .await
@@ -5297,7 +5299,7 @@ mod tests {
             version: 1,
         };
         let budgets = SessionBudgets::new();
-        let message = Message::text(encode_text(&message).unwrap());
+        let message = Message::text(encode_client_text(&message).unwrap());
         let admission = budgets
             .admit_inbound_frame(message_size(&message))
             .await

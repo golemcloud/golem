@@ -2,9 +2,8 @@
 // Licensed under the Golem Source License v1.1 (https://license.golem.cloud/LICENSE).
 
 use crate::base_model::durable_stream::DurableStreamHandle;
-use crate::model::invocation_session_public::{
-    MAX_COLLECTION_SIZE, MAX_LOGICAL_VALUE_SIZE, canonicalize_structural_json,
-};
+pub use crate::model::invocation_session_public::JsonMethodInput;
+use crate::model::invocation_session_public::{MAX_COLLECTION_SIZE, MAX_LOGICAL_VALUE_SIZE};
 use crate::schema::streaming::{
     decode_recursive_stream_value, preflight_proto_recursive_stream_value,
     remap_recursive_stream_references,
@@ -106,38 +105,6 @@ impl NativeMethodInput {
                 .ok_or_else(|| "stored method input stream ordinal is out of range".to_string())?;
             stream(ordinal, handle.as_ref())
         })
-    }
-}
-
-/// Bounded structural JSON; numbers retain their JSON representation until dispatch.
-#[derive(Clone, PartialEq, Eq, BinaryCodec)]
-#[desert(evolution())]
-pub struct JsonMethodInput {
-    value: String,
-}
-
-impl Debug for JsonMethodInput {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("JsonMethodInput")
-            .field("bytes", &self.value.len())
-            .finish()
-    }
-}
-
-impl JsonMethodInput {
-    pub fn capture(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.len() > MAX_LOGICAL_VALUE_SIZE {
-            return Err("method input exceeds the 16 MiB logical value limit".into());
-        }
-        let value = canonicalize_structural_json(bytes).map_err(|error| error.to_string())?;
-        if value.len() > MAX_LOGICAL_VALUE_SIZE {
-            return Err("method input exceeds the 16 MiB logical value limit".into());
-        }
-        Ok(Self { value })
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.value
     }
 }
 

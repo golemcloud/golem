@@ -2206,7 +2206,7 @@ async fn websocket_and_http_sessions_have_isolated_identities(
             attempt_id: Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: session.clone(),
-            method_parameters: native_input_stream(input_reference),
+            method_parameters: native_input_stream(input_reference).try_into()?,
             selector: Box::new(InvocationSelector {
                 agent_type: "DurableStreamAgent".into(),
                 application: agent.application_name.clone(),
