@@ -167,6 +167,10 @@ jobs:
           rm -rf "$HOME/.ivy2"
           ln -s "$PWD/.validation-cache/ivy" "$HOME/.ivy2"
       - uses: ./.validation-control/.github/actions/setup-main-validation
+      - name: Record restored cache identities
+        env:
+          MAIN_VALIDATION_SOURCE: ${{ needs.select.outputs.source }}
+        run: bun .validation-control/.github/main-validation/cache-diagnostics.ts begin || echo 'Cache diagnostics unavailable'
       - name: Validate the selected source
         id: workload
         timeout-minutes: 300
@@ -182,6 +186,12 @@ jobs:
           status=0
           bun .validation-control/.github/main-validation/progress.ts observe -- cargo make --profile ci main-validation || status=$?
           printf 'exit_code=%s\n' "$status" >> "$GITHUB_OUTPUT"
+      - name: Record cache contents before commit request
+        if: always()
+        env:
+          MAIN_VALIDATION_SOURCE: ${{ needs.select.outputs.source }}
+          WORKLOAD_EXIT_CODE: ${{ steps.workload.outputs.exit_code }}
+        run: bun .validation-control/.github/main-validation/cache-diagnostics.ts complete || echo 'Cache diagnostics unavailable'
       - name: Retain Linux reports even after failure
         if: always()
         uses: actions/upload-artifact@v6
