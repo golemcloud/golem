@@ -6928,6 +6928,34 @@ impl Oplog for TestOplog {
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> golem_worker_executor::services::oplog::OplogAddPairReceipt {
+        let gate = self
+            .additional_test_deps
+            .agent_initialization_enqueue_gates
+            .read_sync(&self.owned_agent_id.agent_id, |_, gate| {
+                gate.before_commit
+                    .load(Ordering::SeqCst)
+                    .then(|| gate.clone())
+            })
+            .flatten();
+        if let Some(gate) = gate {
+            let first = start.clone();
+            return self.oplog.enqueue_add_pair(
+                start,
+                Box::new(move |index| {
+                    let second = make_second(index);
+                    // Observe both entries inside the atomic writer job, without splitting the
+                    // pair or depending on its receipt being polled before the next commit.
+                    if gate.armed.load(Ordering::SeqCst) {
+                        if (gate.matches)(&first) {
+                            *gate.entry.lock().unwrap() = Some(first);
+                        } else if (gate.matches)(&second) {
+                            *gate.entry.lock().unwrap() = Some(second.clone());
+                        }
+                    }
+                    second
+                }),
+            );
+        }
         self.oplog.enqueue_add_pair(start, make_second)
     }
 
@@ -6943,7 +6971,7 @@ impl Oplog for TestOplog {
                 details,
             ));
         }
-        self.oplog.add_pair(start, make_second).await
+        self.enqueue_add_pair(start, make_second).await
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {

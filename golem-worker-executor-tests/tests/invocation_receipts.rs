@@ -15,6 +15,8 @@
 use super::*;
 use golem_common::model::{AgentInvocation, InvocationId};
 use golem_common::schema::SchemaValue;
+use golem_worker_executor::services::events::Event;
+use golem_worker_executor::worker::ResultOrSubscription;
 use golem_worker_executor_test_utils::take_agent_oplog_over_at_epoch;
 use test_r::{test, timeout};
 
@@ -43,7 +45,7 @@ fn increment(idempotency_key: InvocationId) -> AgentInvocation {
         method_name: "increment".into(),
         input: data_value!().value().clone(),
         invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::anonymous(),
+        caller: callers::anonymous(),
         scope_card: None,
     }
 }
@@ -206,21 +208,51 @@ async fn finished_commit_receipt_gates_success_and_same_key_result_survives_reco
     );
 
     // Phase 3: neither the original caller, a same-key caller, nor lookup may see success.
-    // `invoke` runs inline through lookup, unlike the detached prefix of invoke_and_await.
-    // Polling it therefore queues a real same-key ingress read behind the held commit.
-    let mut follower = Box::pin(worker.clone().invoke(invocation.clone()));
-    let mut lookup = Box::pin(worker.lookup_invocation_result(&key));
-    assert!(poll!(&mut original).is_pending());
-    assert!(poll!(&mut follower).is_pending());
-    assert!(poll!(&mut lookup).is_pending());
+    // A same-key invoke may return a subscription immediately; drive that subscription too,
+    // so only delivery of the result (not acceptance of the existing invocation) is forbidden.
+    let mut follower = Box::pin(async {
+        match worker.clone().invoke(invocation.clone()).await? {
+            ResultOrSubscription::Finished(result) => Ok::<_, anyhow::Error>(result?),
+            ResultOrSubscription::Pending(mut subscription) => Ok(subscription
+                .wait_for(|event| match event {
+                    Event::InvocationCompleted {
+                        agent_id,
+                        idempotency_key,
+                        result,
+                    } if *agent_id == id && *idempotency_key == key => Some(*result.clone()),
+                    _ => None,
+                })
+                .await??),
+        }
+    });
+    // The gate establishes the uncommitted window. Drive all readers during that window,
+    // rather than checking a single poll that may stop at an unrelated actor round trip.
+    let observation_window = Duration::from_millis(200);
+    let (original_while_held, follower_while_held, lookup_while_held) = tokio::join!(
+        tokio::time::timeout(observation_window, &mut original),
+        tokio::time::timeout(observation_window, &mut follower),
+        tokio::time::timeout(observation_window, worker.lookup_invocation_result(&key)),
+    );
+    assert!(
+        original_while_held.is_err(),
+        "the original caller completed before commit"
+    );
+    assert!(
+        follower_while_held.is_err(),
+        "the same-key caller received a result before commit"
+    );
+    assert!(
+        matches!(lookup_while_held, Err(_) | Ok(LookupResult::Pending)),
+        "lookup must block or report Pending before commit, got {lookup_while_held:?}"
+    );
     let held = executor.stored_oplog(&id).await;
     assert_eq!(held.iter().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { invocation_id, .. } if *invocation_id == key)).count(), 1);
     assert!(!held.iter().any(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { invocation_id, .. } if *invocation_id == key)));
 
     // Phase 4: release the Finished commit; only now may all three readers receive value 2.
     finished_commit_gate.release();
-    let (original, follower, lookup) = tokio::time::timeout(Duration::from_secs(20), async {
-        tokio::join!(original, follower, lookup)
+    let (original, follower) = tokio::time::timeout(Duration::from_secs(20), async {
+        tokio::join!(original, follower)
     })
     .await?;
     let original = original?;
@@ -230,9 +262,8 @@ async fn finished_commit_receipt_gates_success_and_same_key_result_survives_reco
             output: SchemaValue::U32(2)
         }
     );
-    assert!(
-        matches!(follower?, golem_worker_executor::worker::ResultOrSubscription::Finished(Ok(ref result)) if *result == original)
-    );
+    assert_eq!(follower?, original);
+    let lookup = worker.lookup_invocation_result(&key).await;
     assert!(matches!(lookup, LookupResult::Complete(Ok(ref result)) if *result == original));
 
     // Phase 5: discard the resident Worker and executor after completion is delivered.
@@ -261,5 +292,82 @@ async fn finished_commit_receipt_gates_success_and_same_key_result_survives_reco
     let history = executor.stored_oplog(&id).await;
     assert_eq!(history.iter().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { invocation_id, .. } if *invocation_id == key)).count(), 1);
     assert_eq!(history.iter().filter(|entry| matches!(entry, OplogEntry::AgentInvocationFinished { invocation_id, .. } if *invocation_id == key)).count(), 1);
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn commit_gate_observes_either_entry_from_both_pair_append_apis(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::LogLevel;
+    use golem_worker_executor::services::oplog::CommitLevel;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, commit_barrier_overrides()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let name = agent_id!("Counter", "pair-commit-gate");
+    let id = executor.start_agent(&component.id, name.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &name, "increment", data_value!())
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let oplog = worker.oplog();
+
+    let matchers: [fn(&OplogEntry) -> bool; 2] = [
+        |entry| matches!(entry, OplogEntry::Log { message, .. } if message == "first"),
+        |entry| matches!(entry, OplogEntry::Log { message, .. } if message == "second"),
+    ];
+    for enqueue in [false, true] {
+        for matches in matchers {
+            // Buffer an atomic pair, targeting each position through each append API.
+            let before = executor.stored_oplog(&id).await;
+            let mut gate = executor.gate_before_next_oplog_commit(&id, matches).await;
+            let log = |message: &str| OplogEntry::Log {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                level: LogLevel::Info,
+                context: "pair-commit-gate".into(),
+                message: message.into(),
+                trace_context: None,
+            };
+            let first = log("first");
+            let second = log("second");
+            let make_second = Box::new(move |_| second);
+            if enqueue {
+                oplog.enqueue_add_pair(first, make_second).await?;
+            } else {
+                oplog.add_pair(first, make_second).await?;
+            }
+
+            // The explicit commit must stop before either entry reaches storage.
+            let mut commit = Box::pin(oplog.commit(CommitLevel::Always));
+            tokio::select! {
+                _ = gate.entered() => {}
+                result = &mut commit => panic!("pair commit bypassed its gate: {result:?}"),
+            }
+            assert!(matches(&gate.entry()));
+            assert_eq!(executor.stored_oplog(&id).await.len(), before.len());
+
+            // Releasing the gate commits both entries together.
+            gate.release();
+            commit.await?;
+            let after = executor.stored_oplog(&id).await;
+            assert_eq!(after.len(), before.len() + 2);
+            assert!(
+                matches!(&after[before.len()], OplogEntry::Log { message, .. } if message == "first")
+            );
+            assert!(
+                matches!(&after[before.len() + 1], OplogEntry::Log { message, .. } if message == "second")
+            );
+        }
+    }
     Ok(())
 }
