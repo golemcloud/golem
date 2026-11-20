@@ -1946,14 +1946,16 @@ pub mod worker {
             output: Option<std::path::PathBuf>,
             /// Read one page of at most the HTTP batch size (50) entries and print it as one
             /// `agent.oplog-page` document, with the `cursor` of the next page when the oplog has
-            /// entries after the page. A search page ends early when the server's scan budget ends
-            /// the search, so a page with a cursor can have fewer entries, or none.
+            /// entries after the page within its range. A search page ends early when the server's
+            /// scan budget ends the search, so a page with a cursor can have fewer entries, or
+            /// none.
             #[arg(long, conflicts_with_all = ["html", "serve", "obfuscate"])]
             page: bool,
             /// The `cursor` of the previous page: reads the page after it. Pass it back unchanged,
-            /// with the same `--query`. The cursor is opaque; use `--from` to start at an oplog
-            /// index. A cursor of another query, or one past the end of the oplog, is refused as
-            /// stale (`STALE_CURSOR`).
+            /// with the same `--query` and `--to`. The cursor is opaque; use `--from` to start at
+            /// an oplog index. The server refuses a cursor of another query, or one past the end of
+            /// the oplog, as stale (`STALE_CURSOR`), and a cursor outside the range of `--from` and
+            /// `--to` as an invalid request.
             #[arg(long, requires = "page")]
             cursor: Option<OplogCursor>,
             #[command(flatten)]
@@ -3433,7 +3435,7 @@ mod test {
             ("pretty-json", Format::PrettyJson),
             ("pretty-yaml", Format::PrettyYaml),
             ("toon", Format::Toon),
-            ("jsonl", Format::Json),
+            ("jsonl", Format::Jsonl),
         ] {
             let command = GolemCliCommand::try_parse_from(["golem", "--format", name, "build"])
                 .unwrap_or_else(|error| panic!("--format {name}: {error}"));
@@ -3483,6 +3485,8 @@ mod test {
             vec!["--output", "f.jsonl", "--obfuscate"],
             vec!["--output", "f.jsonl", "--omit-payloads"],
             vec!["--to", "9", "--obfuscate"],
+            vec!["--to", "9", "--html", "f.html"],
+            vec!["--to", "9", "--serve"],
         ]
         .into_iter()
         .for_each(|conflicting| {

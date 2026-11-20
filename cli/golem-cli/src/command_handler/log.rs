@@ -45,6 +45,7 @@ impl LogHandler {
         let masking = self.ctx.masking_config();
         match self.ctx.format() {
             Format::Json
+            | Format::Jsonl
             | Format::PrettyJson
             | Format::Yaml
             | Format::PrettyYaml
@@ -108,7 +109,7 @@ pub fn render_structured_document<S: Serialize>(
     value: &S,
 ) -> anyhow::Result<String> {
     match format {
-        Format::Json => Ok(serde_json::to_string(value)?),
+        Format::Json | Format::Jsonl => Ok(serde_json::to_string(value)?),
         Format::PrettyJson => {
             if colorize {
                 to_colored_json(value)

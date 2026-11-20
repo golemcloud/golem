@@ -85,8 +85,8 @@ pub async fn oplog_page_entry_view(
     }
 }
 
-/// The output view of an oplog page entry in full. An entry that the page omitted is read in
-/// full, and a failed read is an error.
+/// The output view of an oplog page entry in full. The function reads in full an entry that the
+/// page omitted, and gives an error when that read fails.
 pub async fn oplog_page_entry_in_full(
     ctx: &Context,
     component_id: &Uuid,

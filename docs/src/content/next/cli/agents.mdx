@@ -161,7 +161,7 @@ Oplog entries are indexed from 1, and the first entry is always a **create** ent
 
 ### Exporting the oplog to a file
 
-The `--output` parameter exports the oplog to a file as [JSON Lines](https://jsonlines.org/): one `agent.oplog` document per line, in index order, as `--format json` prints them. The export needs `--format jsonl`:
+The `--output` parameter exports the oplog to a file as [JSON Lines](https://jsonlines.org/): one `agent.oplog` document per line, in index order, as `--format json` prints them. The export needs `--format jsonl`, and refuses the other formats:
 
 ```shell copy
 golem agent oplog 'CounterAgent("my-counter")' --format jsonl --output oplog.jsonl

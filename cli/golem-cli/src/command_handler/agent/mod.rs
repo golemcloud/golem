@@ -96,7 +96,7 @@ use golem_common::model::component_metadata::{
     ComponentMetadata, ParsedFunctionName, ParsedFunctionSite,
 };
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
+use golem_common::model::oplog::{OplogCursor, OplogRange, PublicOplogPageEntry};
 use golem_common::model::{
     AgentFilter, FilterComparator, IdempotencyKey, IdempotencyScope, InvocationRequestKey,
     OplogIndex, StringFilterComparator,
@@ -289,11 +289,13 @@ impl AgentCommandHandler {
                     viewer,
                     export,
                 } => {
+                    let range = OplogRange::from_indices(from, to)
+                        .map_err(|error| anyhow!("Invalid oplog range: {error}"))?;
                     if page {
                         self.cmd_oplog_page(agent_id, from, to, cursor, query, omit_payloads)
                             .await
                     } else if let Some(output) = output {
-                        self.cmd_oplog_jsonl_export(agent_id, from, to, query, &output)
+                        self.cmd_oplog_jsonl_export(agent_id, from, range, query, &output)
                             .await
                     } else {
                         self.cmd_oplog(agent_id, from, to, query, omit_payloads, viewer, export)
@@ -1087,11 +1089,12 @@ impl AgentCommandHandler {
         Ok(())
     }
 
-    /// Exports the oplog entries from `from` to `to` that match `query` to `path` as JSON Lines.
-    /// The export follows the cursor of each page to the end of the range and writes each page
-    /// before it reads the next, so its memory does not grow with the oplog. A search page that
-    /// the scan budget of the server ends early still has a cursor, so the budget does not end
-    /// the export. Each entry that a page omits for its size is read in full, and a failed read
+    /// Exports the oplog entries of `range` that match `query` to `path` as JSON Lines. `from` is
+    /// the `--from` argument, which sets where an export of every entry must start. The export
+    /// follows the cursor of each page to the end of the range and writes each page before it
+    /// reads the next, so its memory does not grow with the oplog. A search page that the scan
+    /// budget of the server ends early still has a cursor, so the budget does not end the export.
+    /// The export reads in full each entry that a page omits for its size, and a failed read
     /// fails the export. The export writes to a temporary file in the directory of `path`, and
     /// renames it to `path` only after the last entry, so a failed export leaves no file at
     /// `path`.
@@ -1099,11 +1102,11 @@ impl AgentCommandHandler {
         &self,
         agent_id: AgentIdArgs,
         from: Option<u64>,
-        to: Option<u64>,
+        range: OplogRange,
         query: Option<String>,
         path: &Path,
     ) -> anyhow::Result<()> {
-        if self.ctx.format() != Format::Json {
+        if self.ctx.format() != Format::Jsonl {
             log_error(format!(
                 "{} writes JSON Lines; pass {}",
                 "--output".log_color_highlight(),
@@ -1124,7 +1127,9 @@ impl AgentCommandHandler {
             .with_context(|| format!("Failed to create a file in {}", directory.display()))?;
         let selection = match query {
             Some(_) => OplogExportSelection::Matches,
-            None => OplogExportSelection::EveryEntry,
+            None => OplogExportSelection::EveryEntry {
+                start: from.map(|_| range.start().as_u64()),
+            },
         };
         let writer = OplogJsonlWriter::new(
             std::io::BufWriter::new(file),
@@ -1139,6 +1144,7 @@ impl AgentCommandHandler {
             query.as_deref(),
         );
         let batch_size = ctx.http_batch_size();
+        let (from, to) = (from, range.end().map(u64::from));
         let pages =
             futures_util::stream::try_unfold(Some(None::<OplogCursor>), move |cursor| async move {
                 let Some(cursor) = cursor else {
@@ -1159,23 +1165,30 @@ impl AgentCommandHandler {
                     )
                     .await
                     .map_service_error()?;
-                Ok(Some((page.entries, page.next.map(Some))))
+                Ok(Some(((page.entries, page.last_index), page.next.map(Some))))
             });
-        let writer = futures_util::TryStreamExt::try_fold(pages, writer, |writer, entries| {
-            futures_util::TryStreamExt::try_fold(
-                futures_util::stream::iter(entries.into_iter().map(anyhow::Ok)),
-                writer,
-                move |mut writer, entry| async move {
-                    writer.write(
-                        oplog_page_entry_in_full(ctx, component_id, agent_name, entry).await?,
-                    )?;
-                    Ok(writer)
-                },
-            )
-        })
+        let (writer, range_last) = futures_util::TryStreamExt::try_fold(
+            pages,
+            (writer, None),
+            |(writer, _), (entries, last_index)| async move {
+                let writer = futures_util::TryStreamExt::try_fold(
+                    futures_util::stream::iter(entries.into_iter().map(anyhow::Ok)),
+                    writer,
+                    move |mut writer, entry| async move {
+                        writer.write(
+                            oplog_page_entry_in_full(ctx, component_id, agent_name, entry).await?,
+                        )?;
+                        Ok(writer)
+                    },
+                )
+                .await?;
+                Ok((writer, Some(last_index)))
+            },
+        )
         .await?;
 
-        let (buffered, count) = writer.finish()?;
+        let range_last = range_last.ok_or_else(|| anyhow!("The oplog read returned no page"))?;
+        let (buffered, count) = writer.finish(range_last)?;
         let file = buffered
             .into_inner()
             .map_err(|error| error.into_error())

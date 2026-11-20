@@ -9113,6 +9113,7 @@
           "type": "string",
           "enum": [
             "json",
+            "jsonl",
             "pretty-json",
             "yaml",
             "pretty-yaml",
@@ -9180,6 +9181,7 @@
           "type": "string",
           "enum": [
             "json",
+            "jsonl",
             "pretty-json",
             "yaml",
             "pretty-yaml",

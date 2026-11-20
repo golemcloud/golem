@@ -8285,6 +8285,7 @@ fn arb_json_value(depth: u32) -> OutputDocumentStrategy {
 fn arb_format_string() -> BoxedStrategy<&'static str> {
     prop_oneof![
         Just("json"),
+        Just("jsonl"),
         Just("pretty-json"),
         Just("yaml"),
         Just("pretty-yaml"),
@@ -8297,6 +8298,7 @@ fn arb_format_string() -> BoxedStrategy<&'static str> {
 fn arb_format() -> BoxedStrategy<crate::model::format::Format> {
     prop_oneof![
         Just(crate::model::format::Format::Json),
+        Just(crate::model::format::Format::Jsonl),
         Just(crate::model::format::Format::PrettyJson),
         Just(crate::model::format::Format::Yaml),
         Just(crate::model::format::Format::PrettyYaml),
