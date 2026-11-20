@@ -31,7 +31,11 @@ async-fs = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 aws-config = { workspace = true }
+aws-credential-types = { workspace = true }
 aws-sdk-s3 = { workspace = true }
+aws-sigv4 = { workspace = true }
+aws-smithy-runtime-api = { workspace = true, features = ["http-1x"] }
+aws-smithy-types = { workspace = true }
 base64.workspace = true
 bigdecimal.workspace = true
 bitflags = { workspace = true }
@@ -51,9 +55,11 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
-hyper-util = { workspace = true }
+hyper-rustls = { workspace = true }
+hyper-util = { workspace = true, features = ["client-legacy"] }
 include_dir = { workspace = true }
 indexmap.workspace = true
+ipnet = { workspace = true }
 lazy_static = { workspace = true }
 libsqlite3-sys = { workspace = true }
 metrics-prometheus = { workspace = true }
@@ -108,7 +114,6 @@ wasmtime-wasi = { workspace = true, optional = true }
 [dev-dependencies]
 assert2.workspace = true
 aws-runtime = { workspace = true }
-aws-smithy-runtime-api = { workspace = true }
 criterion = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
