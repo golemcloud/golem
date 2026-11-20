@@ -4590,14 +4590,26 @@
     },
     "package.digest": {
       "type": "object",
-      "description": "The SHA-256 digest of a Golem package's OCI manifest.",
+      "description": "The SHA-256 digest of a Golem package's OCI manifest and the publisher exports omitted from the package.",
       "x-golem-output-mode": "single",
       "x-golem-command": "package pack",
       "x-golem-commands": ["package pack", "publish"],
-      "required": ["$type", "digest"],
+      "required": ["$type", "digest", "omittedExports"],
       "properties": {
         "$type": { "const": "package.digest" },
-        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "omittedExports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "name"],
+            "properties": {
+              "kind": { "enum": ["http-api", "mcp"] },
+              "name": { "type": "string", "description": "The resolved domain of the omitted export." }
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     },

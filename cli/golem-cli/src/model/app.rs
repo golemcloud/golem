@@ -2007,6 +2007,14 @@ impl Application {
         self.mcp_deployments.get(environment)
     }
 
+    pub(crate) fn http_api_deployment_domains(&self) -> impl Iterator<Item = &Domain> {
+        self.http_api_deployments.values().flat_map(BTreeMap::keys)
+    }
+
+    pub(crate) fn mcp_deployment_domains(&self) -> impl Iterator<Item = &Domain> {
+        self.mcp_deployments.values().flat_map(BTreeMap::keys)
+    }
+
     pub fn mcp_imports(&self, environment: &EnvironmentName) -> Option<&Vec<app_raw::McpImport>> {
         self.mcp_imports
             .get(environment)
