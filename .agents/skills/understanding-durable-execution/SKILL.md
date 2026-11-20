@@ -3349,15 +3349,16 @@ agent: a boundary that writes no record is not replayed. A start from the initia
 source revision of a manual update counts as an install, not a restore of saved times
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
 
-After a trap in a save hook, such as an out-of-memory refusal, the next save on the same instance
-traps at once with `deadlock detected: event loop cannot make further progress`. So after any
-save that gives no snapshot (a trap, an error, an exit or an interrupt) the loop leaves the inner
-loop, and the next start builds a new instance from the oplog. A failed periodic save writes no
-record (`periodic_snapshot_failure_outcome`). A failed save of a manual update first writes
-`FailedUpdate`, except after a lost shard, and the loop then starts again at once
-(`snapshot_guest_for_update`), so the next request of the update saves on a new instance. A
-pending interrupt still decides how the loop stops. Test:
-`tests/hot_update.rs::a_manual_update_after_a_save_hook_ran_out_of_memory_succeeds`.
+A failed save of a manual update writes `FailedUpdate`, except after a lost shard, and the agent
+stays on its source revision and on its instance: a deterministic trap, a guest error or an exit
+in the save hook would repeat on a new instance. The one failure that restarts the agent is a save
+that runs out of memory (`AgentError::OutOfMemory`). After it the next save on the same instance
+traps at once with `deadlock detected: event loop cannot make further progress`, so
+`snapshot_guest_for_update` leaves the inner loop with `RetryDecision::ReacquirePermits`, as after
+an out-of-memory invocation, and the next request of the update saves on a new instance with new
+memory permits. A pending interrupt still decides how the loop stops. Tests:
+`tests/hot_update.rs::a_manual_update_after_a_save_hook_ran_out_of_memory_succeeds` and
+`a_manual_update_whose_save_hook_threw_keeps_the_instance`.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying,
 snapshotting already, in-flight live host call, and open registered tool

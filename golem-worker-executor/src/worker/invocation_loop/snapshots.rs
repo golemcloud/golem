@@ -352,7 +352,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .invoke_in_snapshotting_mode(lowered, local_span_ids, inherited_span_ids)
             .await;
 
-        let failed = match result {
+        match result {
             Ok(InvokeResult::Succeeded { result, .. }) => {
                 let AgentInvocationResult::SaveSnapshot { snapshot } = *result else {
                     return Err(self
@@ -365,7 +365,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         )
                         .await);
                 };
-                return Ok(snapshot);
+                Ok(snapshot)
             }
 
             Ok(InvokeResult::Failed { error, .. } | InvokeResult::MethodFailed { error, .. }) => {
@@ -375,15 +375,27 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .get_public_state()
                     .event_service()
                     .get_last_invocation_errors();
+                // A refused memory growth can heal on a new instance with new memory permits, as
+                // after an out-of-memory invocation; on this instance the next save traps at once.
+                // Other failures of the save hook would repeat, so the instance stays.
+                let out_of_memory = error == AgentError::OutOfMemory;
                 let error = error.to_string(&stderr);
-                Err(self
-                    .fail_update(
-                        target_revision,
-                        update_attempt_index,
-                        format!("failed to get a snapshot for manual update: {error}"),
-                        UpdateFailureClass::Other,
-                    )
-                    .await)
+                Err(
+                    match self
+                        .fail_update(
+                            target_revision,
+                            update_attempt_index,
+                            format!("failed to get a snapshot for manual update: {error}"),
+                            UpdateFailureClass::Other,
+                        )
+                        .await
+                    {
+                        CommandOutcome::Continue if out_of_memory => {
+                            CommandOutcome::BreakInnerLoop(RetryDecision::ReacquirePermits)
+                        }
+                        outcome => outcome,
+                    },
+                )
             }
             Ok(InvokeResult::Exited { .. }) => Err(self
                 .fail_update(
@@ -421,14 +433,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     UpdateFailureClass::Other,
                 )
                 .await),
-        };
-        // The save hook did not return a snapshot. After a trap in the hook the next save on this
-        // instance traps at once, so the loop starts a new instance, as after a failed periodic
-        // snapshot; a pending interrupt still decides the stop.
-        failed.map_err(|outcome| match outcome {
-            CommandOutcome::Continue => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
-            outcome => outcome,
-        })
+        }
     }
 }
 
