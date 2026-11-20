@@ -728,8 +728,11 @@ pub struct UsableAutomaticSnapshot {
 /// The status at `oplog_idx` is a fold of the oplog entries up to that index. Every field must
 /// be computable from a status baseline and the oplog entries after it. The durable status
 /// baseline of an agent is one stored record of this type, and the fold of the entries after its
-/// `oplog_idx` gives the current status. The oplog alone is not sufficient: an oplog that does not
-/// start at index 1 keeps no record of the entries before its start.
+/// `oplog_idx` gives the current status.
+///
+/// One exception reads an entry before the baseline: when a fold finds the `Attached` record of a
+/// durable stream session, it reads the `PendingAgentInvocation` entry at the
+/// `pending_invocation_oplog_index` of that record, and that entry can be before the baseline.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct AgentStatusRecord {

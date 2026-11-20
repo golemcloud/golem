@@ -481,27 +481,42 @@ pub(crate) fn stored_split_status(status: AgentStatusRecord) -> Option<AgentStat
     })
 }
 
-/// The expiry of a split status hash. The live status cache expires after
+/// The kind of a split status hash.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct SplitStatusKind {
+    /// The `cache` label of the metrics of the hash.
+    pub(super) label: &'static str,
+    /// The expiry that a write gives the hash. `None` means that the hash does not expire.
+    pub(super) expiry: Option<std::time::Duration>,
+}
+
+/// The kind of the split status hash in `namespace`. The live status cache expires after
 /// [`DERIVED_CACHE_EXPIRY`]. The status baseline in
-/// [`KeyValueStorageNamespace::AgentStatusCheckpoint`] never expires, because after a cut of the
-/// oplog no other record holds the status before the retained start.
-fn split_status_expiry(namespace: &KeyValueStorageNamespace) -> Option<std::time::Duration> {
+/// [`KeyValueStorageNamespace::AgentStatusCheckpoint`] does not expire: it lives as long as the
+/// agent, and only the deletion of the agent removes it.
+pub(super) fn split_status_kind(namespace: &KeyValueStorageNamespace) -> SplitStatusKind {
     match namespace {
-        KeyValueStorageNamespace::AgentStatus { .. } => Some(DERIVED_CACHE_EXPIRY),
-        KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => None,
+        KeyValueStorageNamespace::AgentStatus { .. } => SplitStatusKind {
+            label: "status",
+            expiry: Some(DERIVED_CACHE_EXPIRY),
+        },
+        KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => SplitStatusKind {
+            label: "checkpoint",
+            expiry: None,
+        },
         _ => unreachable!("split status must use a status cache namespace"),
     }
 }
 
 impl DefaultWorkerService {
     /// Compares the `core` field of the split status hash in `namespace` with `expected_core`,
-    /// and on a match applies `sets` and `deletions` in one atomic write. With an `expiry`, the
-    /// write also refreshes the expiry of the hash. Without one, the write sets no expiry.
+    /// and on a match applies `sets` and `deletions` in one atomic write. The write gives the
+    /// hash the expiry of its [`split_status_kind`]. When that kind has no expiry, the write sets
+    /// no expiry.
     async fn compare_and_publish_split_status(
         &self,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        expiry: Option<std::time::Duration>,
         expected_core: Option<&[u8]>,
         sets: &[(&str, &[u8])],
         deletions: &[&str],
@@ -509,7 +524,7 @@ impl DefaultWorkerService {
         let storage = self
             .key_value_storage
             .with_entity("worker", api_name, "agent_status");
-        match expiry {
+        match split_status_kind(&namespace).expiry {
             Some(expiry) => {
                 storage
                     .compare_and_mutate_many_raw(
@@ -549,11 +564,13 @@ impl DefaultWorkerService {
         }
     }
 
-    /// Namespace holding the agent's durable status baseline (the *clean* status checkpoint).
-    /// Same physical split layout as [`Self::status_namespace`], but written only at structurally
-    /// clean boundaries (snapshot save / throttled idle) and never advanced by the background
-    /// flusher, so it can serve as a fold baseline that always predates any later jump region. It
-    /// never expires, and only the deletion of the agent removes it.
+    /// Namespace holding the durable status baseline of the agent (the *clean* status
+    /// checkpoint). It has the same physical split layout as [`Self::status_namespace`]. Only
+    /// three writers write it, each at a structurally clean boundary: the snapshot save, the
+    /// throttled idle boundary, and the throttled `checkpoint_status_mid_invocation` during a long
+    /// invocation. The background flusher never moves it forward. Thus it is a fold baseline
+    /// before any later jump region. It does not expire, and only the deletion of the agent
+    /// removes it.
     pub(super) fn checkpoint_namespace(
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
@@ -630,10 +647,11 @@ impl DefaultWorkerService {
     /// and received and source card transfers are written per key (only newly added/changed keys).
     ///
     /// Publication compares the exact serialized baseline `core` and atomically applies all sets,
-    /// stale-field deletions, and the expiry of the live cache (the status baseline has no
-    /// expiry, see [`split_status_expiry`]). A mismatch reloads one complete hash snapshot and retries
-    /// with a full reconciliation guarded by that snapshot's raw core. Thus an expired hash or a
-    /// concurrent publisher can never leave auxiliary fields from a different core generation.
+    /// stale-field deletions, and the expiry of the live cache. The status baseline has no
+    /// expiry (see [`split_status_kind`]). A mismatch reloads one complete hash snapshot and
+    /// retries with a full reconciliation guarded by that snapshot's raw core. Thus an expired
+    /// hash or a concurrent publisher can never leave auxiliary fields from a different core
+    /// generation.
     async fn write_status_fields(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -642,12 +660,7 @@ impl DefaultWorkerService {
         core: &AgentStatusRecord,
         parts: &SplitStatusParts,
     ) -> Result<(), String> {
-        let cache_kind = match &namespace {
-            KeyValueStorageNamespace::AgentStatus { .. } => "status",
-            KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => "checkpoint",
-            _ => unreachable!("split status must use a status cache namespace"),
-        };
-        let expiry = split_status_expiry(&namespace);
+        let cache_kind = split_status_kind(&namespace).label;
         let (mut expected_core, mut existing_fields, mut use_delta) =
             if let Some(previous) = previous_status {
                 let expected = serialize(&status_core(previous)).map_err(|err| {
@@ -687,7 +700,6 @@ impl DefaultWorkerService {
                 .compare_and_publish_split_status(
                     "update_status",
                     namespace.clone(),
-                    expiry,
                     expected_core.as_deref(),
                     &pairs,
                     &deletions,
@@ -800,7 +812,6 @@ impl DefaultWorkerService {
                 .compare_and_publish_split_status(
                     "remove",
                     namespace.clone(),
-                    split_status_expiry(&namespace),
                     expected_core,
                     &[],
                     &deletions,

@@ -34,9 +34,10 @@ interactive examples; preserve unrelated content and verify changed walkthrough 
 Authoritative: oplog entries and payloads, `PendingAgentInvocation` / `AgentInvocationStarted` /
 `AgentInvocationFinished` / `AgentInvocationSettled`, idempotency keys and recorded results,
 `Start`/`End`/`Cancelled` and `CompletionDelivered`/`CompletionDiscarded` markers, update and
-snapshot entries, and status folded from the oplog. Derived and disposable: `Store` memory,
-in-memory queues, caches, event subscriptions, spawned store tasks, sockets. Never let
-correctness after a restart depend on anything in the second list.
+snapshot entries, the durable status baseline (`AgentStatusCheckpoint`), and status folded from
+that baseline and the oplog entries after it. Derived and disposable: `Store` memory, in-memory
+queues, caches, event subscriptions, spawned store tasks, sockets. Never let correctness after a
+restart depend on anything in the second list.
 
 A host resource drop that has no guest-observable result and no remote effect must not open a
 durable call: the guest may release the resource at different points in different runs (garbage

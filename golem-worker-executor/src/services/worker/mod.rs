@@ -444,13 +444,15 @@ pub trait WorkerService: Send + Sync {
         agent_mode: AgentMode,
     ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError>;
 
-    /// Writes the worker's *clean* status checkpoint blob.
+    /// Writes the durable status baseline of the worker (the *clean* status checkpoint), with no
+    /// expiry.
     ///
     /// Same split layout and delta semantics as [`write_cached_status`](Self::write_cached_status),
     /// but targeting the [`KeyValueStorageNamespace::AgentStatusCheckpoint`] hash. No-op for
-    /// ephemeral workers (returning the value unchanged). Returns the reassembled record so the
-    /// caller can use it as the baseline for the next delta. Returns `Err` instead of panicking so
-    /// callers can treat checkpoint writes as best-effort (the oplog remains the source of truth).
+    /// ephemeral workers (returning the value unchanged). Returns the reassembled record, the
+    /// baseline for the next delta. Returns `Err`, not a panic, when the storage refuses the
+    /// write. Every oplog keeps its entries from index 1, so a baseline that a refused write
+    /// leaves older makes a later fold longer and does not change the status.
     async fn write_status_checkpoint(
         &self,
         owned_agent_id: &OwnedAgentId,

@@ -968,17 +968,19 @@ pub enum KeyValueStorageNamespace {
         owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
     },
-    /// Per-agent durable status baseline (the *clean* status checkpoint). Same physical layout as
-    /// [`Self::AgentStatus`] (one structure-per-agent split into `core` / `membership` /
-    /// `regions` / `updates` and per-transfer fields), but written only at structurally clean
-    /// boundaries (snapshot save, throttled idle) where no jumpable oplog region is open. It is
-    /// never advanced by the background status flusher, so it always holds a baseline before any
-    /// later jump region and lets the status recompute fold forward from it instead of re-reading
-    /// the whole oplog from index 1.
+    /// The durable status baseline of one agent (the *clean* status checkpoint). It has the same
+    /// physical layout as [`Self::AgentStatus`]: one hash for each agent, split into `core`,
+    /// `membership`, `regions`, `updates` and the per-transfer fields.
     ///
-    /// Unlike the other per-agent status namespaces, this one is not a cache: it has no expiry,
-    /// an archive of the oplog keeps it, and namespace routing stores it in the persistent
-    /// backend. Only the deletion of the agent removes it.
+    /// Only three writers write it, each at a structurally clean boundary where no jumpable oplog
+    /// region is open: the snapshot save, the throttled idle boundary, and the throttled
+    /// `checkpoint_status_mid_invocation` during a long invocation. The background status flusher
+    /// never moves it forward. Thus it always holds a baseline before any later jump region, and
+    /// the status recompute folds forward from it. It does not read the oplog again from index 1.
+    ///
+    /// This namespace is not a cache. It has no expiry, an archive of the oplog keeps it, and
+    /// namespace routing stores it in the persistent backend. Only the deletion of the agent
+    /// removes it.
     AgentStatusCheckpoint {
         owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
