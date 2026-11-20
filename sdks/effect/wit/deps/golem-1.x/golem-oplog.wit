@@ -607,6 +607,17 @@ interface oplog {
         actual: replay-step,
         /// The identity fields on which the two steps differ; empty when the steps differ in kind
         mismatched: list<start-identity-field>,
+        /// Where the replay that diverged started; none for a divergence outside a recovery replay
+        replay-start: option<replay-start>,
+    }
+
+    /// Where a recovery replay started
+    variant replay-start {
+        /// From the snapshot at this oplog index
+        snapshot(oplog-index),
+        /// Without a snapshot, after the recovery rejected the automatic snapshots at these oplog
+        /// indexes, in ascending order; empty when no snapshot was involved
+        full-replay(list<oplog-index>),
     }
 
     /// One step of a replay

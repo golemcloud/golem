@@ -21695,11 +21695,31 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/StartIdentityField'
+        replayStart:
+          description: Where the replay that diverged started; `None` for a divergence outside a recovery replay.
+          allOf:
+          - $ref: '#/components/schemas/ReplayStart'
+          - description: Where the replay that diverged started; `None` for a divergence outside a recovery replay.
       required:
       - oplogIndex
       - expected
       - actual
       - mismatched
+    ReplayFullStart:
+      title: ReplayFullStart
+      description: |-
+        A replay without a snapshot. `rejected_snapshots` holds the oplog indexes of the automatic
+        snapshots that the recovery rejected before it, in ascending order; it is empty when no
+        snapshot was involved.
+      type: object
+      properties:
+        rejectedSnapshots:
+          type: array
+          items:
+            type: integer
+            format: uint64
+      required:
+      - rejectedSnapshots
     ReplayHostCall:
       title: ReplayHostCall
       description: |-
@@ -21733,6 +21753,59 @@ components:
       - functionName
       - durableFunctionType
       - carriesRequest
+    ReplaySnapshotStart:
+      title: ReplaySnapshotStart
+      description: A replay that started from the snapshot at `snapshot_index`.
+      type: object
+      properties:
+        snapshotIndex:
+          type: integer
+          format: uint64
+      required:
+      - snapshotIndex
+    ReplayStart:
+      description: |-
+        Where a recovery replay started: from a loaded snapshot, or without a snapshot, after the
+        recovery rejected the automatic snapshots that it could have loaded.
+      discriminator:
+        propertyName: type
+        mapping:
+          Snapshot: '#/components/schemas/ReplayStart_ReplaySnapshotStart'
+          FullReplay: '#/components/schemas/ReplayStart_ReplayFullStart'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ReplayStart_ReplaySnapshotStart'
+      - $ref: '#/components/schemas/ReplayStart_ReplayFullStart'
+    ReplayStart_ReplayFullStart:
+      description: |-
+        Where a recovery replay started: from a loaded snapshot, or without a snapshot, after the
+        recovery rejected the automatic snapshots that it could have loaded.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FullReplay
+            type: string
+            enum:
+            - FullReplay
+        required:
+        - type
+      - $ref: '#/components/schemas/ReplayFullStart'
+    ReplayStart_ReplaySnapshotStart:
+      description: |-
+        Where a recovery replay started: from a loaded snapshot, or without a snapshot, after the
+        recovery rejected the automatic snapshots that it could have loaded.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Snapshot
+            type: string
+            enum:
+            - Snapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/ReplaySnapshotStart'
     ReplayStep:
       description: |-
         One step of a replay: a host call, the end of an invocation, the end of the recorded

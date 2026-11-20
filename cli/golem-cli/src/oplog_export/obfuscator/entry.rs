@@ -38,8 +38,8 @@ use golem_common::model::oplog::{
     PublicQueuedCardEventTransferReceived, PublicRetryPolicyState,
     PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes,
     PublicSpanFinished, PublicSpanStarted, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, ReplayDivergence, ReplayStep,
-    SaveSnapshotResultParameters,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, ReplayDivergence, ReplayStart,
+    ReplayStep, SaveSnapshotResultParameters,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OplogIndex, Timestamp};
@@ -382,6 +382,30 @@ impl Walker<'_, '_> {
             .add(
                 "mismatched",
                 tuple(divergence.mismatched.iter().map(name).collect()),
+            )
+            .opt(
+                "replayStart",
+                divergence.replay_start.as_ref().map(|start| match start {
+                    ReplayStart::Snapshot(start) => Fields::new()
+                        .add(
+                            "snapshot",
+                            Fields::new()
+                                .add("snapshotIndex", idx(&start.snapshot_index))
+                                .build(),
+                        )
+                        .build(),
+                    ReplayStart::FullReplay(start) => Fields::new()
+                        .add(
+                            "fullReplay",
+                            Fields::new()
+                                .add(
+                                    "rejectedSnapshots",
+                                    tuple(start.rejected_snapshots.iter().map(idx).collect()),
+                                )
+                                .build(),
+                        )
+                        .build(),
+                }),
             )
             .build()
     }

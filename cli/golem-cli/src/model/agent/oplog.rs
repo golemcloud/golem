@@ -219,6 +219,9 @@ fn render_failed_update_lines(params: &FailedUpdateParams, pad: &str) -> Vec<Str
                     .join(", ")
             ));
         }
+        if let Some(start) = &divergence.replay_start {
+            lines.push(format!("{pad}  replay started:  {start}"));
+        }
         for (label, step) in [
             ("expected", &divergence.expected),
             ("actual", &divergence.actual),
@@ -1523,11 +1526,12 @@ mod tests {
     }
 
     /// A failed update shows its class, and a divergence shows its index, both steps, the
-    /// mismatched fields and the known requests; the JSON form keeps the same fields.
+    /// mismatched fields, where the replay started and the known requests; the JSON form keeps
+    /// the same fields.
     #[test]
     fn a_failed_update_renders_its_class_and_divergence() {
         use golem_common::model::oplog::{
-            PublicDurableFunctionType, ReplayDivergence, ReplayHostCall, ReplayStep,
+            PublicDurableFunctionType, ReplayDivergence, ReplayHostCall, ReplayStart, ReplayStep,
             StartIdentityField, UpdateFailureClass,
         };
         let call = |function_name: &str, request: Option<&str>| ReplayHostCall {
@@ -1552,6 +1556,10 @@ mod tests {
                 expected: ReplayStep::HostCall(call("random::get_random_bytes", Some("recorded"))),
                 actual: ReplayStep::HostCall(call("random::get_random_u64", None)),
                 mismatched: vec![StartIdentityField::FunctionName],
+                replay_start: Some(ReplayStart::full_replay(vec![
+                    golem_common::model::OplogIndex::from_u64(3),
+                    golem_common::model::OplogIndex::from_u64(5),
+                ])),
             })),
         };
 
@@ -1565,6 +1573,7 @@ mod tests {
                 "expected:        Start { random::get_random_bytes, ReadLocal",
                 "actual:          Start { random::get_random_u64, ReadLocal",
                 "mismatched:      function-name",
+                "replay started:  without a snapshot after the snapshots at oplog indexes 3, 5 were rejected",
                 "expected input: \"recorded\"",
             ],
         );
@@ -1589,6 +1598,11 @@ mod tests {
             "random::get_random_bytes"
         );
         assert_eq!(json["divergence"]["mismatched"][0], "function-name");
+        assert_eq!(json["divergence"]["replayStart"]["type"], "FullReplay");
+        assert_eq!(
+            json["divergence"]["replayStart"]["rejectedSnapshots"],
+            serde_json::json!([3, 5])
+        );
     }
 
     fn agent_metadata(agent_key: &str) -> AgentMetadataView {

@@ -30,7 +30,7 @@ use std::hash::{Hash, Hasher};
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
 )]
-#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", desert(evolution(FieldAdded("replay_start", None))))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayDivergence {
@@ -43,6 +43,8 @@ pub struct ReplayDivergence {
     /// The identity fields on which `expected` and `actual` differ; empty when the steps differ
     /// in kind.
     pub mismatched: Vec<StartIdentityField>,
+    /// Where the replay that diverged started; `None` for a divergence outside a recovery replay.
+    pub replay_start: Option<ReplayStart>,
 }
 
 impl ReplayDivergence {
@@ -57,6 +59,7 @@ impl ReplayDivergence {
             expected: ReplayStep::described(expected),
             actual: ReplayStep::described(actual),
             mismatched: Vec::new(),
+            replay_start: None,
         }
     }
 }
@@ -100,8 +103,103 @@ impl Display for ReplayDivergence {
                 .join(", ");
             write!(f, " (mismatched: {fields})")?;
         }
+        if let Some(start) = &self.replay_start
+            && start.names_a_snapshot()
+        {
+            write!(
+                f,
+                "; replay started {start}; a snapshot load that differs from the live state is a \
+                 common cause"
+            )?;
+        }
         Ok(())
     }
+}
+
+declare_unions! {
+    /// Where a recovery replay started: from a loaded snapshot, or without a snapshot, after the
+    /// recovery rejected the automatic snapshots that it could have loaded.
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    #[derive(Eq, Hash)]
+    pub enum ReplayStart {
+        Snapshot(ReplaySnapshotStart),
+        FullReplay(ReplayFullStart),
+    }
+}
+
+impl ReplayStart {
+    pub fn snapshot(snapshot_index: OplogIndex) -> Self {
+        Self::Snapshot(ReplaySnapshotStart { snapshot_index })
+    }
+
+    pub fn full_replay(rejected_snapshots: Vec<OplogIndex>) -> Self {
+        Self::FullReplay(ReplayFullStart { rejected_snapshots })
+    }
+
+    /// Whether the start names a snapshot: a loaded one, or at least one rejected one.
+    pub fn names_a_snapshot(&self) -> bool {
+        match self {
+            Self::Snapshot(_) => true,
+            Self::FullReplay(start) => !start.rejected_snapshots.is_empty(),
+        }
+    }
+}
+
+impl Display for ReplayStart {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Snapshot(start) => write!(
+                f,
+                "from the snapshot at oplog index {}",
+                start.snapshot_index
+            ),
+            Self::FullReplay(start) => match start.rejected_snapshots.as_slice() {
+                [] => write!(f, "without a snapshot"),
+                [index] => write!(
+                    f,
+                    "without a snapshot after the snapshot at oplog index {index} was rejected"
+                ),
+                indexes => write!(
+                    f,
+                    "without a snapshot after the snapshots at oplog indexes {} were rejected",
+                    indexes
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            },
+        }
+    }
+}
+
+/// A replay that started from the snapshot at `snapshot_index`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaySnapshotStart {
+    pub snapshot_index: OplogIndex,
+}
+
+/// A replay without a snapshot. `rejected_snapshots` holds the oplog indexes of the automatic
+/// snapshots that the recovery rejected before it, in ascending order; it is empty when no
+/// snapshot was involved.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayFullStart {
+    pub rejected_snapshots: Vec<OplogIndex>,
 }
 
 declare_unions! {
@@ -411,6 +509,7 @@ pub(crate) mod replay_divergence_test_values {
                 ),
             )),
             mismatched: vec![StartIdentityField::FunctionName],
+            replay_start: None,
         }
     }
 

@@ -7219,14 +7219,21 @@
     },
     "ReplayDivergence": {
       "type": "object",
-      "required": ["oplogIndex", "expected", "actual", "mismatched"],
+      "required": ["oplogIndex", "expected", "actual", "mismatched", "replayStart"],
       "properties": {
         "oplogIndex": { "type": "integer", "minimum": 0 },
         "expected": { "$ref": "#/definitions/ReplayStep" },
         "actual": { "$ref": "#/definitions/ReplayStep" },
-        "mismatched": { "type": "array", "items": { "$ref": "#/definitions/StartIdentityField" } }
+        "mismatched": { "type": "array", "items": { "$ref": "#/definitions/StartIdentityField" } },
+        "replayStart": { "anyOf": [{ "$ref": "#/definitions/ReplayStart" }, { "type": "null" }] }
       },
       "additionalProperties": false
+    },
+    "ReplayStart": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "snapshotIndex"], "properties": { "type": { "const": "Snapshot" }, "snapshotIndex": { "type": "integer", "minimum": 0 } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "rejectedSnapshots"], "properties": { "type": { "const": "FullReplay" }, "rejectedSnapshots": { "type": "array", "items": { "type": "integer", "minimum": 0 } } }, "additionalProperties": false }
+      ]
     },
     "ReplayStep": {
       "oneOf": [

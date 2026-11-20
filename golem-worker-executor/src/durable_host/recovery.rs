@@ -337,31 +337,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         // A rejected periodic snapshot is reported with its own
                                         // index, so only a divergence that ends the replay
                                         // names the snapshot that the replay started from.
-                                        let hint = if snapshot_divergence
-                                            && !Self::rejects_diverged_record(store, &error)
+                                        let error = if snapshot_divergence
+                                            && Self::rejects_diverged_record(store, &error)
                                         {
-                                            Self::replay_snapshot_hint(store)
+                                            error
                                         } else {
-                                            None
+                                            Self::with_replay_start(store, error)
                                         };
-                                        let mut trap_type = TrapType::from_worker_executor_error::<Ctx>(
+                                        Some(TrapType::from_worker_executor_error::<Ctx>(
                                             error,
                                             OplogIndex::INITIAL,
                                             store.as_context().data().agent_mode(),
-                                        );
-                                        // The hint goes into the text of the error only; the
-                                        // divergence keeps its structure.
-                                        if let (
-                                            Some(hint),
-                                            TrapType::Error {
-                                                error: AgentError::InternalError(text),
-                                                ..
-                                            },
-                                        ) = (hint, &mut trap_type)
-                                        {
-                                            text.push_str(&hint);
-                                        }
-                                        Some(trap_type)
+                                        ))
                                     }
                                 }
 ;
@@ -549,49 +536,49 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )));
         }
         result.map_err(|error| ReplayFailure {
-            error,
+            error: Self::with_replay_start(store, error),
             diverged,
             provenance,
         })
     }
 
-    /// The hint for a divergence of a replay that started from a snapshot: the oplog index of the
-    /// snapshot, and that a restored state that differs from the live one is a common cause. A
-    /// replay without a snapshot gets the same hint with the oplog indexes of the automatic
-    /// snapshots that the starts of this incarnation rejected, and no hint when they rejected
-    /// none.
-    fn replay_snapshot_hint(store: &Store<Ctx>) -> Option<String> {
-        const HINT: &str = "a snapshot load that differs from the live state is a common cause";
-        if let Some(snapshot_index) = store.data().durable_ctx().state.last_snapshot_index {
-            return Some(format!(
-                "; replay started from the snapshot at oplog index {snapshot_index}; {HINT}"
-            ));
+    /// Records where the replay started on a divergence at a recorded entry that does not name
+    /// its start yet: the loaded snapshot, or else a replay without a snapshot with the oplog
+    /// indexes of the automatic snapshots that the starts of this incarnation rejected. A
+    /// divergence without an oplog index is not a position of the replay and keeps no start.
+    fn with_replay_start(store: &Store<Ctx>, error: WorkerExecutorError) -> WorkerExecutorError {
+        let mut divergence = match error {
+            WorkerExecutorError::UnexpectedOplogEntry { divergence }
+                if divergence.oplog_index != OplogIndex::NONE =>
+            {
+                divergence
+            }
+            error => return error,
+        };
+        if divergence.replay_start.is_none() {
+            divergence.replay_start = Some(
+                match store.data().durable_ctx().state.last_snapshot_index {
+                    Some(snapshot_index) => {
+                        golem_common::model::oplog::ReplayStart::snapshot(snapshot_index)
+                    }
+                    None => {
+                        let mut rejected: Vec<OplogIndex> = store
+                            .data()
+                            .get_public_state()
+                            .worker()
+                            .read_exclusions(
+                                crate::worker::snapshot_selection::SnapshotExclusions::persisted_rejections,
+                            )
+                            .into_iter()
+                            .flatten()
+                            .collect();
+                        rejected.sort();
+                        golem_common::model::oplog::ReplayStart::full_replay(rejected)
+                    }
+                },
+            );
         }
-        let mut rejected: Vec<OplogIndex> = store
-            .data()
-            .get_public_state()
-            .worker()
-            .read_exclusions(
-                crate::worker::snapshot_selection::SnapshotExclusions::persisted_rejections,
-            )
-            .into_iter()
-            .flatten()
-            .collect();
-        rejected.sort();
-        match rejected.as_slice() {
-            [] => None,
-            [index] => Some(format!(
-                "; replay started without a snapshot after the snapshot at oplog index {index} was rejected; {HINT}"
-            )),
-            indexes => Some(format!(
-                "; replay started without a snapshot after the snapshots at oplog indexes {} were rejected; {HINT}",
-                indexes
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        }
+        WorkerExecutorError::UnexpectedOplogEntry { divergence }
     }
 
     /// Begins the bootstrap phase of the primary Store, before its core initializer runs.

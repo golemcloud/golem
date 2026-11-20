@@ -1145,6 +1145,7 @@ fn failed_update_divergence_requests_drop_their_owned_handles() {
                 expected,
                 actual,
                 mismatched: vec![],
+                replay_start: None,
             }),
         })
     };
