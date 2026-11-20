@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod management;
+
 use crate::Tracing;
 use golem_client::api::{RegistryServiceClient, WorkerClient};
 use golem_client::model::StoredCard;
