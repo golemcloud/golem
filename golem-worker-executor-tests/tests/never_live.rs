@@ -672,3 +672,255 @@ async fn a_divergence_after_a_replayed_directory_listing_of_a_never_live_fork_is
     );
     Ok(())
 }
+
+/// A quota service whose every reservation is throttled, with a refill far in the future.
+struct ThrottlingQuotaService;
+
+#[async_trait::async_trait]
+impl golem_worker_executor::services::quota::QuotaService for ThrottlingQuotaService {
+    async fn acquire(
+        &self,
+        environment_id: EnvironmentId,
+        resource_name: golem_common::model::quota::ResourceName,
+        expected_use: u64,
+        previous_credit: i64,
+        previous_credit_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> golem_worker_executor::services::quota::LeaseInterest {
+        golem_worker_executor::services::quota::QuotaService::acquire(
+            &golem_worker_executor::services::quota::UnlimitedQuotaService,
+            environment_id,
+            resource_name,
+            expected_use,
+            previous_credit,
+            previous_credit_at,
+        )
+        .await
+    }
+
+    async fn try_reserve(
+        &self,
+        _interest: &mut golem_worker_executor::services::quota::LeaseInterest,
+        _amount: u64,
+    ) -> golem_common::model::quota::ReserveResult {
+        golem_common::model::quota::ReserveResult::InsufficientAllocation {
+            enforcement_action: golem_common::model::quota::EnforcementAction::Throttle,
+            estimated_wait_nanos: Some(3_600_000_000_000),
+        }
+    }
+
+    async fn commit(
+        &self,
+        interest: &mut golem_worker_executor::services::quota::LeaseInterest,
+        reservation: golem_common::model::quota::Reservation,
+        used: u64,
+    ) {
+        golem_worker_executor::services::quota::QuotaService::commit(
+            &golem_worker_executor::services::quota::UnlimitedQuotaService,
+            interest,
+            reservation,
+            used,
+        )
+        .await
+    }
+}
+
+/// Scheduler storage that records the agent of every `Resume` it stores.
+#[derive(Debug)]
+struct RecordingResumes {
+    inner: Arc<dyn golem_worker_executor::storage::scheduler::SchedulerStorage + Send + Sync>,
+    resumed: Arc<std::sync::Mutex<Vec<AgentId>>>,
+}
+
+#[async_trait::async_trait]
+impl golem_worker_executor::storage::scheduler::SchedulerStorage for RecordingResumes {
+    async fn insert(
+        &self,
+        id: golem_common::model::ScheduleId,
+        due: chrono::DateTime<chrono::Utc>,
+        shard: golem_common::model::ShardId,
+        action: &[u8],
+    ) -> Result<(), golem_worker_executor::storage::scheduler::SchedulerStorageError> {
+        if let golem_common::model::ScheduledAction::Resume { owned_agent_id, .. } =
+            golem_common::serialization::deserialize(action).unwrap()
+        {
+            self.resumed.lock().unwrap().push(owned_agent_id.agent_id);
+        }
+        self.inner.insert(id, due, shard, action).await
+    }
+
+    async fn cancel(
+        &self,
+        id: &golem_common::model::ScheduleId,
+    ) -> Result<(), golem_worker_executor::storage::scheduler::SchedulerStorageError> {
+        self.inner.cancel(id).await
+    }
+
+    async fn claim_due(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        assignment: &golem_common::model::ShardAssignment,
+        limit: u32,
+        ttl: Duration,
+    ) -> Result<
+        Vec<golem_worker_executor::storage::scheduler::ClaimedScheduledAction>,
+        golem_worker_executor::storage::scheduler::SchedulerStorageError,
+    > {
+        self.inner.claim_due(now, assignment, limit, ttl).await
+    }
+
+    async fn count_due(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        assignment: &golem_common::model::ShardAssignment,
+    ) -> Result<u64, golem_worker_executor::storage::scheduler::SchedulerStorageError> {
+        self.inner.count_due(now, assignment).await
+    }
+
+    async fn extend_lease(
+        &self,
+        id: &golem_common::model::ScheduleId,
+        owner: uuid::Uuid,
+        until: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, golem_worker_executor::storage::scheduler::SchedulerStorageError> {
+        self.inner.extend_lease(id, owner, until).await
+    }
+
+    async fn ack(
+        &self,
+        id: &golem_common::model::ScheduleId,
+        owner: uuid::Uuid,
+    ) -> Result<bool, golem_worker_executor::storage::scheduler::SchedulerStorageError> {
+        self.inner.ack(id, owner).await
+    }
+}
+
+/// A source agent is throttled by a quota reservation: the recorded result makes it schedule a
+/// `Resume` and suspend. A never-live fork of it replays that recorded throttle on each automatic
+/// update, also after a cold restart of the executor. The fork refuses the scheduler write, so
+/// the scheduler stores no `Resume` for it, and each update ends with one `NotReplayable`
+/// failure and appends only its update entries.
+#[test]
+#[timeout("4m")]
+async fn a_replayed_quota_throttle_of_a_never_live_fork_schedules_no_resume(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let resumed = Arc::new(std::sync::Mutex::new(Vec::<AgentId>::new()));
+    let overrides = TestExecutorOverrides {
+        quota_service: Some(Arc::new(ThrottlingQuotaService)),
+        wrap_scheduler_storage: Some(Arc::new({
+            let resumed = resumed.clone();
+            move |inner| {
+                Arc::new(RecordingResumes {
+                    inner,
+                    resumed: resumed.clone(),
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let source = agent_id!("QuotaApi", "never-live-throttle");
+    let source_id = executor.start_agent(&component.id, source.clone()).await?;
+    executor
+        .invoke_agent(
+            &component,
+            &source,
+            "reserve_and_commit",
+            data_value!("never-live-rate".to_string(), 1u64, 1u64, 1u64),
+        )
+        .await?;
+    executor
+        .wait_for_status(&source_id, AgentStatus::Suspended, Duration::from_secs(30))
+        .await?;
+    assert_eq!(
+        resumed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|agent| **agent == source_id)
+            .count(),
+        1,
+        "the source did not schedule its resume"
+    );
+    let cut = tip(&executor, &source_id).await?;
+
+    let fork = ForkTarget::new(
+        &component,
+        phantom_agent_id!("QuotaApi", uuid::Uuid::new_v4(), "never-live-throttle"),
+    )?;
+    executor
+        .fork_worker_never_live(&source_id, &fork.agent.to_string(), cut)
+        .await?;
+    let forked = tip(&executor, &fork.worker_id).await?;
+    executor
+        .auto_update_worker(&fork.worker_id, component.revision, false)
+        .await?;
+    let outcomes =
+        settled_update_outcomes(&executor, context.default_environment_id, &fork.worker_id).await?;
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    let first_outcome = outcomes[0].oplog_index;
+    assert_only_update_entries(&entry_kinds(
+        &executor
+            .get_oplog(&fork.worker_id, OplogIndex::INITIAL)
+            .await?,
+        forked,
+    ));
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &fork.worker_id);
+    executor
+        .auto_update_worker(&fork.worker_id, component.revision, false)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            if update_outcomes(&executor, &fork.worker_id).await?.len() == 2
+                && !executor.worker_is_loaded(&owned).await
+            {
+                break anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    let oplog = executor
+        .get_oplog(&fork.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert_only_update_entries(&entry_kinds(&oplog, first_outcome));
+
+    for outcome in update_outcomes(&executor, &fork.worker_id).await? {
+        let PublicOplogEntry::FailedUpdate(failed) = &outcome.entry else {
+            return Err(anyhow!("the update did not fail: {outcome:?}"));
+        };
+        assert_eq!(
+            failed.failure_class,
+            UpdateFailureClass::NotReplayable,
+            "{failed:?}"
+        );
+        assert!(
+            failed
+                .details
+                .as_deref()
+                .is_some_and(|details| details.contains("throttle-resume")),
+            "the refused boundary is not named: {failed:?}"
+        );
+    }
+    assert!(
+        !resumed.lock().unwrap().contains(&fork.worker_id),
+        "the never-live fork scheduled a resume: {:?}",
+        resumed.lock().unwrap()
+    );
+    assert_eq!(
+        executor.get_worker_metadata(&fork.worker_id).await?.status,
+        AgentStatus::Sandboxed
+    );
+    Ok(())
+}
