@@ -1151,7 +1151,9 @@ pub mod shared_args {
     pub struct OplogExportArgs {
         /// Export an obfuscated report: customer values become tokens. Tokens are equal only inside
         /// one export, because each CLI process draws a new random key. The report is for reading,
-        /// not for replay.
+        /// not for replay. Agent IDs, the agent type name of the exported agent and fingerprints
+        /// are shown in clear. A reader who knows the environment ID can test a guessed key of a
+        /// keyed agent against its agent ID.
         #[arg(long)]
         pub obfuscate: bool,
         /// Show numbers, bools, datetimes, durations and the mantissa, scale and unit of quantities
