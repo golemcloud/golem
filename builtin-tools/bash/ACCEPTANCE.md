@@ -63,7 +63,7 @@ variables. The task needs no Docker. The corpora cover
 agent idioms, every builtin, compound commands, expansions, parameters and arrays, redirections,
 options, traps, syntax errors, what does and does not carry across calls, the agent's environment, and `/dev`
 paths as operands, besides the per-command cases. The task also fails when a feature on the
-checklist (`conformance/features.py`) has no case. The example reports its actual shell status
+checklist (`conformance/features.json`) has no case. The example reports its actual shell status
 separately from process termination: WASI's `cli/run` alone would collapse distinct nonzero
 statuses. No stderr is globally discarded or normalized. A deliberate difference from Bash is a
 per-case fixture with its reason. The same task's harness self-tests (`component/src/tests.rs`)

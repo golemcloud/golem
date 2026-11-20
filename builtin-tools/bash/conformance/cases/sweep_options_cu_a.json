@@ -1,0 +1,3796 @@
+{
+  "tier": "sweep",
+  "description": "Option sweep, part A: every option of the checksum, encoding, cat, comm, cp, csplit and cut\ncommands, with their error paths and meaningful combinations.\n\nError paths print the status and then the diagnostic through `sed`, which folds GNU's curly\nquotes (which it uses under the oracle's UTF-8 locale; see UTF8_QUOTES in the existing corpora)\ninto ASCII ones, so a case compares the words and the status rather than the quote style.",
+  "cases": [
+    {
+      "name": "opt md5sum: stdin",
+      "script": "printf 'abc' | md5sum",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: dash operand",
+      "script": "printf 'abc' | md5sum -",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: two files",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum /tmp/a /tmp/b",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: tag",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum --tag /tmp/a",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: binary mode marker",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum -b /tmp/a",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: text mode",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum -t /tmp/a",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: zero terminated",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum -z /tmp/a | od -An -c | tail -n 2",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: check ok",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum /tmp/a /tmp/b >/tmp/sums; md5sum -c /tmp/sums",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: check quiet",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum /tmp/a /tmp/b >/tmp/sums; printf x >>/tmp/b; md5sum -c --quiet /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: check status only",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum /tmp/a >/tmp/sums; md5sum -c --status /tmp/sums; echo \"status=$?\"; printf y >/tmp/a; md5sum --status -c /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: check missing file",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum /tmp/a /tmp/b >/tmp/sums; rm /tmp/b; md5sum -c /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.md5sum",
+        "cmd.md5sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: check ignore missing",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum /tmp/a /tmp/b >/tmp/sums; rm /tmp/b; md5sum -c --ignore-missing /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: check malformed lines warn",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum /tmp/a >/tmp/sums; echo garbage >>/tmp/sums; md5sum -c -w /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.md5sum",
+        "cmd.md5sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: check strict",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum /tmp/a >/tmp/sums; echo garbage >>/tmp/sums; md5sum -c --strict /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.md5sum",
+        "cmd.md5sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: check no valid lines",
+      "script": "{ echo nothing >/tmp/sums; md5sum -c /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.md5sum",
+        "cmd.md5sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: check tagged format",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum --tag /tmp/a >/tmp/sums; md5sum -c /tmp/sums",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: missing file",
+      "script": "{ md5sum /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.md5sum",
+        "cmd.md5sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: directory operand",
+      "script": "{ mkdir /tmp/d; md5sum /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.md5sum",
+        "cmd.md5sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: unknown option",
+      "script": "{ md5sum --bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.md5sum",
+        "cmd.md5sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: status with no check",
+      "script": "{ md5sum --status /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.md5sum",
+        "cmd.md5sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: escaped file name",
+      "script": "printf x >'/tmp/a\\b'; md5sum '/tmp/a\\b'",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: newline in file name",
+      "script": "printf x >'/tmp/a\nb'; md5sum '/tmp/a\nb'",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: check from stdin",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum /tmp/a | md5sum -c",
+      "tags": [
+        "cmd.md5sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt md5sum: tag with text mode rejected",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; md5sum --tag -t /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.md5sum",
+        "cmd.md5sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: stdin",
+      "script": "printf 'abc' | sha1sum",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: dash operand",
+      "script": "printf 'abc' | sha1sum -",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: two files",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum /tmp/a /tmp/b",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: tag",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum --tag /tmp/a",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: binary mode marker",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum -b /tmp/a",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: text mode",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum -t /tmp/a",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: zero terminated",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum -z /tmp/a | od -An -c | tail -n 2",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: check ok",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum /tmp/a /tmp/b >/tmp/sums; sha1sum -c /tmp/sums",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: check quiet",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum /tmp/a /tmp/b >/tmp/sums; printf x >>/tmp/b; sha1sum -c --quiet /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: check status only",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum /tmp/a >/tmp/sums; sha1sum -c --status /tmp/sums; echo \"status=$?\"; printf y >/tmp/a; sha1sum --status -c /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: check missing file",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum /tmp/a /tmp/b >/tmp/sums; rm /tmp/b; sha1sum -c /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha1sum",
+        "cmd.sha1sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: check ignore missing",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum /tmp/a /tmp/b >/tmp/sums; rm /tmp/b; sha1sum -c --ignore-missing /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: check malformed lines warn",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum /tmp/a >/tmp/sums; echo garbage >>/tmp/sums; sha1sum -c -w /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha1sum",
+        "cmd.sha1sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: check strict",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum /tmp/a >/tmp/sums; echo garbage >>/tmp/sums; sha1sum -c --strict /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha1sum",
+        "cmd.sha1sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: check no valid lines",
+      "script": "{ echo nothing >/tmp/sums; sha1sum -c /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha1sum",
+        "cmd.sha1sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: check tagged format",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum --tag /tmp/a >/tmp/sums; sha1sum -c /tmp/sums",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: missing file",
+      "script": "{ sha1sum /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha1sum",
+        "cmd.sha1sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: directory operand",
+      "script": "{ mkdir /tmp/d; sha1sum /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha1sum",
+        "cmd.sha1sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: unknown option",
+      "script": "{ sha1sum --bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha1sum",
+        "cmd.sha1sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: status with no check",
+      "script": "{ sha1sum --status /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha1sum",
+        "cmd.sha1sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: escaped file name",
+      "script": "printf x >'/tmp/a\\b'; sha1sum '/tmp/a\\b'",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: newline in file name",
+      "script": "printf x >'/tmp/a\nb'; sha1sum '/tmp/a\nb'",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: check from stdin",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum /tmp/a | sha1sum -c",
+      "tags": [
+        "cmd.sha1sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha1sum: tag with text mode rejected",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha1sum --tag -t /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha1sum",
+        "cmd.sha1sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: stdin",
+      "script": "printf 'abc' | sha256sum",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: dash operand",
+      "script": "printf 'abc' | sha256sum -",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: two files",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum /tmp/a /tmp/b",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: tag",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum --tag /tmp/a",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: binary mode marker",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum -b /tmp/a",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: text mode",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum -t /tmp/a",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: zero terminated",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum -z /tmp/a | od -An -c | tail -n 2",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: check ok",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum /tmp/a /tmp/b >/tmp/sums; sha256sum -c /tmp/sums",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: check quiet",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum /tmp/a /tmp/b >/tmp/sums; printf x >>/tmp/b; sha256sum -c --quiet /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: check status only",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum /tmp/a >/tmp/sums; sha256sum -c --status /tmp/sums; echo \"status=$?\"; printf y >/tmp/a; sha256sum --status -c /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: check missing file",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum /tmp/a /tmp/b >/tmp/sums; rm /tmp/b; sha256sum -c /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha256sum",
+        "cmd.sha256sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: check ignore missing",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum /tmp/a /tmp/b >/tmp/sums; rm /tmp/b; sha256sum -c --ignore-missing /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: check malformed lines warn",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum /tmp/a >/tmp/sums; echo garbage >>/tmp/sums; sha256sum -c -w /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha256sum",
+        "cmd.sha256sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: check strict",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum /tmp/a >/tmp/sums; echo garbage >>/tmp/sums; sha256sum -c --strict /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha256sum",
+        "cmd.sha256sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: check no valid lines",
+      "script": "{ echo nothing >/tmp/sums; sha256sum -c /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha256sum",
+        "cmd.sha256sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: check tagged format",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum --tag /tmp/a >/tmp/sums; sha256sum -c /tmp/sums",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: missing file",
+      "script": "{ sha256sum /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha256sum",
+        "cmd.sha256sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: directory operand",
+      "script": "{ mkdir /tmp/d; sha256sum /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha256sum",
+        "cmd.sha256sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: unknown option",
+      "script": "{ sha256sum --bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha256sum",
+        "cmd.sha256sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: status with no check",
+      "script": "{ sha256sum --status /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha256sum",
+        "cmd.sha256sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: escaped file name",
+      "script": "printf x >'/tmp/a\\b'; sha256sum '/tmp/a\\b'",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: newline in file name",
+      "script": "printf x >'/tmp/a\nb'; sha256sum '/tmp/a\nb'",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: check from stdin",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum /tmp/a | sha256sum -c",
+      "tags": [
+        "cmd.sha256sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha256sum: tag with text mode rejected",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha256sum --tag -t /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha256sum",
+        "cmd.sha256sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: stdin",
+      "script": "printf 'abc' | sha512sum",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: dash operand",
+      "script": "printf 'abc' | sha512sum -",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: two files",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum /tmp/a /tmp/b",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: tag",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum --tag /tmp/a",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: binary mode marker",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum -b /tmp/a",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: text mode",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum -t /tmp/a",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: zero terminated",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum -z /tmp/a | od -An -c | tail -n 2",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: check ok",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum /tmp/a /tmp/b >/tmp/sums; sha512sum -c /tmp/sums",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: check quiet",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum /tmp/a /tmp/b >/tmp/sums; printf x >>/tmp/b; sha512sum -c --quiet /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: check status only",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum /tmp/a >/tmp/sums; sha512sum -c --status /tmp/sums; echo \"status=$?\"; printf y >/tmp/a; sha512sum --status -c /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: check missing file",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum /tmp/a /tmp/b >/tmp/sums; rm /tmp/b; sha512sum -c /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha512sum",
+        "cmd.sha512sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: check ignore missing",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum /tmp/a /tmp/b >/tmp/sums; rm /tmp/b; sha512sum -c --ignore-missing /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: check malformed lines warn",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum /tmp/a >/tmp/sums; echo garbage >>/tmp/sums; sha512sum -c -w /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha512sum",
+        "cmd.sha512sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: check strict",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum /tmp/a >/tmp/sums; echo garbage >>/tmp/sums; sha512sum -c --strict /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha512sum",
+        "cmd.sha512sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: check no valid lines",
+      "script": "{ echo nothing >/tmp/sums; sha512sum -c /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha512sum",
+        "cmd.sha512sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: check tagged format",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum --tag /tmp/a >/tmp/sums; sha512sum -c /tmp/sums",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: missing file",
+      "script": "{ sha512sum /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha512sum",
+        "cmd.sha512sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: directory operand",
+      "script": "{ mkdir /tmp/d; sha512sum /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha512sum",
+        "cmd.sha512sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: unknown option",
+      "script": "{ sha512sum --bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha512sum",
+        "cmd.sha512sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: status with no check",
+      "script": "{ sha512sum --status /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha512sum",
+        "cmd.sha512sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: escaped file name",
+      "script": "printf x >'/tmp/a\\b'; sha512sum '/tmp/a\\b'",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: newline in file name",
+      "script": "printf x >'/tmp/a\nb'; sha512sum '/tmp/a\nb'",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: check from stdin",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum /tmp/a | sha512sum -c",
+      "tags": [
+        "cmd.sha512sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sha512sum: tag with text mode rejected",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; sha512sum --tag -t /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sha512sum",
+        "cmd.sha512sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: stdin",
+      "script": "printf 'abc' | b2sum",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: dash operand",
+      "script": "printf 'abc' | b2sum -",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: two files",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum /tmp/a /tmp/b",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: tag",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum --tag /tmp/a",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: binary mode marker",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum -b /tmp/a",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: text mode",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum -t /tmp/a",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: zero terminated",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum -z /tmp/a | od -An -c | tail -n 2",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: check ok",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum /tmp/a /tmp/b >/tmp/sums; b2sum -c /tmp/sums",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: check quiet",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum /tmp/a /tmp/b >/tmp/sums; printf x >>/tmp/b; b2sum -c --quiet /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: check status only",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum /tmp/a >/tmp/sums; b2sum -c --status /tmp/sums; echo \"status=$?\"; printf y >/tmp/a; b2sum --status -c /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: check missing file",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum /tmp/a /tmp/b >/tmp/sums; rm /tmp/b; b2sum -c /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.b2sum",
+        "cmd.b2sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: check ignore missing",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum /tmp/a /tmp/b >/tmp/sums; rm /tmp/b; b2sum -c --ignore-missing /tmp/sums; echo \"status=$?\"",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: check malformed lines warn",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum /tmp/a >/tmp/sums; echo garbage >>/tmp/sums; b2sum -c -w /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.b2sum",
+        "cmd.b2sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: check strict",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum /tmp/a >/tmp/sums; echo garbage >>/tmp/sums; b2sum -c --strict /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.b2sum",
+        "cmd.b2sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: check no valid lines",
+      "script": "{ echo nothing >/tmp/sums; b2sum -c /tmp/sums; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.b2sum",
+        "cmd.b2sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: check tagged format",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum --tag /tmp/a >/tmp/sums; b2sum -c /tmp/sums",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: missing file",
+      "script": "{ b2sum /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.b2sum",
+        "cmd.b2sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: directory operand",
+      "script": "{ mkdir /tmp/d; b2sum /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.b2sum",
+        "cmd.b2sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: unknown option",
+      "script": "{ b2sum --bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.b2sum",
+        "cmd.b2sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: status with no check",
+      "script": "{ b2sum --status /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.b2sum",
+        "cmd.b2sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: escaped file name",
+      "script": "printf x >'/tmp/a\\b'; b2sum '/tmp/a\\b'",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: newline in file name",
+      "script": "printf x >'/tmp/a\nb'; b2sum '/tmp/a\nb'",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: check from stdin",
+      "script": "printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum /tmp/a | b2sum -c",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: tag with text mode rejected",
+      "script": "{ printf 'hello\\n' >/tmp/a; printf '' >/tmp/b; b2sum --tag -t /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.b2sum",
+        "cmd.b2sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: length 256",
+      "script": "printf abc | b2sum -l 256",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: length 8",
+      "script": "printf abc | b2sum --length=8",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: length not multiple of 8",
+      "script": "{ printf abc | b2sum -l 12; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.b2sum",
+        "cmd.b2sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: length too big",
+      "script": "{ printf abc | b2sum -l 1024; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.b2sum",
+        "cmd.b2sum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: length tagged",
+      "script": "printf abc | b2sum -l 128 --tag",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt b2sum: check with length",
+      "script": "printf abc >/tmp/a; b2sum -l 128 /tmp/a >/tmp/s; b2sum -c /tmp/s",
+      "tags": [
+        "cmd.b2sum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm sysv",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sysv /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm bsd",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a bsd /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm crc",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a crc /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm crc32b",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a crc32b /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm md5",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a md5 /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm sha1",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sha1 /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm sha224",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sha224 /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm sha256",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sha256 /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm sha384",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sha384 /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm sha512",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sha512 /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm blake2b",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a blake2b /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: algorithm sm3",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sm3 /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: default crc on stdin",
+      "script": "printf 'abc\\n' | cksum",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: two files",
+      "script": "printf 'abc\\n' >/tmp/a; printf '' >/tmp/b; cksum /tmp/a /tmp/b",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: sha2 with length",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sha2 -l 256 /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: sha3 with length",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sha3 -l 256 /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: sha2 without length",
+      "script": "{ printf 'abc\\n' >/tmp/a; cksum -a sha2 /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cksum",
+        "cmd.cksum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: untagged",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sha256 --untagged /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: base64 digest",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a md5 --base64 /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: raw digest",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a md5 --raw /tmp/a | od -An -tx1",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: raw crc",
+      "script": "printf 'abc\\n' >/tmp/a; cksum --raw /tmp/a | od -An -tx1",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: blake2b length",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a blake2b -l 64 /tmp/a",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: zero terminated",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a md5 -z /tmp/a | od -An -c | tail -n 1",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: check tagged",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sha1 /tmp/a >/tmp/s; cksum -c /tmp/s",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: check untagged needs algorithm",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a sha1 --untagged /tmp/a >/tmp/s; cksum -a sha1 -c /tmp/s",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: check crc rejected",
+      "script": "{ printf 'abc\\n' >/tmp/a; cksum /tmp/a >/tmp/s; cksum -c /tmp/s; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cksum",
+        "cmd.cksum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: check mismatch",
+      "script": "{ printf 'abc\\n' >/tmp/a; cksum -a md5 /tmp/a >/tmp/s; echo z >/tmp/a; cksum -c /tmp/s; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cksum",
+        "cmd.cksum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: check quiet and status",
+      "script": "printf 'abc\\n' >/tmp/a; cksum -a md5 /tmp/a >/tmp/s; cksum -c --quiet /tmp/s; echo \"q=$?\"; cksum -c --status /tmp/s; echo \"s=$?\"",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: invalid algorithm",
+      "script": "{ printf 'abc\\n' >/tmp/a; cksum -a nope /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cksum",
+        "cmd.cksum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: length with md5",
+      "script": "{ printf 'abc\\n' >/tmp/a; cksum -a md5 -l 128 /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cksum",
+        "cmd.cksum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: missing file",
+      "script": "{ cksum /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cksum",
+        "cmd.cksum.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: empty input",
+      "script": "cksum </dev/null",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: bsd on stdin",
+      "script": "printf 'abc\\n' | cksum -a bsd",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cksum: sysv two files",
+      "script": "printf 'abc\\n' >/tmp/a; printf 'xyz' >/tmp/b; cksum -a sysv /tmp/a /tmp/b",
+      "tags": [
+        "cmd.cksum"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: encode stdin",
+      "script": "printf 'hello world' | base32",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: encode file",
+      "script": "printf 'hello' >/tmp/a; base32 /tmp/a",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: wrap 4",
+      "script": "printf 'hello world' | base32 -w 4",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: wrap 0",
+      "script": "printf '%0100d' 0 | base32 --wrap=0; echo",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: default wrap 76",
+      "script": "printf '%0100d' 0 | base32",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: decode",
+      "script": "printf 'hello' | base32 | base32 -d",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: decode long option",
+      "script": "printf 'hi there' | base32 | base32 --decode",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: decode with newlines",
+      "script": "printf 'hello world, longer text' | base32 -w 5 | base32 -d",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: decode garbage",
+      "script": "{ printf '@@@@' | base32 -d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base32",
+        "cmd.base32.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: decode ignore garbage",
+      "script": "printf 'hello' | base32 | sed 's/./&!/2' | base32 -d -i",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: invalid wrap",
+      "script": "{ printf x | base32 -w x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base32",
+        "cmd.base32.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: negative wrap",
+      "script": "{ printf x | base32 -w -1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base32",
+        "cmd.base32.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: extra operand",
+      "script": "{ printf x >/tmp/a; base32 /tmp/a /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base32",
+        "cmd.base32.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: missing file",
+      "script": "{ base32 /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base32",
+        "cmd.base32.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: empty input",
+      "script": "base32 </dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: binary bytes",
+      "script": "printf '\\377\\000\\200' | base32",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: decode truncated input",
+      "script": "{ printf 'aGVsbG8' | base32 -d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base32",
+        "cmd.base32.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: dash operand",
+      "script": "printf abc | base32 -",
+      "tags": [
+        "cmd.base32"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: decode alias D",
+      "script": "{ printf 'hi' | base32 | base32 -D; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base32",
+        "cmd.base32.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: encode stdin",
+      "script": "printf 'hello world' | base64",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: encode file",
+      "script": "printf 'hello' >/tmp/a; base64 /tmp/a",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: wrap 4",
+      "script": "printf 'hello world' | base64 -w 4",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: wrap 0",
+      "script": "printf '%0100d' 0 | base64 --wrap=0; echo",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: default wrap 76",
+      "script": "printf '%0100d' 0 | base64",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: decode",
+      "script": "printf 'hello' | base64 | base64 -d",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: decode long option",
+      "script": "printf 'hi there' | base64 | base64 --decode",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: decode with newlines",
+      "script": "printf 'hello world, longer text' | base64 -w 5 | base64 -d",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: decode garbage",
+      "script": "{ printf '@@@@' | base64 -d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base64",
+        "cmd.base64.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: decode ignore garbage",
+      "script": "printf 'hello' | base64 | sed 's/./&!/2' | base64 -d -i",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: invalid wrap",
+      "script": "{ printf x | base64 -w x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base64",
+        "cmd.base64.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: negative wrap",
+      "script": "{ printf x | base64 -w -1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base64",
+        "cmd.base64.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: extra operand",
+      "script": "{ printf x >/tmp/a; base64 /tmp/a /tmp/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base64",
+        "cmd.base64.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: missing file",
+      "script": "{ base64 /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base64",
+        "cmd.base64.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: empty input",
+      "script": "base64 </dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: binary bytes",
+      "script": "printf '\\377\\000\\200' | base64",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: decode truncated input",
+      "script": "{ printf 'aGVsbG8' | base64 -d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base64",
+        "cmd.base64.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: dash operand",
+      "script": "printf abc | base64 -",
+      "tags": [
+        "cmd.base64"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: decode alias D",
+      "script": "{ printf 'hi' | base64 | base64 -D; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base64",
+        "cmd.base64.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: decode without padding",
+      "script": "{ printf 'aGk' | base64 -d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base64",
+        "cmd.base64.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base64: decode url alphabet rejected",
+      "script": "{ printf '__8=' | base64 -d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base64",
+        "cmd.base64.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt base32: decode lowercase",
+      "script": "{ printf 'nbswy3dp' | base32 -d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.base32",
+        "cmd.base32.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base64 encode",
+      "script": "printf 'hi?>' | basenc --base64",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base64 round trip",
+      "script": "printf 'hi?>' | basenc --base64 | basenc --base64 -d",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base64url encode",
+      "script": "printf 'hi?>' | basenc --base64url",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base64url round trip",
+      "script": "printf 'hi?>' | basenc --base64url | basenc --base64url -d",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base32 encode",
+      "script": "printf 'hi?>' | basenc --base32",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base32 round trip",
+      "script": "printf 'hi?>' | basenc --base32 | basenc --base32 -d",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base32hex encode",
+      "script": "printf 'hi?>' | basenc --base32hex",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base32hex round trip",
+      "script": "printf 'hi?>' | basenc --base32hex | basenc --base32hex -d",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base16 encode",
+      "script": "printf 'hi?>' | basenc --base16",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base16 round trip",
+      "script": "printf 'hi?>' | basenc --base16 | basenc --base16 -d",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base2lsbf encode",
+      "script": "printf 'hi?>' | basenc --base2lsbf",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base2lsbf round trip",
+      "script": "printf 'hi?>' | basenc --base2lsbf | basenc --base2lsbf -d",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base2msbf encode",
+      "script": "printf 'hi?>' | basenc --base2msbf",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base2msbf round trip",
+      "script": "printf 'hi?>' | basenc --base2msbf | basenc --base2msbf -d",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: z85 encode",
+      "script": "printf 'abcd' | basenc --z85",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: z85 round trip",
+      "script": "printf 'abcd' | basenc --z85 | basenc --z85 -d",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base58 encode",
+      "script": "printf 'hi?>' | basenc --base58",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base58 round trip",
+      "script": "printf 'hi?>' | basenc --base58 | basenc --base58 -d",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: z85 bad length",
+      "script": "{ printf 'abc' | basenc --z85; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.basenc",
+        "cmd.basenc.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base16 decode lowercase",
+      "script": "{ printf '6869' | basenc --base16 -d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.basenc",
+        "cmd.basenc.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base16 wrap",
+      "script": "printf 'hello' | basenc --base16 -w 4",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base2msbf decode bad digit",
+      "script": "{ printf '0120' | basenc --base2msbf -d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.basenc",
+        "cmd.basenc.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: no encoding",
+      "script": "{ printf x | basenc; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.basenc",
+        "cmd.basenc.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: two encodings last wins",
+      "script": "printf 'hi' | basenc --base64 --base16",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: ignore garbage",
+      "script": "printf '68!69' | basenc --base16 -d -i",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base64url decode",
+      "script": "printf '__8=' | basenc --base64url -d | od -An -tx1",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basenc: base32hex decode",
+      "script": "printf 'D1KG====' | basenc --base32hex -d",
+      "tags": [
+        "cmd.basenc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: trailing slashes",
+      "script": "basename /usr/lib/",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: root",
+      "script": "basename /; basename //; basename ///",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: empty string",
+      "script": "basename ''",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: suffix operand equals name",
+      "script": "basename .txt .txt",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: suffix not matched",
+      "script": "basename a.txt .log",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: multiple",
+      "script": "basename -a /a/b /c/d/ e",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: suffix option",
+      "script": "basename -s .c /x/a.c b.c c.h",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: suffix long option",
+      "script": "basename --suffix=.c /x/a.c",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: zero terminated",
+      "script": "basename -z /a/b | od -An -c",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: missing operand",
+      "script": "{ basename; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.basename",
+        "cmd.basename.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: extra operand",
+      "script": "{ basename a b c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.basename",
+        "cmd.basename.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: multiple long option",
+      "script": "basename --multiple a/b c/d",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: dash-leading name",
+      "script": "basename -- -x/y",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt basename: unknown option",
+      "script": "{ basename -q x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.basename",
+        "cmd.basename.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirname: no slash",
+      "script": "dirname file",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirname: trailing slash",
+      "script": "dirname /a/b/",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirname: root forms",
+      "script": "dirname /; dirname //; dirname /a",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirname: multiple",
+      "script": "dirname /a/b c/d e",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirname: zero terminated",
+      "script": "dirname -z /a/b c/d | od -An -c",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirname: missing operand",
+      "script": "{ dirname; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.dirname",
+        "cmd.dirname.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirname: empty string",
+      "script": "dirname ''",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirname: double slashes inside",
+      "script": "dirname a//b//c",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirname: dot components",
+      "script": "dirname ./a; dirname ../b; dirname .",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirname: unknown option",
+      "script": "{ dirname --bogus x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.dirname",
+        "cmd.dirname.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -A option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -A /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -b option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -b /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -e option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -e /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -E option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -E /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -n option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -n /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -s option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -s /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -t option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -t /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -T option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -T /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -u option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -u /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -v option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -v /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: --show-all option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat --show-all /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: --number-nonblank option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat --number-nonblank /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: --show-ends option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat --show-ends /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: --number option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat --number /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: --squeeze-blank option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat --squeeze-blank /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: --show-tabs option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat --show-tabs /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: --show-nonprinting option",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat --show-nonprinting /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -bn combination",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -bn /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -ns combination",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -ns /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -bs combination",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -bs /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -sE combination",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -sE /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -nT combination",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -nT /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -vE combination",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -vE /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -An combination",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -An /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -et combination",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -et /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: -sb combination",
+      "script": "printf 'a\\tb\\n\\n\\n\\nc\\001d\\177\\n\\200\\377x\\r\\n' >/tmp/f; cat -sb /tmp/f",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: number across files",
+      "script": "printf 'a\\nb\\n' >/tmp/x; printf 'c\\n' >/tmp/y; cat -n /tmp/x /tmp/y",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: number without trailing newline",
+      "script": "printf 'a\\nb' >/tmp/x; cat -n /tmp/x /tmp/x",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: show ends without trailing newline",
+      "script": "printf 'a\\nb' | cat -E",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: stdin between files",
+      "script": "printf 'x\\n' >/tmp/x; printf 'in\\n' | cat /tmp/x - /tmp/x",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: missing file continues",
+      "script": "{ printf 'x\\n' >/tmp/x; cat /tmp/x /tmp/nosuch /tmp/x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cat",
+        "cmd.cat.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: directory operand",
+      "script": "{ mkdir /tmp/d; cat /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cat",
+        "cmd.cat.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: unknown short option",
+      "script": "{ cat -z; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cat",
+        "cmd.cat.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: unknown long option",
+      "script": "{ cat --number-all; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cat",
+        "cmd.cat.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: squeeze at start",
+      "script": "printf '\\n\\n\\na\\n' | cat -s",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: number nonblank with only blanks",
+      "script": "printf '\\n\\n' | cat -b",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: show nonprinting high bytes",
+      "script": "printf '\\201\\233\\240\\376' | cat -v; echo",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: crlf with show ends",
+      "script": "printf 'a\\r\\nb\\r\\n' | cat -E",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: empty file",
+      "script": "printf '' >/tmp/e; cat /tmp/e; echo \"status=$?\"",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cat: double dash",
+      "script": "printf 'x\\n' >/tmp/-n; cd /tmp && cat -- -n",
+      "tags": [
+        "cmd.cat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: columns all",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm  /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: columns -1",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm -1 /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: columns -2",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm -2 /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: columns -3",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm -3 /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: columns -12",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm -12 /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: columns -13",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm -13 /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: columns -23",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm -23 /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: columns -123",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm -123 /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: output delimiter",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm --output-delimiter=: /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: output delimiter multi-char",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm --output-delimiter='<>' -3 /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: empty output delimiter",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm --output-delimiter= /tmp/1 /tmp/2 | od -An -c",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: total",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm --total /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: total with suppression",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm --total -12 /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: zero terminated",
+      "script": "printf 'a\\0b\\0' >/tmp/1; printf 'b\\0c\\0' >/tmp/2; comm -z /tmp/1 /tmp/2 | od -An -c",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: unsorted input warns",
+      "script": "{ printf 'b\\na\\n' >/tmp/1; printf 'a\\nb\\n' >/tmp/2; comm /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.comm",
+        "cmd.comm.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: check order fails",
+      "script": "{ printf 'b\\na\\n' >/tmp/1; printf 'c\\n' >/tmp/2; comm --check-order /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.comm",
+        "cmd.comm.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: nocheck order",
+      "script": "printf 'b\\na\\n' >/tmp/1; printf 'a\\nb\\n' >/tmp/2; comm --nocheck-order /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: stdin as first",
+      "script": "printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; cat /tmp/1 | comm - /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: one operand",
+      "script": "{ printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm /tmp/1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.comm",
+        "cmd.comm.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: three operands",
+      "script": "{ printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm /tmp/1 /tmp/2 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.comm",
+        "cmd.comm.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: missing second file",
+      "script": "{ printf 'a\\nb\\nd\\n' >/tmp/1; printf 'b\\nc\\nd\\ne\\n' >/tmp/2; comm /tmp/1 /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.comm",
+        "cmd.comm.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: missing final newline",
+      "script": "printf 'a\\nb' >/tmp/1; printf 'b\\nc' >/tmp/2; comm /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt comm: empty files",
+      "script": "printf '' >/tmp/1; printf 'x\\n' >/tmp/2; comm /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.comm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: file to file",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp s/a c; cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: file into directory",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; mkdir d; cp s/a d; cat d/a",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: several into directory",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; mkdir d; cp s/a s/sub/b d; ls d",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: directory without recursive",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp s t; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: recursive",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp -r s t; find t | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: recursive capital",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp -R s t; cat t/sub/b",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: recursive into existing directory",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; mkdir t; cp -r s t; find t | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: archive",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp -a s t; find t | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: verbose",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp -v s/a c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: verbose recursive",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp -rv s t | sort; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: no clobber",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf keep >c; cp -n s/a c; echo \"status=$?\"; cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: force",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf old >c; cp -f s/a c; cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: interactive no",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf old >c; echo n | cp -i s/a c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: interactive yes",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf old >c; echo y | cp -i s/a c 2>/dev/null; cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: hard link",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp -l s/a c; printf more >>c; cat s/a",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: symbolic link relative",
+      "script": "mkdir -p /tmp/w; cd /tmp/w; printf x >a; cp -s a b; readlink b; cat b",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: target directory option",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; mkdir d; cp -t d s/a s/sub/b; ls d",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: no target directory",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; mkdir d; cp -T s/a d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: no target directory file",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp -T s/a c; cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: backup simple",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf old >c; cp -b s/a c; cat c c~",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: backup numbered",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf old >c; cp --backup=numbered s/a c; cp --backup=numbered s/a c; ls c*",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: backup existing",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf old >c; cp --backup=existing s/a c; ls c*",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: backup suffix",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf old >c; cp -b -S .bak s/a c; ls c*; cat c.bak",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: backup none",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf old >c; cp --backup=none s/a c; ls c*",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: backup invalid control",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp --backup=bogus s/a c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: update older",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf new >c; touch -d 2000-01-01 s/a; cp -u s/a c; cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: update none",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf new >c; cp --update=none s/a c; cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: update all",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf new >c; cp --update=all s/a c; cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: update none-fail",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf new >c; cp --update=none-fail s/a c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: parents",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; mkdir d; cp --parents s/sub/b d; find d | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: preserve timestamps",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; touch -d '2001-02-03 04:05:06' s/a; cp -p s/a c; date -u -r c +%F",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: preserve timestamps long",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; touch -d '2001-02-03 04:05:06' s/a; cp --preserve=timestamps s/a c; date -u -r c +%F",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: no preserve by default",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; touch -d '2001-02-03 04:05:06' s/a; cp s/a c; [ \"$(date -u -r c +%Y)\" = 2001 ] && echo same || echo fresh",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: remove destination",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf old >c; cp --remove-destination s/a c; cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: strip trailing slashes",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp -r --strip-trailing-slashes s/ t; ls t",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: attributes only",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf old >c; cp --attributes-only s/a c; cat c; echo",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: same file",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp s/a s/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: missing source",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp nosuch c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: missing operand",
+      "script": "{ cp; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: missing destination",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp s/a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: target not a directory",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp s/a s/sub/b c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: directory into itself",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp -r s s/sub; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: dereference symlink",
+      "script": "mkdir -p /tmp/w; cd /tmp/w; printf x >a; ln -s a l; cp -L l c; [ -L c ] && echo link || cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: no dereference symlink",
+      "script": "mkdir -p /tmp/w; cd /tmp/w; printf x >a; ln -s a l; cp -P l c; readlink c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: recursive copies symlink as link",
+      "script": "mkdir -p /tmp/w/s; cd /tmp/w; printf x >s/a; ln -s a s/l; cp -r s t; readlink t/l",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: dash-d keeps links",
+      "script": "mkdir -p /tmp/w; cd /tmp/w; printf x >a; ln -s a l; cp -d l c; readlink c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: copy file over directory",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; mkdir c; cp s/a c; ls c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: copy directory over file",
+      "script": "{ mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; printf x >t; cp -r s t; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: unknown option",
+      "script": "{ cp --bogus a b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cp",
+        "cmd.cp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: empty file",
+      "script": "cd /tmp; printf '' >e; cp e f; wc -c f",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cp: dot slash names",
+      "script": "mkdir -p /tmp/s/sub; printf one >/tmp/s/a; printf two >/tmp/s/sub/b; cd /tmp; cp ./s/a ./c; cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: line number",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit n 5; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: two line numbers",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit n 4 8; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: regex",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit n /7/; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: regex with offset",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit n /7/+1; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: regex negative offset",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit n /7/-2; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: skip to regex",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit n %5% /9/; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: repeat count",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit n /[0-9]/ '{2}'; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: repeat line pattern",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit n 3 '{2}'; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: repeat forever",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit -k n /1/ '{*}'; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: prefix",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit -f part n 6; ls part*",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: suffix format",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit -b '%03d.txt' n 6; ls xx*",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: digits",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit -n 4 n 6; ls xx*",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: quiet",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit -s n 6; ls xx*",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: silent long",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit --silent n 6; ls xx*",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: elide empty",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit -z n /1/ '{*}'; ls xx*",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: suppress matched",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit --suppress-matched n /6/; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: keep files on error",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit -k n 5 20; echo \"status=$?\"; ls xx*",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: line out of range",
+      "script": "{ seq 1 12 >/tmp/n; cd /tmp; csplit n 20; ls xx* 2>/dev/null; echo end; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.csplit",
+        "cmd.csplit.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: regex no match",
+      "script": "{ seq 1 12 >/tmp/n; cd /tmp; csplit n /abc/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.csplit",
+        "cmd.csplit.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: unterminated regex",
+      "script": "{ seq 1 12 >/tmp/n; cd /tmp; csplit n /abc; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.csplit",
+        "cmd.csplit.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: line zero",
+      "script": "{ seq 1 12 >/tmp/n; cd /tmp; csplit n 0; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.csplit",
+        "cmd.csplit.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: decreasing lines",
+      "script": "{ seq 1 12 >/tmp/n; cd /tmp; csplit n 8 4; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.csplit",
+        "cmd.csplit.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: bad repeat",
+      "script": "{ seq 1 12 >/tmp/n; cd /tmp; csplit n 3 '{x}'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.csplit",
+        "cmd.csplit.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: bad suffix format",
+      "script": "{ seq 1 12 >/tmp/n; cd /tmp; csplit -b '%s' n 3; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.csplit",
+        "cmd.csplit.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: missing pattern",
+      "script": "{ seq 1 12 >/tmp/n; cd /tmp; csplit n; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.csplit",
+        "cmd.csplit.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: missing file",
+      "script": "{ csplit /tmp/nosuch 2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.csplit",
+        "cmd.csplit.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: stdin input",
+      "script": "cd /tmp; seq 1 5 | csplit - 3; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: repeat exceeds input",
+      "script": "{ seq 1 12 >/tmp/n; cd /tmp; csplit n 5 '{3}'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.csplit",
+        "cmd.csplit.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt csplit: regex first line",
+      "script": "seq 1 12 >/tmp/n; cd /tmp; csplit n /1/; for f in xx*; do echo \"== $f\"; cat \"$f\"; done",
+      "tags": [
+        "cmd.csplit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: fields 1",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f1 /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: fields 2",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f2 /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: fields 1,3",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f1,3 /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: fields 2-",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f2- /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: fields -2",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f-2 /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: fields 2-3",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f2-3 /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: fields 1-2,4",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f1-2,4 /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: fields 3,1",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f3,1 /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: fields 1-1",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f1-1 /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: fields 4-",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f4- /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: fields 5",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f5 /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: bytes 1",
+      "script": "printf 'abcdef\\nxy\\n' | cut -b 1",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: bytes 2-4",
+      "script": "printf 'abcdef\\nxy\\n' | cut -b 2-4",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: bytes -3",
+      "script": "printf 'abcdef\\nxy\\n' | cut -b -3",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: bytes 3-",
+      "script": "printf 'abcdef\\nxy\\n' | cut -b 3-",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: bytes 1,3,5",
+      "script": "printf 'abcdef\\nxy\\n' | cut -b 1,3,5",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: bytes 2,2",
+      "script": "printf 'abcdef\\nxy\\n' | cut -b 2,2",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: bytes 10",
+      "script": "printf 'abcdef\\nxy\\n' | cut -b 10",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: characters",
+      "script": "printf 'abcdef\\n' | cut -c 2-4",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: characters multibyte",
+      "script": "printf 'étés\\n' | cut -c 2-3",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: bytes multibyte no partial",
+      "script": "printf 'été\\n' | cut -b 1 -n | od -An -c",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: only delimited",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -s -f2 /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: complement fields",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: --complement -f2 /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: complement bytes",
+      "script": "printf 'abcdef\\n' | cut --complement -b 2-3",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: output delimiter",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f1,3 --output-delimiter=' | ' /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: output delimiter with bytes",
+      "script": "printf 'abcdef\\n' | cut -b 1-2,4-5 --output-delimiter=-",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: default tab delimiter",
+      "script": "printf 'a\\tb\\tc\\nx\\n' | cut -f2",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: space delimiter",
+      "script": "printf 'a b  c\\n' | cut -d' ' -f3",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: zero terminated",
+      "script": "printf 'a:b\\0c:d\\0' | cut -z -d: -f2 | od -An -c",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: whitespace delimited",
+      "script": "printf 'a  b\\tc\\n' | cut -w -f2",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: whitespace trimmed",
+      "script": "printf '  a  b\\n' | cut -w=trimmed -f1",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: capital F",
+      "script": "printf 'a   b c\\n' | cut -F 2,3",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: capital O",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut -d: -f1,2 -O + /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: long options",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; cut --delimiter=: --fields=2 --only-delimited /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: no list",
+      "script": "{ echo x | cut; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cut",
+        "cmd.cut.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: field zero",
+      "script": "{ echo x | cut -f0; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cut",
+        "cmd.cut.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: decreasing range",
+      "script": "{ echo x | cut -f3-1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cut",
+        "cmd.cut.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: invalid list",
+      "script": "{ echo x | cut -f a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cut",
+        "cmd.cut.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: bytes and fields",
+      "script": "{ echo x | cut -b1 -f1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cut",
+        "cmd.cut.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: delimiter without fields",
+      "script": "{ echo x | cut -d: -b1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cut",
+        "cmd.cut.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: multi-char delimiter",
+      "script": "{ echo x | cut -d ab -f1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cut",
+        "cmd.cut.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: only delimited with bytes",
+      "script": "{ echo x | cut -s -b1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cut",
+        "cmd.cut.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: missing file",
+      "script": "{ cut -f1 /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cut",
+        "cmd.cut.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: empty list range",
+      "script": "{ echo x | cut -f -; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cut",
+        "cmd.cut.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: open ranges overlap",
+      "script": "printf 'abcdefgh\\n' | cut -c -3,2-,5",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: no trailing newline",
+      "script": "printf 'a:b' | cut -d: -f2",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: empty delimiter",
+      "script": "printf 'a\\0b\\n' | cut -d '' -f2 | od -An -c",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cut: stdin dash with file",
+      "script": "printf 'a:b:c:d\\nno delim\\n1:2\\n::\\n' >/tmp/f; echo 'x:y' | cut -d: -f2 - /tmp/f",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    }
+  ]
+}

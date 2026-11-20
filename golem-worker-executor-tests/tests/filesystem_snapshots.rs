@@ -966,7 +966,7 @@ async fn a_late_snapshot_publication_cannot_reach_a_recreated_incarnation(
                 .snapshots
                 .iter()
                 .flatten()
-                .any(|name| &**name == late)
+                .any(|name| **name == late)
         );
         assert!(!records.is_confirmed(&late));
         assert!(records.is_confirmed(&newer));

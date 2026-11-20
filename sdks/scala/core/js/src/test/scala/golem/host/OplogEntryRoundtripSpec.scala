@@ -58,7 +58,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       "create",
       js.Dynamic.literal(
         timestamp = ts(),
-        agentId = js.Dynamic.literal(agentId = "sandbox-agent"),
+        agentId = golem.host.js.JsAgentId(golem.host.js.JsUuid.fromUuid(invocationUuid)),
         ownerKind = "component-agent",
         componentRevision = js.BigInt("3"),
         env = js.Array[js.Any](),

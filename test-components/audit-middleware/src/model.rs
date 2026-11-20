@@ -33,15 +33,19 @@ pub struct OwnerSummary {
 )]
 pub enum PrincipalSummary {
     Anonymous,
-    Oidc {
+    User {
         issuer: String,
         subject: String,
     },
     Agent {
         agent_id: String,
     },
-    GolemUser {
+    Account {
         account_id: String,
+    },
+    Tool {
+        environment_id: String,
+        tool_name: String,
     },
 }
 

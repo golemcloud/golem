@@ -126,6 +126,8 @@ the member, and the next scan requests the delete again. A delete request that a
 queue refuses is counted as a leaked clean-up: the scan still removes the member, and no later
 scan asks again.
 
+Scheduler storage (memory, SQLite and Postgres) acknowledges or renews a lease only when its owner token matches and its deadline is later than the caller-supplied `now`, compared at millisecond precision. Equality is expired. SQL mutations and the memory mutex enforce the owner and expiry checks atomically. A valid renewal cannot shorten the lease or revive an expired one. These are trusted as-of timestamps, not database execution-time checks: a pool wait or process pause after sampling time does not advance the check. The scheduler samples fresh time for each batch, acknowledgement and renewal; batch eligibility advances, but archive follow-ups retain the original tick time. A batch-wide heartbeat renews every claimed action, including work queued behind an agent or the concurrency limit, until its delivery and acknowledgement finish. Each action also renews before starting. A refused or failed renewal cancels only that action's delivery future; it does not cancel an acknowledgement already in progress or discard its storage error. Agent ordering and sibling-lane completion are unchanged. Renewal cannot guarantee survival through a storage stall or process pause longer than the lease. Expiry refusal leaves the action for redelivery and does not undo effects already performed, so scheduling remains at-least-once.
+
 Scheduled `WakeInvocation`, `Resume` and `CompletePromise` actions carry the target's fingerprint and
 use `WorkerActivator::enqueue_exact_existing`. It checks identity before cold hydration and
 again on the returned worker, covering cached and shared acquisition. Missing or mismatched
@@ -3575,8 +3577,10 @@ history, and replayed connects return the decision recorded in their `Start`. A 
 update keeps the links of the history before its `PendingUpdate`, which the agent ran, and its
 target initializer's lookups link after them. A tool entity Store keeps its own index, starts
 empty, and links on replay too. The lookup itself is
-checked against `dns_target(name)`, which a grant with a port does not match, so a grant that names
-a port needs a portless grant for the lookup too.
+checked against `dns_target(name)`, a request-only `NetworkResourcePattern::Lookup` that a grant of
+the host matches whatever ports it names, so `db.internal:5432` allows the lookup and only port 5432
+for the connect. A grant of only `*` with ports, such as `*:443`, names no host and allows no
+lookup. A denial covers a lookup only when it covers every port that a connect can use (1 to 65535).
 
 **DNS record lookups.** `golem:network/dns` (`durable_host/sockets/dns.rs`) queries one record
 type of one name (A, AAAA, CNAME, MX, NS, PTR, SRV, TXT, CAA, SOA, NAPTR) with `hickory-resolver`

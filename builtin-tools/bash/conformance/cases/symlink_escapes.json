@@ -1,0 +1,54 @@
+{
+  "tier": "pr",
+  "description": "`ln -s` and `cp` creating or preserving a symbolic link whose relative target climbs above the\nagent's root. Only the link's text is stored, so the link is created, as in bash.",
+  "cases": [
+    {
+      "name": "symlink escape: ln -s creates a relative target that climbs above root",
+      "script": "mkdir w; cd w; ln -s ../../nonexistent-xyz esc; echo status=$?; readlink esc",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "symlink escape: ln -sf replaces a file with such a link",
+      "script": "mkdir w; cd w; : > esc; ln -sf ../../nonexistent-xyz esc; echo status=$?; readlink esc",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "symlink escape: ln -s into a directory creates one link per target",
+      "script": "mkdir w d; cd w; ln -s ../../a ../../b ../d; echo status=$?; readlink ../d/a ../d/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "symlink escape: ln -s relative target that stays inside root still works",
+      "script": "mkdir -p w/a/b; cd w/a/b; ln -s ../../x safe; readlink safe; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "symlink escape: cp -s of a source above root fails",
+      "script": "mkdir w; cd w; cp -s ../../nonexistent-xyz esc; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expectedStderr": {
+        "value": {
+          "text": "cp: Operation not permitted (os error 63)\n"
+        },
+        "reason": "fixture: both sides fail to stat the source -- the oracle reports a missing file, WASI refuses a path above the agent's root"
+      }
+    },
+    {
+      "name": "symlink escape: cp -a recreates a symlink's target text in a shallower directory",
+      "script": "mkdir -p a/b/c; cd a/b/c; ln -s ../x safelink; cd /; cp -a a/b/c/safelink shallow; echo status=$?; readlink shallow",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "symlink escape: cp -a of the same symlink into a directory just as deep still works",
+      "script": "mkdir -p a/b/c d; ln -s ../x a/b/c/safelink; cp -a a/b/c/safelink d/; readlink d/safelink; echo status=$?",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

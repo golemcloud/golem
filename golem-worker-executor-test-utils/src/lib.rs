@@ -2198,7 +2198,7 @@ impl TestWorkerExecutor {
     ) -> AgentInitializationEnqueueGateHandle {
         let handle = self
             .additional_test_deps
-            .gate_next_append(agent_id.clone(), matches)
+            .gate_next_append(*agent_id, matches)
             .await;
         handle.gate.before_commit.store(true, Ordering::SeqCst);
         handle
