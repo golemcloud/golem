@@ -62,7 +62,7 @@ pub fn wasmExportInvokeGolemToolGuest(Int32) -> Int32
 
 pub fn wasmExportInvokeToolMiddleware(Int32) -> Int32
 
-pub fn wasmExportLoad(Int32, Int32, Int32, Int32) -> Int32
+pub fn wasmExportLoad(Int32, Int32, Int32, Int32, Int32, Int32, Int32) -> Int32
 
 pub fn wasmExportSave() -> Int32
 
@@ -130,27 +130,20 @@ pub fn StaticDefaultsAgent::read(Self) -> String
 pub(all) struct StaticDefaultsAgentClient {
   client : @rpc.AgentClient
 }
+pub async fn StaticDefaultsAgentClient::agent_id(Self) -> @schema.AgentId
 pub fn StaticDefaultsAgentClient::bind_self() -> Self raise
+pub async fn StaticDefaultsAgentClient::create(String, keyed? : Bool, config? : StaticDefaultsOverride, env? : Array[(String, String)]) -> Self
 pub fn StaticDefaultsAgentClient::drop(Self) -> Unit
-pub fn StaticDefaultsAgentClient::get(String) -> Self raise @common.AgentError
-pub fn StaticDefaultsAgentClient::get_agent_id(Self) -> String raise @common.AgentError
-pub fn StaticDefaultsAgentClient::get_phantom(String, @schema.Uuid) -> Self raise @common.AgentError
-pub fn StaticDefaultsAgentClient::get_phantom_with_config(String, @schema.Uuid, StaticDefaultsOverride) -> Self raise @common.AgentError
-pub fn StaticDefaultsAgentClient::get_with_config(String, StaticDefaultsOverride) -> Self raise @common.AgentError
-pub fn StaticDefaultsAgentClient::new_phantom(String) -> Self raise @common.AgentError
-pub fn StaticDefaultsAgentClient::new_phantom_with_config(String, StaticDefaultsOverride) -> Self raise @common.AgentError
-pub fn StaticDefaultsAgentClient::phantom_id(Self) -> @schema.Uuid?
+pub fn StaticDefaultsAgentClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn StaticDefaultsAgentClient::read(Self, scope_card? : @permissions.ScopeCard) -> String
 pub fn StaticDefaultsAgentClient::schedule_cancelable_read(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn StaticDefaultsAgentClient::schedule_read(Self, @system-clock.Instant) -> Unit raise @common.AgentError
-pub async fn[T] StaticDefaultsAgentClient::scoped(String, async (Self) -> T) -> T
-pub async fn[T] StaticDefaultsAgentClient::scoped_get_phantom(String, @schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] StaticDefaultsAgentClient::scoped_get_phantom_with_config(String, @schema.Uuid, StaticDefaultsOverride, async (Self) -> T) -> T
-pub async fn[T] StaticDefaultsAgentClient::scoped_new_phantom(String, async (Self) -> T) -> T
-pub async fn[T] StaticDefaultsAgentClient::scoped_new_phantom_with_config(String, StaticDefaultsOverride, async (Self) -> T) -> T
-pub async fn[T] StaticDefaultsAgentClient::scoped_with_config(String, StaticDefaultsOverride, async (Self) -> T) -> T
+pub async fn[T] StaticDefaultsAgentClient::scoped_create(String, keyed? : Bool, config? : StaticDefaultsOverride, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] StaticDefaultsAgentClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] StaticDefaultsAgentClient::scoped_upsert(String, async (Self) -> T) -> T
 pub fn StaticDefaultsAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn StaticDefaultsAgentClient::trigger_read(Self) -> Unit raise @common.AgentError
+pub fn StaticDefaultsAgentClient::upsert(String) -> Self raise
 
 pub(all) struct StaticDefaultsOverride {
   settings : Settings?
@@ -167,27 +160,20 @@ pub fn StaticShapeAgent::read(Self) -> String
 pub(all) struct StaticShapeAgentClient {
   client : @rpc.AgentClient
 }
+pub async fn StaticShapeAgentClient::agent_id(Self) -> @schema.AgentId
 pub fn StaticShapeAgentClient::bind_self() -> Self raise
+pub async fn StaticShapeAgentClient::create(keyed? : Bool, config? : ShapeConfigOverride, env? : Array[(String, String)]) -> Self
 pub fn StaticShapeAgentClient::drop(Self) -> Unit
-pub fn StaticShapeAgentClient::get() -> Self raise @common.AgentError
-pub fn StaticShapeAgentClient::get_agent_id(Self) -> String raise @common.AgentError
-pub fn StaticShapeAgentClient::get_phantom(@schema.Uuid) -> Self raise @common.AgentError
-pub fn StaticShapeAgentClient::get_phantom_with_config(@schema.Uuid, ShapeConfigOverride) -> Self raise @common.AgentError
-pub fn StaticShapeAgentClient::get_with_config(ShapeConfigOverride) -> Self raise @common.AgentError
-pub fn StaticShapeAgentClient::new_phantom() -> Self raise @common.AgentError
-pub fn StaticShapeAgentClient::new_phantom_with_config(ShapeConfigOverride) -> Self raise @common.AgentError
-pub fn StaticShapeAgentClient::phantom_id(Self) -> @schema.Uuid?
+pub fn StaticShapeAgentClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn StaticShapeAgentClient::read(Self, scope_card? : @permissions.ScopeCard) -> String
 pub fn StaticShapeAgentClient::schedule_cancelable_read(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn StaticShapeAgentClient::schedule_read(Self, @system-clock.Instant) -> Unit raise @common.AgentError
-pub async fn[T] StaticShapeAgentClient::scoped(async (Self) -> T) -> T
-pub async fn[T] StaticShapeAgentClient::scoped_get_phantom(@schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] StaticShapeAgentClient::scoped_get_phantom_with_config(@schema.Uuid, ShapeConfigOverride, async (Self) -> T) -> T
-pub async fn[T] StaticShapeAgentClient::scoped_new_phantom(async (Self) -> T) -> T
-pub async fn[T] StaticShapeAgentClient::scoped_new_phantom_with_config(ShapeConfigOverride, async (Self) -> T) -> T
-pub async fn[T] StaticShapeAgentClient::scoped_with_config(ShapeConfigOverride, async (Self) -> T) -> T
+pub async fn[T] StaticShapeAgentClient::scoped_create(keyed? : Bool, config? : ShapeConfigOverride, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] StaticShapeAgentClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] StaticShapeAgentClient::scoped_upsert(async (Self) -> T) -> T
 pub fn StaticShapeAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn StaticShapeAgentClient::trigger_read(Self) -> Unit raise @common.AgentError
+pub fn StaticShapeAgentClient::upsert() -> Self raise
 
 // Type aliases
 

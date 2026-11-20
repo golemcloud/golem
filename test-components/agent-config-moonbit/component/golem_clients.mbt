@@ -10,9 +10,9 @@ pub(all) struct StaticDefaultsAgentClient {
 ///
 /// Binds the current durable incarnation without creating it or waiting for initialization.
 ///
-/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// Use this to schedule work on self from inside the constructor. `upsert` reuses
 /// an initialized agent without rerunning its constructor, but waits for an unfinished
-/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+/// constructor. Calling `upsert` on self from that constructor would therefore deadlock.
 ///
 /// Scheduled work runs after construction finishes. This does not make awaited
 /// self-calls reentrant or bypass method permissions. A different client type raises
@@ -23,21 +23,13 @@ pub fn StaticDefaultsAgentClient::bind_self() -> StaticDefaultsAgentClient raise
 
 ///|
 ///
-pub fn StaticDefaultsAgentClient::get(
+/// Connects to the agent that the constructor parameters key. The host creates
+/// the agent when it is missing and reuses it otherwise.
+pub fn StaticDefaultsAgentClient::upsert(
   _name : String,
-) -> StaticDefaultsAgentClient raise @common.AgentError {
+) -> StaticDefaultsAgentClient raise {
   let constructor_input = @agents.encode_wire_input([_name])
-  let client = @rpc.AgentClient::get("StaticDefaultsAgent", constructor_input)
-  { client, }
-}
-
-///|
-///
-pub fn StaticDefaultsAgentClient::new_phantom(
-  _name : String,
-) -> StaticDefaultsAgentClient raise @common.AgentError {
-  let constructor_input = @agents.encode_wire_input([_name])
-  let client = @rpc.AgentClient::new_phantom(
+  let client = @rpc.AgentClient::upsert(
     "StaticDefaultsAgent", constructor_input,
   )
   { client, }
@@ -45,31 +37,51 @@ pub fn StaticDefaultsAgentClient::new_phantom(
 
 ///|
 ///
-pub fn StaticDefaultsAgentClient::get_phantom(
+/// Connects to the existing agent with the given ID. Never creates an agent: an
+/// unknown ID, or the ID of an agent of another type, raises `RpcError::NotFound`.
+pub fn StaticDefaultsAgentClient::get_by_id(
+  agent_id : @schema.AgentId,
+) -> StaticDefaultsAgentClient raise @agentHost.RpcError {
+  let client = @rpc.AgentClient::get_by_id("StaticDefaultsAgent", agent_id)
+  { client, }
+}
+
+///|
+///
+/// Creates a new agent and returns after its initialization. With `keyed`, the new
+/// agent is the agent that the constructor parameters key, and the creation raises
+/// `RpcError::Conflict` when that agent already exists; otherwise the new agent has
+/// no key and a new ID. `env` adds environment variables to the ones the manifest
+/// defines.
+pub async fn StaticDefaultsAgentClient::create(
   _name : String,
-  phantom_id : @schema.Uuid,
-) -> StaticDefaultsAgentClient raise @common.AgentError {
+  keyed~ : Bool = false,
+  config? : StaticDefaultsOverride,
+  env~ : Array[(String, String)] = [],
+) -> StaticDefaultsAgentClient {
   let constructor_input = @agents.encode_wire_input([_name])
-  let client = @rpc.AgentClient::get_phantom(
-    "StaticDefaultsAgent", constructor_input, phantom_id,
+  let agent_config = match config {
+    Some(config) => collect_static_defaults_overrides(config, [])
+    None => []
+  }
+  let client = @rpc.AgentClient::create(
+    "StaticDefaultsAgent",
+    constructor_input,
+    keyed~,
+    config=agent_config,
+    env~,
   )
   { client, }
 }
 
 ///|
 ///
-pub fn StaticDefaultsAgentClient::get_agent_id(
+/// The ID of the agent. On a client of `upsert`, the host creates the agent when
+/// it is missing, without invoking a method.
+pub async fn StaticDefaultsAgentClient::agent_id(
   self : StaticDefaultsAgentClient,
-) -> String raise @common.AgentError {
-  self.client.get_agent_id()
-}
-
-///|
-///
-pub fn StaticDefaultsAgentClient::phantom_id(
-  self : StaticDefaultsAgentClient,
-) -> @schema.Uuid? {
-  self.client.phantom_id()
+) -> @schema.AgentId {
+  self.client.agent_id()
 }
 
 ///|
@@ -91,34 +103,36 @@ pub fn StaticDefaultsAgentClient::set_default_scope_card(
 
 ///|
 ///
-pub async fn[T] StaticDefaultsAgentClient::scoped(
+pub async fn[T] StaticDefaultsAgentClient::scoped_upsert(
   _name : String,
   f : async (StaticDefaultsAgentClient) -> T,
 ) -> T {
-  let client = StaticDefaultsAgentClient::get(_name)
+  let client = StaticDefaultsAgentClient::upsert(_name)
   defer client.drop()
   f(client)
 }
 
 ///|
 ///
-pub async fn[T] StaticDefaultsAgentClient::scoped_new_phantom(
-  _name : String,
+pub async fn[T] StaticDefaultsAgentClient::scoped_get_by_id(
+  agent_id : @schema.AgentId,
   f : async (StaticDefaultsAgentClient) -> T,
 ) -> T {
-  let client = StaticDefaultsAgentClient::new_phantom(_name)
+  let client = StaticDefaultsAgentClient::get_by_id(agent_id)
   defer client.drop()
   f(client)
 }
 
 ///|
 ///
-pub async fn[T] StaticDefaultsAgentClient::scoped_get_phantom(
+pub async fn[T] StaticDefaultsAgentClient::scoped_create(
   _name : String,
-  phantom_id : @schema.Uuid,
+  keyed~ : Bool = false,
+  config? : StaticDefaultsOverride,
+  env~ : Array[(String, String)] = [],
   f : async (StaticDefaultsAgentClient) -> T,
 ) -> T {
-  let client = StaticDefaultsAgentClient::get_phantom(_name, phantom_id)
+  let client = StaticDefaultsAgentClient::create(_name, keyed~, config?, env~)
   defer client.drop()
   f(client)
 }
@@ -173,88 +187,6 @@ pub fn StaticDefaultsAgentClient::schedule_cancelable_read(
 
 ///|
 ///
-pub fn StaticDefaultsAgentClient::get_with_config(
-  _name : String,
-  config : StaticDefaultsOverride,
-) -> StaticDefaultsAgentClient raise @common.AgentError {
-  let constructor_input = @agents.encode_wire_input([_name])
-  let agent_config = collect_static_defaults_overrides(config, [])
-  let client = @rpc.AgentClient::get_with_config(
-    "StaticDefaultsAgent", constructor_input, agent_config,
-  )
-  { client, }
-}
-
-///|
-///
-pub fn StaticDefaultsAgentClient::new_phantom_with_config(
-  _name : String,
-  config : StaticDefaultsOverride,
-) -> StaticDefaultsAgentClient raise @common.AgentError {
-  let constructor_input = @agents.encode_wire_input([_name])
-  let agent_config = collect_static_defaults_overrides(config, [])
-  let client = @rpc.AgentClient::new_phantom_with_config(
-    "StaticDefaultsAgent", constructor_input, agent_config,
-  )
-  { client, }
-}
-
-///|
-///
-pub fn StaticDefaultsAgentClient::get_phantom_with_config(
-  _name : String,
-  phantom_id : @schema.Uuid,
-  config : StaticDefaultsOverride,
-) -> StaticDefaultsAgentClient raise @common.AgentError {
-  let constructor_input = @agents.encode_wire_input([_name])
-  let agent_config = collect_static_defaults_overrides(config, [])
-  let client = @rpc.AgentClient::get_phantom_with_config(
-    "StaticDefaultsAgent", constructor_input, phantom_id, agent_config,
-  )
-  { client, }
-}
-
-///|
-///
-pub async fn[T] StaticDefaultsAgentClient::scoped_with_config(
-  _name : String,
-  config : StaticDefaultsOverride,
-  f : async (StaticDefaultsAgentClient) -> T,
-) -> T {
-  let client = StaticDefaultsAgentClient::get_with_config(_name, config)
-  defer client.drop()
-  f(client)
-}
-
-///|
-///
-pub async fn[T] StaticDefaultsAgentClient::scoped_new_phantom_with_config(
-  _name : String,
-  config : StaticDefaultsOverride,
-  f : async (StaticDefaultsAgentClient) -> T,
-) -> T {
-  let client = StaticDefaultsAgentClient::new_phantom_with_config(_name, config)
-  defer client.drop()
-  f(client)
-}
-
-///|
-///
-pub async fn[T] StaticDefaultsAgentClient::scoped_get_phantom_with_config(
-  _name : String,
-  phantom_id : @schema.Uuid,
-  config : StaticDefaultsOverride,
-  f : async (StaticDefaultsAgentClient) -> T,
-) -> T {
-  let client = StaticDefaultsAgentClient::get_phantom_with_config(
-    _name, phantom_id, config,
-  )
-  defer client.drop()
-  f(client)
-}
-
-///|
-///
 pub(all) struct StaticShapeAgentClient {
   client : @rpc.AgentClient
 }
@@ -263,9 +195,9 @@ pub(all) struct StaticShapeAgentClient {
 ///
 /// Binds the current durable incarnation without creating it or waiting for initialization.
 ///
-/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// Use this to schedule work on self from inside the constructor. `upsert` reuses
 /// an initialized agent without rerunning its constructor, but waits for an unfinished
-/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+/// constructor. Calling `upsert` on self from that constructor would therefore deadlock.
 ///
 /// Scheduled work runs after construction finishes. This does not make awaited
 /// self-calls reentrant or bypass method permissions. A different client type raises
@@ -276,48 +208,60 @@ pub fn StaticShapeAgentClient::bind_self() -> StaticShapeAgentClient raise {
 
 ///|
 ///
-pub fn StaticShapeAgentClient::get() -> StaticShapeAgentClient raise @common.AgentError {
+/// Connects to the agent that the constructor parameters key. The host creates
+/// the agent when it is missing and reuses it otherwise.
+pub fn StaticShapeAgentClient::upsert() -> StaticShapeAgentClient raise {
   let constructor_input = @agents.encode_wire_input([])
-  let client = @rpc.AgentClient::get("StaticShapeAgent", constructor_input)
+  let client = @rpc.AgentClient::upsert("StaticShapeAgent", constructor_input)
   { client, }
 }
 
 ///|
 ///
-pub fn StaticShapeAgentClient::new_phantom() -> StaticShapeAgentClient raise @common.AgentError {
+/// Connects to the existing agent with the given ID. Never creates an agent: an
+/// unknown ID, or the ID of an agent of another type, raises `RpcError::NotFound`.
+pub fn StaticShapeAgentClient::get_by_id(
+  agent_id : @schema.AgentId,
+) -> StaticShapeAgentClient raise @agentHost.RpcError {
+  let client = @rpc.AgentClient::get_by_id("StaticShapeAgent", agent_id)
+  { client, }
+}
+
+///|
+///
+/// Creates a new agent and returns after its initialization. With `keyed`, the new
+/// agent is the agent that the constructor parameters key, and the creation raises
+/// `RpcError::Conflict` when that agent already exists; otherwise the new agent has
+/// no key and a new ID. `env` adds environment variables to the ones the manifest
+/// defines.
+pub async fn StaticShapeAgentClient::create(
+  keyed~ : Bool = false,
+  config? : ShapeConfigOverride,
+  env~ : Array[(String, String)] = [],
+) -> StaticShapeAgentClient {
   let constructor_input = @agents.encode_wire_input([])
-  let client = @rpc.AgentClient::new_phantom(
-    "StaticShapeAgent", constructor_input,
+  let agent_config = match config {
+    Some(config) => collect_shape_config_overrides(config, [])
+    None => []
+  }
+  let client = @rpc.AgentClient::create(
+    "StaticShapeAgent",
+    constructor_input,
+    keyed~,
+    config=agent_config,
+    env~,
   )
   { client, }
 }
 
 ///|
 ///
-pub fn StaticShapeAgentClient::get_phantom(
-  phantom_id : @schema.Uuid,
-) -> StaticShapeAgentClient raise @common.AgentError {
-  let constructor_input = @agents.encode_wire_input([])
-  let client = @rpc.AgentClient::get_phantom(
-    "StaticShapeAgent", constructor_input, phantom_id,
-  )
-  { client, }
-}
-
-///|
-///
-pub fn StaticShapeAgentClient::get_agent_id(
+/// The ID of the agent. On a client of `upsert`, the host creates the agent when
+/// it is missing, without invoking a method.
+pub async fn StaticShapeAgentClient::agent_id(
   self : StaticShapeAgentClient,
-) -> String raise @common.AgentError {
-  self.client.get_agent_id()
-}
-
-///|
-///
-pub fn StaticShapeAgentClient::phantom_id(
-  self : StaticShapeAgentClient,
-) -> @schema.Uuid? {
-  self.client.phantom_id()
+) -> @schema.AgentId {
+  self.client.agent_id()
 }
 
 ///|
@@ -337,31 +281,34 @@ pub fn StaticShapeAgentClient::set_default_scope_card(
 
 ///|
 ///
-pub async fn[T] StaticShapeAgentClient::scoped(
+pub async fn[T] StaticShapeAgentClient::scoped_upsert(
   f : async (StaticShapeAgentClient) -> T,
 ) -> T {
-  let client = StaticShapeAgentClient::get()
+  let client = StaticShapeAgentClient::upsert()
   defer client.drop()
   f(client)
 }
 
 ///|
 ///
-pub async fn[T] StaticShapeAgentClient::scoped_new_phantom(
+pub async fn[T] StaticShapeAgentClient::scoped_get_by_id(
+  agent_id : @schema.AgentId,
   f : async (StaticShapeAgentClient) -> T,
 ) -> T {
-  let client = StaticShapeAgentClient::new_phantom()
+  let client = StaticShapeAgentClient::get_by_id(agent_id)
   defer client.drop()
   f(client)
 }
 
 ///|
 ///
-pub async fn[T] StaticShapeAgentClient::scoped_get_phantom(
-  phantom_id : @schema.Uuid,
+pub async fn[T] StaticShapeAgentClient::scoped_create(
+  keyed~ : Bool = false,
+  config? : ShapeConfigOverride,
+  env~ : Array[(String, String)] = [],
   f : async (StaticShapeAgentClient) -> T,
 ) -> T {
-  let client = StaticShapeAgentClient::get_phantom(phantom_id)
+  let client = StaticShapeAgentClient::create(keyed~, config?, env~)
   defer client.drop()
   f(client)
 }
@@ -412,80 +359,4 @@ pub fn StaticShapeAgentClient::schedule_cancelable_read(
 ) -> @agentHost.CancellationToken raise @common.AgentError {
   let input = @agents.encode_wire_input([])
   self.client.schedule_cancelable_invocation(scheduled_at, "read", input).cancellation_token
-}
-
-///|
-///
-pub fn StaticShapeAgentClient::get_with_config(
-  config : ShapeConfigOverride,
-) -> StaticShapeAgentClient raise @common.AgentError {
-  let constructor_input = @agents.encode_wire_input([])
-  let agent_config = collect_shape_config_overrides(config, [])
-  let client = @rpc.AgentClient::get_with_config(
-    "StaticShapeAgent", constructor_input, agent_config,
-  )
-  { client, }
-}
-
-///|
-///
-pub fn StaticShapeAgentClient::new_phantom_with_config(
-  config : ShapeConfigOverride,
-) -> StaticShapeAgentClient raise @common.AgentError {
-  let constructor_input = @agents.encode_wire_input([])
-  let agent_config = collect_shape_config_overrides(config, [])
-  let client = @rpc.AgentClient::new_phantom_with_config(
-    "StaticShapeAgent", constructor_input, agent_config,
-  )
-  { client, }
-}
-
-///|
-///
-pub fn StaticShapeAgentClient::get_phantom_with_config(
-  phantom_id : @schema.Uuid,
-  config : ShapeConfigOverride,
-) -> StaticShapeAgentClient raise @common.AgentError {
-  let constructor_input = @agents.encode_wire_input([])
-  let agent_config = collect_shape_config_overrides(config, [])
-  let client = @rpc.AgentClient::get_phantom_with_config(
-    "StaticShapeAgent", constructor_input, phantom_id, agent_config,
-  )
-  { client, }
-}
-
-///|
-///
-pub async fn[T] StaticShapeAgentClient::scoped_with_config(
-  config : ShapeConfigOverride,
-  f : async (StaticShapeAgentClient) -> T,
-) -> T {
-  let client = StaticShapeAgentClient::get_with_config(config)
-  defer client.drop()
-  f(client)
-}
-
-///|
-///
-pub async fn[T] StaticShapeAgentClient::scoped_new_phantom_with_config(
-  config : ShapeConfigOverride,
-  f : async (StaticShapeAgentClient) -> T,
-) -> T {
-  let client = StaticShapeAgentClient::new_phantom_with_config(config)
-  defer client.drop()
-  f(client)
-}
-
-///|
-///
-pub async fn[T] StaticShapeAgentClient::scoped_get_phantom_with_config(
-  phantom_id : @schema.Uuid,
-  config : ShapeConfigOverride,
-  f : async (StaticShapeAgentClient) -> T,
-) -> T {
-  let client = StaticShapeAgentClient::get_phantom_with_config(
-    phantom_id, config,
-  )
-  defer client.drop()
-  f(client)
 }

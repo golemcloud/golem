@@ -62,11 +62,46 @@ function guest(values, {deny = false, malformed = false} = {}) {
     }
     return {type, root: type(u32(p + 16)), defs: Object.fromEntries(definitions.map(d => [d.name, type(d.root)]))};
   }
+  function value(p, type, defs) {
+    const nodes = u32(p), count = u32(p + 4);
+    function read(t, index) {
+      assert.ok(index < count, 'default value index belongs to its tree');
+      const n = nodes + index * 32;
+      if (typeof t === 'string') {
+        const tags = {bool: 0, s32: 3, u32: 7, string: 12};
+        assert.equal(byte(n), tags[t], `native default matches ${t}`);
+        switch (t) {
+          case 'bool': return byte(n + 8) !== 0;
+          case 's32': return view().getInt32(n + 8, true);
+          case 'u32': return u32(n + 8);
+          case 'string': return str(n + 8);
+          default: throw Error(`unsupported fixture default ${t}`);
+        }
+      }
+      if (t[0] === 'ref') return read(defs[t[1]], index);
+      const tags = {record: 13, tuple: 17, list: 18, option: 21, union: 31};
+      assert.equal(byte(n), tags[t[0]], `native default matches ${t[0]}`);
+      const indices = () => list(n + 8, 4, u32);
+      switch (t[0]) {
+        case 'record': return Object.fromEntries(indices().map((i, field) => [t[1][field][0], read(t[1][field][1], i)]));
+        case 'tuple': return indices().map((i, field) => read(t[1][field], i));
+        case 'list': return indices().map(i => read(t[1], i));
+        case 'option': return byte(n + 8) ? read(t[1], u32(n + 12)) : null;
+        case 'union': {
+          const branch = t[1].find(([tag]) => tag === str(n + 8));
+          assert.ok(branch, 'native default selects a declared union branch');
+          return read(branch[1], u32(n + 16));
+        }
+        default: throw Error(`unsupported fixture default ${t[0]}`);
+      }
+    }
+    return read(type, u32(p + 8));
+  }
   function metadata(p) {
     const schema = graph(p + 28);
-    const declarations = list(p + 224, 28, d => ({
+    const declarations = list(p + 224, 32, d => ({
       source: byte(d), path: list(d + 4, 8, str), type: schema.type(u32(d + 12)),
-      defaultValue: byte(d + 16) ? JSON.parse(str(d + 20)) : undefined,
+      defaultValue: byte(d + 16) ? value(d + 20, schema.type(u32(d + 12)), schema.defs) : undefined,
     }));
     return {name: str(p), defs: schema.defs, declarations};
   }

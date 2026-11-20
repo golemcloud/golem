@@ -60,8 +60,8 @@ fn init {
   @agents.register_agent({
     name: "StaticDefaultsAgent",
     agent_type: staticDefaultsAgent_type_def,
-    construct: async fn(input, principal) {
-      let _ = principal
+    construct: async fn(input, context) {
+      let _ = context
       try {
         let params = @agents.decode_wire_input(
           input, 1, "StaticDefaultsAgent::new",
@@ -145,8 +145,8 @@ fn init {
   @agents.register_agent({
     name: "StaticShapeAgent",
     agent_type: staticShapeAgent_type_def,
-    construct: async fn(input, principal) {
-      let _ = principal
+    construct: async fn(input, context) {
+      let _ = context
       try {
         let params = @agents.decode_wire_input(
           input, 0, "StaticShapeAgent::new",
@@ -189,9 +189,9 @@ impl @agents.RawAgent for StaticDefaultsAgent with fn invoke(
   self,
   method_name,
   input,
-  principal,
+  context,
 ) {
-  let _ = principal
+  let _ = context
   try {
     match method_name {
       "read" => {
@@ -229,9 +229,9 @@ impl @agents.RawAgent for StaticShapeAgent with fn invoke(
   self,
   method_name,
   input,
-  principal,
+  context,
 ) {
-  let _ = principal
+  let _ = context
   try {
     match method_name {
       "read" => {

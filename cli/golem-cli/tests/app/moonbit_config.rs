@@ -121,21 +121,31 @@ async fn constructor_config_refreshes_on_update_and_replays_after_restart() {
 
         ///|
         #derive.agent
-        struct ConfigCaller { name : String }
+        struct ConfigCaller {
+          name : String
+          mut target : @schema.AgentId?
+        }
 
         ///|
-        fn ConfigCaller::new(name : String) -> ConfigCaller { { name, } }
+        fn ConfigCaller::new(name : String) -> ConfigCaller { { name, target: None, } }
 
         ///|
-        pub async fn ConfigCaller::run(_self : Self, root : String, child : String, limit : UInt32) -> String {
-          let client = ConfiguredAgentClient::get_with_config("rpc-created", {
-            label: None,
-            max_chars: Some(limit),
-            tree: Some({ display_name: root, next: Some({ display_name: child, next: None, }), }),
-            cleared: Some(None),
-            enabled: Some(false),
-            values: Some([]),
-          })
+        pub async fn ConfigCaller::run(self : Self, root : String, child : String, limit : UInt32) -> String {
+          let client = match self.target {
+            Some(id) => ConfiguredAgentClient::get_by_id(id)
+            None => {
+              let client = ConfiguredAgentClient::create("rpc-created", keyed=true, config={
+                label: None,
+                max_chars: Some(limit),
+                tree: Some({ display_name: root, next: Some({ display_name: child, next: None, }), }),
+                cleared: Some(None),
+                enabled: Some(false),
+                values: Some([]),
+              })
+              self.target = Some(client.agent_id())
+              client
+            }
+          }
           defer client.drop()
           client.read()
         }
@@ -209,7 +219,7 @@ async fn constructor_config_refreshes_on_update_and_replays_after_restart() {
     assert_eq!(
         invoke(
             &ctx,
-            r#"ConfigCaller("after")"#,
+            r#"ConfigCaller("before")"#,
             "run",
             &["ignored-after", "different-child", "99"]
         )

@@ -87,11 +87,11 @@ pub fn ReflectedConfigDeclaration::schema(
 }
 
 ///|
-/// Native static data, or `None` when no default is declared.
+/// The native default, or `None` when no default is declared.
 pub fn ReflectedConfigDeclaration::default_value(
   self : ReflectedConfigDeclaration,
 ) -> @model.SchemaValue? {
-  self.default_value
+  self.default_value.map(copy_schema_value)
 }
 
 ///|

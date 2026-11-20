@@ -46,10 +46,12 @@ import {
   type RemoteAgentHandle,
 } from './bridge/agent';
 import {
+  cloneSchemaValue,
   field,
   freezeSchemaGraph,
   schemaShapesMatch,
   schemaGraphRootsFromWit,
+  schemaValueFromWit,
   t,
   type SchemaGraph,
   type SchemaType,
@@ -114,8 +116,8 @@ export class AgentType {
     readonly path: readonly string[];
     readonly source: 'local' | 'secret';
     readonly schema: SchemaRef;
-    /** Canonical schema JSON; undefined means no default, distinct from "null". */
-    readonly defaultValue?: string;
+    /** Native static data; undefined differs from an option-none value. */
+    readonly defaultValue?: SchemaValue;
   }[];
   readonly client: ReflectedAgentClientFactory;
 
@@ -129,14 +131,18 @@ export class AgentType {
     this.constructorInput = inputSchemaRef(graph, raw.constructor.inputSchema);
     this.methods = Object.freeze(raw.methods.map((method) => new AgentMethod(method, graph)));
     this.config = Object.freeze(
-      raw.config.map((decl) =>
-        Object.freeze({
+      raw.config.map((decl) => {
+        const defaultValue =
+          decl.defaultValue === undefined ? undefined : schemaValueFromWit(decl.defaultValue);
+        return Object.freeze({
           path: Object.freeze([...decl.path]),
           source: decl.source,
           schema: SchemaRef.fromImmutableGraph(graph.graph, reflectedTypeAt(graph, decl.valueType)),
-          defaultValue: decl.defaultValue,
-        }),
-      ),
+          get defaultValue() {
+            return defaultValue === undefined ? undefined : cloneSchemaValue(defaultValue);
+          },
+        });
+      }),
     );
     this.client = new ReflectedAgentClientFactory(this);
     Object.freeze(this);

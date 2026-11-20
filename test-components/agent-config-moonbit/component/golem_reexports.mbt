@@ -140,8 +140,16 @@ pub fn wasmExportInvokeToolMiddleware(p0 : Int32) -> Int32 {
 }
 
 ///|
-pub fn wasmExportLoad(p0 : Int32, p1 : Int32, p2 : Int32, p3 : Int32) -> Int32 {
-  @gen.wasmExportLoad(p0, p1, p2, p3)
+pub fn wasmExportLoad(
+  p0 : Int32,
+  p1 : Int32,
+  p2 : Int32,
+  p3 : Int32,
+  p4 : Int32,
+  p5 : Int32,
+  p6 : Int32,
+) -> Int32 {
+  @gen.wasmExportLoad(p0, p1, p2, p3, p4, p5, p6)
 }
 
 ///|
