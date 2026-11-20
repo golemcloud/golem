@@ -52,7 +52,8 @@ trait GetIndexedStorage: Debug {
         open().await
     }
 
-    /// Opens independent clients onto one store, retaining only its connection settings.
+    /// Opens clients onto one store. Persistent backends create independent clients;
+    /// the in-memory backend retains and returns the same store.
     async fn opener(&self) -> OpenIndexedStorage;
 
     /// Two handles onto the SAME store, as two executors racing over one key have.
@@ -298,8 +299,11 @@ impl GetIndexedStorage for PostgresIndexedStorageWrapper {
         Box::new(move || {
             let config = config.clone();
             Box::pin(async move {
-                Arc::new(PostgresIndexedStorage::configured(&config).await.unwrap())
-                    as Arc<dyn IndexedStorage + Send + Sync>
+                Arc::new(
+                    PostgresIndexedStorage::configured(&config)
+                        .await
+                        .expect("Cannot create postgres indexed storage"),
+                ) as Arc<dyn IndexedStorage + Send + Sync>
             })
         })
     }
@@ -377,10 +381,11 @@ inherit_test_dep!(WorkerExecutorTestDependencies);
 
 define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres");
 define_matrix_dimension!(sql_is: Arc<dyn GetIndexedStorage + Send + Sync> -> "sqlite", "postgres");
+define_matrix_dimension!(persistent_is: Arc<dyn GetIndexedStorage + Send + Sync> -> "redis", "sqlite", "multi_sqlite", "postgres");
 
 fn test_agent_metadata(name: &str) -> golem_common::model::AgentMetadata {
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::agent::{OwnerKind, Principal};
+    use golem_common::model::agent::OwnerKind;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
@@ -410,7 +415,7 @@ fn test_agent_metadata(name: &str) -> golem_common::model::AgentMetadata {
         create_request: CreateRequest::new(
             CreateRequestKind::GetOrCreate,
             None,
-            Principal::anonymous(),
+            golem_worker_executor_test_utils::callers::anonymous(),
             &InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -492,7 +497,7 @@ async fn publish_staged_records(
 #[test]
 #[test_r::timeout("120s")]
 async fn committed_oplog_records_survive_cold_reopen(
-    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[dimension(persistent_is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
 ) {
     use golem_common::model::oplog::{OplogEntry, OplogIndex};
     use golem_worker_executor::services::oplog::{CommitLevel, OplogService};
@@ -501,7 +506,8 @@ async fn committed_oplog_records_survive_cold_reopen(
     let metadata = test_agent_metadata("cold-reopen");
     let owned = metadata.owned_agent_id();
     let stage_id = Uuid::new_v4();
-    let key = format!("{}#{stage_id}", owned.agent_id.to_redis_key());
+    let target_key = owned.agent_id.to_redis_key();
+    let key = format!("{target_key}#{stage_id}");
     let staged = IndexedStorageNamespace::StagedOpLog {
         agent_id: owned.agent_id.clone(),
         agent_mode: AgentMode::Durable,
@@ -539,7 +545,7 @@ async fn committed_oplog_records_survive_cold_reopen(
     );
     assert!(
         !storage
-            .exists("test", "hidden", visible.clone(), &key)
+            .exists("test", "hidden", visible.clone(), &target_key)
             .await
             .unwrap()
     );
@@ -557,13 +563,13 @@ async fn committed_oplog_records_survive_cold_reopen(
     .await
     .unwrap();
     let (published, other) = tokio::join!(
-        publish_staged_records(storage.as_ref(), &staged, &key, &visible, "target", 2),
+        publish_staged_records(storage.as_ref(), &staged, &key, &visible, &target_key, 2),
         publish_staged_records(
             competitor.as_ref(),
             &staged,
             "competitor",
             &visible,
-            "target",
+            &target_key,
             1
         ),
     );
@@ -579,7 +585,15 @@ async fn committed_oplog_records_survive_cold_reopen(
         (key.as_str(), 2)
     };
     assert!(
-        !publish_staged_records(competitor.as_ref(), &staged, loser, &visible, "target", tip).await
+        !publish_staged_records(
+            competitor.as_ref(),
+            &staged,
+            loser,
+            &visible,
+            &target_key,
+            tip
+        )
+        .await
     );
     assert!(
         competitor
@@ -588,18 +602,24 @@ async fn committed_oplog_records_survive_cold_reopen(
             .unwrap()
     );
     storage
-        .set_key_epoch("test", "owner", visible.clone(), "target", ShardEpoch(7))
+        .set_key_epoch("test", "owner", visible.clone(), &target_key, ShardEpoch(7))
         .await
         .unwrap();
     competitor
-        .set_key_epoch("test", "takeover", visible.clone(), "target", ShardEpoch(8))
+        .set_key_epoch(
+            "test",
+            "takeover",
+            visible.clone(),
+            &target_key,
+            ShardEpoch(8),
+        )
         .await
         .unwrap();
     assert_fenced(
         append_record(
             storage.as_ref(),
             &visible,
-            "target",
+            &target_key,
             3,
             b"stale",
             Some(ShardEpoch(7)),
@@ -613,14 +633,14 @@ async fn committed_oplog_records_survive_cold_reopen(
 
     let reopened = open().await;
     assert_eq!(
-        read_records(reopened.as_ref(), &visible, "target").await,
+        read_records(reopened.as_ref(), &visible, &target_key).await,
         expected
     );
     assert_fenced(
         append_record(
             reopened.as_ref(),
             &visible,
-            "target",
+            &target_key,
             3,
             b"stale",
             Some(ShardEpoch(7)),
@@ -632,7 +652,7 @@ async fn committed_oplog_records_survive_cold_reopen(
     append_record(
         reopened.as_ref(),
         &visible,
-        "target",
+        &target_key,
         3,
         b"current",
         Some(ShardEpoch(8)),
@@ -643,7 +663,7 @@ async fn committed_oplog_records_survive_cold_reopen(
     let mut expected = expected;
     expected.push((3, b"current".to_vec()));
     assert_eq!(
-        read_records(open().await.as_ref(), &visible, "target").await,
+        read_records(open().await.as_ref(), &visible, &target_key).await,
         expected
     );
 }
