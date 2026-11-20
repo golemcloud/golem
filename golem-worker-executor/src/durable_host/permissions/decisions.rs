@@ -135,6 +135,7 @@ where
         };
         if recorded.invocation_id != invocation_id {
             return Err(call.trap(WorkerExecutorError::unexpected_oplog_entry(
+                call.start_index(),
                 format!("permission-card decision for invocation {invocation_id:?}"),
                 format!(
                     "permission-card decision for invocation {:?}",

@@ -229,8 +229,8 @@ func (c *MiddlewareContext[P]) middlewareInvocation() *middlewareInvocation { re
 // Parameters returns the middleware's configuration for this installation.
 func (c *MiddlewareContext[P]) Parameters() P { return c.params }
 
-// Principal returns who invoked the tool.
-func (c *MiddlewareContext[P]) Principal() golem.Principal { return c.inv.principal }
+// Caller says who invoked the tool. The host is asked on the first call.
+func (c *MiddlewareContext[P]) Caller() golem.Caller { return callerOf(c.inv.caller) }
 
 // Name returns the middleware's own name.
 func (c *MiddlewareContext[P]) Name() string { return c.inv.entry.name }
@@ -378,8 +378,15 @@ type UniversalMiddlewareContext[P any] struct {
 // Parameters returns the middleware's configuration for this installation.
 func (c *UniversalMiddlewareContext[P]) Parameters() P { return c.params }
 
-// Principal returns who invoked the tool.
-func (c *UniversalMiddlewareContext[P]) Principal() golem.Principal { return c.inv.principal }
+// Caller says who invoked the tool. The host is asked on the first call.
+func (c *UniversalMiddlewareContext[P]) Caller() golem.Caller { return callerOf(c.inv.caller) }
+
+func callerOf(read func() golem.Caller) golem.Caller {
+	if read == nil {
+		return golem.AnonymousCaller()
+	}
+	return read()
+}
 
 // Name returns the middleware's own name.
 func (c *UniversalMiddlewareContext[P]) Name() string { return c.inv.entry.name }
@@ -452,7 +459,7 @@ type middlewareInvocation struct {
 	stdin       *byteReader
 	stdout      *Output
 	stderr      *Output
-	principal   golem.Principal
+	caller      func() golem.Caller
 	under       underlyingLayer
 }
 
@@ -645,7 +652,7 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 		}
 		return d.passThrough(inv)
 	}
-	args, terr := ce.decodeArgs(d, inv.input, inv.stdin, inv.principal)
+	args, terr := ce.decodeArgs(d, inv.input, inv.stdin)
 	if terr != nil {
 		return fail(*terr)
 	}

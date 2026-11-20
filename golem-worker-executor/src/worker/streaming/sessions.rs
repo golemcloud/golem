@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
+use golem_common::model::caller::{Caller, Principal};
 
 use crate::worker::*;
 
@@ -568,11 +569,11 @@ pub(in crate::worker) fn stream_agent_authority(effective_identity: &[u8]) -> Op
         return None;
     }
     last.and_then(|value| {
-        golem_api_grpc::proto::golem::component::Principal::decode(value)
+        golem_api_grpc::proto::golem::component::Caller::decode(value)
             .ok()
-            .and_then(|principal| Principal::try_from(principal).ok())
+            .and_then(|caller| Caller::try_from(caller).ok())
     })
-    .is_some_and(|principal| matches!(principal, Principal::Agent(_)))
+    .is_some_and(|caller| matches!(caller.immediate, Principal::Agent(_)))
     .then_some(authority?)
 }
 
@@ -939,5 +940,61 @@ pub(in crate::worker) fn validate_stream_session_record(
         Err(WorkerExecutorError::runtime(
             "unsupported or malformed durable Stream Session record version",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_callers::{agent_caller, user_principal};
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
+    use prost::Message;
+    use test_r::test;
+
+    /// The identity bytes as `effective_session_identity` writes them: each part behind its
+    /// length, the caller last.
+    fn identity(caller: &Caller) -> Vec<u8> {
+        let auth = golem_api_grpc::proto::golem::auth::AuthCtx::from(
+            golem_service_base::model::auth::AuthCtx::System,
+        )
+        .encode_to_vec();
+        let caller =
+            golem_api_grpc::proto::golem::component::Caller::from(caller.clone()).encode_to_vec();
+        let mut identity = Vec::new();
+        for part in [auth, caller] {
+            identity.extend_from_slice(&(part.len() as u64).to_be_bytes());
+            identity.extend_from_slice(&part);
+        }
+        identity
+    }
+
+    #[test]
+    fn stream_agent_authority_reads_the_caller_identity() {
+        let agent = agent_caller(AgentId {
+            component_id: ComponentId(uuid::Uuid::from_u128(1)),
+            agent_id: "Relay(\"r\")".to_string(),
+        });
+        let identity_of_agent = identity(&agent);
+        assert!(stream_agent_authority(&identity_of_agent).is_some());
+        assert!(stream_effective_identity_is_agent(&identity_of_agent));
+
+        let user = Caller::entry(user_principal());
+        let identity_of_user = identity(&user);
+        assert!(stream_agent_authority(&identity_of_user).is_none());
+
+        // An agent that acts for a user is the immediate caller, which is what counts.
+        let mut agent_for_user = agent.clone();
+        agent_for_user.original = user_principal();
+        assert!(stream_agent_authority(&identity(&agent_for_user)).is_some());
+        let mut user_via_agent_root = user.clone();
+        user_via_agent_root.original = agent.original.clone();
+        assert!(stream_agent_authority(&identity(&user_via_agent_root)).is_none());
+
+        // An identity that does not decode is not an agent.
+        let mut garbage = Vec::new();
+        garbage.extend_from_slice(&3u64.to_be_bytes());
+        garbage.extend_from_slice(&[0xff, 0xff, 0xff]);
+        assert!(stream_agent_authority(&garbage).is_none());
     }
 }

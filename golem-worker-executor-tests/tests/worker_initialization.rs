@@ -14,9 +14,7 @@
 
 use crate::Tracing;
 use futures::poll;
-use golem_common::model::agent::{
-    AgentMode, AgentPrincipal, AgentTarget, InvocationFreshnessDisposition, Principal,
-};
+use golem_common::model::agent::{AgentMode, AgentTarget, InvocationFreshnessDisposition};
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::*;
@@ -45,6 +43,7 @@ use golem_worker_executor::storage::keyvalue::fault_injecting::{
     FaultInjectingKeyValueStorage, KeyValueStorageFaults,
 };
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerCtx,
     TestWorkerExecutor, WorkerExecutorTestDependencies, start_with_overrides,
@@ -92,6 +91,7 @@ async fn warm_get_or_create_does_not_wait_for_oplog_maintenance(
             environment_id: Some(metadata.environment_id.into()),
             ignore_already_existing: true,
             auth_ctx: Some(AuthCtx::System.into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         }),
     )
@@ -137,6 +137,7 @@ async fn fresh_ephemeral_streaming_preparation_skips_the_existence_lookup(
             &seed.agent_id(),
             &[],
             InvocationContextStack::fresh(),
+            &callers::agent(seed.agent_id()),
             vec![],
             &AuthCtx::System,
             Some(key.clone()),
@@ -169,6 +170,7 @@ async fn fresh_ephemeral_streaming_preparation_skips_the_existence_lookup(
             &seed.agent_id(),
             &[],
             InvocationContextStack::fresh(),
+            &callers::agent(seed.agent_id()),
             vec![],
             &AuthCtx::System,
             Some(key),
@@ -214,6 +216,7 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
         freshness_disposition: ProtoFreshness::KnownFresh as i32,
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let invalid = executor
@@ -304,6 +307,7 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
             &seed.agent_id(),
             &[],
             InvocationContextStack::fresh(),
+            &callers::agent(seed.agent_id()),
             vec![],
             &AuthCtx::System,
             Some(child_key),
@@ -320,7 +324,7 @@ async fn grpc_ephemeral_streaming_preparation_validates_freshness_and_reuses_the
 
 #[test]
 #[timeout("2 minutes")]
-async fn grpc_create_records_its_kind_key_and_principal(
+async fn grpc_create_records_its_kind_key_and_caller(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] component: &PrecompiledComponent,
@@ -330,9 +334,7 @@ async fn grpc_create_records_its_kind_key_and_principal(
     };
     let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
     let metadata = seed.get_initial_worker_metadata();
-    let principal = Principal::Agent(AgentPrincipal {
-        agent_id: seed.agent_id(),
-    });
+    let caller = callers::agent(seed.agent_id());
     for (name, ignore_already_existing, kind) in [
         ("exclusive-create", false, CreateRequestKind::Exclusive),
         ("joining-create", true, CreateRequestKind::GetOrCreate),
@@ -348,7 +350,7 @@ async fn grpc_create_records_its_kind_key_and_principal(
                 environment_id: Some(metadata.environment_id.into()),
                 ignore_already_existing,
                 auth_ctx: Some(AuthCtx::System.into()),
-                principal: Some(principal.clone().into()),
+                caller: Some(caller.clone().into()),
                 idempotency_key: Some(key.clone().into()),
                 ..Default::default()
             })
@@ -373,7 +375,7 @@ async fn grpc_create_records_its_kind_key_and_principal(
         assert_eq!(requests.len(), 1, "{name}");
         assert_eq!(requests[0].kind, kind, "{name}");
         assert_eq!(requests[0].idempotency_key, Some(key), "{name}");
-        assert_eq!(requests[0].principal, principal, "{name}");
+        assert_eq!(requests[0].caller, caller, "{name}");
     }
     Ok(())
 }
@@ -408,6 +410,7 @@ async fn grpc_create_waits_for_prepared_constructor(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let prepared = executor
@@ -604,6 +607,7 @@ async fn grpc_create_keeps_startup_failure_out_of_constructor_results(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     // Acquisition and constructor reservation succeed before the runtime's component get fails.
@@ -742,6 +746,7 @@ async fn grpc_create_reports_recorded_constructor_failure(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let context = executor.context.clone();
@@ -843,6 +848,7 @@ async fn grpc_create_keeps_constructor_success_after_a_later_method_failure(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let response = executor
@@ -913,6 +919,7 @@ async fn grpc_create_reports_constructor_exit_without_restarting_it(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let mut history = None;
@@ -1002,6 +1009,7 @@ async fn grpc_create_preserves_interrupted_constructor_retry_across_restart(
         ignore_already_existing: true,
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let prepared = executor
@@ -1174,6 +1182,7 @@ async fn grpc_create_joins_an_initialized_fork_with_the_source_constructor_key(
             ignore_already_existing: true,
             auth_ctx: Some(AuthCtx::System.into()),
             idempotency_key: Some(IdempotencyKey::fresh().into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })
         .await?
@@ -1537,15 +1546,15 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
             } else {
                 "right"
             };
-            let first_principal = if reverse {
-                Principal::anonymous()
+            let first_caller = if reverse {
+                callers::anonymous()
             } else {
-                Principal::Agent(AgentPrincipal {
-                    agent_id: seed.agent_id(),
-                })
+                callers::agent(seed.agent_id())
             };
             let key = keyed.then(IdempotencyKey::fresh);
-            let create = |value: &'static str, exclusive: bool, principal: Principal| {
+            let create = |value: &'static str,
+                          exclusive: bool,
+                          caller: golem_common::model::caller::Caller| {
                 let seed = seed.clone();
                 let id = id.clone();
                 let key = key.clone();
@@ -1558,7 +1567,7 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
                         None,
                         None,
                         &InvocationContextStack::fresh(),
-                        principal,
+                        caller,
                         InvocationFreshnessDisposition::MayExist,
                         CreateIntent::Create {
                             exclusive,
@@ -1569,24 +1578,18 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
                 }
             };
             let gate = faults.pause_next("read_cached_agent_mode");
-            let mut first = Box::pin(create(
-                first_value,
-                first_exclusive,
-                first_principal.clone(),
-            ));
+            let mut first = Box::pin(create(first_value, first_exclusive, first_caller.clone()));
             assert!(poll!(&mut first).is_pending());
             gate.entered().await;
             assert!(executor.stored_oplog(&id.agent_id).await.is_empty());
-            let second_principal = if identical {
-                first_principal.clone()
+            let second_caller = if identical {
+                first_caller.clone()
             } else if reverse {
-                Principal::Agent(AgentPrincipal {
-                    agent_id: seed.agent_id(),
-                })
+                callers::agent(seed.agent_id())
             } else {
-                Principal::anonymous()
+                callers::anonymous()
             };
-            let mut second = Box::pin(create(second_value, second_exclusive, second_principal));
+            let mut second = Box::pin(create(second_value, second_exclusive, second_caller));
             assert!(poll!(&mut second).is_pending());
             assert!(executor.stored_oplog(&id.agent_id).await.is_empty());
             gate.release();
@@ -1605,11 +1608,8 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
                         winner.fingerprint
                     );
                     assert_eq!(
-                        worker
-                            .get_initial_worker_metadata()
-                            .create_request
-                            .principal,
-                        first_principal
+                        worker.get_initial_worker_metadata().create_request.caller,
+                        first_caller
                     );
                 }
                 Err(WorkerExecutorError::AgentAlreadyExists { .. }) => {
@@ -1637,7 +1637,7 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
                 creates[0].env,
                 vec![("OWNER".to_string(), first_value.to_string())]
             );
-            assert_eq!(creates[0].create_request.principal, first_principal);
+            assert_eq!(creates[0].create_request.caller, first_caller);
             assert_eq!(creates[0].create_request.idempotency_key, key);
             assert_eq!(
                 creates[0].create_request.kind,
@@ -1654,11 +1654,8 @@ async fn pre_create_single_flight_admits_each_caller_against_the_winner(
             );
             assert_eq!(joined.get_initial_worker_metadata().env, winner.env);
             assert_eq!(
-                joined
-                    .get_initial_worker_metadata()
-                    .create_request
-                    .principal,
-                first_principal
+                joined.get_initial_worker_metadata().create_request.caller,
+                first_caller
             );
         }
     }
@@ -1686,6 +1683,7 @@ async fn grpc_create_reports_typed_conflicts_and_keeps_the_winner(
         auth_ctx: Some(AuthCtx::System.into()),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
         env: [("OWNER".into(), "winner".into())].into(),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let first = executor
@@ -1836,7 +1834,7 @@ async fn exclusive_create_admission_checks_warm_and_cold_stored_identity(
                     None,
                     None,
                     &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
+                    callers::anonymous(),
                     InvocationFreshnessDisposition::MayExist,
                     CreateIntent::Create {
                         exclusive,
@@ -1892,8 +1890,8 @@ async fn exclusive_create_admission_checks_warm_and_cold_stored_identity(
                 metadata.create_request.idempotency_key
             );
             assert_eq!(
-                joined_metadata.create_request.principal,
-                metadata.create_request.principal
+                joined_metadata.create_request.caller,
+                metadata.create_request.caller
             );
         }
     }
@@ -2001,7 +1999,7 @@ async fn acquire(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await
 }
@@ -2190,7 +2188,7 @@ async fn exclusive_retry_after_partial_construction_uses_the_persisted_identity(
                     None,
                     None,
                     &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
+                    callers::anonymous(),
                     InvocationFreshnessDisposition::MayExist,
                     CreateIntent::Create {
                         exclusive: true,
@@ -2276,9 +2274,7 @@ async fn partial_creation_reloads_identity_and_original_initialization(
         );
         assert!(Worker::get_latest_metadata(&all, &id).await?.is_none());
         let context = InvocationContextStack::fresh();
-        let principal = Principal::Agent(AgentPrincipal {
-            agent_id: seed.agent_id(),
-        });
+        let caller = callers::agent(seed.agent_id());
         let payload_directory = deps
             .blob_storage_root()
             .join("oplog_payload")
@@ -2305,7 +2301,7 @@ async fn partial_creation_reloads_identity_and_original_initialization(
             None,
             None,
             &context,
-            principal.clone(),
+            caller.clone(),
         )
         .await
         .err()
@@ -2364,8 +2360,7 @@ async fn partial_creation_reloads_identity_and_original_initialization(
             .collect::<Vec<_>>();
         assert_eq!(pending.len(), 1);
         let AgentInvocationPayload::AgentInitialization {
-            principal: recorded,
-            ..
+            caller: recorded, ..
         } = oplog
             .download_payload(pending[0].0.clone())
             .await
@@ -2373,7 +2368,7 @@ async fn partial_creation_reloads_identity_and_original_initialization(
         else {
             panic!("expected initialization payload")
         };
-        assert_eq!(recorded, principal);
+        assert_eq!(recorded, caller);
         assert_eq!(pending[0].1, &context.trace_id);
         if agent_type == "EphemeralCounter" {
             // No guest was admitted by the failed creation, so this is not a fail-stop reload.
@@ -2406,9 +2401,7 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
         .await?;
     let seed = seed_worker(&executor, &stored).await?;
     let creator_context = InvocationContextStack::fresh();
-    let creator = Principal::Agent(AgentPrincipal {
-        agent_id: seed.agent_id(),
-    });
+    let creator = callers::agent(seed.agent_id());
     let loaders = ["get-or-create", "existing-only"];
     for loader in loaders {
         let id = target(&seed, &format!("restart-creator-{loader}"));
@@ -2459,7 +2452,7 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
     for loader in loaders {
         let id = target(&seed, &format!("restart-creator-{loader}"));
         if loader == "existing-only" {
-            Worker::interrupt(seed.all(), &id, false, Principal::anonymous()).await?;
+            Worker::interrupt(seed.all(), &id, false, callers::anonymous()).await?;
         }
         let worker = acquire(&seed, &id).await?;
         let entries = worker
@@ -2481,7 +2474,7 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
         let create = &creates[0];
         assert_eq!(create.kind, CreateRequestKind::GetOrCreate, "{loader}");
         assert_eq!(create.idempotency_key, None, "{loader}");
-        assert_eq!(create.principal, creator, "{loader}");
+        assert_eq!(create.caller, creator, "{loader}");
         assert_eq!(create.trace_id, creator_context.trace_id, "{loader}");
         assert_eq!(
             create.trace_states, creator_context.trace_states,
@@ -2518,8 +2511,7 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
         assert_eq!(pending.len(), 1, "{loader}");
         let (payload, trace_id, trace_states, invocation_context) = pending[0];
         let AgentInvocationPayload::AgentInitialization {
-            principal: recorded,
-            ..
+            caller: recorded, ..
         } = worker
             .oplog()
             .download_payload(payload.clone())
@@ -2548,7 +2540,7 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
     let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
     let id = target(&seed, "cancelled-creator");
     let all = seed.all().clone();
-    Worker::interrupt(&all, &id, false, Principal::anonymous()).await?;
+    Worker::interrupt(&all, &id, false, callers::anonymous()).await?;
     assert!(!executor.worker_is_cached(&id).await);
     assert!(
         !seed
@@ -2561,14 +2553,12 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
         .gate_next_agent_initialization_enqueue(&id.agent_id)
         .await;
     let context = InvocationContextStack::fresh();
-    let original_principal = Principal::Agent(AgentPrincipal {
-        agent_id: seed.agent_id(),
-    });
+    let original_caller = callers::agent(seed.agent_id());
     let creating = tokio::spawn({
         let all = all.clone();
         let id = id.clone();
         let context = context.clone();
-        let principal = original_principal.clone();
+        let caller = original_caller.clone();
         async move {
             Worker::get_or_create_suspended(
                 &all,
@@ -2578,7 +2568,7 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
                 None,
                 None,
                 &context,
-                principal,
+                caller,
             )
             .await
         }
@@ -2588,7 +2578,7 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
         .expect("creator must reach the initialization enqueue");
     creating.abort();
     assert!(creating.await.err().unwrap().is_cancelled());
-    let mut existing = Box::pin(Worker::interrupt(&all, &id, false, Principal::anonymous()));
+    let mut existing = Box::pin(Worker::interrupt(&all, &id, false, callers::anonymous()));
     let mut competing = Box::pin(acquire(&seed, &id));
     assert!(poll!(&mut existing).is_pending());
     assert!(poll!(&mut competing).is_pending());
@@ -2625,13 +2615,13 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
         if let OplogEntry::PendingAgentInvocation {
             payload, trace_id, ..
         } = entry
-            && let AgentInvocationPayload::AgentInitialization { principal, .. } = oplog
+            && let AgentInvocationPayload::AgentInitialization { caller, .. } = oplog
                 .download_payload(payload.clone())
                 .await
                 .map_err(anyhow::Error::msg)?
         {
             initializations += 1;
-            assert_eq!(principal, original_principal);
+            assert_eq!(caller, original_caller);
             assert_eq!(trace_id, &context.trace_id);
         }
     }
@@ -2816,7 +2806,7 @@ async fn prepare_session(
     let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
         method_name: "increment".into(),
         input: data_value!().value().clone(),
-        principal: Principal::anonymous(),
+        caller: callers::anonymous(),
         scope_card: None,
     }));
     let context = InvocationContextStack::fresh();
@@ -2955,7 +2945,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
     let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
         method_name: "increment".into(),
         input: data_value!().value().clone(),
-        principal: Principal::anonymous(),
+        caller: callers::anonymous(),
         scope_card: None,
     }));
     let context = InvocationContextStack::fresh();
@@ -3115,7 +3105,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "increment".into(),
                 input: data_value!().value().clone(),
-                principal: Principal::anonymous(),
+                caller: callers::anonymous(),
                 scope_card: None,
             })),
             invocation_context: context.to_oplog_data(),
@@ -3268,7 +3258,7 @@ async fn jump_projection_finishes_without_its_producer(
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "increment".into(),
                     input: data_value!().value().clone(),
-                    principal: Principal::anonymous(),
+                    caller: callers::anonymous(),
                     scope_card: None,
                 })),
                 invocation_context: context.to_oplog_data(),

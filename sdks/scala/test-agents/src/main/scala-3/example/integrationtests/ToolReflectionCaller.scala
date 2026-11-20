@@ -10,7 +10,7 @@
 
 package example.integrationtests
 
-import golem.{BaseAgent, Principal, ULong}
+import golem.{BaseAgent, InvocationContext, ULong}
 import golem.reflection.{AgentClientDefinition, DynamicAgentClient, DynamicToolClient, GolemReflectError, Reflection}
 import golem.runtime.annotations.*
 import golem.runtime.{InputRecordCodec, OutputCodec}
@@ -73,7 +73,7 @@ trait ScalaReflectionTestTool {
   def asymmetric(input: ScalaConformanceInput): ScalaConformanceOutput
   def nested(prefix: String): ScalaReflectionNestedTool
   def typedFailure(message: String): Either[ScalaConformanceFailure, String]
-  def principal(label: String, principal: Principal): String
+  def principal(label: String, context: InvocationContext): String
   def streaming(label: String, stdout: ToolOutputStream): Future[String]
 }
 
@@ -109,8 +109,8 @@ final class ScalaReflectionTestToolImpl extends ScalaReflectionTestTool {
   override def typedFailure(message: String): Either[ScalaConformanceFailure, String] =
     Left(ScalaConformanceFailure.Invalid(ScalaConformanceFailurePayload("message", message)))
 
-  override def principal(label: String, principal: Principal): String =
-    s"$label:${principalLabel(principal)}"
+  override def principal(label: String, context: InvocationContext): String =
+    s"$label:${context.caller.immediate.toString}"
 
   override def streaming(label: String, stdout: ToolOutputStream): Future[String] =
     stdout
@@ -120,12 +120,6 @@ final class ScalaReflectionTestToolImpl extends ScalaReflectionTestTool {
         case Left(error) => Future.failed(new IllegalStateException(s"stream write failed: $error"))
       }(ExecutionContext.global)
 
-  private def principalLabel(principal: Principal): String = principal match {
-    case Principal.Anonymous                            => "anonymous"
-    case Principal.Agent(_, name)                       => s"agent:$name"
-    case Principal.GolemUser(_)                         => "golem-user"
-    case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => s"oidc:$sub"
-  }
 }
 
 @agentDefinition()
@@ -135,7 +129,7 @@ trait ScalaPrincipalIdentity extends BaseAgent {
 }
 
 @agentImplementation()
-final class ScalaPrincipalIdentityImpl(name: String, principal: Principal) extends ScalaPrincipalIdentity {
+final class ScalaPrincipalIdentityImpl(name: String, context: InvocationContext) extends ScalaPrincipalIdentity {
   override def who(): Future[String] = Future.successful(name)
 }
 
@@ -147,7 +141,7 @@ trait ScalaToolReflectionCaller extends BaseAgent {
   def canonicalRoundTrip(): Future[String]
   def principalRoundTrip(): Future[String]
   def agentRoundTrip(): Future[String]
-  def toolConformanceRoundTrip(principal: Principal): Future[String]
+  def toolConformanceRoundTrip(context: InvocationContext): Future[String]
 }
 
 @agentImplementation()
@@ -270,7 +264,7 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
     }
   }
 
-  override def toolConformanceRoundTrip(principal: Principal): Future[String] = {
+  override def toolConformanceRoundTrip(context: InvocationContext): Future[String] = {
     val input      = ScalaConformanceInput("left", Map("z" -> Seq(8L, 1L), "a" -> Seq(3L)))
     val direct     = new ScalaReflectionTestToolImpl
     val captured   = new CapturingOutput
@@ -281,7 +275,7 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
       direct.asymmetric(input),
       direct.nested("definition-nested").inspect(input),
       direct.typedFailure("definition-error"),
-      direct.principal("definition", principal),
+      direct.principal("definition", context),
       streamed,
       captured.text,
       captured.terminal

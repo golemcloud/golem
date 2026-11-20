@@ -16,7 +16,7 @@
 
 package golem.runtime.autowire
 
-import golem.Principal
+import golem.InvocationContext
 import golem.FutureInterop
 import golem.host.SchemaWireInterop
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
@@ -58,7 +58,11 @@ trait MethodBinding[Instance] {
   def name: String
   def metadata: MethodMetadata
 
-  def invoke(instance: Instance, input: JsSchemaValueTree, principal: Principal): js.Promise[Option[JsSchemaValueTree]]
+  def invoke(
+    instance: Instance,
+    input: JsSchemaValueTree,
+    context: InvocationContext
+  ): js.Promise[Option[JsSchemaValueTree]]
 }
 
 object MethodBinding {
@@ -76,11 +80,11 @@ object MethodBinding {
       def invoke(
         instance: Instance,
         input: JsSchemaValueTree,
-        principal: Principal
+        context: InvocationContext
       ): js.Promise[Option[JsSchemaValueTree]] =
         FutureInterop.toPromise(SchemaPayload.withWireInput(input) { value =>
           val head = rawHttp && isHeadWireInput(value)
-          method.invoke(instance, value, principal).flatMap {
+          method.invoke(instance, value, context).flatMap {
             case None        => Future.successful(None)
             case Some(value) =>
               suppressWireBody(value, head)
@@ -94,16 +98,16 @@ object MethodBinding {
     methodMetadata: MethodMetadata,
     inputCodec: InputRecordCodec[In],
     outputCodec: OutputCodec[Out]
-  )(handler: (Instance, In, Principal) => Out): MethodBinding[Instance] =
-    async[Instance, In, Out](methodMetadata, inputCodec, outputCodec)((instance, input, principal) =>
-      Future.successful(handler(instance, input, principal))
+  )(handler: (Instance, In, InvocationContext) => Out): MethodBinding[Instance] =
+    async[Instance, In, Out](methodMetadata, inputCodec, outputCodec)((instance, input, context) =>
+      Future.successful(handler(instance, input, context))
     )
 
   def async[Instance, In, Out](
     methodMetadata: MethodMetadata,
     inputCodec: InputRecordCodec[In],
     outputCodec: OutputCodec[Out]
-  )(handler: (Instance, In, Principal) => Future[Out]): MethodBinding[Instance] =
+  )(handler: (Instance, In, InvocationContext) => Future[Out]): MethodBinding[Instance] =
     new MethodBinding[Instance] {
       override val name: String             = methodMetadata.name
       override val metadata: MethodMetadata = methodMetadata
@@ -124,13 +128,13 @@ object MethodBinding {
       override def invoke(
         instance: Instance,
         input: JsSchemaValueTree,
-        principal: Principal
+        context: InvocationContext
       ): js.Promise[Option[JsSchemaValueTree]] = {
         val future = SchemaPayload.withDecodedInput[(In, Boolean), Option[JsSchemaValueTree]](input) {
           case Left(err) =>
             Future.failed(js.JavaScriptException(JsAgentError.invalidInput(err.toString)))
           case Right((value, head)) =>
-            AgentMethodFailure.capture(handler(instance, value, principal)).flatMap { out =>
+            AgentMethodFailure.capture(handler(instance, value, context)).flatMap { out =>
               outputCodec.into match {
                 case None                  => Future.successful(None)
                 case Some(into) if rawHttp =>

@@ -77,6 +77,7 @@ before (value) {}
                 params.instance_id.high_bits,
                 params.instance_id.low_bits,
             ),
+            never_live: params.never_live,
         }),
     }) }
     Start { record (params) {
@@ -267,6 +268,11 @@ before (value) {}
             .transpose()?,
         // The WIT record of a failed update has no snapshot fault.
         snapshot_fault: None,
+        failure_class: update_failure_class_from_wit(params.failure_class),
+        divergence: params
+            .divergence
+            .map(|divergence| replay_divergence_from_wit(divergence).map(Box::new))
+            .transpose()?,
     } }
     GrowMemory { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -550,6 +556,7 @@ before (value) {}
                         original_phantom_id,
                         instance_id,
                         create_request: _,
+                        never_live,
                     } = *parameters;
                     Ok(Self::Create(oplog::RawCreateParameters {
                         timestamp: timestamp.into(),
@@ -595,6 +602,7 @@ before (value) {}
                             .collect::<Result<_, String>>()?,
                         original_phantom_id: original_phantom_id.map(|id| id.into()),
                         instance_id: instance_id.into(),
+                        never_live,
                     }))
                 } }
     Start { record () => RawStartParameters {
@@ -708,6 +716,10 @@ before (value) {}
                 snapshot_index: details.snapshot_index.into(),
             }
         }),
+        failure_class: update_failure_class_to_wit(failure_class),
+        divergence: divergence
+            .map(|divergence| replay_divergence_to_wit(*divergence))
+            .transpose()?,
     } }
     GrowMemory { record () => GrowMemoryParameters {
         timestamp: timestamp.into(),

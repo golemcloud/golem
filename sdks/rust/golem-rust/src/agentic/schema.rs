@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::Principal;
 use crate::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, IntoSchema, MetadataEnvelope, Role,
     SchemaGraph, SchemaType, SchemaValue, TextRestrictions, TextValuePayload, UrlRestrictions,
@@ -24,10 +23,8 @@ pub trait Schema {
 
     #[doc(hidden)]
     fn contains_stream() -> bool {
-        match Self::get_type() {
-            StructuredSchema::Default(graph) => schema_contains_stream(&graph),
-            StructuredSchema::AutoInject(_) => false,
-        }
+        let StructuredSchema::Default(graph) = Self::get_type();
+        schema_contains_stream(&graph)
     }
     fn to_schema_value(self) -> Result<SchemaValue, String>
     where
@@ -35,13 +32,6 @@ pub trait Schema {
     fn from_schema_value(value: SchemaValue, schema: StructuredSchema) -> Result<Self, String>
     where
         Self: Sized;
-
-    fn from_principal(_principal: Principal) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        Err("Principal can only be injected into Principal parameters".to_string())
-    }
 }
 
 pub(crate) fn schema_type_contains_stream(
@@ -113,39 +103,14 @@ fn schema_contains_stream(graph: &SchemaGraph) -> bool {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum StructuredSchema {
-    AutoInject(AutoInjectedParamType),
     Default(SchemaGraph),
-}
-
-#[derive(Debug, Clone)]
-pub enum AutoInjectedParamType {
-    Principal,
 }
 
 impl StructuredSchema {
     pub fn get_schema_graph(self) -> Option<SchemaGraph> {
         match self {
             StructuredSchema::Default(schema) => Some(schema),
-            StructuredSchema::AutoInject(_) => None,
         }
-    }
-}
-
-impl Schema for Principal {
-    fn get_type() -> StructuredSchema {
-        StructuredSchema::AutoInject(AutoInjectedParamType::Principal)
-    }
-
-    fn to_schema_value(self) -> Result<SchemaValue, String> {
-        Err("Principal is auto-injected and cannot be converted to SchemaValue".to_string())
-    }
-
-    fn from_schema_value(_value: SchemaValue, _schema: StructuredSchema) -> Result<Self, String> {
-        Err("Principal is auto-injected and cannot be converted from SchemaValue".to_string())
-    }
-
-    fn from_principal(principal: Principal) -> Result<Self, String> {
-        Ok(principal)
     }
 }
 
@@ -162,10 +127,8 @@ impl<T: IntoSchema + FromSchema> Schema for T {
     }
 
     fn from_schema_value(value: SchemaValue, schema: StructuredSchema) -> Result<Self, String> {
-        match schema {
-            StructuredSchema::Default(_) => T::from_value(&value).map_err(|err| err.to_string()),
-            _ => Err(format!("Expected ComponentModel schema, got: {schema:?}")),
-        }
+        let StructuredSchema::Default(_) = schema;
+        T::from_value(&value).map_err(|err| err.to_string())
     }
 }
 
@@ -360,6 +323,7 @@ mod host_api_schema {
         Retrying,
         Failed,
         Exited,
+        Sandboxed,
     }
 
     impl From<host::AgentStatus> for AgentStatusModel {
@@ -372,6 +336,7 @@ mod host_api_schema {
                 host::AgentStatus::Retrying => Self::Retrying,
                 host::AgentStatus::Failed => Self::Failed,
                 host::AgentStatus::Exited => Self::Exited,
+                host::AgentStatus::Sandboxed => Self::Sandboxed,
             }
         }
     }
@@ -386,6 +351,7 @@ mod host_api_schema {
                 AgentStatusModel::Retrying => Self::Retrying,
                 AgentStatusModel::Failed => Self::Failed,
                 AgentStatusModel::Exited => Self::Exited,
+                AgentStatusModel::Sandboxed => Self::Sandboxed,
             }
         }
     }

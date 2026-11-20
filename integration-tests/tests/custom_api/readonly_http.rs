@@ -15,7 +15,7 @@
 //! HTTP integration tests for the read-only agent method feature (issue #3393,
 //! tests H1..H5).
 //!
-//! All six tests (H4 is split into principal-unaware / principal-aware halves)
+//! All six tests (H4 is split into an anonymous half and a credential-carrying half)
 //! exercise the `ReadonlyAgent` agent declared in the shared
 //! `agent-sdk-rust` test component. They drive the worker-service HTTP layer
 //! through `HttpTestContext` and assert the cache-header contract documented
@@ -121,7 +121,7 @@ async fn h1_get_returns_etag_and_cache_control(
         header_str(response.headers().get(CACHE_CONTROL)).expect("expected Cache-Control header");
     assert_eq!(
         cache_control, "public, no-cache",
-        "principal-unaware UntilWrite must emit `public, no-cache`"
+        "an anonymous UntilWrite read must emit `public, no-cache`"
     );
 
     let etag = header_str(response.headers().get(ETAG))
@@ -257,7 +257,7 @@ async fn h3_etag_invalidates_after_write(
 
 #[test]
 #[tracing::instrument]
-async fn h4_principal_unaware_uses_public_cache_directive(
+async fn h4_anonymous_request_without_credentials_is_public_with_vary(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let response = agent
@@ -271,7 +271,7 @@ async fn h4_principal_unaware_uses_public_cache_directive(
         header_str(response.headers().get(CACHE_CONTROL)).expect("expected Cache-Control header");
     assert_eq!(
         cache_control, "public, no-cache",
-        "principal-unaware UntilWrite read must emit `public, no-cache`"
+        "an anonymous UntilWrite read must emit `public, no-cache`"
     );
 
     let vary = header_str(response.headers().get(VARY)).unwrap_or("");
@@ -320,6 +320,43 @@ async fn h4_anonymous_principal_aware_read_is_public_and_varies_on_credentials(
     Ok(())
 }
 
+// A request that carries a credential the route does not verify is still anonymous, so its read
+// stays public; it varies on the credential headers, so no cache gives it to another request.
+#[test]
+#[tracing::instrument]
+async fn h4_an_unverified_credential_leaves_the_read_public_and_varying_on_credentials(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/readonly-agents/h4p-agent/count-for")?,
+        )
+        .header("Authorization", "Bearer not-a-session")
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let cache_control =
+        header_str(response.headers().get(CACHE_CONTROL)).expect("expected Cache-Control header");
+    assert_eq!(
+        cache_control, "public, no-cache",
+        "a credential that the route does not verify leaves the caller anonymous: `public, no-cache`"
+    );
+
+    let vary = header_str(response.headers().get(VARY)).expect("expected Vary header");
+    for credential in ["Authorization", "Cookie", "Golem-Token"] {
+        assert!(
+            header_has_token(vary, credential),
+            "missing {credential}: {vary}"
+        );
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // H5 — Ttl cache policy emits `max-age=<seconds>`
 // ---------------------------------------------------------------------------
@@ -339,7 +376,7 @@ async fn h5_ttl_method_returns_max_age(
     let cache_control =
         header_str(response.headers().get(CACHE_CONTROL)).expect("expected Cache-Control header");
     // The agent is declared with `#[read_only(cache = "ttl", ttl = "2s")]`
-    // and the method is principal-unaware, so visibility must be `public`
+    // and the request is anonymous, so visibility must be `public`
     // and `max-age` must be 2 seconds (floor of 2s).
     assert_eq!(
         cache_control, "public, max-age=2",

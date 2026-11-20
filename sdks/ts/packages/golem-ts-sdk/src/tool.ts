@@ -45,7 +45,8 @@ import {
   type StartedToolInvocation,
   type ToolInputStream,
 } from './internal/tool/startedToolInvocation';
-import type { Principal } from './principal';
+import type { Caller } from './caller';
+import { assertNotLiveValue, type RejectLiveValues } from './liveValues';
 import {
   type ExtendedCommandBody,
   type ExtendedCommandNode,
@@ -377,11 +378,7 @@ export type ToolInvocationContext<
   Stdout extends StreamPresence = StreamPresence,
   Stderr extends StreamPresence = StreamPresence,
 > = Simplify<
-  { readonly principal: Principal } & StreamContextField<
-    'stdin',
-    Stdin,
-    ReadableStream<Uint8Array>
-  > &
+  { readonly caller: Caller } & StreamContextField<'stdin', Stdin, ReadableStream<Uint8Array>> &
     StreamContextField<'stdout', Stdout, WritableStream<Uint8Array>> &
     StreamContextField<'stderr', Stderr, WritableStream<Uint8Array>>
 >;
@@ -680,7 +677,7 @@ export type ToolMiddlewareInvocationContext<
   Parameters = {},
 > = Simplify<
   {
-    readonly principal: Principal;
+    readonly caller: Caller;
     readonly underlying: ToolUnderlying<UnderlyingDefinition>;
     readonly parameters: Parameters;
   } & StreamContextField<'stdin', Stdin, AsyncIterable<number>>
@@ -880,7 +877,7 @@ export interface UniversalToolMiddlewareInvocation {
   readonly stdin?: AsyncIterable<number>;
   readonly stdout?: ToolOutputWriter;
   readonly stderr?: ToolOutputWriter;
-  readonly principal: Principal;
+  readonly caller: Caller;
 }
 
 export interface UniversalToolMiddlewareContext<Parameters = {}> {
@@ -1183,7 +1180,7 @@ export class BodyBuilder<
     const Options extends PositionalOptions<SchemaOutput<Schema>> = {},
   >(
     name: Name,
-    schema: Schema,
+    schema: Schema & RejectLiveValues<[SchemaOutput<Schema>]>,
     options?: Options,
   ): BodyBuilder<
     AddBodyArgument<Args, Name, SchemaOutput<Schema>, PositionalIsRequired<Options>>,
@@ -1194,6 +1191,7 @@ export class BodyBuilder<
     Stderr
   > {
     const codec = compileSchema(schema);
+    if (hasOwn(options, 'default')) assertNotLiveValue(options?.default);
     const defaultValue = hasOwn(options, 'default')
       ? codecValue(codec, options?.default)
       : undefined;
@@ -1219,7 +1217,7 @@ export class BodyBuilder<
 
   tail<const Name extends string, Schema extends StandardSchemaV1>(
     name: Name,
-    schema: Schema,
+    schema: Schema & RejectLiveValues<[SchemaOutput<Schema>]>,
     options: TailOptions = {},
   ): BodyBuilder<
     ReplaceTailArgument<Args, Name, SchemaOutput<Schema>[]>,
@@ -1254,7 +1252,7 @@ export class BodyBuilder<
     const Options extends OptionOptions<SchemaOutput<Schema>, SchemaProducesMap<Schema>> = {},
   >(
     name: Name,
-    schema: Schema,
+    schema: Schema & RejectLiveValues<[SchemaOutput<Schema>]>,
     options?: Options,
   ): BodyBuilder<
     AddBodyArgument<
@@ -1321,7 +1319,7 @@ export class BodyBuilder<
   }
 
   returns<Schema extends StandardSchemaV1>(
-    schema: Schema,
+    schema: Schema & RejectLiveValues<[SchemaOutput<Schema>]>,
     options: ReturnsOptions = {},
   ): BodyBuilder<Args, SuccessOutput<Schema>, Errors, Stdin, Stdout, Stderr> {
     const codec = compileSchema(schema);
@@ -1348,7 +1346,9 @@ export class BodyBuilder<
   ): BodyBuilder<Args, Success, Errors | ToolErr<Name>, Stdin, Stdout, Stderr>;
   error<const Name extends string, Payload extends StandardSchemaV1>(
     name: Name,
-    options: ErrorOptions<Payload> & { readonly payload: Payload },
+    options: ErrorOptions<Payload> & {
+      readonly payload: Payload & RejectLiveValues<[SchemaOutput<Payload>]>;
+    },
   ): BodyBuilder<
     Args,
     Success,
@@ -3024,6 +3024,7 @@ function buildOption<Schema extends StandardSchemaV1>(
   } = {},
 ): ExtendedOptionSpec {
   const codec = compileSchema(schema);
+  if (hasOwn(options, 'default')) assertNotLiveValue(options.default);
   const shape = buildOptionShape(codec, options);
   const collectedCodec = shape.tag === 'repeatable-list' ? listCodec(codec) : codec;
   return {

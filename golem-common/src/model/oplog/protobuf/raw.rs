@@ -40,7 +40,7 @@ use crate::model::oplog::raw_types::{
 };
 use crate::model::oplog::{
     AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails, LogLevel,
-    OplogEntry, PublicOplogEntry, SnapshotAssistedUpdateDetails,
+    OplogEntry, PublicOplogEntry, SnapshotAssistedUpdateDetails, UpdateFailureClass,
 };
 use crate::resource_runtime::ResourceTypeId;
 
@@ -463,6 +463,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     original_phantom_id,
                     instance_id,
                     create_request,
+                    never_live,
                 } = *parameters;
                 Entry::Create(RawCreateParameters {
                     component_id: Some(component_id.into()),
@@ -493,6 +494,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     original_phantom_id: original_phantom_id.map(Into::into),
                     instance_id: Some(instance_id.into()),
                     create_request: Some(create_request_to_proto(create_request)),
+                    never_live,
                 })
             }
             OplogEntry::Start {
@@ -678,6 +680,8 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 snapshot_assisted_details,
                 update_attempt_index,
                 snapshot_fault,
+                failure_class,
+                divergence,
                 ..
             } => Entry::FailedUpdate(RawFailedUpdateParameters {
                 target_revision: target_revision.into(),
@@ -693,6 +697,10 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 update_attempt_index: update_attempt_index.map(Into::into),
                 snapshot_fault: snapshot_fault
                     .map(|fault| raw_snapshot_fault_to_proto(fault) as i32),
+                failure_class: failure_class.proto_number(),
+                divergence: divergence
+                    .map(|divergence| (*divergence).try_into())
+                    .transpose()?,
             }),
             OplogEntry::GrowMemory { delta, .. } => {
                 Entry::GrowMemory(RawGrowMemoryParameters { delta })
@@ -1143,6 +1151,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         create_request: create_request_from_proto(
                             p.create_request.ok_or("Missing create_request")?,
                         )?,
+                        never_live: p.never_live,
                     }),
                 })
             }
@@ -1382,6 +1391,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     snapshot_fault: p
                         .snapshot_fault
                         .map(raw_snapshot_fault_from_proto)
+                        .transpose()?,
+                    failure_class: UpdateFailureClass::from_proto_number(p.failure_class)?,
+                    divergence: p
+                        .divergence
+                        .map(|divergence| {
+                            crate::model::oplog::ReplayDivergence::try_from(divergence)
+                                .map(Box::new)
+                        })
                         .transpose()?,
                 })
             }
@@ -1745,7 +1762,7 @@ fn create_request_to_proto(
     let CreateRequest {
         kind,
         idempotency_key,
-        principal,
+        caller,
         trace_id,
         trace_states,
         invocation_context,
@@ -1758,7 +1775,7 @@ fn create_request_to_proto(
             CreateRequestKind::Fork => RawCreateRequestKind::Fork,
         } as i32,
         idempotency_key: idempotency_key.map(Into::into),
-        principal: Some(principal.into()),
+        caller: Some(caller.into()),
         trace_id: trace_id.to_string(),
         trace_states,
         invocation_context: invocation_context
@@ -1784,9 +1801,9 @@ fn create_request_from_proto(
     Ok(CreateRequest {
         kind,
         idempotency_key: value.idempotency_key.map(Into::into),
-        principal: value
-            .principal
-            .ok_or("Missing create request principal")?
+        caller: value
+            .caller
+            .ok_or("Missing create request caller")?
             .try_into()?,
         trace_id: TraceId::from_string(value.trace_id)?,
         trace_states: value.trace_states,

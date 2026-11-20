@@ -36,6 +36,7 @@ use golem_worker_executor::services::blob_store::{
 use golem_worker_executor::services::oplog::{Oplog, OplogOps};
 use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use golem_worker_executor::worker::EvictionClass;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::start_with_resource_limits_and_overrides;
 use std::path::Path;
 use test_r::test;
@@ -98,7 +99,7 @@ async fn invoke_blob_tool(
     fingerprint: AgentFingerprint,
     key: &InvocationId,
     input: &TypedSchemaValue,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
 ) -> Result<AgentInvocationResult, WorkerExecutorError> {
     let active = executor
         .production_active_agent(owner)
@@ -113,7 +114,7 @@ async fn invoke_blob_tool(
             vec!["write-blob".into()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal,
+            caller,
             None,
         )
         .await
@@ -247,16 +248,14 @@ async fn write_and_reconstruct(
         .context("existing durable owner")?;
     let worker = active.primary();
     let key = InvocationId(uuid::Uuid::new_v4());
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: context.account_id,
-    });
+    let caller = callers::account(context.account_id);
     storage.armed.store(true, Ordering::SeqCst);
     let mut invocation = Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
         let owner = owner.clone();
         let input = input.clone();
-        let principal = principal.clone();
-        async move { invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, principal).await }
+        let caller = caller.clone();
+        async move { invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, caller).await }
     })));
     storage.pending.notified().await;
     ensure!(!invocation.as_ref().unwrap().is_finished());
@@ -340,15 +339,7 @@ async fn write_and_reconstruct(
         assert_terminals(&settled.public, window, false)?;
         executor.resume(&id, false).await?;
         assert_output(
-            invoke_blob_tool(
-                &executor,
-                &owner,
-                fingerprint,
-                &key,
-                &input,
-                principal.clone(),
-            )
-            .await?,
+            invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, caller.clone()).await?,
         )?;
     } else {
         assert_output(invocation.take().unwrap().await??)?;
@@ -375,9 +366,7 @@ async fn write_and_reconstruct(
     ensure!(storage.entered.load(Ordering::SeqCst) == expected_puts);
     ensure!(storage.effects.load(Ordering::SeqCst) == expected_puts);
     assert_bytes(&storage, environment_id, b"1357").await?;
-    assert_output(
-        invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, principal).await?,
-    )?;
+    assert_output(invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, caller).await?)?;
     ensure!(storage.effects.load(Ordering::SeqCst) == expected_puts);
 
     executor.shutdown_and_wait_for_invocation_loops().await?;
@@ -990,7 +979,7 @@ fn oracle_fixture() -> OplogSnapshot {
     let input = data_value!("first", "second");
     let payload = AgentInvocationPayload::AgentInitialization {
         input: input.value().clone(),
-        principal: Principal::anonymous(),
+        caller: callers::anonymous(),
     };
     let key = InvocationId(uuid::Uuid::from_u128(1));
     let token = WalletVersionToken {

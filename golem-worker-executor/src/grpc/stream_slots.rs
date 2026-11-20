@@ -392,7 +392,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             input,
             invocation_context: from_proto_invocation_context(&request.context)
                 .limit_depth(worker.config().limits.max_invocation_context_stack_depth),
-            principal: request.principal(),
+            caller: request.caller()?,
             scope_card: request
                 .scope_card
                 .clone()

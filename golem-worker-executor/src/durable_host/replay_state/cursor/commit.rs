@@ -307,7 +307,11 @@ impl CursorTx<'_> {
                     },
                 );
                 if let Some(wallet) = &self.cursor.wallet {
-                    wallet.record_derivation(*entity_parent_start_index, card.as_ref().clone())?;
+                    wallet.record_derivation(
+                        read_idx,
+                        *entity_parent_start_index,
+                        card.as_ref().clone(),
+                    )?;
                 }
             }
             OplogEntry::AgentInvocationFinished { .. }
@@ -442,8 +446,9 @@ impl CursorTx<'_> {
                             result
                         } else {
                             return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                "HostResponse::GolemApiFork",
+                                read_idx,
                                 format!("{response:?}"),
+                                "HostResponse::GolemApiFork",
                             ));
                         };
                     if result.result == Ok(ForkResult::Forked) {

@@ -417,7 +417,7 @@ func TestAMissingStandardInputIsRefusedBeforeTheDecode(t *testing.T) {
 		t.Fatalf("tool discovery failed: %s", engine.AllErrors(d.Errs))
 	}
 	input := witOf(hostValue(t, func(card func() golem.PermissionCard) KeysArgs { return KeysArgs{Card: card()} }))
-	if _, terr := cmd.ce.decodeArgs(d, input, &byteReader{absent: absentStdin}, nil); terr == nil {
+	if _, terr := cmd.ce.decodeArgs(d, input, &byteReader{absent: absentStdin}); terr == nil {
 		t.Fatal("a command without its standard input was decoded")
 	}
 	if engine.CheckCardsPresent(input.Value) != nil {

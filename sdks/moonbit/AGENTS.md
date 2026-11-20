@@ -55,7 +55,7 @@ sdks/moonbit/
 │   ├── interface/                     # WIT-generated MoonBit types and host-import bindings
 │   │   └── golem/
 │   │       ├── core/types/            # The schema model WIT types (golem:core/types@2.0.0)
-│   │       ├── agent/common/          # AgentType, AgentError, Principal, HTTP details, etc.
+│   │       ├── agent/common/          # AgentType, AgentError, Caller, Principal, HTTP details, etc.
 │   │       ├── agent/host/            # Host import: get_all_agent_types
 │   │       ├── api/                   # host, context, oplog, retry bindings
 │   │       ├── durability/durability/ # Durability host imports
@@ -97,7 +97,8 @@ sdks/moonbit/
 │   │   ├── agents.mbt                # AgentState, RegisteredAgent, RawAgent/Snapshottable traits, register_agent
 │   │   ├── agent_type.mbt            # AgentTypeDef/Method/Constructor/Config defs -> @common.AgentType
 │   │   ├── dispatch.mbt              # encode/decode invocation input/output via @schema
-│   │   └── principal_json.mbt        # Principal/UUID <-> JSON helpers
+│   │   └── legacy_principal.mbt      # validates and drops the 1.6 snapshot principal
+│   ├── caller/                        # Caller, Principal, PrincipalRef, TokenProvenance, InvocationContext
 │   ├── config/                        # Code-first configuration (Config[T], Secret[T])
 │   ├── errors/                        # AgentError construction/decoding helpers
 │   ├── rpc/                           # Agent-to-agent RPC client helpers (AgentClient)
@@ -126,7 +127,7 @@ sdks/moonbit/
 │   │   ├── multimodal_emit.mbt       # MultimodalModality impl emitter
 │   │   ├── config_emit.mbt           # Config declaration emitter
 │   │   ├── clients_emit.mbt          # RPC client stub emitter
-│   │   ├── http_validation.mbt       # HTTP mount/endpoint validation (Principal rules, path vars)
+│   │   ├── http_validation.mbt       # HTTP mount/endpoint validation (InvocationContext rules, path vars)
 │   │   ├── ast_helpers.mbt           # AST construction helpers
 │   │   ├── pkg.mbt                   # moon.pkg parser/updater (link section, imports)
 │   │   └── *_test.mbt                # Tests for parsing, emission, validation
@@ -144,7 +145,7 @@ sdks/moonbit/
         ├── config_agent.mbt          # ConfiguredAgent + #derive.config + @config.Secret
         ├── http_agent.mbt            # WeatherAgent (HTTP mount + endpoints)
         ├── multimodal_agent.mbt      # VisionAgent + TextOrImage (#derive.multimodal)
-        ├── audit_agent.mbt           # AuditLog (constructor Principal injection)
+        ├── audit_agent.mbt           # AuditLog (constructor InvocationContext injection)
         ├── rpc_example.mbt           # RpcExampleAgent (calls generated client stubs)
         ├── webhook_agent.mbt         # WebhookAgent (@logging + @webhook)
         ├── golem_reexports.mbt       # Generated — re-exports WASM entry points from SDK gen package
@@ -217,16 +218,20 @@ The core pattern (in `agents/agents.mbt`):
    `AgentInstance?`.
 2. Each agent type calls `register_agent(...)` during the generated `fn init {}` to register itself.
 3. When the host calls `initialize(agent_type, input)`, the SDK looks up the registered agent by
-   name, calls its `construct` function with the decoded constructor input + `Principal`, and stores
+   name, calls its `construct` function with the decoded constructor input + the `InvocationContext`, and stores
    the resulting `AgentInstance`.
 4. When the host calls `invoke(method_name, input)`, the SDK delegates to the instance's
    `RawAgent::invoke`.
 5. `discover_agent_types()` returns all registered agent types.
 6. `get_definition()` returns the current instance's type.
 
-The guest exports take no principal. The export entry points (`agent-exports`, `tool-exports`,
-`tool-middleware-exports`) read `caller().immediate` from `golem:agent/invocation-context` and pass
-it to `construct`, `RawAgent::invoke`, tool invokers, and middleware invocations.
+The guest exports take no caller. The export entry points (`agent-exports`, `tool-exports`,
+`tool-middleware-exports`) build a lazy `InvocationContext` that reads `caller()` from
+`golem:agent/invocation-context` only when the code asks for it, and pass it to `construct`,
+`RawAgent::invoke`, tool invokers, and middleware invocations. A method or constructor reads it with
+an `InvocationContext` parameter and `ctx.caller()`; `Principal`, `Caller` and `TokenProvenance` are
+live values and are refused in any signature or value type. Store `ctx.caller().original.principal_ref()`
+(a `PrincipalRef`) when an identity must be kept as data.
 
 ### The RawAgent Trait
 
@@ -236,7 +241,7 @@ pub(open) trait RawAgent {
     Self,
     method_name : String,
     input : @types.SchemaValueTree,
-    principal : @common.Principal,
+    context : InvocationContext,
   ) -> Result[@types.SchemaValueTree?, @common.AgentError]
 }
 ```

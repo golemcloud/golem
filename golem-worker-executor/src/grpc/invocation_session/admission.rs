@@ -16,11 +16,12 @@ use super::{
     AcceptedInvocation, AccountId, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMode, ComponentRevision, DateTime, Future, HasAll,
     HasComponentService, InvocationFreshnessDisposition, InvocationStart, InvocationStatus,
-    ParsedAgentKey, Pin, Principal, SchemaValue, ScopeCard, UsesAllDeps, Utc, Worker, WorkerCtx,
+    ParsedAgentKey, Pin, SchemaValue, ScopeCard, UsesAllDeps, Utc, Worker, WorkerCtx,
     WorkerExecutorError, WorkerExecutorImpl, build_durable_streaming_request,
     extract_owned_agent_id, from_proto_invocation_context, golem, validate_agent_method_invocation,
 };
 use golem_common::model::InvocationRequestKey;
+use golem_common::model::caller::Caller;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -182,15 +183,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )
         .await?;
 
-        let principal: Principal = request
-            .principal
-            .clone()
-            .map(|p| p.try_into())
-            .transpose()
-            .map_err(|e: String| {
-                WorkerExecutorError::invalid_request(format!("failed converting principal: {e}"))
-            })?
-            .unwrap_or_else(Principal::anonymous);
+        let caller: Caller = crate::grpc::extract_caller(&request.caller)?;
 
         let invocation_context = self
             .limit_invocation_context_stack_depth(from_proto_invocation_context(&request.context));
@@ -307,7 +300,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     method_name: method_name.clone(),
                     input: method_parameters,
                     invocation_context,
-                    principal,
+                    caller,
                     scope_card,
                 };
                 let mut invocation_output = if streaming {
@@ -381,7 +374,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         Worker::get_exact_existing_suspended_for_response(
                             self,
                             &owned_agent_id,
-                            principal.clone(),
+                            caller.clone(),
                             Some(expected),
                         )
                         .await?,
@@ -481,7 +474,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     method_name,
                     input: method_parameters,
                     invocation_context,
-                    principal,
+                    caller,
                     scope_card,
                 };
 

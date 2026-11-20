@@ -30,9 +30,6 @@ func encodeParams(fields []engine.Field, v reflect.Value) types.SchemaValueTree 
 	defer b.RestoreOnPanic()
 	idxs := make([]int32, 0, len(fields))
 	for _, f := range fields {
-		if f.AutoInjected {
-			continue // filled by the host, never sent
-		}
 		idxs = append(idxs, f.Codec.Encode(&b, v.Field(f.Index)))
 	}
 	root := b.Push(types.MakeSchemaValueNodeRecordValue(idxs))
@@ -56,13 +53,11 @@ func tryEncodeParams(fields []engine.Field, v reflect.Value) (tree types.SchemaV
 
 // decodeParams decodes a parameter-list tree (a record at the root) into dst's
 // fields. An empty parameter list is permitted to arrive as an empty record.
-// Principal fields have no value in the tree: they are set to principal, which
-// may be nil where there is no invocation (parsing an agent id).
 //
 // The tree is received: a failed decode gives every permission card in it back
 // to the host, and a successful one gives back the cards in values past the
 // parameters it read.
-func decodeParams(tree types.SchemaValueTree, fields []engine.Field, dst reflect.Value, principal Principal) (err error) {
+func decodeParams(tree types.SchemaValueTree, fields []engine.Field, dst reflect.Value) (err error) {
 	d := engine.Decoder{Nodes: tree.ValueNodes}
 	defer func() {
 		if err != nil {
@@ -71,12 +66,6 @@ func decodeParams(tree types.SchemaValueTree, fields []engine.Field, dst reflect
 			d.ReleaseRest(releaseCard)
 		}
 	}()
-	if principal != nil {
-		for _, f := range principalFields(fields) {
-			dst.Field(f.Index).Set(reflect.ValueOf(&principal).Elem())
-		}
-	}
-	fields = userFields(fields)
 	if len(d.Nodes) == 0 {
 		if len(fields) == 0 {
 			return nil

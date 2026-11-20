@@ -17,7 +17,8 @@ use crate::services::golem_config::ScanBudget;
 use crate::services::oplog::{CommitLevel, OplogOps, PrimaryOplogService};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
+use golem_common::model::agent::AgentTypeName;
+
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
@@ -562,7 +563,7 @@ fn make_agent_metadata(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -970,6 +971,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         local_agent_config: Vec::new(),
         original_phantom_id: Some(Uuid::new_v4()),
         instance_id: Uuid::new_v4(),
+        never_live: true,
     };
     let public = PublicOplogEntry::from_enrichment_entry(
         OplogIndex::INITIAL,
@@ -1007,6 +1009,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
     );
     assert_eq!(public.original_phantom_id, projection.original_phantom_id);
     assert_eq!(public.instance_id, projection.instance_id);
+    assert!(public.never_live);
     assert_eq!(public.initial_active_plugins.len(), 1);
     assert_eq!(
         public.initial_active_plugins.first().unwrap().plugin_name,
@@ -1026,6 +1029,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         wire.owner_kind,
         crate::preview2::golem_api_1_x::oplog::OwnerKind::OplogProcessor
     ));
+    assert!(wire.never_live);
 }
 
 fn default_last_known_status() -> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
@@ -1153,9 +1157,7 @@ fn test_entity_request(
                 },
             })
         }),
-        principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        }),
+        caller: crate::test_callers::agent_caller(owner.agent_id.clone()),
         plan: EntityInvocationPlanReference::Root { plan },
         authority_wallet: Vec::new(),
     };

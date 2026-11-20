@@ -329,6 +329,20 @@ impl ExecutionStatus {
     }
 }
 
+/// Where a failure of guest code came from, decided while the Wasmtime error chain still
+/// exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureProvenance {
+    /// A Wasm instruction trap of the guest, such as a panic.
+    TargetInstruction,
+    /// The guest returned an agent error.
+    TargetReturned,
+    /// The host failed: a host error, an executor error, a resource limit or a deadline.
+    Host,
+    /// The execution was interrupted or exited.
+    Lifecycle,
+}
+
 /// Describes the various reasons a worker can run into a trap
 #[derive(Clone, Debug)]
 pub enum TrapType {
@@ -350,6 +364,8 @@ pub enum TrapType {
         /// Always `None` for guest-originated traps and for non-host failures.
         semantic_trap_retry_override:
             Option<crate::durable_host::durability::SemanticTrapRetryOverride>,
+        /// Where the failure came from.
+        provenance: FailureProvenance,
     },
 }
 
@@ -388,6 +404,7 @@ impl TrapType {
                 error: AgentError::PermissionDenied(details),
                 retry_from: fallback_retry_from,
                 semantic_trap_retry_override: None,
+                provenance: FailureProvenance::Host,
             },
             error => {
                 Self::from_error::<Ctx>(&anyhow::Error::new(error), fallback_retry_from, agent_mode)
@@ -425,10 +442,12 @@ impl TrapType {
             .unwrap_or(fallback_retry_from);
         // Single constructor for every `TrapType::Error` arm below, so the call-owned/fallback
         // classification is applied uniformly and adding fields stays a one-line change.
+        let provenance = crate::worker::invocation::failure_provenance(error);
         let make_error = |error: AgentError| TrapType::Error {
             error,
             retry_from,
             semantic_trap_retry_override: semantic_trap_retry_override.clone(),
+            provenance,
         };
 
         match error.root_cause().downcast_ref::<InterruptKind>() {
@@ -584,10 +603,8 @@ impl TrapType {
                             // mapped here: it is also used as a generic transient
                             // error wrapper and must remain retriable via the
                             // default policy path (`AgentError::Unknown`).
-                            Some(WorkerExecutorError::UnexpectedOplogEntry { expected, got }) => {
-                                make_error(AgentError::InternalError(format!(
-                                    "Unexpected oplog entry during replay: expected {expected}, got {got}"
-                                )))
+                            Some(WorkerExecutorError::UnexpectedOplogEntry { divergence }) => {
+                                make_error(AgentError::InternalError(divergence.to_string()))
                             }
                             _ => {
                                 // A bare `?` on an oplog write inside an anyhow host function
@@ -1323,7 +1340,7 @@ mod tests {
     fn unexpected_oplog_entry_is_non_retriable_internal_error() {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::Error::from(
-                golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(OplogIndex::from_u64(3),
                     "OplogEntry::Start",
                     "End { .. }",
                 ),
@@ -1338,7 +1355,7 @@ mod tests {
                 ..
             } => {
                 assert!(
-                    msg.contains("Unexpected oplog entry during replay"),
+                    msg.contains("Unexpected oplog entry at 3"),
                     "unexpected message: {msg}"
                 );
                 assert!(msg.contains("OplogEntry::Start"));
@@ -1426,6 +1443,7 @@ mod tests {
             error,
             retry_from: OplogIndex::INITIAL,
             semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
         };
         let retry = |trap: &TrapType| {
             crate::durable_host::DurableWorkerCtx::<crate::workerctx::default::Context>::speculative_retry(trap)
@@ -1496,6 +1514,7 @@ mod tests {
         // classification.
         let wasmtime_error = wasmtime::Error::from(
             golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(3),
                 "OplogEntry::Start",
                 "Cancelled { .. }",
             ),

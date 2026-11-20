@@ -25,6 +25,7 @@ use golem_common::model::{AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::worker::EvictionClass;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_concurrent_agent_limit,
@@ -309,7 +310,6 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::agent::Principal;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::{OplogEntry, OplogIndex};
     use golem_service_base::error::worker_executor::InterruptKind;
@@ -357,7 +357,7 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
             None,
             None,
             &InvocationContextStack::fresh(),
-            Principal::anonymous(),
+            callers::anonymous(),
         )
         .await?;
         let attempt = Worker::start_if_needed(worker.clone()).await?.unwrap();
@@ -1353,7 +1353,7 @@ async fn prepare_worker_does_not_start_target_and_public_create_waits_for_loadin
             config: Vec::new(),
             ignore_already_existing: true,
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,

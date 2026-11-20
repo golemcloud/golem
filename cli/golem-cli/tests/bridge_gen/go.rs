@@ -57,7 +57,7 @@ use golem_common::schema::tool::{
     OptionSpec, Positional, Positionals, RepeatableListShape, RepeatableMapShape, Repetition,
     ResultSpec as ToolResultSpec, StreamSpec, Tool,
 };
-use golem_common::schema::{AgentTypeSchema, AutoInjectedKind, NamedField, Role, SchemaType};
+use golem_common::schema::{AgentTypeSchema, Role, SchemaType};
 use golem_schema::http::FileMapping;
 use std::process::Command;
 use tempfile::TempDir;
@@ -1051,25 +1051,18 @@ func TestAUnitTheCalleeDoesNotAcceptIsRefusedBeforeSending(t *testing.T) {{
     );
 }
 
-/// The host fills a principal parameter, so neither client asks a caller for
-/// one: not in the id, not in a method's arguments.
+/// The host supplies the caller, so the generated clients have no caller, principal or context
+/// parameter besides the Go context of the external client.
 #[test]
-fn go_clients_leave_out_the_principal(env: &GoEnv) {
-    let principal = || {
-        NamedField::auto_injected(
-            "principal",
-            AutoInjectedKind::Principal,
-            SchemaType::record(vec![]),
-        )
-    };
-    let with_principal = || {
+fn go_clients_have_no_caller_field(env: &GoEnv) {
+    let ledger = || {
         agent(
             "LedgerAgent",
             "go",
-            vec![field("name", SchemaType::string()), principal()],
+            vec![field("name", SchemaType::string())],
             vec![method(
                 "charge",
-                vec![field("amount", SchemaType::s64()), principal()],
+                vec![field("amount", SchemaType::s64())],
                 Some(SchemaType::string()),
             )],
             vec![],
@@ -1077,15 +1070,16 @@ fn go_clients_leave_out_the_principal(env: &GoEnv) {
         )
     };
     for generated in [
-        GeneratedGo::guest(env, with_principal()),
-        GeneratedGo::external(env, with_principal()),
+        GeneratedGo::guest(env, ledger()),
+        GeneratedGo::external(env, ledger()),
     ] {
-        let client = generated.read("client.go");
-        assert!(!client.to_lowercase().contains("principal"), "{client}");
+        let client = generated.read("client.go").to_lowercase();
+        assert!(!client.contains("principal"), "{client}");
+        assert!(!client.contains("caller"), "{client}");
         // the guest client takes the arguments alone, the external one a ctx first
         assert!(
-            client.contains("Charge(amount int64)")
-                || client.contains("Charge(ctx context.Context, amount int64)"),
+            client.contains("charge(amount int64)")
+                || client.contains("charge(ctx context.context, amount int64)"),
             "{client}"
         );
         generated.assert_gofmt_clean(env);

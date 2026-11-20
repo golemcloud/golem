@@ -247,7 +247,8 @@ fn replay_recovery_rejects_account_and_application_transfer_targets() {
 
     for target in unsupported_targets {
         let transfer_id = Uuid::new_v4();
-        let error = pending_transfer_target_agent_id(transfer_id, &target).unwrap_err();
+        let error = pending_transfer_target_agent_id(OplogIndex::from_u64(1), transfer_id, &target)
+            .unwrap_err();
         assert!(
             error.to_string().contains(&format!(
                 "pending transfer {transfer_id} targets an unsupported non-agent holder"

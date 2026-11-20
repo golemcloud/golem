@@ -23,6 +23,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentMode, AgentTarget, InvocationFreshnessDisposition,
 };
+use golem_common::model::caller::Caller;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -248,6 +249,7 @@ impl Rpc for HoldFirstSchedule {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
@@ -261,6 +263,7 @@ impl Rpc for HoldFirstSchedule {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -329,6 +332,7 @@ impl Rpc for HoldFirstSchedule {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         key: Option<IdempotencyKey>,
@@ -346,6 +350,7 @@ impl Rpc for HoldFirstSchedule {
                 caller,
                 env,
                 stack,
+                callee_caller,
                 config,
                 auth,
                 key,
@@ -367,6 +372,7 @@ impl Rpc for HoldFirstSchedule {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         card: Option<golem_common::model::card::ScopeCard>,
@@ -384,6 +390,7 @@ impl Rpc for HoldFirstSchedule {
                 caller,
                 env,
                 stack,
+                callee_caller,
                 config,
                 auth,
                 card,
@@ -404,6 +411,7 @@ impl Rpc for HoldFirstSchedule {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
     ) -> Result<(), RpcError> {
@@ -420,6 +428,7 @@ impl Rpc for HoldFirstSchedule {
                 caller,
                 env,
                 stack,
+                callee_caller,
                 config,
                 auth,
             )

@@ -6,7 +6,7 @@ import {
   defineAgentClient,
   InvocationId,
   method,
-  Principal,
+  InvocationContext,
   Quota,
   Reflection,
   Tool,
@@ -62,7 +62,7 @@ const RustPeer = defineAgent({
 
 const TsPrincipalPeer = defineAgent({
   name: "TsPrincipalPeer",
-  id: { tenant: Schema.String, caller: Principal.PrincipalSchema },
+  id: { tenant: Schema.String, owner: InvocationContext.PrincipalRefSchema },
   methods: { value: method({ input: {}, success: Schema.String }) },
 })
 
@@ -137,20 +137,22 @@ defineAgent({
       Effect.scoped(
         Effect.gen(function* () {
           const tenant = `principal-effect-${name}`
+          const owner = new InvocationContext.PrincipalRef("https://cross-sdk.example", "effect")
           const reflected = yield* Reflection.getAgentType("TsPrincipalPeer")
           if (reflected === undefined || reflected.mode !== "durable")
             return "missing-principal-type"
-          const client = yield* reflected.client.get({ tenant })
+          const client = yield* reflected.client.get({ tenant, owner: owner.toJSON() })
           const first = yield* (yield* client.method("value")).invoke({})
           const identity = yield* AgentIdentity.parse(first.metadata.agentId)
+          // The reference travels as the named record { issuer, subject } next to the tenant.
           if (
             identity.typeName !== "TsPrincipalPeer" ||
             identity.constructorValue.valueNodes.filter((node) => node.tag === "record-value")
-              .length !== 1
+              .length !== 2
           ) {
-            return "principal-in-id"
+            return "owner-not-a-record"
           }
-          const localId = yield* TsPrincipalPeer.agentId({ tenant })
+          const localId = yield* TsPrincipalPeer.agentId({ tenant, owner })
           if (localId.encoded !== identity.encoded) return "identity-mismatch"
           const full = yield* identity.client(TsPrincipalPeer)
           const methodOnly = yield* identity.client(

@@ -20,7 +20,6 @@ use axum::routing::{any, get};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::{GolemUserPrincipal, Principal};
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
     PublicOplogPageEntry, PublicSnapshotData,
@@ -29,6 +28,7 @@ use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
     start_with_snapshot_policy,
@@ -193,7 +193,6 @@ struct SnapshotLoadProbeStatus {
     loaded_value: Option<u64>,
     origin: String,
     mode: String,
-    principal: String,
     agent_type: String,
     phantom_id: Option<String>,
     config_marker: String,
@@ -2386,6 +2385,75 @@ async fn oplog_returns_host_call_entries_larger_than_the_page_entry_limit(
     Ok(())
 }
 
+/// The claims of a caller can be large. A 200 KiB claim set is recorded with the invocation, and
+/// after a crash the agent reads the same bytes back from the oplog.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_caller_with_200_kib_of_claims_survives_blob_storage_and_a_crash(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let probe = agent_id!(
+        "InvocationContextProbe",
+        format!("claims-{}", context.redis_prefix())
+    );
+    let probe_id = AgentId {
+        component_id: component.id,
+        agent_id: probe.to_string(),
+    };
+
+    let claims = format!(
+        "{{\"sub\":\"big-claims\",\"padding\":\"{}\",\"spaced\": [ 1 ,2.50 ]}}",
+        "x".repeat(200 * 1024)
+    );
+    let caller = callers::user_with_claims("https://claims.test", "big-claims", &claims);
+    let digest = executor
+        .invoke_and_await_agent_as_caller(
+            &component,
+            &probe,
+            caller.clone(),
+            "record_caller_claims_digest",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert!(
+        digest.ends_with(&format!(":{}", claims.len())),
+        "the guest must see every byte of the claims: {digest}"
+    );
+
+    // A real restart: the agent is rebuilt from its oplog, which reads the recorded caller back.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    executor.resume(&probe_id, false).await?;
+    executor
+        .wait_for_status(&probe_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    let digests: Vec<String> = executor
+        .invoke_and_await_agent_as_caller(
+            &component,
+            &probe,
+            caller,
+            "recorded_caller_claims_digests",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(digests, vec![digest]);
+
+    drop(executor);
+    Ok(())
+}
+
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
@@ -2421,20 +2489,14 @@ async fn snapshot_load_restores_without_initialization_and_replays_only_the_suff
         component_id: component.id,
         agent_id: agent_id.to_string(),
     };
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: AccountId::new(),
-    });
-    let principal_account_id = match &principal {
-        Principal::GolemUser(principal) => principal.account_id.to_string(),
-        _ => unreachable!(),
-    };
+    let caller = callers::account(AccountId::new());
 
     for expected in 1..=4 {
         let result = executor
-            .invoke_and_await_agent_as_principal(
+            .invoke_and_await_agent_as_caller(
                 &component,
                 &agent_id,
-                principal.clone(),
+                caller.clone(),
                 "increment",
                 data_value!(),
             )
@@ -2457,21 +2519,11 @@ async fn snapshot_load_restores_without_initialization_and_replays_only_the_suff
     assert_eq!(snapshot.mime_type, "application/octet-stream");
     assert_eq!(
         snapshot.data.first(),
-        Some(&2),
-        "expected binary envelope v2"
-    );
-    let principal_length = u32::from_be_bytes(
-        snapshot.data[1..5]
-            .try_into()
-            .expect("binary snapshot should contain the principal length"),
-    ) as usize;
-    let state_offset = 5 + principal_length;
-    assert!(
-        String::from_utf8_lossy(&snapshot.data[5..state_offset]).contains(&principal_account_id),
-        "snapshot envelope should retain the initialization principal"
+        Some(&3),
+        "expected binary envelope v3, which holds no caller"
     );
     assert_eq!(
-        &snapshot.data[state_offset..],
+        &snapshot.data[1..],
         3u64.to_be_bytes().as_slice(),
         "the latest snapshot should contain the state after invocation three"
     );
@@ -2497,13 +2549,7 @@ async fn snapshot_load_restores_without_initialization_and_replays_only_the_suff
     );
 
     let status = executor
-        .invoke_and_await_agent_as_principal(
-            &component,
-            &agent_id,
-            principal,
-            "status",
-            data_value!(),
-        )
+        .invoke_and_await_agent_as_caller(&component, &agent_id, caller, "status", data_value!())
         .await?
         .into_typed::<String>()?;
     assert_snapshot_recovery_loaded(&mut events).await;
@@ -2524,10 +2570,6 @@ async fn snapshot_load_restores_without_initialization_and_replays_only_the_suff
     assert_eq!(status.constructor_calls_at_restore, 0);
     assert_eq!(status.constructor_calls_now, 0);
     assert_eq!(status.load_calls_now, 1);
-    assert!(
-        status.principal.contains(&principal_account_id),
-        "restore context should contain the initialization principal"
-    );
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let recovery_entries: Vec<_> = oplog
@@ -2581,9 +2623,7 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_the_older_sn
         )
         .store()
         .await?;
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: AccountId::new(),
-    });
+    let caller = callers::account(AccountId::new());
     let mut probes = Vec::new();
 
     for mode in ["write", "http", "rpc"] {
@@ -2594,10 +2634,10 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_the_older_sn
         };
         for expected in 1..=2 {
             let result = executor
-                .invoke_and_await_agent_as_principal(
+                .invoke_and_await_agent_as_caller(
                     &component,
                     &agent_id,
-                    principal.clone(),
+                    caller.clone(),
                     "increment",
                     data_value!(),
                 )
@@ -2676,10 +2716,10 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_the_older_sn
         );
 
         let status = executor
-            .invoke_and_await_agent_as_principal(
+            .invoke_and_await_agent_as_caller(
                 &component,
                 &agent_id,
-                principal.clone(),
+                caller.clone(),
                 "status",
                 data_value!(),
             )

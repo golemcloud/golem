@@ -40,7 +40,7 @@ priv enum ToolArgSurface {
   SurfaceBoolFlag
   SurfaceCountFlag
   SurfaceStream
-  SurfacePrincipal
+  SurfaceInvocationContext
 } derive(Eq)
 
 ///|
@@ -291,7 +291,7 @@ fn structural_attr_allowed(surface : ToolArgSurface, attr : String) -> Bool {
     (SurfaceBoolFlag, "short" | "alias" | "env" | "negatable" | "default") =>
       true
     (SurfaceCountFlag, "short" | "alias" | "env") => true
-    (SurfaceStream | SurfacePrincipal, _) => false
+    (SurfaceStream | SurfaceInvocationContext, _) => false
     _ => false
   }
 }
@@ -387,16 +387,16 @@ fn validate_hidden_attrs(
   hidden : ToolHiddenType,
   source : String,
 ) -> Unit raise ToolEmitError {
-  let surface = if hidden == Principal {
-    SurfacePrincipal
+  let surface = if hidden == InvocationContext {
+    SurfaceInvocationContext
   } else {
     SurfaceStream
   }
   validate_structural_attrs(info, surface, source)
   guard info is Some(info) else { return }
-  if hidden == Principal {
+  if hidden == InvocationContext {
     emit_fail(
-      "Principal parameter '" +
+      "InvocationContext parameter '" +
       source +
       "' does not accept #derive.arg metadata",
     )
@@ -498,7 +498,7 @@ fn project_command(
         let hidden_type = match hidden {
           InputStream => Parameterized("@asyncCore.Stream", [Simple("Byte")])
           OutputStream | ErrorStream => Simple("@tool.ProviderOutput")
-          Principal => Simple("@tool.Principal")
+          InvocationContext => Simple("@tool.InvocationContext")
         }
         projected.push({
           source,
@@ -2374,7 +2374,7 @@ fn emit_context_invoker(
   buf.write_string(
     "///|\n#warnings(\"-alert_wit_bindgen\")\nasync fn " +
     name +
-    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @tool.ProviderOutput?, __golem_stderr : @tool.ProviderOutput?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @types.ToolError] {\n",
+    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @tool.ProviderOutput?, __golem_stderr : @tool.ProviderOutput?, __golem_context : @tool.InvocationContext) -> Result[@toolCommon.InvocationResult, @types.ToolError] {\n",
   )
   for index, command in tool.commands {
     if command.subtree is Some(target) {
@@ -2387,7 +2387,7 @@ fn emit_context_invoker(
         name +
         "_subtree_" +
         index.to_string() +
-        "(__golem_command_path[1:].to_owned(), __golem_input, __golem_stdin, __golem_stdout, __golem_stderr, __golem_principal)\n  }\n",
+        "(__golem_command_path[1:].to_owned(), __golem_input, __golem_stdin, __golem_stdout, __golem_stderr, __golem_context)\n  }\n",
       )
     }
   }
@@ -2579,8 +2579,8 @@ fn emit_context_invoker(
       ({
         let emitted_call_args : Array[String] = []
         for arg in args {
-          let value = if arg.placement is Hidden(Principal) {
-            "__golem_principal"
+          let value = if arg.placement is Hidden(InvocationContext) {
+            "__golem_context"
           } else {
             arg.source
           }
@@ -2897,7 +2897,7 @@ fn client_args(
     if !projected_arg_identity_names(arg).any(name => {
         inherited_identities.contains(name)
       }) &&
-      !(arg.placement is Hidden(Principal | OutputStream | ErrorStream)) {
+      !(arg.placement is Hidden(InvocationContext | OutputStream | ErrorStream)) {
       result.push(arg)
     }
   }

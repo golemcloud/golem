@@ -29,7 +29,6 @@ use crate::worker::entity_invocation::{RetainedEntityStore, await_component_enti
 use crate::worker::entity_slot::{EntitySlot, EntitySlotRegistration};
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentId;
 use golem_common::model::entity::{
     EntityActivation, EntityActivationPolicy, EntityInvocationId, EntityInvocationScope,
@@ -2031,9 +2030,7 @@ fn registered_blob_entity(
         )
         .unwrap(),
     );
-    let principal = Principal::Agent(golem_common::model::agent::AgentPrincipal {
-        agent_id: owner.agent_id.clone(),
-    });
+    let caller = crate::test_callers::agent_caller(owner.agent_id.clone());
     let entity = OwnedAgentEntityId {
         owner,
         entity: activation.entity(),
@@ -2043,7 +2040,7 @@ fn registered_blob_entity(
         EntityInvocationId::new(entity, OplogIndex::from_u64(2)).unwrap(),
         OplogIndex::from_u64(1),
         activation,
-        principal,
+        caller.immediate.clone(),
         InvocationExecutionMode::Live,
         InvocationId(Uuid::new_v4()),
         false,

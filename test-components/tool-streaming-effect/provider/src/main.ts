@@ -1,6 +1,12 @@
-import type * as AgentCommon from "golem:agent/common@2.0.0"
 import { Effect, Schema, Stream } from "effect"
-import { Agents, Quota, Secrets, Tool, WitTypes } from "@golemcloud/effect-golem"
+import {
+  Agents,
+  type InvocationContext,
+  Quota,
+  Secrets,
+  Tool,
+  WitTypes,
+} from "@golemcloud/effect-golem"
 
 const MatrixRequest = Schema.Struct({
   source: Schema.String,
@@ -68,23 +74,13 @@ const getSelfMetadata = Agents.getSelfMetadata as Effect.Effect<
   Agents.AgentsHostError
 >
 
-const principalLabel = (principal: unknown): string => {
-  const value = principal as AgentCommon.Principal
-  switch (value.tag) {
-    case "oidc":
-      return `oidc:${value.val.sub}`
-    case "agent":
-      return "agent"
-    case "golem-user":
-      return "golem-user"
-    case "anonymous":
-      return "anonymous"
-  }
-}
+/** The immediate caller as "<kind> <ref text>", or "anonymous". */
+const callerLabel = (context: { readonly caller: InvocationContext.Caller }): string =>
+  context.caller.immediate.toString()
 
-const evidence = (principal: unknown, ownerAgentId: string) => ({
+const evidence = (principal: string, ownerAgentId: string) => ({
   provider: "effect",
-  principal: principalLabel(principal),
+  principal,
   ownerAgentId,
 })
 
@@ -123,7 +119,7 @@ Tool.toolDefinition("matrix-core", { version: "1.0.0" })
                     multiplier +
                   BigInt(request.labels.length),
                 labelSummary: [...request.labels].reverse().join("|"),
-                principal: principalLabel(context.principal),
+                principal: callerLabel(context),
                 ownerAgentId: metadata.agentId.agentId,
               }
             }),
@@ -164,7 +160,7 @@ Tool.toolDefinition("matrix-resource", { version: "1.0.0" })
             Secrets.reveal(secret, Schema.String) as Effect.Effect<string, unknown>
           ).pipe(Effect.orDie)
           return {
-            ...evidence(context.principal, owner.agentId.agentId),
+            ...evidence(callerLabel(context), owner.agentId.agentId),
             revealed: revealed === "matrix-secret-value",
             secret,
           }
@@ -178,7 +174,7 @@ Tool.toolDefinition("matrix-resource", { version: "1.0.0" })
             Effect.succeed({
               used: 1n,
               value: {
-                ...evidence(context.principal, owner.agentId.agentId),
+                ...evidence(callerLabel(context), owner.agentId.agentId),
                 reserved: true,
                 token,
               },
@@ -191,7 +187,7 @@ Tool.toolDefinition("matrix-resource", { version: "1.0.0" })
         Effect.gen(function* () {
           const owner = yield* getSelfMetadata.pipe(Effect.orDie)
           return {
-            ...evidence(context.principal, owner.agentId.agentId),
+            ...evidence(callerLabel(context), owner.agentId.agentId),
             card,
           }
         }),

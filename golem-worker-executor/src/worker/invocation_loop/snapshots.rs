@@ -1,5 +1,7 @@
 use super::*;
 use golem_common::model::InvocationId;
+use golem_common::model::caller::Caller;
+use golem_common::model::oplog::UpdateFailureClass;
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Waits, before this generation, with `mark`, ends for the automatic update at the head of
@@ -187,6 +189,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     target_revision,
                     update_attempt_index,
                     format!("cannot take a snapshot for the update: {blocker}"),
+                    UpdateFailureClass::Other,
                 )
                 .await;
         }
@@ -213,7 +216,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             } => (snapshot, name, retention),
             UpdateSnapshot::Fail(details) => {
                 return self
-                    .fail_update(target_revision, update_attempt_index, details)
+                    .fail_update(
+                        target_revision,
+                        update_attempt_index,
+                        details,
+                        UpdateFailureClass::Other,
+                    )
                     .await;
             }
             UpdateSnapshot::WriteNothing => {
@@ -273,6 +281,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     target_revision,
                     update_attempt_index,
                     format!("failed to store the snapshot for manual update: {error}"),
+                    UpdateFailureClass::Other,
                 )
                 .await
             }
@@ -295,7 +304,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         };
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
-        let save_snapshot_invocation = AgentInvocation::SaveSnapshot { idempotency_key };
+        let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
+            idempotency_key,
+            // Nothing records this caller: the call is lowered and run directly, with no invocation
+            // entry. It is the value that the guest's caller() returns through its fallback.
+            caller: Caller::entry(self.store.data().durable_ctx().self_principal()),
+        };
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,
@@ -309,6 +323,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         target_revision,
                         update_attempt_index,
                         format!("failed to lower save-snapshot invocation: {err}"),
+                        UpdateFailureClass::Other,
                     )
                     .await);
             }
@@ -328,6 +343,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     target_revision,
                     update_attempt_index,
                     format!("failed to install invocation context for save-snapshot: {err}"),
+                    UpdateFailureClass::Other,
                 )
                 .await);
         }
@@ -345,6 +361,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                             update_attempt_index,
                             "failed to get a snapshot for manual update: invalid snapshot result"
                                 .to_string(),
+                            UpdateFailureClass::Other,
                         )
                         .await);
                 };
@@ -364,6 +381,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         target_revision,
                         update_attempt_index,
                         format!("failed to get a snapshot for manual update: {error}"),
+                        UpdateFailureClass::Other,
                     )
                     .await)
             }
@@ -372,6 +390,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     target_revision,
                     update_attempt_index,
                     "failed to get a snapshot for manual update: it called exit".to_string(),
+                    UpdateFailureClass::Interrupted,
                 )
                 .await),
             Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
@@ -390,6 +409,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         target_revision,
                         update_attempt_index,
                         format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
+                        UpdateFailureClass::Interrupted,
                     )
                     .await)
             }
@@ -398,6 +418,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     target_revision,
                     update_attempt_index,
                     format!("failed to get a snapshot for manual update: {error:?}"),
+                    UpdateFailureClass::Other,
                 )
                 .await),
         }
@@ -411,6 +432,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         target_revision: ComponentRevision,
         update_attempt_index: OplogIndex,
         error: String,
+        failure_class: UpdateFailureClass,
     ) -> CommandOutcome {
         // Refused, the shard is lost: it stops rather than carrying on at a revision
         // whose failed update was never recorded.
@@ -421,6 +443,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 target_revision,
                 update_attempt_index,
                 error,
+                failure_class,
             ))
             .await
         {
@@ -490,7 +513,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .await;
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
-        let save_snapshot_invocation = AgentInvocation::SaveSnapshot { idempotency_key };
+        let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
+            idempotency_key,
+            // Nothing records this caller: the call is lowered and run directly, with no invocation
+            // entry. It is the value that the guest's caller() returns through its fallback.
+            caller: Caller::entry(self.store.data().durable_ctx().self_principal()),
+        };
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,

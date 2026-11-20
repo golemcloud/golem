@@ -95,6 +95,7 @@ impl WalletCommit {
     ) -> Result<Self, WorkerExecutorError> {
         let CardEventBoundary::Live { owner, .. } = boundary.as_ref() else {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::NONE,
                 "live owner wallet transaction",
                 "historical wallet boundary",
             ));
@@ -289,6 +290,7 @@ impl WalletSnapshot {
 
     pub(crate) fn apply_replay_event(
         &mut self,
+        index: OplogIndex,
         agent_id: &golem_common::model::AgentId,
         event: &crate::durable_host::replay_state::ReplayEvent,
     ) -> Result<(), WorkerExecutorError> {
@@ -296,6 +298,7 @@ impl WalletSnapshot {
         let recorded = match event {
             ReplayEvent::InvocationWalletPinned { wallet_pin, .. } => {
                 apply_invocation_wallet_pin(
+                    index,
                     &mut self.cards,
                     self.wallet_id_hash,
                     &mut self.generation,
@@ -358,7 +361,7 @@ impl WalletSnapshot {
             _ => None,
         };
         if let Some(generation) = recorded {
-            adopt_recorded_wallet_generation(&mut self.generation, generation)?;
+            adopt_recorded_wallet_generation(index, &mut self.generation, generation)?;
         }
         Ok(())
     }
@@ -405,6 +408,7 @@ impl WalletSnapshot {
                     *wallet_generation = self.generation;
                 } else if *wallet_generation != self.generation {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        OplogIndex::NONE,
                         "CardDerived generation from the preceding wallet prefix",
                         format!(
                             "audit generation {wallet_generation} differs from preceding generation {}",
@@ -471,6 +475,7 @@ impl WalletSnapshot {
             }
             OplogEntry::AgentInvocationStarted { wallet_pin, .. } if !skipped => {
                 apply_invocation_wallet_pin(
+                    OplogIndex::NONE,
                     &mut self.cards,
                     self.wallet_id_hash,
                     &mut self.generation,
@@ -504,7 +509,11 @@ impl WalletSnapshot {
         recorded: bool,
     ) -> Result<(), WorkerExecutorError> {
         if recorded {
-            adopt_recorded_wallet_generation(&mut self.generation, *entry_generation)
+            adopt_recorded_wallet_generation(
+                OplogIndex::NONE,
+                &mut self.generation,
+                *entry_generation,
+            )
         } else {
             *entry_generation = self.generation;
             Ok(())
@@ -797,6 +806,7 @@ impl OwnerWallet {
         };
         if index < predecessor.index {
             completion.complete(Err(WorkerExecutorError::unexpected_oplog_entry(
+                index,
                 "strictly increasing physical wallet reservation",
                 format!("index {index} follows {}", predecessor.index),
             )));
@@ -840,6 +850,7 @@ impl OwnerWallet {
                     } => {
                         if *wallet_generation != wallet.generation {
                             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                index,
                                 "CardDerived generation from its physical predecessor",
                                 format!(
                                     "audit {wallet_generation}, predecessor {}",
@@ -850,7 +861,11 @@ impl OwnerWallet {
                         None
                     }
                     _ => {
-                        wallet.apply_replay_event(&owner.baseline.owner_id.agent_id, &event)?;
+                        wallet.apply_replay_event(
+                            index,
+                            &owner.baseline.owner_id.agent_id,
+                            &event,
+                        )?;
                         None
                     }
                 };
@@ -982,6 +997,7 @@ impl OwnerWallet {
         self.validate_current()?;
         let CardEventBoundary::Live { owner, .. } = boundary else {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                self.latest_replay_receipt().index.next(),
                 "live owner wallet boundary",
                 "historical wallet boundary",
             ));
@@ -1312,12 +1328,14 @@ impl OwnerWallet {
 
     pub(crate) fn record_derivation(
         &self,
+        index: OplogIndex,
         parent: Option<OplogIndex>,
         card: StoredCard,
     ) -> Result<(), WorkerExecutorError> {
         let mut derivations = self.derivations.lock().unwrap();
         if derivations.contains_key(&card.card_id()) {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                index,
                 "one runtime-card audit in the invocation",
                 format!("duplicate audit for {}", card.card_id()),
             ));
@@ -1367,6 +1385,7 @@ impl OwnerWallet {
             };
             let evidence = audit.evidence.take().ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    start,
                     "unconsumed runtime-card audit",
                     format!("audit for {} was already consumed", card.card_id()),
                 )
@@ -1375,6 +1394,7 @@ impl OwnerWallet {
         };
         if audit.receipt.index <= start || audit_parent != parent || &audit.card != card {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                audit.receipt.index,
                 "matching runtime-card audit after the call Start",
                 format!("conflicting CardDerived at {}", audit.receipt.index),
             ));

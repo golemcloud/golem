@@ -38,7 +38,8 @@ use golem_common::model::oplog::{
     PublicQueuedCardEventTransferReceived, PublicRetryPolicyState,
     PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes,
     PublicSpanFinished, PublicSpanStarted, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, SaveSnapshotResultParameters,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, ReplayDivergence, ReplayStep,
+    SaveSnapshotResultParameters,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OplogIndex, Timestamp};
@@ -366,6 +367,64 @@ impl Walker<'_, '_> {
 
     fn err_text(&self, value: &str) -> ReportNode {
         self.str_leaf(value, Region::Error)
+    }
+
+    /// A replay divergence: the indexes, function names, function types and identity fields as
+    /// they are, the request of a host call as a host request of its function, and the text of
+    /// another step as an error text.
+    fn replay_divergence(&mut self, divergence: &ReplayDivergence) -> ReportNode {
+        let expected = self.replay_step(&divergence.expected);
+        let actual = self.replay_step(&divergence.actual);
+        Fields::new()
+            .add("oplogIndex", idx(&divergence.oplog_index))
+            .add("expected", expected)
+            .add("actual", actual)
+            .add(
+                "mismatched",
+                tuple(divergence.mismatched.iter().map(name).collect()),
+            )
+            .build()
+    }
+
+    fn replay_step(&mut self, step: &ReplayStep) -> ReportNode {
+        match step {
+            ReplayStep::HostCall(call) => {
+                let request = call.request.as_ref().map(|request| {
+                    self.host(Some(&call.function_name), Direction::Request, request)
+                });
+                let host_call = Fields::new()
+                    .add("functionName", text(call.function_name.clone()))
+                    .add("durableFunctionType", kept(&call.durable_function_type))
+                    .opt(
+                        "parentStartIndex",
+                        call.parent_start_index.as_ref().map(idx),
+                    )
+                    .opt(
+                        "invocationId",
+                        call.invocation_id.as_ref().map(
+                            |DurableInvocationId { anchor, ordinal }| {
+                                Fields::new()
+                                    .add("anchor", idx(anchor))
+                                    .add("ordinal", number(*ordinal))
+                                    .build()
+                            },
+                        ),
+                    )
+                    .opt(
+                        "observationalOwner",
+                        call.observational_owner.as_ref().map(idx),
+                    )
+                    .add("carriesRequest", flag(call.carries_request))
+                    .opt("request", request)
+                    .build();
+                Fields::new().add("hostCall", host_call).build()
+            }
+            ReplayStep::InvocationEnd(_) => text("invocation-end"),
+            ReplayStep::EndOfHistory(_) => text("end-of-history"),
+            ReplayStep::Other(description) => Fields::new()
+                .add("other", self.err_text(&description.description))
+                .build(),
+        }
     }
 
     fn agent(&self, agent_id: &AgentId) -> ReportNode {
@@ -779,6 +838,7 @@ impl Walker<'_, '_> {
                 local_agent_config,
                 original_phantom_id,
                 instance_id,
+                never_live,
             }) => Fields::new()
                 .add("agentId", self.agent(agent_id))
                 .add("ownerKind", name(owner_kind))
@@ -830,6 +890,7 @@ impl Walker<'_, '_> {
                     original_phantom_id.as_ref().map(|id| self.tok(id)),
                 )
                 .add("instanceId", text(instance_id.to_string()))
+                .add("neverLive", self.boolean(*never_live))
                 .build(),
             PublicOplogEntry::Start(StartParams {
                 timestamp: _,
@@ -1032,8 +1093,15 @@ impl Walker<'_, '_> {
                 details,
                 snapshot_assisted_details,
                 update_attempt_index,
+                failure_class,
+                divergence,
             }) => Fields::new()
                 .add("targetRevision", number(target_revision.get()))
+                .add("failureClass", name(failure_class))
+                .opt(
+                    "divergence",
+                    divergence.as_ref().map(|d| self.replay_divergence(d)),
+                )
                 .opt(
                     "details",
                     details.as_deref().map(|d| self.failed_update_details(d)),

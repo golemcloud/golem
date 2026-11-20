@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::caller::Caller;
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Best-effort mid-invocation clean status checkpoint. Called from `end_durable_function` after
@@ -138,9 +139,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .set_current_idempotency_key(idempotency_key)
             .await;
 
+        // Nothing records this caller: the call is lowered and run directly, with no invocation
+        // entry. It is the value that the guest's caller() returns through its fallback.
+        let caller = Caller::entry(store.as_context().data().durable_ctx().self_principal());
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
             idempotency_key,
             snapshot: RawSnapshotData { data, mime_type },
+            caller,
         };
         let agent_id = store.as_context().data().parsed_agent_id();
         let lowered = lower_invocation(
@@ -348,7 +353,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     false,
                     Some(error.clone()),
                 );
-                return SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(error));
+                return SnapshotRecoveryResult::Failed(
+                    WorkerExecutorError::runtime(error),
+                    FailureProvenance::Host,
+                );
             }
         };
 
@@ -400,7 +408,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 false,
                 Some(error.to_string()),
             );
-            return SnapshotRecoveryResult::Failed(error);
+            return SnapshotRecoveryResult::Failed(error, FailureProvenance::Host);
         }
 
         let component_metadata = store
@@ -418,9 +426,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .set_current_idempotency_key(idempotency_key)
             .await;
 
+        // Nothing records this caller: the call is lowered and run directly, with no invocation
+        // entry. It is the value that the guest's caller() returns through its fallback.
+        let caller = Caller::entry(store.as_context().data().durable_ctx().self_principal());
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
             idempotency_key,
             snapshot: RawSnapshotData { data, mime_type },
+            caller,
         };
         let agent_id = store.as_context().data().parsed_agent_id();
         let lowered = match lower_invocation(
@@ -438,7 +450,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     false,
                     Some(error.clone()),
                 );
-                return SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(error));
+                return SnapshotRecoveryResult::Failed(
+                    WorkerExecutorError::runtime(error),
+                    FailureProvenance::Host,
+                );
             }
         };
 
@@ -453,7 +468,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             let error = format!("Snapshot recovery failed to install invocation context: {err}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
-            return SnapshotRecoveryResult::Unavailable(err);
+            return SnapshotRecoveryResult::Unavailable(err, FailureProvenance::Host);
         }
 
         store
@@ -493,16 +508,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return SnapshotRecoveryResult::Retry(decision);
         }
         let failed = match load_result {
-            Err(error) => return SnapshotRecoveryResult::Unavailable(error),
-            Ok(InvokeResult::Failed { error, .. }) if !snapshot_divergence => {
+            Err(error) => {
+                return SnapshotRecoveryResult::Unavailable(error, FailureProvenance::Host);
+            }
+            Ok(InvokeResult::Failed {
+                error, provenance, ..
+            }) if !snapshot_divergence => {
                 return SnapshotRecoveryResult::Unavailable(
                     WorkerExecutorError::InvocationFailed {
                         error,
                         stderr: String::new(),
                     },
+                    provenance,
                 );
             }
-            Ok(InvokeResult::Failed { error, .. }) => {
+            Ok(InvokeResult::Failed {
+                error, provenance, ..
+            }) => {
                 let stderr = store
                     .as_context()
                     .data()
@@ -510,25 +532,42 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .event_service()
                     .get_last_invocation_errors();
                 let error = error.to_string(&stderr);
-                Some(format!(
-                    "Snapshot recovery failed to load snapshot: {error}"
+                Some((
+                    format!("Snapshot recovery failed to load snapshot: {error}"),
+                    provenance,
                 ))
             }
             Ok(InvokeResult::Succeeded { result, .. }) => match *result {
-                AgentInvocationResult::LoadSnapshot { error } => {
-                    error.map(|e| format!("Snapshot recovery load-snapshot returned error: {e}"))
-                }
-                _ => Some("Unexpected result value from load-snapshot function".to_string()),
+                AgentInvocationResult::LoadSnapshot { error } => error.map(|e| {
+                    (
+                        format!("Snapshot recovery load-snapshot returned error: {e}"),
+                        FailureProvenance::TargetReturned,
+                    )
+                }),
+                _ => Some((
+                    "Unexpected result value from load-snapshot function".to_string(),
+                    FailureProvenance::Host,
+                )),
             },
-            Ok(_) => Some("Snapshot recovery interrupted".to_string()),
+            Ok(InvokeResult::MethodFailed { .. }) => Some((
+                "Snapshot recovery interrupted".to_string(),
+                FailureProvenance::TargetReturned,
+            )),
+            Ok(InvokeResult::Exited { .. } | InvokeResult::Interrupted { .. }) => Some((
+                "Snapshot recovery interrupted".to_string(),
+                FailureProvenance::Lifecycle,
+            )),
         };
 
-        if let Some(error) = failed {
+        if let Some((error, provenance)) = failed {
             warn!(%error, %snapshot_index, "Snapshot recovery failed");
             Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error.clone()));
-            SnapshotRecoveryResult::Failed(WorkerExecutorError::runtime(format!(
-                "Snapshot recovery at {snapshot_index} failed: {error}"
-            )))
+            SnapshotRecoveryResult::Failed(
+                WorkerExecutorError::runtime(format!(
+                    "Snapshot recovery at {snapshot_index} failed: {error}"
+                )),
+                provenance,
+            )
         } else {
             let ctx = store.as_context();
             let ctx = ctx.data().durable_ctx();
@@ -537,7 +576,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if ctx.is_live()
                 && let Err(error) = ctx.reconcile_memory_accounting(true).await
             {
-                return SnapshotRecoveryResult::Unavailable(error);
+                return SnapshotRecoveryResult::Unavailable(error, FailureProvenance::Host);
             }
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
@@ -561,6 +600,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     start_outcome::RawStartError::Replay {
                         error,
                         diverged: true,
+                        provenance: None,
                     },
                 ),
                 start_outcome::StartAction::RejectPeriodic(_)
@@ -787,9 +827,9 @@ pub(in crate::durable_host) fn snapshot_entry_read_failure(
     let transient = error.is_transient();
     let error = WorkerExecutorError::from(error);
     if transient {
-        SnapshotRecoveryResult::Unavailable(error)
+        SnapshotRecoveryResult::Unavailable(error, FailureProvenance::Host)
     } else {
-        SnapshotRecoveryResult::Failed(error)
+        SnapshotRecoveryResult::Failed(error, FailureProvenance::Host)
     }
 }
 
@@ -813,20 +853,25 @@ pub(in crate::durable_host) fn payload_download_failure(
         SnapshotReplayPurpose::AssistedUpdate if lost => {
             SnapshotRecoveryResult::Lost(WorkerExecutorError::runtime(error))
         }
-        SnapshotReplayPurpose::AssistedUpdate => {
-            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired {
+        SnapshotReplayPurpose::AssistedUpdate => SnapshotRecoveryResult::Unavailable(
+            WorkerExecutorError::RecoveryRequired {
                 retry_from: None,
                 details: error,
-            })
-        }
-        SnapshotReplayPurpose::AutomaticUpdate if !lost => {
-            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired {
+            },
+            FailureProvenance::Host,
+        ),
+        SnapshotReplayPurpose::AutomaticUpdate if !lost => SnapshotRecoveryResult::Unavailable(
+            WorkerExecutorError::RecoveryRequired {
                 retry_from: None,
                 details: error,
-            })
-        }
+            },
+            FailureProvenance::Host,
+        ),
         SnapshotReplayPurpose::None | SnapshotReplayPurpose::AutomaticUpdate => {
-            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error))
+            SnapshotRecoveryResult::Unavailable(
+                WorkerExecutorError::runtime(error),
+                FailureProvenance::Host,
+            )
         }
     }
 }

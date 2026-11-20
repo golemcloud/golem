@@ -23,7 +23,7 @@ Callback delivery handles owner loss without dispatching the leaf. Dropping the 
 not cancel the durable owner invocation.
 
 Separate registration and decision tokens exercise authentication boundaries. The fixture records
-the principal kind, not OIDC claims or tool inputs. Tests start the router with temporary stores,
+the principal kind, not user claims or tool inputs. Tests start the router with temporary stores,
 provide decisions programmatically, and shut it down; no test needs a human to approve a request.
 
 ## Tests

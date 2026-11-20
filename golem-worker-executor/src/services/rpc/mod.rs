@@ -60,9 +60,10 @@ use golem_common::base_model::durable_stream::{
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{
-    AgentError as ModelAgentError, AgentInvocationMode, AgentPrincipal, AgentTarget,
-    InvocationFreshnessDisposition, ParsedAgentKey, Principal,
+    AgentError as ModelAgentError, AgentInvocationMode, AgentTarget,
+    InvocationFreshnessDisposition, ParsedAgentKey,
 };
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, ScopeCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -147,6 +148,7 @@ pub trait Rpc: Send + Sync {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
@@ -161,6 +163,7 @@ pub trait Rpc: Send + Sync {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
@@ -184,6 +187,7 @@ pub trait Rpc: Send + Sync {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
@@ -205,6 +209,7 @@ pub trait Rpc: Send + Sync {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _scope_card: Option<ScopeCard>,
@@ -254,6 +259,7 @@ pub trait Rpc: Send + Sync {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError>;
@@ -555,12 +561,6 @@ fn rpc_error_from_failure(failure: InvocationFailure) -> RpcError {
             details: failure.message,
         },
     }
-}
-
-fn caller_agent_principal(self_agent_id: &AgentId) -> Principal {
-    Principal::Agent(AgentPrincipal {
-        agent_id: self_agent_id.clone(),
-    })
 }
 
 pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {

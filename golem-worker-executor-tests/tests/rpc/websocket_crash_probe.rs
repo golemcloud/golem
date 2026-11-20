@@ -140,6 +140,7 @@ async fn effect_duplex_websocket_crash_continuation(
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
             ..Default::default()
         };
         let (requests, receiver) = mpsc::channel(8);

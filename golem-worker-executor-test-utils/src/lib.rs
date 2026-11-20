@@ -18,6 +18,7 @@
 #![recursion_limit = "256"]
 
 pub mod agent_deployments_service;
+pub mod callers;
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
@@ -37,11 +38,10 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{
-    AgentMode, AgentTarget, ParsedAgentKey, Principal, ResolvedOwnerContext,
-};
+use golem_common::model::agent::{AgentMode, AgentTarget, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
+use golem_common::model::caller::Caller;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
     Card, CardId, CardManagedByRuntimeDerived, StoredCard, parse_permission_fields,
@@ -653,7 +653,7 @@ impl TestWorkerExecutor {
         environment_id: EnvironmentId,
         idempotency_key: &IdempotencyKey,
         invocation_context: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Worker<TestWorkerCtx>>, WorkerExecutorError> {
         let services = self
             .services
@@ -667,7 +667,7 @@ impl TestWorkerExecutor {
                 environment_id,
                 idempotency_key,
                 invocation_context,
-                principal,
+                caller,
             )
             .await
     }
@@ -684,7 +684,7 @@ impl TestWorkerExecutor {
         command_path: Vec<String>,
         input: TypedSchemaValue,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         self.invoke_external_tool_in_environment(
@@ -696,7 +696,7 @@ impl TestWorkerExecutor {
             command_path,
             input,
             invocation_context,
-            principal,
+            caller,
             scope_card,
         )
         .await
@@ -712,7 +712,7 @@ impl TestWorkerExecutor {
         command_path: Vec<String>,
         input: TypedSchemaValue,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let services = self
@@ -721,8 +721,7 @@ impl TestWorkerExecutor {
             .expect("test service graph is captured");
         let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
         let worker =
-            Worker::get_exact_existing_suspended(services, &owned_agent_id, principal.clone())
-                .await?;
+            Worker::get_exact_existing_suspended(services, &owned_agent_id, caller.clone()).await?;
         let invocation_id = golem_common::model::InvocationRequestKey::Internal(idempotency_key)
             .finalize(
                 agent_id.clone(),
@@ -738,7 +737,7 @@ impl TestWorkerExecutor {
                 command_path,
                 input,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             )
             .await
@@ -2858,6 +2857,7 @@ impl TestExecutorOverrides {
 
 fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
     GolemConfig {
+        golem_issuer: Some("https://issuer.golem-test.example".parse().unwrap()),
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
             root: deps.data_dir.path().join("blobs"),
         }),
@@ -3357,7 +3357,7 @@ trait NativeTestTool {
         stdin: Option<golem_native_tool::NativeToolStdin<NativeTestContext>>,
         stdout: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
         stderr: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
-        principal: golem_native_tool::Principal,
+        caller: golem_native_tool::Caller,
     ) -> golem_native_tool::HostResult<()>;
 }
 
@@ -3382,7 +3382,7 @@ impl NativeTestTool for NativeTestToolImpl {
         mut stdin: Option<golem_native_tool::NativeToolStdin<NativeTestContext>>,
         mut stdout: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
         mut stderr: Option<golem_native_tool::NativeToolOutput<NativeTestContext>>,
-        _principal: golem_native_tool::Principal,
+        _caller: golem_native_tool::Caller,
     ) -> golem_native_tool::HostResult<()> {
         let wait_for_count = mode
             .strip_prefix("wait-counter:")
@@ -9632,6 +9632,7 @@ impl Rpc for RecordingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
@@ -9645,6 +9646,7 @@ impl Rpc for RecordingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -9697,6 +9699,7 @@ impl Rpc for RecordingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
@@ -9712,6 +9715,7 @@ impl Rpc for RecordingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -9733,6 +9737,7 @@ impl Rpc for RecordingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
@@ -9754,6 +9759,7 @@ impl Rpc for RecordingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 scope_card,
@@ -9774,6 +9780,7 @@ impl Rpc for RecordingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
@@ -9791,6 +9798,7 @@ impl Rpc for RecordingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
             )
@@ -9808,6 +9816,7 @@ impl Rpc for FailingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
@@ -9820,6 +9829,7 @@ impl Rpc for FailingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -9870,6 +9880,7 @@ impl Rpc for FailingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
@@ -9884,6 +9895,7 @@ impl Rpc for FailingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -9905,6 +9917,7 @@ impl Rpc for FailingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<golem_common::model::card::ScopeCard>,
@@ -9931,6 +9944,7 @@ impl Rpc for FailingRpc {
                     self_agent_id,
                     self_env,
                     self_stack,
+                    caller,
                     config,
                     auth_ctx,
                     scope_card,
@@ -9952,6 +9966,7 @@ impl Rpc for FailingRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
@@ -9968,6 +9983,7 @@ impl Rpc for FailingRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
             )

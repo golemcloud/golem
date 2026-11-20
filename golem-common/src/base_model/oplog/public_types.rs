@@ -226,6 +226,11 @@ impl PublicOplogEntry {
             Self::StreamItems(params) => redact_typed_value(&mut params.record),
             Self::StreamTerminal(params) => redact_typed_value(&mut params.record),
             Self::StreamSession(params) => redact_typed_value(&mut params.record),
+            Self::FailedUpdate(params) => {
+                if let Some(divergence) = &mut params.divergence {
+                    divergence.redact_host_managed_values_for_external();
+                }
+            }
             _ => {}
         }
     }
@@ -533,9 +538,13 @@ pub struct PluginInstallationDescription {
     pub parameters: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "type")]
 pub enum PublicDurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,

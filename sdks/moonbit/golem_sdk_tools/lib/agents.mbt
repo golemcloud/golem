@@ -108,7 +108,6 @@ pub(all) enum ReadOnlyCachePolicy {
 
 ///|
 /// Read-only configuration parsed from a `#derive.read_only` annotation.
-/// `uses_principal` is derived from the method signature, not from user input.
 pub(all) struct ReadOnlyInfo {
   cache_policy : ReadOnlyCachePolicy
 } derive(Debug, Eq)
@@ -508,8 +507,6 @@ fn parse_uint(s : String) -> UInt32? {
 /// - `#derive.read_only(cache="until-write")`          — `UntilWrite`
 /// - `#derive.read_only(cache="ttl", ttl=<nanos>)`     — `Ttl(nanos)`
 ///
-/// Note: `uses_principal` is never accepted as user input — it is derived from the
-/// method signature (presence of a `Principal` parameter).
 fn extract_read_only(attrs : @list.List[@attribute.Attribute]) -> ReadOnlyInfo? {
   let mut result : ReadOnlyInfo? = None
   attrs.each(fn(attr) {
@@ -621,20 +618,68 @@ pub fn is_multimodal_type(pt : ParamType) -> Bool {
 }
 
 ///|
-/// Returns true if the parameter type is `Principal` or `@common.Principal`.
-pub fn is_principal_type(pt : ParamType) -> Bool {
+/// Returns true if the parameter type is the injected `InvocationContext`: the SDK supplies it,
+/// so it is not part of the input schema and no caller supplies it.
+pub fn is_invocation_context_type(pt : ParamType) -> Bool {
   match pt {
-    Simple(name) => name == "Principal" || name == "@common.Principal"
+    Simple(name) =>
+      name == "InvocationContext" ||
+      name == "@agents.InvocationContext" ||
+      name == "@caller.InvocationContext" ||
+      name == "@tool.InvocationContext"
     _ => false
   }
 }
 
 ///|
-/// Filters out `Principal` and `Config[T]` parameters from a parameter list.
+/// The message of every refusal of a live value in a signature or a value type.
+pub let live_value_message : String = "Principal and Caller cannot appear in a method, constructor or tool signature, or inside a value type. Read the caller with ctx.caller() (@agents.InvocationContext), and store ctx.caller().original.principal_ref() as a PrincipalRef."
+
+///|
+/// Returns true if the type is, or contains, a `Principal`, a `Caller` or a `TokenProvenance`
+/// (bare, or qualified with `@common.`, `@agentCommon.`, `@tool.`, `@agents.` or `@caller.`).
+pub fn contains_live_value_type(pt : ParamType) -> Bool {
+  match pt {
+    Simple(name) => {
+      let bare = match name.rev_find(".") {
+        Some(i) => name.unsafe_substring(start=i + 1, end=name.length())
+        None => name
+      }
+      (
+        bare == "Principal" ||
+        bare == "Caller" ||
+        bare == "TokenProvenance" ||
+        bare == "UserPrincipal" ||
+        bare == "AccountPrincipal" ||
+        bare == "AgentPrincipal" ||
+        bare == "ToolPrincipal"
+      ) &&
+      (
+        name == bare ||
+        name.has_prefix("@common.") ||
+        name.has_prefix("@agentCommon.") ||
+        name.has_prefix("@tool.") ||
+        name.has_prefix("@agents.") ||
+        name.has_prefix("@caller.")
+      )
+    }
+    Optional(inner) | List(inner) | MultimodalType(inner) =>
+      contains_live_value_type(inner)
+    ResultType(ok, err) =>
+      contains_live_value_type(ok) || contains_live_value_type(err)
+    Tuple(items) | Parameterized(_, items) =>
+      items.iter().any(contains_live_value_type)
+  }
+}
+
+///|
+/// Filters out `InvocationContext` and `Config[T]` parameters from a parameter list.
 pub fn visible_params(
   params : Array[(String, ParamType)],
 ) -> Array[(String, ParamType)] {
-  params.filter(fn(p) { !is_principal_type(p.1) && !is_config_type(p.1) })
+  params.filter(fn(p) {
+    !is_invocation_context_type(p.1) && !is_config_type(p.1)
+  })
 }
 
 ///|
@@ -702,10 +747,12 @@ pub fn find_config_param(
 }
 
 ///|
-/// Returns the index of the first `Principal` parameter, if any.
-pub fn find_principal_index(params : Array[(String, ParamType)]) -> Int32? {
+/// Returns the index of the first `InvocationContext` parameter, if any.
+pub fn find_invocation_context_index(
+  params : Array[(String, ParamType)],
+) -> Int32? {
   for i, p in params {
-    if is_principal_type(p.1) {
+    if is_invocation_context_type(p.1) {
       return Some(i)
     }
   }
@@ -1837,14 +1884,29 @@ pub fn parse_agents(
           )
         }
       }
-      // Validate at most one Principal param per method
-      let principal_count = meth.params
-        .filter(fn(p) { is_principal_type(p.1) })
+      // Validate at most one InvocationContext param per method
+      let context_count = meth.params
+        .filter(fn(p) { is_invocation_context_type(p.1) })
         .length()
-      if principal_count > 1 {
+      if context_count > 1 {
         raise AgentParseError(
-          "Method '\{meth.name}' of agent '\{agent.name}' has \{principal_count} Principal parameters; at most one is allowed",
+          "Method '\{meth.name}' of agent '\{agent.name}' has \{context_count} InvocationContext parameters; at most one is allowed",
         )
+      }
+      // A Principal, Caller or TokenProvenance is a live value, never method data.
+      for p in meth.params {
+        if contains_live_value_type(p.1) {
+          raise AgentParseError(
+            "Parameter '\{p.0}' of method '\{meth.name}' of agent '\{agent.name}': \{live_value_message}",
+          )
+        }
+      }
+      match meth.return_type {
+        Some(rt) if contains_live_value_type(rt) =>
+          raise AgentParseError(
+            "Return type of method '\{meth.name}' of agent '\{agent.name}': \{live_value_message}",
+          )
+        _ => ()
       }
       // Validate ephemeral + read-only combination
       if meth.read_only is Some(_) && agent.mode is Ephemeral {
@@ -1853,14 +1915,21 @@ pub fn parse_agents(
         )
       }
     }
-    // Validate at most one Principal param per constructor
-    let ctor_principal_count = agent.constructor_params
-      .filter(fn(p) { is_principal_type(p.1) })
+    // Validate at most one InvocationContext param per constructor
+    let ctor_context_count = agent.constructor_params
+      .filter(fn(p) { is_invocation_context_type(p.1) })
       .length()
-    if ctor_principal_count > 1 {
+    if ctor_context_count > 1 {
       raise AgentParseError(
-        "Constructor of agent '\{agent.name}' has \{ctor_principal_count} Principal parameters; at most one is allowed",
+        "Constructor of agent '\{agent.name}' has \{ctor_context_count} InvocationContext parameters; at most one is allowed",
       )
+    }
+    for p in agent.constructor_params {
+      if contains_live_value_type(p.1) {
+        raise AgentParseError(
+          "Constructor parameter '\{p.0}' of agent '\{agent.name}': \{live_value_message}",
+        )
+      }
     }
     // Validate at most one Config[T] param per constructor
     let config_params = agent.constructor_params.filter(fn(p) {

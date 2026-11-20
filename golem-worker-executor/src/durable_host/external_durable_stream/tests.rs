@@ -41,7 +41,12 @@ fn reader_restores_recorded_auth_and_expands_request_independently_of_table_inde
     reconstructed.auth.as_mut().unwrap().resolved_at += chrono::Duration::seconds(123);
     let guest = DurableStreamReaderEntry::from_request(reconstructed.clone()).unwrap();
     let restored = DurableStreamReaderEntry::from_request(recorded).unwrap();
-    validate_resource_id(&guest.resource_id, &restored.resource_id).unwrap();
+    validate_resource_id(
+        OplogIndex::from_u64(1),
+        &guest.resource_id,
+        &restored.resource_id,
+    )
+    .unwrap();
     assert_eq!(restored.auth.as_ref().unwrap().to_snapshot(), auth());
 
     let mut before = ResourceTable::new();
@@ -79,8 +84,22 @@ fn reader_restores_recorded_auth_and_expands_request_independently_of_table_inde
     );
     reconstructed.auth.as_mut().unwrap().version += 1;
     let rotated = DurableStreamReaderEntry::from_request(reconstructed).unwrap();
-    assert!(validate_resource_id(&rotated.resource_id, &restored.resource_id).is_err());
-    assert!(validate_resource_id(&restored.resource_id, "different recorded response").is_err());
+    assert!(
+        validate_resource_id(
+            OplogIndex::from_u64(1),
+            &rotated.resource_id,
+            &restored.resource_id
+        )
+        .is_err()
+    );
+    assert!(
+        validate_resource_id(
+            OplogIndex::from_u64(1),
+            &restored.resource_id,
+            "different recorded response"
+        )
+        .is_err()
+    );
 }
 
 #[test]

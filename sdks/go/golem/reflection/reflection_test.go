@@ -151,12 +151,6 @@ func TestSnapshotDescribesTheAgentType(t *testing.T) {
 }
 
 // need unwraps a (value, error) pair, failing the test through a panic.
-func need[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
 
 func recordFieldNames(ref core.Ref) []string {
 	record, _ := ref.Type().Body.(core.RecordType)
@@ -243,26 +237,6 @@ func TestInputJSONSchemaDescribesItsArguments(t *testing.T) {
 	required, _ := doc["required"].([]any)
 	if len(required) != 2 {
 		t.Errorf("required is %v, want both parameters", required)
-	}
-}
-
-// TestAutoInjectedFieldsAreNotAskedOfTheCaller — the host fills the principal
-// in, so a caller can neither know it nor override it.
-func TestAutoInjectedFieldsAreNotAskedOfTheCaller(t *testing.T) {
-	in := common.MakeInputSchemaParameters([]common.NamedField{
-		{Name: "name", Source: common.MakeFieldSourceUserSupplied(), Schema: 0},
-		{Name: "principal", Source: common.MakeFieldSourceAutoInjected(common.AutoInjectedKindPrincipal), Schema: 0},
-	})
-	conv, err := witschema.GraphToCore(types.SchemaGraph{
-		TypeNodes: []types.SchemaTypeNode{{Body: types.MakeSchemaTypeBodyStringType()}},
-		Root:      0,
-	})
-	if err != nil {
-		t.Fatalf("GraphToCore: %v", err)
-	}
-	ref := need(parametersRecord(conv, in))
-	if got := recordFieldNames(ref); strings.Join(got, ",") != "name" {
-		t.Errorf("fields are %v, want only the caller-supplied one", got)
 	}
 }
 

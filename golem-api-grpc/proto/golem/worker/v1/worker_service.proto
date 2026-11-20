@@ -61,7 +61,9 @@ message LaunchNewWorkerRequest {
   bool ignore_already_existing = 5;
   golem.auth.AuthCtx auth_ctx = 6;
   optional golem.worker.InvocationContext context = 7;
-  optional golem.component.Principal principal = 8;
+  reserved 8;
+  reserved "principal";
+  golem.component.Caller caller = 12;
   optional string method_name = 9;
   // Used only by PrepareWorker for the first creation attempt of an ephemeral RPC target: the
   // owner key of the demanding invocation, which a KnownFresh phantom is checked against.
@@ -100,8 +102,10 @@ message ForkWorkerRequest {
   golem.worker.AgentId target_agent_id = 2;
   uint64 oplog_index_cutoff = 3;
   golem.auth.AuthCtx auth_ctx = 4;
-  // The principal of the fork target's create request. Absent means the account of auth_ctx.
-  optional golem.component.Principal principal = 5;
+  // The caller of the fork target's create request.
+  reserved 5;
+  reserved "principal";
+  golem.component.Caller caller = 6;
 }
 
 message ForkWorkerResponse {
@@ -166,7 +170,9 @@ message InvokeAgentRequest {
   optional golem.worker.IdempotencyKey idempotency_key = 6;
   optional golem.worker.InvocationContext context = 7;
   golem.auth.AuthCtx auth_ctx = 8;
-  golem.component.Principal principal = 9;
+  reserved 9;
+  reserved "principal";
+  golem.component.Caller caller = 16;
   optional golem.common.EnvironmentId environment_id = 10;
   InvocationFreshnessDisposition freshness_disposition = 11;
   repeated golem.worker.AgentConfigEntryDto config = 12;

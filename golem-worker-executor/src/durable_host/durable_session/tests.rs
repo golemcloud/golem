@@ -1863,7 +1863,9 @@ async fn append_prepared_pending(
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -3418,6 +3420,7 @@ impl Rpc for AttachedProducerRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: golem_common::model::invocation_context::InvocationContextStack,
+        _caller: &golem_common::model::caller::Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: IdempotencyKey,
@@ -3518,6 +3521,7 @@ impl Rpc for AttachedProducerRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: golem_common::model::invocation_context::InvocationContextStack,
+        _caller: &golem_common::model::caller::Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: Option<IdempotencyKey>,
@@ -3539,6 +3543,7 @@ impl Rpc for AttachedProducerRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: golem_common::model::invocation_context::InvocationContextStack,
+        _caller: &golem_common::model::caller::Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _scope_card: Option<golem_common::base_model::card::ScopeCard>,
@@ -3609,6 +3614,7 @@ impl Rpc for AttachedProducerRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: golem_common::model::invocation_context::InvocationContextStack,
+        _caller: &golem_common::model::caller::Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError> {
@@ -7228,6 +7234,7 @@ async fn consumer_value_is_committed_before_delivery_and_replay_is_a_no_op() {
         request
             .result
             .send(Err(WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(1),
                 "recorded stream observation",
                 "completed entity replay cannot open a live source",
             )))
@@ -8241,12 +8248,19 @@ async fn packed_u8_consumer_values_share_one_durable_journal_record() {
 
 #[test]
 async fn dropping_unfinished_input_producer_cancels_the_durable_source_after_cleanup_drain() {
-    check_dropped_input_cancellation(false).await;
+    check_dropped_input_cancellation(DroppedInput::Producer).await;
 }
 
 #[test]
 async fn dropping_unread_input_resource_cancels_the_durable_source_after_cleanup_drain() {
-    check_dropped_input_cancellation(true).await;
+    check_dropped_input_cancellation(DroppedInput::UnreadResource).await;
+}
+
+/// A host that rejects a value with an owned stream, such as the request of a forged divergence,
+/// disposes of the stream as a guest drop does.
+#[test]
+async fn a_rejected_unread_input_handle_cancels_the_durable_source_after_cleanup_drain() {
+    check_dropped_input_cancellation(DroppedInput::RejectedHandle).await;
 }
 
 #[test]
@@ -8372,15 +8386,18 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
         if terminal != "open" {
             assert!(
                 cancellation
-                    .replay_disposal_is_complete(None, &boundary, true)
+                    .replay_disposal_is_complete(None, &boundary, Some(OplogIndex::from_u64(30)))
                     .await
                     .unwrap()
             );
             let operation = crate::durable_host::tool::operation::tests::replay_operation(2);
             operation
                 .install_recorded_admission_refusal(boundary.clone(), OplogIndex::from_u64(29));
-            let waiting =
-                cancellation.replay_disposal_is_complete(Some(&operation), &boundary, true);
+            let waiting = cancellation.replay_disposal_is_complete(
+                Some(&operation),
+                &boundary,
+                Some(OplogIndex::from_u64(30)),
+            );
             tokio::pin!(waiting);
             assert!(futures::poll!(&mut waiting).is_pending());
             assert_eq!(operation.observed_admission_refusal(), None);
@@ -8396,13 +8413,13 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
         } else {
             assert!(
                 cancellation
-                    .replay_disposal_is_complete(None, &boundary, true)
+                    .replay_disposal_is_complete(None, &boundary, Some(OplogIndex::from_u64(30)))
                     .await
                     .is_err()
             );
             assert!(
                 !cancellation
-                    .replay_disposal_is_complete(None, &boundary, false)
+                    .replay_disposal_is_complete(None, &boundary, None)
                     .await
                     .unwrap()
             );
@@ -8434,7 +8451,7 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
                 operation
                     .install_recorded_admission_refusal(expected.clone(), OplogIndex::from_u64(29));
                 let waiting =
-                    cancellation.replay_disposal_is_complete(Some(&operation), &boundary, false);
+                    cancellation.replay_disposal_is_complete(Some(&operation), &boundary, None);
                 tokio::pin!(waiting);
                 assert!(futures::poll!(&mut waiting).is_pending());
                 assert_eq!(operation.observed_admission_refusal(), None);
@@ -8489,7 +8506,7 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
                 .unwrap();
             assert!(
                 cancellation
-                    .replay_disposal_is_complete(None, &boundary, false)
+                    .replay_disposal_is_complete(None, &boundary, None)
                     .await
                     .unwrap()
             );
@@ -8681,7 +8698,7 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
     let boundary = cancellation.disposal_boundary().unwrap();
     assert!(
         cancellation
-            .replay_disposal_is_complete(None, &boundary, true)
+            .replay_disposal_is_complete(None, &boundary, Some(OplogIndex::from_u64(30)))
             .await
             .unwrap()
     );
@@ -8701,7 +8718,11 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
     );
     assert!(
         unrelated
-            .replay_disposal_is_complete(None, &unrelated.disposal_boundary().unwrap(), true)
+            .replay_disposal_is_complete(
+                None,
+                &unrelated.disposal_boundary().unwrap(),
+                Some(OplogIndex::from_u64(30)),
+            )
             .await
             .is_err()
     );
@@ -8754,7 +8775,17 @@ async fn replay_input_disposal_recognizes_exact_source_terminals_without_cancel_
     }
 }
 
-async fn check_dropped_input_cancellation(unread_resource: bool) {
+/// How `check_dropped_input_cancellation` drops the durable input endpoint.
+enum DroppedInput {
+    /// A producer that was never finished.
+    Producer,
+    /// An unread stream resource, after a copy was moved out for transfer.
+    UnreadResource,
+    /// A stream handle in the resource table that the host rejects.
+    RejectedHandle,
+}
+
+async fn check_dropped_input_cancellation(dropped: DroppedInput) {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
     let producer = DurableStreamStore::load(
@@ -8841,18 +8872,34 @@ async fn check_dropped_input_cancellation(unread_resource: bool) {
         .endpoint(handle.clone(), 0, SessionStreamRole::Output)
         .await
         .unwrap();
-    if unread_resource {
-        let stream = SchemaValueStream::from_host_endpoint(endpoint);
-        let moved = stream.take_for_transfer().unwrap();
-        DurableInputProducer::drop_unread(stream, drop_event_sink.clone(), Arc::new(|| false));
-        assert!(drop_events.try_recv().is_err());
-        assert!(!source_cancelled.is_cancelled());
-        DurableInputProducer::drop_unread(moved, drop_event_sink, Arc::new(|| false));
-    } else {
-        drop(
+    match dropped {
+        DroppedInput::UnreadResource => {
+            let stream = SchemaValueStream::from_host_endpoint(endpoint);
+            let moved = stream.take_for_transfer().unwrap();
+            DurableInputProducer::drop_unread(stream, drop_event_sink.clone(), Arc::new(|| false));
+            assert!(drop_events.try_recv().is_err());
+            assert!(!source_cancelled.is_cancelled());
+            DurableInputProducer::drop_unread(moved, drop_event_sink, Arc::new(|| false));
+        }
+        DroppedInput::Producer => drop(
             DurableInputProducer::new(endpoint)
                 .with_drop_cleanup(drop_event_sink, Arc::new(|| false)),
-        );
+        ),
+        DroppedInput::RejectedHandle => {
+            let mut table = wasmtime::component::ResourceTable::new();
+            let handle = table
+                .push(golem_schema::schema::SchemaValueStreamHandleRep::new(
+                    SchemaValueStream::from_host_endpoint(endpoint),
+                ))
+                .unwrap();
+            crate::durable_host::schema_value_stream::dispose_stream_handle(
+                &mut table,
+                handle,
+                drop_event_sink,
+                Arc::new(|| false),
+            )
+            .unwrap();
+        }
     }
     let cancellation = match drop_events.recv().await.unwrap() {
         DropEvent::CancelDroppedDurableInput { cancellation } => cancellation,
@@ -10895,7 +10942,9 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -11535,7 +11584,9 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         .add(OplogEntry::pending_agent_invocation(
             None,
             consumer.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -12081,7 +12132,9 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -12504,7 +12557,9 @@ async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_with
         .add(OplogEntry::pending_agent_invocation(
             None,
             session_key.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -12733,7 +12788,9 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         .add(OplogEntry::pending_agent_invocation(
             None,
             session_key.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -13283,7 +13340,9 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         .add(OplogEntry::pending_agent_invocation(
             None,
             consumer.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
