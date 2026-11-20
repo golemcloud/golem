@@ -101,6 +101,9 @@ fn pending_preparations(
 /// Inspect admission requirements before authorizing project preparation. This
 /// does not construct an executable plan from unpersisted loading changes.
 pub async fn inspect_build_requirements(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
+    if let Some(packages) = &ctx.application_context().package_preparation {
+        packages.revalidate().await?;
+    }
     let requirements = inspect::inspect_build(
         ctx,
         ctx.should_run_step(AppBuildStep::GenBridge) || ctx.should_run_step(AppBuildStep::Check),
@@ -142,6 +145,9 @@ pub async fn inspect_build_requirements(ctx: &BuildContext<'_>) -> anyhow::Resul
 }
 
 pub async fn preflight_build(ctx: &BuildContext<'_>) -> anyhow::Result<plan::BuildPlan> {
+    if let Some(packages) = &ctx.application_context().package_preparation {
+        packages.revalidate().await?;
+    }
     let plan = inspect::inspect_build(
         ctx,
         ctx.should_run_step(AppBuildStep::GenBridge) || ctx.should_run_step(AppBuildStep::Check),
@@ -346,6 +352,16 @@ async fn execute_component_stages(
     };
 
     loop {
+        if let Some(preparation) = &ctx.application_context().package_preparation {
+            let prepared = ctx
+                .application_context()
+                .prepared_packages
+                .as_ref()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Package inputs must be prepared before executing build stages")
+                })?;
+            prepared.validate(preparation).await?;
+        }
         for name in pending_components.iter() {
             for requirement in checked_plan
                 .stage(name)?

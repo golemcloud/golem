@@ -2000,7 +2000,6 @@ impl ComponentCommandHandler {
                                 component_name.0, agent_type.type_name.0
                             )
                         })?,
-                    files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
                     plugins: plugins(resolved_agent.plugins())?,
                 },
@@ -2109,31 +2108,14 @@ impl ComponentCommandHandler {
             let resolved_files: Vec<crate::model::app::InitialComponentFile> = manifest_config
                 .files
                 .iter()
-                .map(|f| {
-                    crate::model::app::InitialComponentFileSource::new(
-                        &f.source_path,
-                        &manifest_config.files_source,
+                .map(staging::resolve_provision_ifs_entry)
+                .collect::<anyhow::Result<Vec<_>>>()
+                .with_context(|| {
+                    format!(
+                        "Failed to resolve initial files for component {} and agent {}",
+                        component_name.0, agent_type_name.0
                     )
-                    .map_err(|err| {
-                        anyhow!(
-                            "Failed to resolve source path '{}' for component {} and agent {}: {}",
-                            f.source_path,
-                            component_name.0,
-                            agent_type_name.0,
-                            err
-                        )
-                    })
-                    .map(|source| crate::model::app::InitialComponentFile {
-                        source,
-                        target: crate::model::app::CanonicalFilePathWithPermissions {
-                            path: f.target_path.clone(),
-                            permissions: f.permissions.unwrap_or(
-                                golem_common::model::component::AgentFilePermissions::ReadOnly,
-                            ),
-                        },
-                    })
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?;
+                })?;
 
             let file_hashes = ifs_manager
                 .collect_file_hashes(

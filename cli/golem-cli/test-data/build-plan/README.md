@@ -66,6 +66,36 @@ candidates reserve requirements without requiring unrelated artifacts. When a
 metadata result activates a candidate, execution checks its artifact before the
 next stage.
 
+Installed packages use the same verified declaration projection during check and
+build. Inspection reads the pins, lock and package bytes but does not allocate an
+unpack root, replace cache entries or write a generated manifest. Package origins
+are declaration sources, not editable user manifests. Relative asset defaults
+remain anchored to their package declaration source.
+
+The app handler prepares packages automatically before constructing the actual
+build plan. Package cache, root, unpack and lease operations are separate from
+`BuildPlan` and `BuildExecution`. The preparation inventory describes package
+assets before they exist. Its concrete namespace derives from the verified
+package identity, not a random temporary path. Preparation revalidates manifest
+bytes and locked package identities, then allocates under the registry lock.
+Concurrent consumers share verified assets under shared leases. Context exit
+releases the lease but retains the prepared outputs for subsequent invocations.
+Task markers bind the inputs and CLI version; every reuse also verifies output
+presence, asset bytes and the declaration snapshot. Missing or changed outputs
+invalidate readiness. Repair refuses an active conflicting root.
+
+The bounded preparation sweep admits obsolete candidates during inspection,
+rechecks their leases under the registry lock and never removes the valid current
+root or adds newly discovered candidates. Clean does not inspect or unpack package
+archives and refuses while a consumer holds a root lease. It retains the stable
+registry namespace so waiting preparers cannot acquire a replaced lock.
+
+Pack, publish dry-run and deployment without a build call the same preparation
+operation without running component recipes. Installed metadata does not execute
+the component to rediscover declarations already verified in the package. Install
+uses the shared output policy, including structured success and quiet diagnostics;
+project-relative persisted package locators use Unix separators.
+
 Managed Go inspection accepts either the installed toolchain or the pinned
 download on a supported platform. Check does not download or install it. A cold
 offline build refuses before project writes; an online build retains on-demand

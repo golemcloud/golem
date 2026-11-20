@@ -280,7 +280,14 @@ fn inspect_stage(
             "Build plan action limit exceeded"
         );
     }
-    if requires_artifact && (!inspect_commands || component.build_commands().is_empty()) {
+    let installed = ctx
+        .application_context()
+        .installed_components
+        .get(component_name);
+    if installed.is_none()
+        && requires_artifact
+        && (!inspect_commands || component.build_commands().is_empty())
+    {
         let wasm = component.wasm();
         actions.push(BuildAction {
             inputs: vec![wasm.clone()],
@@ -329,11 +336,24 @@ fn inspect_stage(
         actions,
     };
     if with_dependencies && (requires_artifact || component.wasm().exists()) {
-        let wasm = component.wasm();
-        stage.actions.push(BuildAction::metadata(
-            wasm.clone(),
-            component.extracted_component_metadata(&wasm),
-        ));
+        if let Some(installed) = installed {
+            stage.actions.push(BuildAction {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                requirements: BTreeSet::new(),
+                effects: BTreeSet::new(),
+                operation: BuildOperation::InstalledMetadata {
+                    package_digest: installed.package_metadata.package_digest.clone(),
+                    layer_digest: installed.package_metadata.layer_digest.clone(),
+                },
+            });
+        } else {
+            let wasm = component.wasm();
+            stage.actions.push(BuildAction::metadata(
+                wasm.clone(),
+                component.extracted_component_metadata(&wasm),
+            ));
+        }
     }
     Ok(stage)
 }

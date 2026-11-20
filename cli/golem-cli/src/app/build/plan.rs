@@ -199,6 +199,10 @@ pub enum BuildOperation {
     Dependencies(CommonDependencies),
     Metadata,
     Bridge,
+    InstalledMetadata {
+        package_digest: String,
+        layer_digest: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]

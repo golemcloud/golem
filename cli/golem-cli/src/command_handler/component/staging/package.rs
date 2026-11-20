@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::super::ComponentCommandHandler;
-use super::{ComponentStager, extract_local_component, resolve_ifs_entry, resolve_tool_ifs_entry};
+use super::{ComponentStager, extract_local_component, resolve_provision_ifs_entry};
 use crate::command_handler::component::ifs::expand_package_files;
 use crate::model::app::{InitialComponentFile, ResolvedToolProvision};
 use crate::package::{
@@ -32,14 +32,22 @@ use tokio::io::AsyncReadExt;
 
 impl ComponentCommandHandler {
     pub(crate) async fn pack_application(&self) -> anyhow::Result<(String, Vec<u8>)> {
-        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
-        let app_ctx = app_ctx.some_or_err_mut()?;
+        let app_ctx = self.ctx.app_context_lock().await;
+        let app_ctx = app_ctx.some_or_err()?;
+        let publisher = app_ctx
+            .publisher_package
+            .clone()
+            .context("Declare package: { name, version } in the root golem.yaml before packing")?;
+        for name in app_ctx.application().component_names() {
+            if !app_ctx.installed_components.contains_key(name) {
+                let wasm = app_ctx.application().component(name).wasm();
+                ensure!(wasm.is_file(), "Cannot pack {name}; run golem build first");
+            }
+        }
         let app = app_ctx.application();
         let mut config = PackageConfig {
             application: app.application_name().to_string(),
-            package: app_ctx.publisher_package.clone().context(
-                "Declare package: { name, version } in the root golem.yaml before packing",
-            )?,
+            package: publisher,
             components: BTreeMap::new(),
         };
         let mut stage = PackageStage {
@@ -129,7 +137,7 @@ impl ComponentCommandHandler {
                     let files = staged
                         .files
                         .iter()
-                        .map(|file| resolve_ifs_entry(file, &staged.files_source))
+                        .map(resolve_provision_ifs_entry)
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     stage
                         .provision(&mut provision, &files)
@@ -356,7 +364,7 @@ impl PackageStage<'_> {
             .properties
             .files
             .iter()
-            .map(resolve_tool_ifs_entry)
+            .map(resolve_provision_ifs_entry)
             .collect::<anyhow::Result<Vec<_>>>()?;
         self.provision(&mut provision, &files).await?;
         Ok(provision)

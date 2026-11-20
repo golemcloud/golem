@@ -462,6 +462,32 @@ impl AppCommandHandler {
         Self { ctx }
     }
 
+    pub fn cmd_install(
+        &self,
+        flags: &crate::command::GolemCliGlobalFlags,
+        file: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        let installed = crate::package::install(flags, file)?;
+        self.ctx.log_handler().log_output(installed)
+    }
+
+    pub async fn cmd_pack(&self, output: PathBuf) -> anyhow::Result<()> {
+        self.prepare_packages().await?;
+        let (digest, bytes) = self.ctx.component_handler().pack_application().await?;
+        crate::package::write_package(&output, &bytes)?;
+        self.ctx
+            .log_handler()
+            .log_output(crate::package::PackageDigest { digest })
+    }
+
+    pub async fn cmd_publish(&self) -> anyhow::Result<()> {
+        self.prepare_packages().await?;
+        let (digest, _) = self.ctx.component_handler().pack_application().await?;
+        self.ctx
+            .log_handler()
+            .log_output(crate::package::PackageDigest { digest })
+    }
+
     pub async fn exec_custom_command(&self, subcommand: ExecSubcommand) -> anyhow::Result<()> {
         match subcommand {
             ExecSubcommand::CustomCommand(command) => self.cmd_custom_command(command).await,
@@ -1079,6 +1105,21 @@ impl AppCommandHandler {
             .post_deploy_args
             .allow_incompatible_changes(self.ctx.deploy_args());
 
+        let package_preparation = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()
+                .map_err(DeployError::PrepareError)?
+                .package_preparation
+                .clone()
+        };
+        if let Some(packages) = &package_preparation {
+            packages
+                .revalidate()
+                .await
+                .map_err(DeployError::PrepareError)?;
+        }
+
         let build_config = {
             let mut build_config = BuildConfig::new().with_skip_up_to_date_checks(
                 config
@@ -1246,6 +1287,10 @@ impl AppCommandHandler {
             )
             .await
             .map_err(DeployError::BuildError)?;
+        } else {
+            self.prepare_packages()
+                .await
+                .map_err(DeployError::BuildError)?;
         }
 
         let Some((deploy_diff, deployment_version)) = self
@@ -3782,6 +3827,36 @@ impl AppCommandHandler {
         }
     }
 
+    pub(crate) async fn prepare_packages(&self) -> anyhow::Result<()> {
+        use crate::app::build::task_result_marker::TaskResultMarker;
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let app = app_ctx.some_or_err_mut()?;
+        let Some(preparation) = &app.package_preparation else {
+            return Ok(());
+        };
+        if let Some(prepared) = &app.prepared_packages {
+            return prepared.validate(preparation).await;
+        }
+        preparation.revalidate().await?;
+        let marker_dir = app
+            .application()
+            .app_root_dir()
+            .join(app.application().task_result_marker_dir());
+        let marker = TaskResultMarker::new(&marker_dir, preparation)?;
+        let up_to_date = marker.is_up_to_date();
+        let (prepared, reused) = marker.result(preparation.execute().await)?;
+        log_action(
+            if up_to_date && reused {
+                "Up-to-date"
+            } else {
+                "Prepared"
+            },
+            "local file packages",
+        );
+        app.prepared_packages = Some(prepared);
+        Ok(())
+    }
+
     pub async fn build(
         &self,
         build_config: &BuildConfig,
@@ -3851,7 +3926,19 @@ impl AppCommandHandler {
             } else {
                 false
             };
-            if pending_dependency_changes || self.ctx.has_pending_application_changes().await {
+            let pending_packages = {
+                let app_ctx = self.ctx.app_context_lock().await;
+                if let Some(packages) = &app_ctx.some_or_err()?.package_preparation {
+                    packages.log();
+                    packages.verify_outputs().is_err()
+                } else {
+                    false
+                }
+            };
+            if pending_dependency_changes
+                || pending_packages
+                || self.ctx.has_pending_application_changes().await
+            {
                 logln(
                     "Project preparation is required and was not applied by check; no executable build plan was constructed. Run build and confirm the project changes before planning execution.",
                 );
@@ -3876,6 +3963,7 @@ impl AppCommandHandler {
             )?;
         }
         self.ctx.reload_application().await?;
+        self.prepare_packages().await?;
         let app_ctx = self.ctx.app_context_lock().await;
         crate::app::build::preflight_build(&BuildContext::new(app_ctx.some_or_err()?, build_config))
             .await
@@ -4275,34 +4363,40 @@ impl AppCommandHandler {
         component_names: Vec<ComponentName>,
         default_component_select_mode: &ApplicationComponentSelectMode,
     ) -> anyhow::Result<()> {
-        let any_component_requested = !component_names.is_empty();
+        self.ctx.initialize_for_clean().await;
+        let result = async {
+            let any_component_requested = !component_names.is_empty();
 
-        self.must_select_components(component_names, default_component_select_mode)
-            .await?;
+            self.must_select_components(component_names, default_component_select_mode)
+                .await?;
 
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
 
-        let all_selected =
-            app_ctx.selected_component_names().len() == app_ctx.application().component_count();
+            let all_selected =
+                app_ctx.selected_component_names().len() == app_ctx.application().component_count();
 
-        let clean_mode = {
-            if all_selected {
-                CleanMode::All
-            } else if any_component_requested {
-                CleanMode::SelectedComponentsOnly
-            } else {
-                match &default_component_select_mode {
-                    ApplicationComponentSelectMode::CurrentDir
-                    | ApplicationComponentSelectMode::Explicit(_) => {
-                        CleanMode::SelectedComponentsOnly
+            let clean_mode = {
+                if all_selected {
+                    CleanMode::All
+                } else if any_component_requested {
+                    CleanMode::SelectedComponentsOnly
+                } else {
+                    match &default_component_select_mode {
+                        ApplicationComponentSelectMode::CurrentDir
+                        | ApplicationComponentSelectMode::Explicit(_) => {
+                            CleanMode::SelectedComponentsOnly
+                        }
+                        ApplicationComponentSelectMode::All => CleanMode::All,
                     }
-                    ApplicationComponentSelectMode::All => CleanMode::All,
                 }
-            }
-        };
+            };
 
-        app_ctx.clean(&BuildConfig::new(), clean_mode)
+            app_ctx.clean(&BuildConfig::new(), clean_mode)
+        }
+        .await;
+        self.ctx.finish_clean().await;
+        result
     }
 
     async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<ComponentDto>> {

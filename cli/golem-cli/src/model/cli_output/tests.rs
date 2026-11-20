@@ -290,6 +290,11 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     ),
     registry_entry!("PackageDigest", "package.digest", arb_package_digest),
     registry_entry!(
+        "PackageInstallResult",
+        "package.install",
+        arb_package_install_result
+    ),
+    registry_entry!(
         "DeploymentNewView",
         "deploy.deployment",
         arb_deployment_create_result
@@ -5858,6 +5863,21 @@ fn arb_package_digest() -> OutputDocumentStrategy {
             digest: format!("sha256:{:x}", Sha256::digest(bytes)),
         }
     }))
+}
+
+fn arb_package_install_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (arb_small_string(), arb_small_string(), any::<[u8; 32]>()).prop_map(
+            |(name, version, bytes)| {
+                use sha2::{Digest, Sha256};
+                crate::package::PackageInstallResult {
+                    name,
+                    version,
+                    digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+                }
+            },
+        ),
+    )
 }
 
 fn arb_template_list_result() -> OutputDocumentStrategy {

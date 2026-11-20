@@ -359,7 +359,8 @@ pub struct ApplicationContext {
     component_metadata: crate::app::component_metadata::ComponentMetadataRegistry,
     pub(crate) publisher_package: Option<golem_package::PackageIdentity>,
     pub(crate) installed_components: BTreeMap<ComponentName, golem_package::InstalledComponent>,
-    _package_dir: Option<crate::package::UnpackRoot>,
+    pub(crate) package_preparation: Option<crate::package::PackagePreparation>,
+    pub(crate) prepared_packages: Option<std::sync::Arc<crate::package::PreparedPackages>>,
     calling_working_dir: PathBuf,
     selected_component_names: BTreeSet<ComponentName>,
     builtin_local_url: url::Url,
@@ -385,7 +386,8 @@ impl ApplicationContext {
             ),
             publisher_package: None,
             installed_components: BTreeMap::new(),
-            _package_dir: None,
+            package_preparation: None,
+            prepared_packages: None,
             builtin_local_url: "http://localhost:9881".parse().unwrap(),
             tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps::new(),
         }
@@ -527,21 +529,25 @@ impl ApplicationContext {
         component_presets: ComponentPresetSelector,
         builtin_local_url: url::Url,
         config_dir: &Path,
+        inspect_packages: bool,
     ) -> anyhow::Result<Option<ApplicationContext>> {
         let mut source_mode = source_mode;
-        let (publisher_package, expanded, package_dir) = match &mut source_mode {
-            ApplicationSourceMode::Preloaded(loaded) => {
+        let (publisher_package, expanded, package_preparation) = match &mut source_mode {
+            ApplicationSourceMode::Preloaded(loaded) if inspect_packages => {
                 let (publisher_package, pins, lock) = package_pins(loaded)?;
+                golem_package::check_lock(&pins, &lock)?;
                 if pins.is_empty() {
                     (publisher_package, Default::default(), None)
                 } else {
-                    let dir = crate::package::UnpackRoot::new(&loaded.app_root_dir)?;
-                    let mut effects = crate::package::LocalEffects {
-                        app_root: &loaded.app_root_dir,
-                        cache_root: config_dir.join("package-cache"),
-                    };
-                    let mut expanded =
-                        golem_package::expand(&pins, &lock, dir.path(), &mut effects).await?;
+                    let plan = crate::package::PackagePreparation::inspect(
+                        &loaded.app_root_dir,
+                        config_dir.join("package-cache"),
+                        &loaded.root_manifest,
+                        &pins,
+                        &lock,
+                    )
+                    .await?;
+                    let mut expanded = plan.inspection.bind(&plan.root);
                     for installed in expanded.components.values_mut() {
                         // The lock is a local locator, not the source label sent to the registry.
                         let source = fs::absolute_lexical_path_from_base_dir(
@@ -556,8 +562,8 @@ impl ApplicationContext {
                     }
                     loaded
                         .raw_apps
-                        .push(package_manifest(dir.path(), &expanded.declarations)?);
-                    (publisher_package, expanded.components, Some(dir))
+                        .push(package_manifest(&plan.root, &expanded.declarations)?);
+                    (publisher_package, expanded.components, Some(plan))
                 }
             }
             _ => (None, Default::default(), None),
@@ -582,7 +588,12 @@ impl ApplicationContext {
         )?;
         ctx.publisher_package = publisher_package;
         ctx.installed_components = expanded;
-        ctx._package_dir = package_dir;
+        ctx.package_preparation = package_preparation;
+        for (name, installed) in &ctx.installed_components {
+            ctx.component_metadata
+                .add_cached_component_metadata(name, installed.metadata.clone())
+                .await?;
+        }
 
         if ctx.config.offline {
             log_action("Using", "offline mode");
@@ -630,7 +641,8 @@ impl ApplicationContext {
                 component_metadata,
                 publisher_package: None,
                 installed_components: BTreeMap::new(),
-                _package_dir: None,
+                package_preparation: None,
+                prepared_packages: None,
                 calling_working_dir,
                 selected_component_names: BTreeSet::new(),
                 builtin_local_url,
@@ -1099,11 +1111,10 @@ fn package_manifest(
     declarations: &golem_package::Declarations,
 ) -> anyhow::Result<app_raw::ApplicationWithSource> {
     let source = root.join("package-manifest.json");
-    let declarations = serde_json::to_string(declarations)?;
-    std::fs::write(&source, &declarations)?;
     Ok(app_raw::ApplicationWithSource {
         source,
-        application: serde_json::from_str(&declarations)?,
+        application: serde_json::from_value(serde_json::to_value(declarations)?)?,
+        package_source: true,
     })
 }
 
@@ -1132,7 +1143,6 @@ fn package_pins(
         golem_package::validate_identity(identity)?;
     }
     let lock = crate::package::load_lock(&loaded.app_root_dir)?;
-    golem_package::check_lock(&pins, &lock)?;
     Ok((publisher, pins, lock))
 }
 
@@ -1227,6 +1237,7 @@ fn prospective_application_source(
         .collect::<anyhow::Result<Vec<_>>>()?;
     Ok(ApplicationSourceMode::Preloaded(LoadedRawApps {
         app_root_dir: collected.app_root_dir,
+        root_manifest: collected.root_manifest,
         calling_working_dir: collected.calling_working_dir,
         raw_apps,
     }))
@@ -1545,6 +1556,11 @@ tools:
         };
         let installed = resolve(installed);
         let local = resolve(local);
+        assert_eq!(
+            installed.all_sources(),
+            &std::collections::BTreeSet::from([root.clone()])
+        );
+        assert!(local.all_sources().contains(&local_source));
         let component_name: golem_common::model::component::ComponentName =
             "sample:shared".parse().unwrap();
         let agent_name: golem_common::model::agent::AgentTypeName = "SampleAgent".parse().unwrap();

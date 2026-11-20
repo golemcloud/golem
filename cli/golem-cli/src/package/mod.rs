@@ -12,6 +12,10 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+mod preparation;
+pub(crate) use preparation::clean_roots;
+pub(crate) use preparation::{PackagePreparation, PreparedPackages};
+
 const LOCK_NAME: &str = "golem.lock";
 const MAX_LOCK_BYTES: u64 = 512 * 1024;
 
@@ -29,6 +33,19 @@ impl crate::model::text_format::TextOutput for PackageDigest {
         crate::log::print_line(&self.digest);
     }
 }
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PackageInstallResult {
+    pub name: String,
+    pub version: String,
+    pub digest: String,
+}
+
+impl crate::model::cli_output::StructuredOutput for PackageInstallResult {
+    const KIND: &'static str = "package.install";
+}
+
+impl crate::model::text_format::TextOutput for PackageInstallResult {}
 
 fn stage_write(path: &Path, bytes: &[u8]) -> anyhow::Result<tempfile::NamedTempFile> {
     let directory = path
@@ -112,7 +129,10 @@ fn read_lock(root: &Path) -> anyhow::Result<(Lock, Option<Vec<u8>>)> {
     })
 }
 
-pub(crate) fn install(flags: &GolemCliGlobalFlags, file: &Path) -> anyhow::Result<()> {
+pub(crate) fn install(
+    flags: &GolemCliGlobalFlags,
+    file: &Path,
+) -> anyhow::Result<PackageInstallResult> {
     ensure!(
         !flags.disable_app_manifest_discovery,
         "Installing a package requires an application manifest"
@@ -129,14 +149,15 @@ pub(crate) fn install(flags: &GolemCliGlobalFlags, file: &Path) -> anyhow::Resul
     let package = read(open_regular(&path)?)
         .with_context(|| format!("Cannot read package {}", path.display()))?;
     let identity = &package.config().package;
-    let source = path.strip_prefix(root).unwrap_or(&path);
     let pin = FilePin {
-        source: crate::fs::path_to_str(source)?.into(),
+        source: match path.strip_prefix(root) {
+            Ok(relative) => crate::fs::path_to_unix_str(relative)?,
+            Err(_) => crate::fs::path_to_str(&path)?.into(),
+        },
         version: identity.version.clone(),
         digest: package.digest().into(),
     };
 
-    let _output = crate::log::LogOutput::new(crate::log::Output::Stderr);
     crate::log::log_action(
         "Installing",
         format!(
@@ -178,7 +199,12 @@ pub(crate) fn install(flags: &GolemCliGlobalFlags, file: &Path) -> anyhow::Resul
         &root.join(LOCK_NAME),
         lock_bytes.as_bytes(),
         previous_lock.as_deref(),
-    )
+    )?;
+    Ok(PackageInstallResult {
+        name: identity.name.clone(),
+        version: identity.version.clone(),
+        digest: package.digest().into(),
+    })
 }
 
 fn save_install(
@@ -210,78 +236,6 @@ pub(crate) struct LocalEffects<'a> {
     pub cache_root: PathBuf,
 }
 
-pub(crate) struct UnpackRoot {
-    _lease: File,
-    dir: tempfile::TempDir,
-}
-
-impl UnpackRoot {
-    pub(crate) fn new(app_root: &Path) -> anyhow::Result<Self> {
-        let temp = app_root.join(crate::model::app::TEMP_DIR);
-        let parent = temp.join("package-unpack");
-        for path in [&temp, &parent] {
-            match fs::create_dir(path) {
-                Ok(()) => (),
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::AlreadyExists
-                        && fs::symlink_metadata(path)?.is_dir() => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
-
-        // Serialize directory creation with the sweep, but not expansion or build.
-        // The OS releases each root's lease if its process exits without cleanup.
-        let registry = File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(parent.join("registry.lock"))?;
-        registry.lock()?;
-        for entry in fs::read_dir(&parent)? {
-            let entry = entry?;
-            if !entry.file_name().as_encoded_bytes().starts_with(b"root-")
-                || !entry.file_type()?.is_dir()
-            {
-                continue;
-            }
-            let path = entry.path();
-            match File::options()
-                .read(true)
-                .write(true)
-                .open(path.join("lease"))
-            {
-                Ok(lease) => match lease.try_lock() {
-                    Ok(()) => (),
-                    Err(std::fs::TryLockError::WouldBlock) => continue,
-                    Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
-                },
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                Err(error) => return Err(error.into()),
-            }
-            match fs::remove_dir_all(path) {
-                Ok(()) => (),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                Err(error) => return Err(error.into()),
-            }
-        }
-        let dir = tempfile::Builder::new()
-            .prefix("root-")
-            .tempdir_in(parent)?;
-        let lease = File::options()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(dir.path().join("lease"))?;
-        lease.lock()?;
-        Ok(Self { _lease: lease, dir })
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        self.dir.path()
-    }
-}
-
 impl LocalEffects<'_> {
     fn cache_path(&self, digest: &str) -> PathBuf {
         self.cache_root.join(&digest["sha256:".len()..])
@@ -289,7 +243,7 @@ impl LocalEffects<'_> {
 }
 
 #[async_trait::async_trait]
-impl PackageEffects for LocalEffects<'_> {
+impl PackageReader for LocalEffects<'_> {
     fn authorize_file(&self, _name: &str, _pin: &FilePin) -> anyhow::Result<()> {
         Ok(())
     }
@@ -302,7 +256,10 @@ impl PackageEffects for LocalEffects<'_> {
         let path = self.app_root.join(&pin.source);
         read_regular(&path, limit).with_context(|| format!("Cannot fetch {}", path.display()))
     }
+}
 
+#[async_trait::async_trait]
+impl PackageEffects for LocalEffects<'_> {
     async fn cache(&mut self, digest: &str, bytes: &[u8]) -> anyhow::Result<()> {
         fs::create_dir_all(&self.cache_root)?;
         write_package(&self.cache_path(digest), bytes)
@@ -357,23 +314,6 @@ fn read_regular(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
 mod tests {
     use super::*;
     use test_r::test;
-
-    #[test]
-    fn new_unpack_root_cleans_abandoned_roots_but_keeps_live_roots() {
-        let app = tempfile::tempdir().unwrap();
-        let live = UnpackRoot::new(app.path()).unwrap();
-        fs::write(live.path().join("in-use"), b"live").unwrap();
-        let abandoned = UnpackRoot::new(app.path()).unwrap();
-        let UnpackRoot { _lease, dir } = abandoned;
-        let abandoned_path = dir.keep();
-        drop(_lease);
-        fs::write(abandoned_path.join("incomplete"), b"abandoned").unwrap();
-
-        let fresh = UnpackRoot::new(app.path()).unwrap();
-        assert!(!abandoned_path.exists());
-        assert!(live.path().join("in-use").exists());
-        assert_ne!(fresh.path(), live.path());
-    }
 
     #[test]
     fn failed_manifest_replace_restores_the_original_lock() {

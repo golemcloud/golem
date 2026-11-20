@@ -1431,6 +1431,12 @@ impl Application {
                 properties: AgentLayerPropertiesKind::ComponentBase {
                     properties: Box::new(component_base),
                     tool_bindings: component_tool_bindings,
+                    file_sources: self
+                        .component(component_name)
+                        .layer_properties()
+                        .file_sources
+                        .value()
+                        .clone(),
                     config: self
                         .component(component_name)
                         .layer_properties()
@@ -1514,6 +1520,7 @@ impl Application {
                         properties: AgentLayerPropertiesKind::ComponentTemplate {
                             properties: Box::new(template_agent_props),
                             tool_bindings: template_layer_props.tool_bindings.clone(),
+                            file_sources: template_layer_props.file_sources.value().clone(),
                             config: template_layer_props.config,
                         },
                     })
@@ -2769,7 +2776,7 @@ impl<'a> Agent<'a> {
         &self.resolved.properties.plugins
     }
 
-    pub fn files(&self) -> &[app_raw::InitialComponentFile] {
+    pub fn files(&self) -> &[ProvisionFile] {
         &self.resolved.properties.files
     }
 
@@ -3172,7 +3179,7 @@ enum ToolLayerPropertiesKind {
 #[derive(Debug, Clone, Serialize)]
 struct ToolLayerInput {
     properties: app_raw::ToolLayerProperties,
-    files: Vec<ToolProvisionFile>,
+    files: Vec<ProvisionFile>,
 }
 
 impl ToolLayerInput {
@@ -3182,7 +3189,7 @@ impl ToolLayerInput {
             .take()
             .unwrap_or_default()
             .into_iter()
-            .map(|file| ToolProvisionFile {
+            .map(|file| ProvisionFile {
                 source: source.to_path_buf(),
                 file,
             })
@@ -3221,7 +3228,7 @@ impl ToolLayerInput {
                 .iter()
                 .cloned()
                 .zip(properties.file_sources.value().iter().cloned())
-                .map(|(file, source)| ToolProvisionFile { source, file })
+                .map(|(file, source)| ProvisionFile { source, file })
                 .collect(),
         }
     }
@@ -3340,7 +3347,7 @@ pub struct ToolLayerProperties {
     config: JsonProperty<ToolLayer>,
     env: MapProperty<ToolLayer, String, String>,
     plugins: VecProperty<ToolLayer, app_raw::PluginInstallation>,
-    files: VecProperty<ToolLayer, ToolProvisionFile>,
+    files: VecProperty<ToolLayer, ProvisionFile>,
 }
 
 impl ToolLayerProperties {
@@ -3380,12 +3387,12 @@ pub struct ToolProvisionProperties {
     pub config: Option<JsonValue>,
     pub env: BTreeMap<String, String>,
     pub plugins: Vec<app_raw::PluginInstallation>,
-    pub files: Vec<ToolProvisionFile>,
+    pub files: Vec<ProvisionFile>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolProvisionFile {
+pub struct ProvisionFile {
     pub source: PathBuf,
     pub file: app_raw::InitialComponentFile,
 }
@@ -3470,11 +3477,13 @@ enum AgentLayerPropertiesKind {
     ComponentBase {
         properties: Box<app_raw::AgentLayerProperties>,
         tool_bindings: ToolBindingsProperty<AgentLayer>,
+        file_sources: Vec<PathBuf>,
         config: JsonProperty<ComponentLayer>,
     },
     ComponentTemplate {
         properties: Box<app_raw::AgentLayerProperties>,
         tool_bindings: ToolBindingsProperty<ComponentLayer>,
+        file_sources: Vec<PathBuf>,
         config: JsonProperty<ComponentLayer>,
     },
     Common(Box<app_raw::AgentLayerProperties>),
@@ -3604,12 +3613,25 @@ impl Layer for AgentLayer {
                     properties.plugins.clone().unwrap_or_default(),
                 ),
             );
+            let files = properties.files.clone().unwrap_or_default();
+            let file_sources = match &self.properties {
+                AgentLayerPropertiesKind::ComponentBase { file_sources, .. }
+                | AgentLayerPropertiesKind::ComponentTemplate { file_sources, .. } => {
+                    file_sources.clone()
+                }
+                _ => vec![self.source.clone(); files.len()],
+            };
             value.files.apply_layer(
+                id,
+                selection,
+                (properties.files_merge_mode.unwrap_or_default(), files),
+            );
+            value.file_sources.apply_layer(
                 id,
                 selection,
                 (
                     properties.files_merge_mode.unwrap_or_default(),
-                    properties.files.clone().unwrap_or_default(),
+                    file_sources,
                 ),
             );
             value.tool_bindings.apply_layer(
@@ -3638,6 +3660,8 @@ pub struct AgentLayerProperties {
     env: MapProperty<AgentLayer, String, String>,
     plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
     files: VecProperty<AgentLayer, app_raw::InitialComponentFile>,
+    #[serde(skip)]
+    file_sources: VecProperty<AgentLayer, PathBuf>,
     tool_bindings: ToolBindingsProperty<AgentLayer>,
 }
 
@@ -3658,6 +3682,7 @@ impl AgentLayerProperties {
         self.env.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
+        self.file_sources.compact_trace();
         self.tool_bindings.compact_trace();
     }
 
@@ -3693,12 +3718,16 @@ pub struct AgentProperties {
     pub initial_card: Option<app_raw::ManifestInitialCard>,
     pub env: BTreeMap<String, String>,
     pub plugins: Vec<app_raw::PluginInstallation>,
-    pub files: Vec<app_raw::InitialComponentFile>,
+    pub files: Vec<ProvisionFile>,
     pub tool_bindings: BTreeMap<String, ToolBindingState>,
 }
 
 impl AgentProperties {
     fn from_resolved(layer_properties: &AgentLayerProperties) -> Self {
+        debug_assert_eq!(
+            layer_properties.files.value().len(),
+            layer_properties.file_sources.value().len()
+        );
         Self {
             config: layer_properties.config.value().clone(),
             initial_card: layer_properties.initial_card.value().clone(),
@@ -3709,7 +3738,14 @@ impl AgentProperties {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             plugins: layer_properties.plugins.value().clone(),
-            files: layer_properties.files.value().clone(),
+            files: layer_properties
+                .files
+                .value()
+                .iter()
+                .cloned()
+                .zip(layer_properties.file_sources.value().iter().cloned())
+                .map(|(file, source)| ProvisionFile { source, file })
+                .collect(),
             tool_bindings: layer_properties
                 .tool_bindings
                 .value()
@@ -3795,8 +3831,18 @@ impl ComponentProperties {
         merged: &ComponentLayerProperties,
         node_http_routers: Option<IndexMap<String, NodeHttpRouter>>,
     ) -> Self {
-        let files =
-            InitialComponentFile::from_raw_vec(validation, source, merged.files.value().clone());
+        debug_assert_eq!(
+            merged.files.value().len(),
+            merged.file_sources.value().len()
+        );
+        let files = merged
+            .files
+            .value()
+            .iter()
+            .cloned()
+            .zip(merged.file_sources.value())
+            .filter_map(|(file, source)| InitialComponentFile::from_raw(validation, source, file))
+            .collect();
         let plugins =
             PluginInstallation::from_raw_vec(validation, source, merged.plugins.value().clone());
 
@@ -4021,17 +4067,6 @@ impl InitialComponentFile {
                 permissions: file.permissions.unwrap_or(AgentFilePermissions::ReadOnly),
             },
         })
-    }
-
-    pub fn from_raw_vec(
-        validation: &mut ValidationBuilder,
-        source: &Path,
-        files: Vec<app_raw::InitialComponentFile>,
-    ) -> Vec<Self> {
-        files
-            .into_iter()
-            .filter_map(|file| InitialComponentFile::from_raw(validation, source, file))
-            .collect::<Vec<_>>()
     }
 }
 
@@ -4858,7 +4893,9 @@ mod app_builder {
                 vec![("source", app.source.to_string_lossy().to_string())],
                 |validation| {
                     let app_source_dir = fs::parent_or_err(&app.source).expect("Failed to get parent");
-                    self.all_sources.insert(app.source.clone());
+                    if !app.package_source {
+                        self.all_sources.insert(app.source.clone());
+                    }
 
                     for environment_name in app.application.environments.keys() {
                         if let Ok(environment_name) = environment_name.parse::<EnvironmentName>() {
@@ -7176,6 +7213,103 @@ mod test {
         assert_eq!(resolved.properties.files[0].source, template_source);
         assert_eq!(resolved.properties.files[1].source, component_source);
         assert_eq!(resolved.properties.files[2].source, root);
+
+        let component_name = parse_component_name("app:main");
+        let component = app.component(&component_name);
+        let sources = component
+            .files()
+            .iter()
+            .map(|file| file.source.as_url().to_file_path().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sources,
+            [
+                template_source.parent().unwrap().join("template.txt"),
+                component_source.parent().unwrap().join("component.txt"),
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_files_retain_each_layer_source_and_merge_order() {
+        for mode in ["append", "prepend", "replace"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("golem.yaml");
+            let template = dir.path().join("templates/golem.yaml");
+            let agent_template = dir.path().join("agent-template/golem.yaml");
+            let component = dir.path().join("components/golem.yaml");
+            let agent_source = dir.path().join("agents/golem.yaml");
+            for path in [&template, &agent_template, &component, &agent_source] {
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+            }
+            fs::write(
+                &root,
+                "app: provenance\nenvironments:\n  local:\n    server: local\n",
+            )
+            .unwrap();
+            fs::write(&template, "componentTemplates:\n  base:\n    files:\n    - sourcePath: shared.txt\n      targetPath: /template.txt\n").unwrap();
+            fs::write(&agent_template, "componentTemplates:\n  agent-base:\n    files:\n    - sourcePath: shared.txt\n      targetPath: /agent-template.txt\n").unwrap();
+            fs::write(&component, "components:\n  app:main:\n    templates: base\n    dir: build\n    componentWasm: main.wasm\n    files:\n    - sourcePath: shared.txt\n      targetPath: /component.txt\n").unwrap();
+            fs::write(&agent_source, format!(
+                "agents:\n  Reader:\n    templates: agent-base\n    files:\n    - sourcePath: shared.txt\n      targetPath: /agent.txt\n    presets:\n      app-env:local:\n        filesMergeMode: prepend\n        files:\n        - sourcePath: environment.txt\n          targetPath: /environment.txt\n      debug:\n        filesMergeMode: {mode}\n        files:\n        - sourcePath: debug.txt\n          targetPath: /debug.txt\n"
+            )).unwrap();
+            let declarations = [
+                (&template, "shared.txt", "template bytes"),
+                (&component, "shared.txt", "component bytes"),
+                (&agent_template, "shared.txt", "agent template bytes"),
+                (&agent_source, "shared.txt", "agent bytes"),
+                (&agent_source, "environment.txt", "environment bytes"),
+                (&agent_source, "debug.txt", "debug bytes"),
+            ];
+            for (source, file, bytes) in declarations {
+                fs::write(source.parent().unwrap().join(file), bytes).unwrap();
+            }
+            let raw_apps = [&root, &template, &agent_template, &component, &agent_source]
+                .into_iter()
+                .map(|source| app_raw::ApplicationWithSource::from_yaml_file(source).unwrap())
+                .collect::<Vec<_>>();
+            let preload = Application::preload_from_raw_apps(&raw_apps)
+                .into_product()
+                .0
+                .unwrap();
+            let (app, _, errors) = Application::from_raw_apps(
+                dir.path().into(),
+                preload.application_name,
+                preload.environments,
+                preload.local_server,
+                selector("local", &["debug"]),
+                raw_apps,
+            )
+            .into_product();
+            assert!(errors.is_empty(), "{errors:?}");
+            let app = app.unwrap();
+            let name = parse_component_name("app:main");
+            assert_eq!(
+                app.component(&name).component_dir(),
+                component.parent().unwrap().join("build")
+            );
+            with_resolved_agent(&app, "app:main", "Reader", |agent| {
+                let expected = match mode {
+                    "append" => vec![4, 0, 1, 2, 3, 5],
+                    "prepend" => vec![5, 4, 0, 1, 2, 3],
+                    "replace" => vec![5],
+                    _ => unreachable!(),
+                };
+                assert_eq!(agent.files().len(), expected.len());
+                for (file, index) in agent.files().iter().zip(expected) {
+                    let (source, path, bytes) = declarations[index];
+                    assert_eq!(&file.source, source);
+                    assert_eq!(file.file.source_path, path);
+                    assert_eq!(
+                        fs::read_to_string(
+                            file.source.parent().unwrap().join(&file.file.source_path)
+                        )
+                        .unwrap(),
+                        bytes
+                    );
+                }
+            });
+        }
     }
 
     #[test]

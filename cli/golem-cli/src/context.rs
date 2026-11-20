@@ -872,6 +872,18 @@ impl Context {
         }
     }
 
+    pub(crate) async fn initialize_for_clean(&self) {
+        let mut state = self.app_context_state.write().await;
+        state.app_context = None;
+        state.omit_package_inspection = true;
+    }
+
+    pub(crate) async fn finish_clean(&self) {
+        let mut state = self.app_context_state.write().await;
+        state.app_context = None;
+        state.omit_package_inspection = false;
+    }
+
     pub async fn app_context_lock(
         &self,
     ) -> tokio::sync::RwLockReadGuard<'_, ApplicationContextState> {
@@ -1129,6 +1141,7 @@ pub struct ApplicationContextState {
     should_colorize: bool,
     app_source_mode: Option<ApplicationSourceMode>,
     pub silent_init: bool,
+    omit_package_inspection: bool,
 
     app_context: Option<Result<Option<ApplicationContext>, Arc<anyhow::Error>>>,
 }
@@ -1140,6 +1153,7 @@ impl ApplicationContextState {
             should_colorize,
             app_source_mode: Some(source_mode),
             silent_init: false,
+            omit_package_inspection: false,
             app_context: None,
         }
     }
@@ -1174,8 +1188,9 @@ impl ApplicationContextState {
         self.app_context = Some(
             ApplicationContext::new(
                 self.app_source_mode
-                    .take()
-                    .expect("ApplicationContextState.app_source_mode is not set"),
+                    .as_ref()
+                    .expect("ApplicationContextState.app_source_mode is not set")
+                    .clone(),
                 app_config,
                 config.application_name.clone(),
                 config.environments.clone(),
@@ -1183,6 +1198,7 @@ impl ApplicationContextState {
                 config.component_presets.clone(),
                 config.builtin_local_url.clone(),
                 config_dir,
+                !self.omit_package_inspection,
             )
             .await
             .map_err(Arc::new),

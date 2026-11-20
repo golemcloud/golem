@@ -98,11 +98,15 @@ pub enum ExpandError {
 /// runs for every pin before any cache, source, or unpack effect. A Golem tool can refuse
 /// local file sources here (the only source type so far), without changing expansion.
 #[async_trait::async_trait]
-pub trait PackageEffects: Send {
+pub trait PackageReader: Send {
     fn authorize_file(&self, name: &str, pin: &FilePin) -> anyhow::Result<()>;
     // Return at most `limit` bytes, or an error. Invalid cache bytes are treated as a miss.
     async fn cached(&mut self, digest: &str, limit: u64) -> anyhow::Result<Option<Vec<u8>>>;
     async fn fetch_file(&mut self, pin: &FilePin, limit: u64) -> anyhow::Result<Vec<u8>>;
+}
+
+#[async_trait::async_trait]
+pub trait PackageEffects: PackageReader {
     async fn cache(&mut self, digest: &str, verified: &[u8]) -> anyhow::Result<()>;
     // Paths are relative to `root` and contain only normal components. The caller must
     // use a fresh root or a confined filesystem view that does not follow symlinks.
@@ -115,13 +119,13 @@ pub trait PackageEffects: Send {
     ) -> anyhow::Result<()>;
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ExpandedPackages {
     pub declarations: Declarations,
     pub components: BTreeMap<ComponentName, InstalledComponent>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct InstalledComponent {
     pub wasm_path: PathBuf,
     pub metadata: ExtractedComponentMetadata,
@@ -130,12 +134,62 @@ pub struct InstalledComponent {
 
 /// Ordinary manifest declarations, separate from publisher metadata. Build commands,
 /// includes, templates, and environment declarations cannot be supplied by a package.
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Declarations {
     components: Map<String, Value>,
     agents: Map<String, Value>,
     tools: Map<String, Value>,
+}
+
+/// An asset is relative to the root supplied by the materialization producer.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum PackageAsset {
+    Directory {
+        layer: String,
+    },
+    File {
+        layer: String,
+        entry: Option<String>,
+        digest: String,
+        size: u64,
+    },
+}
+
+/// Verified declarations and bounded output descriptions, without filesystem allocation.
+#[derive(Clone, Debug, Default)]
+pub struct PackageInspection {
+    pins: Pins,
+    projected: ExpandedPackages,
+    assets: BTreeMap<PathBuf, PackageAsset>,
+}
+
+impl PackageInspection {
+    pub fn pins(&self) -> &Pins {
+        &self.pins
+    }
+
+    pub fn assets(&self) -> &BTreeMap<PathBuf, PackageAsset> {
+        &self.assets
+    }
+
+    pub fn declarations(&self) -> &Declarations {
+        &self.projected.declarations
+    }
+
+    pub fn bind(&self, root: &Path) -> ExpandedPackages {
+        let mut bound = self.projected.clone();
+        for component in bound.components.values_mut() {
+            component.wasm_path = root.join(&component.wasm_path);
+        }
+        bound
+    }
+
+    pub fn identity(&self) -> anyhow::Result<String> {
+        let bytes = serde_json::to_vec(&(&self.pins, &self.assets, &self.projected.declarations))?;
+        Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+    }
 }
 
 pub async fn expand(
@@ -144,35 +198,98 @@ pub async fn expand(
     unpack_root: &Path,
     effects: &mut impl PackageEffects,
 ) -> Result<ExpandedPackages, ExpandError> {
+    let inspection = inspect(manifest, lock, effects).await?;
+    materialize(&inspection, unpack_root, effects).await?;
+    Ok(inspection.bind(unpack_root))
+}
+
+pub async fn inspect(
+    manifest: &Pins,
+    lock: &Pins,
+    reader: &mut impl PackageReader,
+) -> Result<PackageInspection, ExpandError> {
     check_lock(manifest, lock)?;
-    let entry_error = |name: &str, pin: &FilePin, cause| ExpandError::Entry {
-        name: name.into(),
-        location: pin.source.clone(),
-        digest: pin.digest.clone(),
-        cause,
-    };
     for (name, pin) in lock {
-        effects
+        reader
             .authorize_file(name, pin)
             .map_err(|cause| entry_error(name, pin, cause))?;
     }
 
-    let mut expanded = ExpandedPackages::default();
+    let mut inspection = PackageInspection {
+        pins: lock.clone(),
+        ..Default::default()
+    };
     for (name, pin) in lock {
-        expand_one(&mut expanded, name, pin, unpack_root, effects)
+        let (package, _) = verified_source(name, pin, reader)
             .await
             .map_err(|cause| entry_error(name, pin, cause))?;
+        project_one(&mut inspection, name, pin, &package)
+            .map_err(|cause| entry_error(name, pin, cause))?;
     }
-    Ok(expanded)
+    Ok(inspection)
 }
 
-async fn expand_one(
-    output: &mut ExpandedPackages,
-    name: &str,
-    pin: &FilePin,
+pub async fn materialize(
+    inspection: &PackageInspection,
     root: &Path,
     effects: &mut impl PackageEffects,
-) -> anyhow::Result<()> {
+) -> Result<(), ExpandError> {
+    // Revalidate every input before the first cache or asset write. Payloads are
+    // read again per package so inspection does not retain all package bytes.
+    inspect(&inspection.pins, &inspection.pins, effects).await?;
+    for (name, pin) in &inspection.pins {
+        let result = async {
+            let (package, uncached) = verified_source(name, pin, effects).await?;
+            if let Some(bytes) = uncached {
+                effects.cache(&pin.digest, &bytes).await?;
+            }
+            let mut archives = BTreeMap::new();
+            for (path, asset) in inspection
+                .assets
+                .iter()
+                .filter(|(path, _)| path.starts_with(name))
+            {
+                match asset {
+                    PackageAsset::Directory { .. } => effects.create_dir(root, path).await?,
+                    PackageAsset::File { layer, entry, .. } => {
+                        let blob = package.blob(layer).context("Missing package blob")?;
+                        let bytes = match entry {
+                            None => blob,
+                            Some(entry) => {
+                                if !archives.contains_key(layer) {
+                                    archives.insert(layer.clone(), super::archive_entries(blob)?);
+                                }
+                                archives[layer]
+                                    .get(entry)
+                                    .context("Missing package archive entry")?
+                            }
+                        };
+                        effects.write_file(root, path, bytes).await?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        .await;
+        result.map_err(|cause| entry_error(name, pin, cause))?;
+    }
+    Ok(())
+}
+
+fn entry_error(name: &str, pin: &FilePin, cause: anyhow::Error) -> ExpandError {
+    ExpandError::Entry {
+        name: name.into(),
+        location: pin.source.clone(),
+        digest: pin.digest.clone(),
+        cause,
+    }
+}
+
+async fn verified_source(
+    name: &str,
+    pin: &FilePin,
+    reader: &mut impl PackageReader,
+) -> anyhow::Result<(ValidatedPackage, Option<Vec<u8>>)> {
     let verify = |bytes: &[u8]| {
         ensure!(
             bytes.len() as u64 <= MAX_PACKAGE_BYTES,
@@ -195,32 +312,38 @@ async fn expand_one(
         );
         Ok(package)
     };
-    let cached = effects.cached(&pin.digest, MAX_PACKAGE_BYTES).await?;
+    let cached = reader.cached(&pin.digest, MAX_PACKAGE_BYTES).await?;
     let cached = cached.and_then(|bytes| verify(&bytes).ok());
-    let package = match cached {
-        Some(package) => package,
+    match cached {
+        Some(package) => Ok((package, None)),
         None => {
-            let bytes = effects.fetch_file(pin, MAX_PACKAGE_BYTES).await?;
+            let bytes = reader.fetch_file(pin, MAX_PACKAGE_BYTES).await?;
             let package = verify(&bytes)
                 .context("Could not verify the source package digest and identity")?;
-            effects.cache(&pin.digest, &bytes).await?;
-            package
+            Ok((package, Some(bytes)))
         }
-    };
+    }
+}
 
-    let mut unpack = Unpack {
-        package: &package,
-        root,
+fn project_one(
+    inspection: &mut PackageInspection,
+    name: &str,
+    pin: &FilePin,
+    package: &ValidatedPackage,
+) -> anyhow::Result<()> {
+    let output = &mut inspection.projected;
+    let mut unpack = Projection {
+        package,
         prefix: PathBuf::from(name),
         written: BTreeSet::new(),
-        effects,
+        assets: &mut inspection.assets,
         remaining_entries: MAX_ENTRIES,
     };
     let mut middleware = Map::new();
     for (component, spec) in &package.config().components {
         let component = component.as_str();
-        let wasm = unpack.blob(&spec.wasm, "wasm", false).await?;
-        let mut declaration = unpack.provision(&spec.provision).await?;
+        let wasm = unpack.blob(&spec.wasm, "wasm", false)?;
+        let mut declaration = unpack.provision(&spec.provision)?;
         declaration.insert("componentWasm".into(), json!(wasm));
         declaration.insert(
             "configSchema".into(),
@@ -230,7 +353,7 @@ async fn expand_one(
         output.components.insert(
             ComponentName(component.into()),
             InstalledComponent {
-                wasm_path: root.join(wasm),
+                wasm_path: wasm,
                 metadata: spec.metadata.clone(),
                 package_metadata: golem_common::model::component::ComponentPackageMetadata {
                     source: pin.source.clone(),
@@ -243,11 +366,11 @@ async fn expand_one(
             insert(
                 &mut output.declarations.agents,
                 name.as_str(),
-                unpack.provision(provision).await?,
+                unpack.provision(provision)?,
             )?;
         }
         for (name, provision) in &spec.tools {
-            let mut declaration = unpack.provision(provision).await?;
+            let mut declaration = unpack.provision(provision)?;
             declaration.insert("component".into(), json!(component));
             ensure!(
                 name.as_str() != "middleware",
@@ -256,7 +379,7 @@ async fn expand_one(
             insert(&mut output.declarations.tools, name.as_str(), declaration)?;
         }
         for (name, provision) in &spec.tool_middlewares {
-            let mut declaration = unpack.provision(provision).await?;
+            let mut declaration = unpack.provision(provision)?;
             declaration.insert("component".into(), json!(component));
             insert(&mut middleware, name.as_str(), declaration)?;
         }
@@ -291,17 +414,16 @@ fn insert(
     Ok(())
 }
 
-struct Unpack<'a, E> {
+struct Projection<'a> {
     package: &'a ValidatedPackage,
-    root: &'a Path,
     prefix: PathBuf,
-    effects: &'a mut E,
+    assets: &'a mut BTreeMap<PathBuf, PackageAsset>,
     written: BTreeSet<PathBuf>,
     remaining_entries: usize,
 }
 
-impl<E: PackageEffects> Unpack<'_, E> {
-    async fn blob(&mut self, digest: &str, kind: &str, archive: bool) -> anyhow::Result<PathBuf> {
+impl Projection<'_> {
+    fn blob(&mut self, digest: &str, kind: &str, archive: bool) -> anyhow::Result<PathBuf> {
         let hex = digest
             .strip_prefix("sha256:")
             .context("Missing SHA-256 digest")?;
@@ -312,43 +434,60 @@ impl<E: PackageEffects> Unpack<'_, E> {
             if archive {
                 let entries = super::archive_entries_with_limit(bytes, self.remaining_entries)?;
                 self.remaining_entries -= entries.len();
-                self.effects.create_dir(self.root, &relative).await?;
+                self.assets.insert(
+                    relative.clone(),
+                    PackageAsset::Directory {
+                        layer: digest.into(),
+                    },
+                );
                 for (name, contents) in entries {
-                    let name = Path::new(&name);
+                    let path = Path::new(&name);
                     ensure!(
-                        name.components()
+                        path.components()
                             .all(|part| matches!(part, std::path::Component::Normal(_))),
                         "Unsafe unpack path {name:?}"
                     );
-                    self.effects
-                        .write_file(self.root, &relative.join(name), &contents)
-                        .await?;
+                    self.assets.insert(
+                        relative.join(path),
+                        PackageAsset::File {
+                            layer: digest.into(),
+                            entry: Some(name),
+                            digest: format!("sha256:{:x}", Sha256::digest(&contents)),
+                            size: contents.len() as u64,
+                        },
+                    );
                 }
             } else {
                 self.remaining_entries = self
                     .remaining_entries
                     .checked_sub(1)
                     .context("Too many unpacked entries")?;
-                self.effects.write_file(self.root, &relative, bytes).await?;
+                self.assets.insert(
+                    relative.clone(),
+                    PackageAsset::File {
+                        layer: digest.into(),
+                        entry: None,
+                        digest: digest.into(),
+                        size: bytes.len() as u64,
+                    },
+                );
             }
         }
         Ok(relative)
     }
 
-    async fn provision(&mut self, spec: &PackageProvision) -> anyhow::Result<Map<String, Value>> {
+    fn provision(&mut self, spec: &PackageProvision) -> anyhow::Result<Map<String, Value>> {
         let mut config = spec.config.clone();
         for file in &spec.file_defaults {
-            let path = self
-                .blob(
-                    &file.digest,
-                    if file.directory {
-                        "directories"
-                    } else {
-                        "files"
-                    },
-                    file.directory,
-                )
-                .await?;
+            let path = self.blob(
+                &file.digest,
+                if file.directory {
+                    "directories"
+                } else {
+                    "files"
+                },
+                file.directory,
+            )?;
             replace_config_value(&mut config, &file.path, json!(path))?;
         }
         let mut result = Map::new();
@@ -365,7 +504,7 @@ impl<E: PackageEffects> Unpack<'_, E> {
             result.insert("plugins".into(), json!(spec.plugins));
         }
         if let Some(files) = &spec.files {
-            let dir = self.blob(&files.layer, "initial-files", true).await?;
+            let dir = self.blob(&files.layer, "initial-files", true)?;
             let files = files.entries.iter().map(|(name, file)| json!({
                 "sourcePath": dir.join(name), "targetPath": file.target, "permissions": file.permissions,
             })).collect::<Vec<_>>();
