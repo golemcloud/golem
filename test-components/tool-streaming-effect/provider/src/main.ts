@@ -74,9 +74,9 @@ const getSelfMetadata = Agents.getSelfMetadata as Effect.Effect<
   Agents.AgentsHostError
 >
 
-/** The immediate caller as "<kind> <ref text>", or "anonymous". */
+/** Both roles of the caller: "<original>|<immediate>", each "<kind> <ref text>" or "anonymous". */
 const callerLabel = (context: { readonly caller: InvocationContext.Caller }): string =>
-  context.caller.immediate.toString()
+  `${context.caller.original.toString()}|${context.caller.immediate.toString()}`
 
 const evidence = (principal: string, ownerAgentId: string) => ({
   provider: "effect",

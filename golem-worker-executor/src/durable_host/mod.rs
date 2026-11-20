@@ -88,6 +88,7 @@ mod input_observation;
 pub mod io;
 pub mod keyvalue;
 mod logging;
+pub(crate) mod outgoing_caller;
 pub mod p3;
 pub(crate) mod permissions;
 pub mod quota;

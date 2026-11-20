@@ -126,13 +126,15 @@ final class MatrixTypedToolImpl extends MatrixTypedTool {
 private def matrixResourceEvidence(context: InvocationContext): (String, String, String) =
   (
     "scala",
-    context.caller.immediate.toString,
+    s"${context.caller.original.toString}|${context.caller.immediate.toString}",
     HostApi.getSelfMetadata().agentId.agentId
   )
 
-/** The evidence of a user caller whose subject is the acceptance subject. */
-private def isAcceptanceCaller(text: String): Boolean =
-  text.startsWith("user (") && text.endsWith(",\"matrix-resource-acceptance\")")
+/** The evidence of a caller whose original caller is the user with the acceptance subject. */
+private def isAcceptanceCaller(text: String): Boolean = {
+  val original = text.takeWhile(_ != '|')
+  original.startsWith("user (") && original.endsWith(",\"matrix-resource-acceptance\")")
+}
 
 final case class MatrixResourceConfig(secret: Secret[String])
 object MatrixResourceConfig {

@@ -19,7 +19,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::caller::{
     AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, Claims, Pair, Principal,
-    UserPrincipal,
+    ToolPrincipal, UserPrincipal,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId, Timestamp};
@@ -113,5 +113,32 @@ pub fn account_text(account_id: AccountId) -> String {
     format!(
         "account (\"{GOLEM_ISSUER}\",\"account:{}\")",
         account_id.0.hyphenated()
+    )
+}
+
+/// A tool of the environment as a principal, under the test Golem issuer.
+pub fn tool_principal(environment_id: EnvironmentId, tool_name: &str) -> Principal {
+    Principal::Tool(ToolPrincipal {
+        issuer: GOLEM_ISSUER.to_string(),
+        environment_id,
+        tool_name: golem_common::model::tool::ToolName::try_from(tool_name)
+            .expect("the tool name is valid"),
+    })
+}
+
+/// The display text that every SDK gives a principal: its kind and its pair, or `anonymous`.
+pub fn principal_text(principal: &Principal) -> String {
+    match principal.principal_ref() {
+        Some(principal_ref) => format!("{} {principal_ref}", principal.kind()),
+        None => "anonymous".to_string(),
+    }
+}
+
+/// Both roles of a caller as the caller-reporting fixtures print them: `<original>|<immediate>`.
+pub fn caller_text(caller: &Caller) -> String {
+    format!(
+        "{}|{}",
+        principal_text(&caller.original),
+        principal_text(&caller.immediate)
     )
 }

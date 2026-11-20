@@ -3433,7 +3433,7 @@ impl Rpc for AttachedProducerRpc {
         _target: &OwnedAgentId,
         _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
-        _owner: &golem_common::model::AgentId,
+        _canceller: &golem_common::model::caller::Principal,
         _auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         Err(RpcError::ProtocolError {
@@ -3448,6 +3448,7 @@ impl Rpc for AttachedProducerRpc {
         _request_key: golem_common::model::InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
         _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
         Err(RpcError::ProtocolError {

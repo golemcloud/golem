@@ -506,7 +506,8 @@ async fn effect_imported_mcp_client_projects_contract_and_runs_middleware() {
     );
     assert_eq!(
         *middleware_effects.lock().unwrap(),
-        vec!["/middleware/catalog-lookup/account"; 4]
+        // The middleware sees the calling agent as the immediate caller.
+        vec!["/middleware/catalog-lookup/agent"; 4]
     );
     upstream.abort();
     middleware_server.abort();

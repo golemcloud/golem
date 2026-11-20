@@ -29,14 +29,17 @@ enum Hold {
     Response(usize),
 }
 
-/// Records the idempotency key of every target activation and every `inc_by` dispatch, and holds
-/// the call selected by `hold`. With `hold_first_cancel`, the first scheduled invocation
-/// cancellation is held the same way after the target commits it.
+/// Records the idempotency key of every target activation and every `inc_by` dispatch, and the
+/// caller that each of them gives the target, and holds the call selected by `hold`. With
+/// `hold_first_cancel`, the first scheduled invocation cancellation is held the same way after
+/// the target commits it.
 struct HoldResponseRpc {
     inner: Arc<dyn Rpc>,
     hold: Hold,
     activations: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
     attempts: Arc<Mutex<Vec<Option<IdempotencyKey>>>>,
+    /// The caller of each target activation (`activation`) and each `inc_by` dispatch (`inc_by`).
+    callee_callers: Arc<Mutex<Vec<(&'static str, Caller)>>>,
     effect_applied: Arc<tokio::sync::Notify>,
     hold_first_cancel: bool,
     cancel_results: Arc<Mutex<Vec<bool>>>,
@@ -58,6 +61,10 @@ impl Rpc for HoldResponseRpc {
         idempotency_key: IdempotencyKey,
     ) -> Result<Box<dyn RpcDemand>, golem_service_base::error::worker_executor::WorkerExecutorError>
     {
+        self.callee_callers
+            .lock()
+            .unwrap()
+            .push(("activation", caller.clone()));
         let hold = {
             let mut activations = self.activations.lock().unwrap();
             activations.push(Some(idempotency_key.clone()));
@@ -90,12 +97,12 @@ impl Rpc for HoldResponseRpc {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         let result = self
             .inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await;
         let hold = {
             let mut results = self.cancel_results.lock().unwrap();
@@ -118,6 +125,7 @@ impl Rpc for HoldResponseRpc {
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
         self.inner
@@ -127,6 +135,7 @@ impl Rpc for HoldResponseRpc {
                 request_key,
                 invocation,
                 scheduled_at,
+                self_agent_id,
                 auth_ctx,
             )
             .await
@@ -147,6 +156,10 @@ impl Rpc for HoldResponseRpc {
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        self.callee_callers
+            .lock()
+            .unwrap()
+            .push(("activation", callee_caller.clone()));
         let hold = {
             let mut activations = self.activations.lock().unwrap();
             activations.push(key.clone());
@@ -194,6 +207,12 @@ impl Rpc for HoldResponseRpc {
         auth: &AuthCtx,
         card: Option<ScopeCard>,
     ) -> Result<SchemaValue, RpcError> {
+        if method == "inc_by" {
+            self.callee_callers
+                .lock()
+                .unwrap()
+                .push(("inc_by", callee_caller.clone()));
+        }
         let hold = method == "inc_by" && {
             let mut attempts = self.attempts.lock().unwrap();
             attempts.push(key.clone());
@@ -375,10 +394,12 @@ async fn held_response_restart_case(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let attempts = Arc::new(Mutex::new(Vec::new()));
+    let callee_callers = Arc::new(Mutex::new(Vec::new()));
     let effect_applied = Arc::new(tokio::sync::Notify::new());
     let overrides = TestExecutorOverrides {
         wrap_rpc: Some(Arc::new({
             let attempts = attempts.clone();
+            let callee_callers = callee_callers.clone();
             let effect_applied = effect_applied.clone();
             move |rpc| {
                 Arc::new(HoldResponseRpc {
@@ -386,6 +407,7 @@ async fn held_response_restart_case(
                     hold: Hold::Response(held),
                     activations: Arc::default(),
                     attempts: attempts.clone(),
+                    callee_callers: callee_callers.clone(),
                     effect_applied: effect_applied.clone(),
                     hold_first_cancel: false,
                     cancel_results: Arc::default(),
@@ -495,6 +517,29 @@ async fn held_response_restart_case(
         count, expected_count,
         "the target must apply each effect once; {context}"
     );
+    // The redispatch after the restart gives the target the caller of the lost dispatch: the
+    // root's caller as the original caller, and the calling agent as the immediate one.
+    let callee_callers = callee_callers
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(kind, _)| *kind == "inc_by")
+        .map(|(_, caller)| caller.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(callee_callers.len(), attempts.len(), "{context}");
+    assert_eq!(callee_callers[held + 1], callee_callers[held], "{context}");
+    let calling_agent = callers::agent_in(
+        caller.clone(),
+        executor.get_worker_metadata(&caller).await?.fingerprint,
+        component.environment_id,
+    )
+    .immediate;
+    for callee_caller in &callee_callers {
+        assert!(
+            callee_caller.immediate.same_record(&calling_agent),
+            "{callee_caller:?}; {context}"
+        );
+    }
     Ok(())
 }
 
@@ -521,6 +566,7 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
                     hold: Hold::Response(0),
                     activations: Arc::default(),
                     attempts: Arc::default(),
+                    callee_callers: Arc::default(),
                     effect_applied: effect_applied.clone(),
                     hold_first_cancel: true,
                     cancel_results: cancel_results.clone(),
@@ -657,10 +703,12 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let activations = Arc::new(Mutex::new(Vec::new()));
+    let callee_callers = Arc::new(Mutex::new(Vec::new()));
     let created = Arc::new(tokio::sync::Notify::new());
     let overrides = TestExecutorOverrides {
         wrap_rpc: Some(Arc::new({
             let activations = activations.clone();
+            let callee_callers = callee_callers.clone();
             let created = created.clone();
             move |rpc| {
                 Arc::new(HoldResponseRpc {
@@ -668,6 +716,7 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
                     hold: Hold::Activation,
                     activations: activations.clone(),
                     attempts: Arc::default(),
+                    callee_callers: callee_callers.clone(),
                     effect_applied: created.clone(),
                     hold_first_cancel: false,
                     cancel_results: Arc::default(),
@@ -688,17 +737,22 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
     let target_id = agent_id!("RpcCounter", "held-activation-target");
     let target = AgentId::from_agent_id(component.id, &target_id).map_err(anyhow::Error::msg)?;
     let key = IdempotencyKey::fresh();
+    // The account that starts the root call, also on its retry.
+    let account = callers::account(AccountId::new());
     let invocation = {
         let executor = executor.clone();
         let component = component.clone();
         let caller_id = caller_id.clone();
         let key = key.clone();
+        let account = account.clone();
         tokio::spawn(async move {
             executor
-                .invoke_and_await_agent_with_key(
+                .invoke_and_await_agent_impl(
                     &component,
                     &caller_id,
-                    &key,
+                    Some(&key),
+                    None,
+                    Some(account),
                     "try_call_counter",
                     data_value!("held-activation-target"),
                 )
@@ -714,10 +768,12 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
     let executor = start_with_overrides(deps, &context, overrides).await?;
     tokio::time::timeout(
         Duration::from_secs(30),
-        executor.invoke_and_await_agent_with_key(
+        executor.invoke_and_await_agent_impl(
             &component,
             &caller_id,
-            &key,
+            Some(&key),
+            None,
+            Some(account.clone()),
             "try_call_counter",
             data_value!("held-activation-target"),
         ),
@@ -749,9 +805,29 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
     );
     assert_eq!(create_requests[0].idempotency_key, activations[0].clone());
     let caller_fingerprint = executor.get_worker_metadata(&caller).await?.fingerprint;
-    assert_eq!(
-        create_requests[0].caller,
-        callers::agent_in(caller.clone(), caller_fingerprint, component.environment_id)
+    // Every attempt across the restart gives the target the same caller: the account that
+    // started the root call, and the calling agent.
+    let expected = Caller {
+        immediate: callers::agent_in(caller.clone(), caller_fingerprint, component.environment_id)
+            .immediate,
+        ..account
+    };
+    let callee_callers = callee_callers
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(kind, _)| *kind == "activation")
+        .map(|(_, caller)| caller.clone())
+        .collect::<Vec<_>>();
+    assert!(callee_callers.len() >= 2, "{callee_callers:?}");
+    for callee_caller in &callee_callers {
+        assert_eq!(callee_caller, &expected);
+    }
+    assert_eq!(create_requests[0].caller, expected);
+    let recorded = executor.recorded_callers(&target).await;
+    assert!(
+        recorded.iter().all(|(_, recorded)| recorded == &expected),
+        "{recorded:?}"
     );
     let initializations = executor
         .get_oplog(&target, OplogIndex::INITIAL)

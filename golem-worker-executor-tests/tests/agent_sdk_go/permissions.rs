@@ -446,11 +446,11 @@ impl WorkerProxy for LocalCardDeliveryProxy {
         target: &golem_common::model::OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::agent::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 

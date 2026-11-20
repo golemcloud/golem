@@ -482,6 +482,16 @@ impl Caller {
     pub fn anonymous() -> Self {
         Self::entry(Principal::Anonymous)
     }
+
+    /// The caller of a call that an agent or tool makes inside the invocation that has this
+    /// caller: the same original caller and tokens, and `immediate` as the immediate caller.
+    pub fn propagate(&self, immediate: Principal) -> Caller {
+        Caller {
+            original: self.original.clone(),
+            immediate,
+            tokens: self.tokens.clone(),
+        }
+    }
 }
 
 /// The same recorded caller: every field is equal, and claims are equal byte for byte.

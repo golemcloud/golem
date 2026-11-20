@@ -857,6 +857,7 @@ mod request_equality_tests {
                     secret_keys_revealable: Default::default(),
                     filesystem_access: ToolFilesystemAccess::Denied,
                     source,
+                    shell: false,
                 },
                 filesystem: FilesystemCapability::Incapable,
                 middleware_chain: None,

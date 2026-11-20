@@ -255,7 +255,7 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
             .invoke_and_await_agent_as_caller(
                 &component,
                 &caller,
-                user,
+                user.clone(),
                 "report_of_peer",
                 data_value!(callee_name),
             )
@@ -269,18 +269,15 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
         peer.triggered, callee_reports[1],
         "the caller's invocation metadata names the callee's invocation"
     );
-    // Until the original caller propagates through RPC, `original` falls back to the immediate
-    // caller: the calling agent, in both roles.
+    // The peer keeps the user as the original caller and sees the calling agent as the immediate
+    // caller, in its constructor (create on demand) and in its method.
     let agent_prefix = agent_text_prefix(&caller_id);
-    for text in [
-        &peer_report.constructor.original,
-        &peer_report.constructor.immediate,
-        &peer_report.method.original,
-        &peer_report.method.immediate,
-    ] {
+    for observed in [&peer_report.constructor, &peer_report.method] {
+        assert_eq!(observed.original, user_text);
         assert!(
-            text.starts_with(&agent_prefix),
-            "{text} is not {agent_prefix}"
+            observed.immediate.starts_with(&agent_prefix),
+            "{} is not {agent_prefix}",
+            observed.immediate
         );
     }
     assert_eq!(peer_report.constructor.invocation_id, None);
@@ -291,11 +288,31 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
     assert!(
         peer_report
             .method_caller
-            .starts_with(&format!("original={agent_prefix}"))
+            .starts_with(&format!("original={user_text} immediate={agent_prefix}"))
             && peer_report.method_caller.ends_with(" tokens=0"),
         "{}",
         peer_report.method_caller
     );
+
+    // The peer recorded the same caller for its creation, the awaited call and the triggered
+    // call: the user, and the calling agent as it is.
+    let calling_agent = callers::agent_in(
+        caller_id.clone(),
+        executor.get_worker_metadata(&caller_id).await?.fingerprint,
+        component.environment_id,
+    )
+    .immediate;
+    let expected = golem_common::model::caller::Caller {
+        immediate: calling_agent,
+        ..user
+    };
+    let recorded = executor.recorded_callers(&callee_id).await;
+    let count = |wanted: &str| recorded.iter().filter(|(name, _)| name == wanted).count();
+    assert_eq!(count("create"), 1, "{recorded:?}");
+    assert_eq!(count("report"), 2, "{recorded:?}");
+    for (name, recorded) in recorded {
+        assert_eq!(recorded, expected, "{name}");
+    }
 
     drop(executor);
     Ok(())

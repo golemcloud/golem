@@ -253,6 +253,7 @@ pub fn tool_activation_from_mcp(
         secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::new()),
         filesystem_access: ToolFilesystemAccess::Denied,
         source: mcp_import_bridge_source(),
+        shell: false,
     };
     let configuration = &deployment.tool_middleware_configuration;
     let environment_binding = configuration.environment_bindings.get(&tool_name);

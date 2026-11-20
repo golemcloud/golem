@@ -311,7 +311,7 @@ pub(crate) fn build_durable_streaming_request(
 
     if let Some(origin) = &request.origin_invocation {
         let invalid = || WorkerExecutorError::invalid_request("invalid executor RPC origin");
-        let _: EnvironmentId = origin
+        let origin_environment_id: EnvironmentId = origin
             .callee_environment_id
             .ok_or_else(invalid)?
             .try_into()
@@ -332,10 +332,13 @@ pub(crate) fn build_durable_streaming_request(
             .ok_or_else(invalid)?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
-        if fingerprint.is_nil()
-            || origin.idempotency_key.is_none()
-            || !matches!(&caller.immediate, Principal::Agent(agent) if agent.address == parent)
-        {
+        // The calling code is the agent that made the call, or a tool that this agent hosts.
+        let internal = match &caller.immediate {
+            Principal::Agent(agent) => agent.address == parent,
+            Principal::Tool(tool) => tool.environment_id == origin_environment_id,
+            _ => false,
+        };
+        if fingerprint.is_nil() || origin.idempotency_key.is_none() || !internal {
             return Err(invalid());
         }
     }

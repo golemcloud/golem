@@ -349,7 +349,7 @@ impl Rpc for ActivatingRpc {
         _target: &OwnedAgentId,
         _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
-        _owner: &AgentId,
+        _canceller: &golem_common::model::caller::Principal,
         _auth: &AuthCtx,
     ) -> Result<bool, ServiceRpcError> {
         Err(ServiceRpcError::ProtocolError {
@@ -364,6 +364,7 @@ impl Rpc for ActivatingRpc {
         _request_key: InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
         _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
         Err(ServiceRpcError::ProtocolError {
@@ -461,7 +462,7 @@ impl Rpc for RecordingScopeCardRpc {
         _target: &OwnedAgentId,
         _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
-        _owner: &AgentId,
+        _canceller: &golem_common::model::caller::Principal,
         _auth: &AuthCtx,
     ) -> Result<bool, ServiceRpcError> {
         Err(ServiceRpcError::ProtocolError {
@@ -476,6 +477,7 @@ impl Rpc for RecordingScopeCardRpc {
         _request_key: InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
         _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
         Err(ServiceRpcError::ProtocolError {
