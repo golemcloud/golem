@@ -51,6 +51,9 @@ struct Faults {
     saves: AtomicUsize,
     /// The hold of the next save, when a test asked for one.
     hold: Mutex<Option<SaveHold>>,
+    /// A publication that has read its tree and can land even after executor shutdown.
+    publication_hold: Mutex<Option<SaveHold>>,
+    publication_results: Mutex<std::collections::HashMap<String, Result<(), String>>>,
     restored: Mutex<Vec<Box<str>>>,
     /// The names of the restores that gave a tree, in the order of their ends.
     completed_restores: Mutex<Vec<Box<str>>>,
@@ -109,20 +112,28 @@ impl HeldSave {
 }
 
 /// A filesystem snapshot store in memory, with faults and counts for tests.
-#[derive(Clone)]
 pub struct TestFilesystemSnapshotStore {
-    inner: InMemorySnapshotStore,
+    inner: Arc<InMemorySnapshotStore>,
     faults: Arc<Faults>,
 }
 
-/// The failure of a test whose store got a write into an agent after a delete of all its
-/// snapshots.
-const WRITE_AFTER_DELETE_ALL: &str =
-    "no write goes into an agent after a delete of all its snapshots";
+impl Clone for TestFilesystemSnapshotStore {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::new(self.inner.as_ref().clone()),
+            faults: Arc::clone(&self.faults),
+        }
+    }
+}
 
-/// Runs the test `test` with a new store, and then checks that no write went into an agent after a
-/// delete of all its snapshots, also a write of a background job. It is the only way that a test
-/// gets a store, so no test skips the check. It gives the error of the test when the test failed,
+/// The failure of a test whose caller started a write after a delete of all snapshots.
+const WRITE_AFTER_DELETE_ALL: &str =
+    "no caller starts a write into an agent after a delete of all its snapshots";
+
+/// Runs `test` with a new store, then checks that no caller started a write after a delete of all
+/// snapshots, including background jobs. A publication submitted before shutdown can still land
+/// after another executor deletes the namespace; that is not a new caller write. It is the only
+/// way that a test gets a store, so no test skips the check. It gives the error of a failed test
 /// with the writes that the check found, and otherwise the failure of the check.
 pub async fn with_snapshot_store<T, F, Fut>(test: F) -> anyhow::Result<T>
 where
@@ -145,7 +156,7 @@ impl TestFilesystemSnapshotStore {
     /// [`with_snapshot_store`].
     fn new() -> Self {
         Self {
-            inner: InMemorySnapshotStore::new(),
+            inner: Arc::new(InMemorySnapshotStore::new()),
             faults: Arc::default(),
         }
     }
@@ -182,6 +193,38 @@ impl TestFilesystemSnapshotStore {
             started: started_receiver,
             released,
         }
+    }
+
+    /// Holds the next save after it reads its tree, as a submitted storage PUT whose answer is
+    /// delayed. The run keeps its slot and does not report a wait for late writes. The publication
+    /// survives cancellation and executor shutdown. Dropping the hold releases it;
+    /// `publication_result` reports when the storage write actually ends.
+    pub fn hold_next_publication(&self) -> HeldSave {
+        let (started, started_receiver) = watch::channel(None);
+        let (released, released_receiver) = watch::channel(false);
+        *self
+            .faults
+            .publication_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SaveHold {
+            started,
+            released: released_receiver,
+        });
+        HeldSave {
+            started: started_receiver,
+            released,
+        }
+    }
+
+    /// The result of a held publication once its storage write ended, even if the executor that
+    /// submitted it has stopped waiting for the answer.
+    pub fn publication_result(&self, name: &str) -> Option<Result<(), String>> {
+        self.faults
+            .publication_results
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()
     }
 
     /// Holds the next copy that starts: it reports its target, then waits before it copies
@@ -422,8 +465,8 @@ impl TestFilesystemSnapshotStore {
         .unwrap_or_else(failed)
     }
 
-    /// Each write that a caller made into an agent after a delete of all its snapshots, which the
-    /// store refused. A caller never makes one, so a test can assert that this is empty.
+    /// Each new write that a caller started after a delete of all snapshots, which the store
+    /// refused. This does not include publications submitted before another executor's delete.
     pub fn writes_after_delete_all(&self) -> Vec<String> {
         self.inner.writes_after_delete_all()
     }
@@ -483,10 +526,50 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             drop(slot);
             return Err(self.failed_runs(slots).await);
         }
-        let info = self
-            .inner
-            .save(agent, name, tree, parent, cancel, &Unlimited)
-            .await;
+        let publication = self
+            .faults
+            .publication_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let info = if let Some(hold) = publication {
+            let (inner, faults) = (Arc::clone(&self.inner), Arc::clone(&self.faults));
+            let (agent, name, tree, cancel) = (
+                agent.clone(),
+                name.clone(),
+                tree.to_path_buf(),
+                cancel.clone(),
+            );
+            // The task is the storage write already in flight, not executor work. It owns the
+            // read tree before it reports the gate, so teardown can discard the capture safely.
+            tokio::spawn(async move {
+                let result = inner
+                    .save_with_publication(
+                        &agent,
+                        &name,
+                        &tree,
+                        &cancel,
+                        &Unlimited,
+                        hold.hold(name.as_str()),
+                    )
+                    .await;
+                faults
+                    .publication_results
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(
+                        name.as_str().to_string(),
+                        result.as_ref().map(|_| ()).map_err(ToString::to_string),
+                    );
+                result
+            })
+            .await
+            .map_err(|error| SaveError::Failed(Failed::new(error.into())))?
+        } else {
+            self.inner
+                .save(agent, name, tree, parent, cancel, &Unlimited)
+                .await
+        };
         drop(slot);
         let info = info?;
         let offset = *self
