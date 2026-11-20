@@ -113,7 +113,7 @@ async fn go_http_compensation_survives_executor_restart(
         )
         .await?;
     let key = IdempotencyKey::fresh();
-    let invocation = {
+    let mut invocation = {
         let executor = executor.clone();
         let component = component.clone();
         let agent_id = agent_id.clone();
@@ -130,7 +130,11 @@ async fn go_http_compensation_survives_executor_restart(
                 .await
         })
     };
-    peer.held.notified().await;
+    tokio::select! {
+        _ = peer.held.notified() => {}
+        result = &mut invocation => panic!("saga finished before the compensation hold: {result:?}; attempts: {:?}", peer.attempts.lock().unwrap()),
+        _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => panic!("saga did not reach the compensation hold within 30s; attempts: {:?}", peer.attempts.lock().unwrap()),
+    }
     assert_eq!(
         peer.effects
             .lock()

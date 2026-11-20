@@ -79,9 +79,8 @@ impl SagaPeer {
                 async move {
                     let key = headers
                         .get("idempotency-key")
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
                         .to_string();
                     let first = {
                         let mut attempts = attempts.lock().unwrap();
@@ -153,6 +152,10 @@ impl SagaPeer {
     pub fn assert_recovered(&self, expected: &[&str], held: &str) {
         let effects = self.effects.lock().unwrap().clone();
         let attempts = self.attempts.lock().unwrap().clone();
+        assert!(
+            attempts.iter().all(|(_, key)| !key.is_empty()),
+            "lost idempotency key: {attempts:?}"
+        );
         assert_eq!(
             effects
                 .iter()
@@ -227,12 +230,15 @@ async fn golem_rust_compensation_survives_executor_restart(
         .start_agent_with(
             &component.id,
             agent_id.clone(),
-            HashMap::from([("PORT".to_string(), peer.port.to_string())]),
+            HashMap::from([
+                ("PORT".to_string(), peer.port.to_string()),
+                ("HTTP_TIMEOUT_SECS".to_string(), "120".to_string()),
+            ]),
             Vec::new(),
         )
         .await?;
     let key = IdempotencyKey::fresh();
-    let invocation = {
+    let mut invocation = {
         let executor = executor.clone();
         let component = component.clone();
         let agent_id = agent_id.clone();
@@ -249,7 +255,11 @@ async fn golem_rust_compensation_survives_executor_restart(
                 .await
         })
     };
-    peer.held.notified().await;
+    tokio::select! {
+        _ = peer.held.notified() => {}
+        result = &mut invocation => panic!("saga finished before the compensation hold: {result:?}; attempts: {:?}", peer.attempts.lock().unwrap()),
+        _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => panic!("saga did not reach the compensation hold within 30s; attempts: {:?}", peer.attempts.lock().unwrap()),
+    }
     assert_eq!(
         peer.effects
             .lock()
