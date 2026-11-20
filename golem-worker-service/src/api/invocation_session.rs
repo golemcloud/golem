@@ -495,9 +495,12 @@ struct AdapterState {
     tokens: Option<TokenContext>,
     attachment_epoch: u64,
     invalid_items_ready: Arc<Notify>,
-    /// The request sender of a client handler that stopped while an input ended after an
-    /// invalid item still waits for its private cancellation.
+    /// A request sender kept while an input ended after an invalid item waits for its private
+    /// cancellation, so the request stream stays open for it when the client handler stops.
     invalid_item_requests: Option<mpsc::Sender<AdmittedRequest>>,
+    /// The request sender of the client handler, kept as `invalid_item_requests` in the same
+    /// step that records an invalid item.
+    client_requests: Option<mpsc::WeakSender<AdmittedRequest>>,
     /// The client handler stopped, so no ACK or cancellation reaches the client any more.
     client_gone: bool,
 }
@@ -534,6 +537,7 @@ impl AdapterState {
             attachment_epoch: 0,
             invalid_items_ready: Arc::new(Notify::new()),
             invalid_item_requests: None,
+            client_requests: None,
             client_gone: false,
         }
     }
@@ -1232,36 +1236,63 @@ async fn serve_session_messages(
     }
     let _ = setup_complete.send(());
     let state = Arc::new(Mutex::new(initial_state));
-    let responses = started.responses;
-    {
-        let request_sender_for_responses = request_sender.downgrade();
-        let client = handle_client_messages(
-            websocket_stream,
-            request_sender,
-            outbound.clone(),
-            state.clone(),
-            budgets,
-            attempt_id,
-        );
-        let server = handle_private_responses(
-            responses,
-            request_sender_for_responses,
-            outbound.clone(),
-            state,
-            keyring,
-            token_bindings,
-            token_key_id,
-            attempt_id,
-        );
-        tokio::pin!(client, server);
-        tokio::select! {
-            _ = &mut client => {
-                let _ = tokio::time::timeout(CLIENT_GONE_DRAIN_TIMEOUT, &mut server).await;
-            }
-            _ = &mut server => {}
+    run_accepted_session(
+        websocket_stream,
+        request_sender,
+        started.responses,
+        outbound,
+        state,
+        budgets,
+        keyring,
+        token_bindings,
+        token_key_id,
+        attempt_id,
+    )
+    .await;
+}
+
+/// Runs an accepted session until the client and the private responses are done.
+///
+/// The private responses run on their own task, so a session dropped with its connection
+/// never drops them in the middle of a response. The task stops before it reads the next
+/// response, unless an input ended after an invalid item still needs its private cancellation.
+#[allow(clippy::too_many_arguments)]
+async fn run_accepted_session<S, R>(
+    websocket: S,
+    requests: mpsc::Sender<AdmittedRequest>,
+    responses: R,
+    outbound: Outbound,
+    state: Arc<Mutex<AdapterState>>,
+    budgets: SessionBudgets,
+    keyring: Arc<InvocationSessionTokenKeyring>,
+    bindings: InvocationSessionTokenBindings,
+    token_key_id: String,
+    attempt_id: Uuid,
+) where
+    S: futures::Stream<Item = std::io::Result<AdmittedMessage>> + Unpin,
+    R: futures::Stream<Item = Result<InvocationResponse, tonic::Status>> + Unpin + Send + 'static,
+{
+    let stopped = tokio_util::sync::CancellationToken::new();
+    let _stop_responses = stopped.clone().drop_guard();
+    let mut server = tokio::spawn(handle_private_responses(
+        responses,
+        requests.downgrade(),
+        outbound.clone(),
+        state.clone(),
+        keyring,
+        bindings,
+        token_key_id,
+        attempt_id,
+        stopped,
+    ));
+    let client = handle_client_messages(websocket, requests, outbound, state, budgets, attempt_id);
+    tokio::pin!(client);
+    tokio::select! {
+        _ = &mut client => {
+            let _ = tokio::time::timeout(CLIENT_GONE_DRAIN_TIMEOUT, &mut server).await;
         }
+        _ = &mut server => {}
     }
-    drop(outbound);
 }
 
 fn invocation_session_websocket(
@@ -1570,9 +1601,10 @@ async fn handle_client_messages<S>(
 ) where
     S: futures::Stream<Item = std::io::Result<AdmittedMessage>> + Unpin,
 {
+    state.lock().await.client_requests = Some(requests.downgrade());
     receive_client_messages(
         websocket,
-        requests.clone(),
+        requests,
         outbound,
         state.clone(),
         budgets,
@@ -1584,7 +1616,6 @@ async fn handle_client_messages<S>(
     let mut state = state.lock().await;
     state.client_gone = true;
     if has_unsent_invalid_item(&state) {
-        state.invalid_item_requests = Some(requests);
         state.invalid_items_ready.notify_one();
     }
 }
@@ -2004,6 +2035,7 @@ async fn handle_private_responses<S>(
     bindings: InvocationSessionTokenBindings,
     token_key_id: String,
     attempt_id: Uuid,
+    stopped: tokio_util::sync::CancellationToken,
 ) where
     S: futures::Stream<Item = Result<InvocationResponse, tonic::Status>> + Unpin + Send + 'static,
 {
@@ -2017,13 +2049,15 @@ async fn handle_private_responses<S>(
         bindings.clone(),
         token_key_id.clone(),
         attempt_id,
+        &stopped,
     )
     .await;
-    let public_gone = outbound.sender.is_closed();
+    // The public receiver closes with the WebSocket writer; a stopped session has no client.
+    let disconnected = outbound.sender.is_closed() || stopped.is_cancelled();
     drop(outbound);
     {
         let state = state.lock().await;
-        if !(public_gone || state.client_gone)
+        if !(disconnected || state.client_gone)
             || state.protocol_state.is_complete()
             || !state
                 .channels
@@ -2103,6 +2137,7 @@ async fn cancel_invalid_items_without_client<S>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn forward_private_responses<S>(
     mut responses: S,
     requests: &mpsc::WeakSender<AdmittedRequest>,
@@ -2112,6 +2147,7 @@ async fn forward_private_responses<S>(
     bindings: InvocationSessionTokenBindings,
     token_key_id: String,
     attempt_id: Uuid,
+    stopped: &tokio_util::sync::CancellationToken,
 ) where
     S: futures::Stream<Item = Result<InvocationResponse, tonic::Status>> + Unpin,
 {
@@ -2135,6 +2171,7 @@ async fn forward_private_responses<S>(
                 continue;
             }
             _ = outbound.sender.closed() => return,
+            _ = stopped.cancelled() => return,
         };
         let response = match response {
             Ok(response) => response,
@@ -3026,6 +3063,12 @@ fn end_input_after_invalid_item(
         message,
         sent: false,
     });
+    if state.invalid_item_requests.is_none() {
+        state.invalid_item_requests = state
+            .client_requests
+            .as_ref()
+            .and_then(mpsc::WeakSender::upgrade);
+    }
     state.invalid_items_ready.notify_one();
     Ok(())
 }
@@ -3962,6 +4005,7 @@ mod tests {
             attachment_epoch: 1,
             invalid_items_ready: Arc::new(Notify::new()),
             invalid_item_requests: None,
+            client_requests: None,
             client_gone: false,
         }))
     }
@@ -4091,6 +4135,7 @@ mod tests {
             token_bindings(&AuthCtx::system()),
             keyring.active_key_id().to_string(),
             attempt,
+            tokio_util::sync::CancellationToken::new(),
         );
         futures::pin_mut!(server);
         let ack = tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -4267,6 +4312,7 @@ mod tests {
             token_bindings(&AuthCtx::system()),
             keyring.active_key_id().to_string(),
             attempt,
+            tokio_util::sync::CancellationToken::new(),
         );
         futures::pin_mut!(reader, client, server);
 
@@ -4456,6 +4502,7 @@ mod tests {
                     token_bindings(&AuthCtx::system()),
                     keyring.active_key_id().to_string(),
                     attempt,
+                    tokio_util::sync::CancellationToken::new(),
                 );
                 let server = futures::FutureExt::fuse(server);
                 futures::pin_mut!(server);
@@ -4508,6 +4555,155 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// A connection whose WebSocket write fails ends at once, while an input ended after an
+    /// invalid item waits for the ACKs of its earlier items. The executor still receives the
+    /// durable cancellation once those ACKs arrive: the private responses and a request sender
+    /// outlive the session. The adapter state is locked while the write fails, so the session
+    /// is still pending when the connection drops it.
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn an_invalid_item_cancels_its_input_after_the_connection_write_fails() {
+        for pending in 0..=2_u64 {
+            let case = format!("pending ACKs: {pending}");
+            let state = active_input_state_with_schema(restricted_u8());
+            let (wire, received) = mpsc::channel::<std::io::Result<Message>>(CHANNEL_CAPACITY);
+            for sequence in 0..=pending {
+                let value = if sequence == pending {
+                    9
+                } else {
+                    11 + sequence
+                };
+                let item = PublicClientMessage::InputStreamItem {
+                    channel: 1,
+                    sequence: DecimalU64(sequence),
+                    value: serde_json::json!({"kind": "u8", "value": value}),
+                    version: 1,
+                };
+                wire.send(Ok(Message::text(encode_text(&item).unwrap())))
+                    .await
+                    .unwrap();
+            }
+            let write_fails = Arc::new(Notify::new());
+            let sink = Box::pin(futures::sink::unfold((), {
+                let write_fails = write_fails.clone();
+                move |(), _: Message| {
+                    let write_fails = write_fails.clone();
+                    async move {
+                        write_fails.notified().await;
+                        Err::<(), _>(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+                    }
+                }
+            }));
+            let socket = WebSocketKeepAlive::from_sink_and_stream(
+                tokio_stream::wrappers::ReceiverStream::new(received),
+                sink,
+                std::time::Duration::from_secs(3600),
+                std::time::Duration::ZERO,
+            )
+            .map(|message| message.map_err(|_| std::io::Error::from(std::io::ErrorKind::TimedOut)));
+            let (requests, mut executor) = mpsc::channel(CHANNEL_CAPACITY);
+            let (responses, received_responses) = mpsc::channel(CHANNEL_CAPACITY);
+            let keyring = Arc::new(keyring());
+            let connection = serve_invocation_session_connection(socket, {
+                let state = state.clone();
+                move |incoming, outbound, budgets, setup_complete| async move {
+                    setup_complete.send(()).unwrap();
+                    // The frame whose write fails.
+                    outbound
+                        .send(Message::Text("output".into()), None)
+                        .await
+                        .unwrap();
+                    run_accepted_session(
+                        incoming,
+                        requests,
+                        tokio_stream::wrappers::ReceiverStream::new(received_responses),
+                        outbound,
+                        state,
+                        budgets,
+                        keyring.clone(),
+                        token_bindings(&AuthCtx::system()),
+                        keyring.active_key_id().to_string(),
+                        Uuid::new_v4(),
+                    )
+                    .await;
+                }
+            });
+            let mut connection = tokio::spawn(connection);
+            for sequence in 0..pending {
+                let request =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), executor.recv())
+                        .await
+                        .unwrap_or_else(|_| panic!("no input item reached the executor ({case})"))
+                        .unwrap()
+                        .request
+                        .request
+                        .unwrap();
+                let invocation_request::Request::InputItem(item) = request else {
+                    panic!("expected an input item ({case})")
+                };
+                assert_eq!(item.sequence, sequence, "{case}");
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while invalid_item_sequence(&state).await != Some(pending) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("the invalid item was not recorded ({case})"));
+            assert!(
+                !connection.is_finished(),
+                "the connection ended early ({case})"
+            );
+
+            let locked = state.lock().await;
+            write_fails.notify_one();
+            tokio::time::timeout(std::time::Duration::from_secs(2), &mut connection)
+                .await
+                .unwrap_or_else(|_| panic!("a failed write must end the connection ({case})"))
+                .unwrap();
+            drop(locked);
+
+            for sequence in 0..pending {
+                assert!(
+                    responses
+                        .send(Ok(input_ack_for(7, sequence, 5 + sequence)))
+                        .await
+                        .is_ok(),
+                    "the private responses were dropped with the session ({case})"
+                );
+            }
+            let next_request =
+                tokio::time::timeout(std::time::Duration::from_secs(2), executor.recv())
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|request| request.request.request);
+            let Some(invocation_request::Request::StreamCancel(private)) = next_request else {
+                panic!("the executor did not receive the input cancellation ({case})")
+            };
+            assert_eq!(
+                (private.transport_stream_id, private.producer_sequence),
+                (7, pending),
+                "{case}"
+            );
+            assert_eq!(private.role(), StreamCancelRole::InputProducer, "{case}");
+            assert_eq!(
+                private.reason(),
+                StreamCancelReason::SourceUnavailable,
+                "{case}"
+            );
+            // Without the client the request stream ends after the cancellation.
+            let end = tokio::time::timeout(std::time::Duration::from_secs(2), executor.recv())
+                .await
+                .map(|request| request.is_none());
+            assert_eq!(
+                end.ok(),
+                Some(true),
+                "the request stream stayed open ({case})"
+            );
         }
     }
 
@@ -5289,6 +5485,7 @@ mod tests {
             attachment_epoch: 1,
             invalid_items_ready: Arc::new(Notify::new()),
             invalid_item_requests: None,
+            client_requests: None,
             client_gone: false,
         }));
 
