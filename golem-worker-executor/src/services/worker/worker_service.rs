@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::running_workers::stale_reason;
+use super::status::SplitStatusHash;
 use super::*;
 
 #[async_trait]

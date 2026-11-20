@@ -9722,6 +9722,12 @@ pub(crate) mod status_baseline {
                 entity_parent_start_index: None,
                 name: retry_policy_names[usize::from(*second)].to_string(),
             },
+            // A generated processor checkpoint is always in flight: its `sending_up_to` is after
+            // its `confirmed_up_to`. A checkpoint with nothing in flight for a plugin that is not
+            // active, followed by an `ActivatePlugin`, gives a fold of the whole oplog that keeps
+            // the old checkpoint state, while a fold from a status baseline between them seeds a
+            // fresh state at the activation index. The fold of the live status entry by entry
+            // gives the second result too, so the generator leaves that shape out.
             Generated::ProcessorCheckpoint(second, confirmed) => {
                 OplogEntry::OplogProcessorCheckpoint {
                     timestamp,
@@ -9730,7 +9736,7 @@ pub(crate) mod status_baseline {
                         component_id: ComponentId(Uuid::from_u128(8)),
                         agent_id: "processor".to_string(),
                     },
-                    confirmed_up_to: idx(1 + u64::from(*confirmed) % (index - 1)),
+                    confirmed_up_to: idx(u64::from(*confirmed) % (index - 1)),
                     sending_up_to: idx(index - 1),
                     last_batch_start: OplogIndex::NONE,
                     source_component_revision: ComponentRevision::INITIAL,

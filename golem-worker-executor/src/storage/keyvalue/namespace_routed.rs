@@ -442,4 +442,50 @@ mod tests {
             &storage.persistent,
         ));
     }
+
+    /// A write with an expiry to a namespace that has no expiry fails, also when the namespace
+    /// is the status baseline. A write with an expiry to a derived cache succeeds.
+    #[test]
+    async fn an_expiry_is_refused_for_a_namespace_with_no_expiry() {
+        let storage = NamespaceRoutedKeyValueStorage::new(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            Arc::new(InMemoryKeyValueStorage::new()),
+        );
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "expiry-guard".to_string(),
+        };
+        let fingerprint = golem_common::model::AgentFingerprint(uuid::Uuid::nil());
+        let baseline = KeyValueStorageNamespace::AgentStatusCheckpoint {
+            agent_id: agent_id.clone().into(),
+            fingerprint,
+        };
+        let cache = KeyValueStorageNamespace::AgentStatus {
+            agent_id: agent_id.into(),
+            fingerprint,
+        };
+        let expiry = Duration::from_secs(60);
+        let sets: [(&str, &[u8]); 1] = [("core", b"v")];
+        let set = |namespace| {
+            storage.set_with_expiry("test", "set", "entity", namespace, "core", b"v", expiry)
+        };
+        let mutate = |namespace| {
+            storage.compare_and_mutate_many(
+                "test",
+                "mutate",
+                "entity",
+                namespace,
+                "core",
+                None,
+                &sets,
+                &[],
+                expiry,
+            )
+        };
+
+        assert!(set(baseline.clone()).await.is_err());
+        assert!(mutate(baseline).await.is_err());
+        assert!(set(cache.clone()).await.is_ok());
+        assert!(mutate(cache).await.is_ok());
+    }
 }
