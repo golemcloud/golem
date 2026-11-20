@@ -18,7 +18,7 @@ package golem.runtime
 
 import golem.config.{AgentConfigDeclaration, AgentConfigSource}
 import golem.runtime.http.{HttpEndpointDetails, HttpMountDetails}
-import golem.schema.{MetadataEnvelope, SchemaBuilder, SchemaGraph}
+import golem.schema.{MetadataEnvelope, SchemaBuilder, SchemaGraph, SchemaValue}
 import golem.schema.wire.{GraphEncoder, SchemaWire, WitSchemaGraph}
 
 final case class WireParameterMetadata(name: String, source: FieldSource, schema: Int, metadata: MetadataEnvelope)
@@ -42,7 +42,7 @@ final case class WireConfigDeclaration(
   source: AgentConfigSource,
   path: List[String],
   schema: Int,
-  defaultValue: Option[String] = None
+  defaultValue: Option[SchemaValue] = None
 )
 
 /**

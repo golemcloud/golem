@@ -137,8 +137,8 @@ export interface ReflectedConfigDeclaration {
   readonly path: ReadonlyArray<string>
   readonly source: "local" | "secret"
   readonly schema: SchemaRef
-  /** Canonical schema JSON; `undefined` means no default, while `"null"` is an explicit default. */
-  readonly defaultValue?: string
+  /** Native static data; `undefined` differs from an option-none value. */
+  readonly defaultValue?: CoreTypes.SchemaValueTree
 }
 
 /**
@@ -289,7 +289,11 @@ const wrap = (registration: AgentHost.RegisteredAgentType): AgentType => {
         path: Object.freeze([...declaration.path]),
         source: declaration.source,
         schema: SchemaRef.fromImmutableGraph(sharedGraph, rootAt(declaration.valueType)),
-        defaultValue: declaration.defaultValue,
+        get defaultValue() {
+          return declaration.defaultValue === undefined
+            ? undefined
+            : structuredClone(declaration.defaultValue)
+        },
       }),
     ),
   )

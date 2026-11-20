@@ -507,8 +507,8 @@ type QueuedCardEventRevoke struct {
 }
 
 const (
-	QueuedCardEventInstall uint8 = 0
-	QueuedCardEventRevoke  uint8 = 1
+	QueuedCardEventInstallTag uint8 = 0
+	QueuedCardEventRevokeTag  uint8 = 1
 )
 
 type QueuedCardEvent struct {
@@ -521,23 +521,23 @@ func (self QueuedCardEvent) Tag() uint8 {
 }
 
 func (self QueuedCardEvent) Install() QueuedCardEventInstall {
-	if self.tag != QueuedCardEventInstall {
+	if self.tag != QueuedCardEventInstallTag {
 		panic("tag mismatch")
 	}
 	return self.value.(QueuedCardEventInstall)
 }
 func (self QueuedCardEvent) Revoke() QueuedCardEventRevoke {
-	if self.tag != QueuedCardEventRevoke {
+	if self.tag != QueuedCardEventRevokeTag {
 		panic("tag mismatch")
 	}
 	return self.value.(QueuedCardEventRevoke)
 }
 
 func MakeQueuedCardEventInstall(value QueuedCardEventInstall) QueuedCardEvent {
-	return QueuedCardEvent{QueuedCardEventInstall, value}
+	return QueuedCardEvent{QueuedCardEventInstallTag, value}
 }
 func MakeQueuedCardEventRevoke(value QueuedCardEventRevoke) QueuedCardEvent {
-	return QueuedCardEvent{QueuedCardEventRevoke, value}
+	return QueuedCardEvent{QueuedCardEventRevokeTag, value}
 }
 
 // Parameters for a card-event-queued oplog entry.
@@ -6042,12 +6042,12 @@ func wasm_lower_1_t208(pinner *runtime.Pinner, value golem_api_retry.NamedRetryP
 func wasm_lower_1_t297(pinner *runtime.Pinner, value QueuedCardEvent, dst unsafe.Pointer) {
 
 	switch value.Tag() {
-	case QueuedCardEventInstall:
+	case QueuedCardEventInstallTag:
 		payload := value.Install()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
 		wasm_lower_1_t295(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
-	case QueuedCardEventRevoke:
+	case QueuedCardEventRevokeTag:
 		payload := value.Revoke()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
 		wasm_lower_1_t296(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))

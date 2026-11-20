@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::validated_to_anyhow;
+use crate::app::build::extract_component_metadata::extract_and_store_component_metadata;
+use crate::app::context::{BuildContext, validated_to_anyhow};
 
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{OptionalComponentNames, PostDeployArgs};
@@ -28,7 +29,9 @@ use crate::model::agent::action_result::{
     AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
 use crate::model::agent::{AgentActionError, AgentUpdateMode};
-use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
+use crate::model::app::{
+    ApplicationComponentSelectMode, BuildConfig, ComponentDependency, DynamicHelpSections,
+};
 use crate::model::app_raw;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{

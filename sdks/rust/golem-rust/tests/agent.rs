@@ -1797,21 +1797,17 @@ mod tests {
         }
 
         async fn foo(&self, name: String) -> String {
-            AgentWithPrincipalAutoInjection1Client::upsert(name.clone())
+            AgentWithContextInjection1Client::upsert(name.clone())
                 .foo(name.clone())
                 .await;
 
-            AgentWithPrincipalAutoInjection2Client::upsert(name.clone(), 1, "required".into())
+            AgentWithContextInjection2Client::upsert(name.clone(), 1, "required".into())
                 .foo(name.clone(), 1, "required".into())
                 .await;
 
-            AgentWithPrincipalAutoInjection3Client::upsert(
-                name.clone(),
-                1,
-                Some("not-undefined".into()),
-            )
-            .foo_without_principal_1("name".into(), 1)
-            .await;
+            AgentWithContextInjection3Client::upsert(name.clone(), 1, Some("not-undefined".into()))
+                .foo_without_context_1("name".into(), 1)
+                .await;
 
             "finished".into()
         }
@@ -2285,7 +2281,7 @@ mod tests {
             .invoke(
                 "get_constructor".to_string(),
                 direct::encode(&NoArguments {}).unwrap(),
-                Principal::Anonymous,
+                InvocationContext::anonymous(),
             )
             .await
             .unwrap();
