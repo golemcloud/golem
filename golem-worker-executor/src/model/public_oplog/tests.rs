@@ -2871,10 +2871,12 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
         message: "needle".to_string(),
         trace_context: None,
     };
-    let mut indices = Vec::new();
-    for entry in [needle(), log_entry(0), needle(), log_entry(0), needle()] {
-        indices.push(oplog.add(entry).await.unwrap());
-    }
+    let oplog_ref = &oplog;
+    let indices = futures::StreamExt::collect::<Vec<_>>(futures::StreamExt::then(
+        futures::stream::iter([needle(), log_entry(0), needle(), log_entry(0), needle()]),
+        move |entry| async move { oplog_ref.add(entry).await.unwrap() },
+    ))
+    .await;
     oplog.commit(CommitLevel::Always).await.unwrap();
     let limits = |count| PublicOplogPageLimits {
         count,
@@ -2942,6 +2944,15 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
         vec![(indices[3], true), (indices[4], true)]
     );
     assert_eq!(past_the_end.last_index, indices[4]);
+    // An end at the largest index does not overflow the count of the page.
+    let at_the_largest_index = read_page(indices[3], OplogIndex::from_u64(u64::MAX), 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        page_indices(&at_the_largest_index.entries),
+        vec![(indices[3], true), (indices[4], true)]
+    );
+    assert_eq!(at_the_largest_index.last_index, indices[4]);
 
     // The range drops the matches before and after it.
     let search = search_public_oplog_page(
@@ -2965,11 +2976,28 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
     assert_eq!(search.last_index, indices[3]);
     assert_eq!(search.next_oplog_index, indices[4]);
 
-    assert!(oplog_read_end(indices[3], Some(indices[2])).is_err());
+    let search_to_the_largest_index = search_public_oplog_page(
+        Arc::new(PanicComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        ComponentRevision::INITIAL,
+        indices[3],
+        Some(OplogIndex::from_u64(u64::MAX)),
+        limits(100),
+        "needle",
+        ScanBudget::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        oplog_read_end(indices[3], Some(indices[3])).unwrap(),
-        Some(indices[3])
+        page_indices(&search_to_the_largest_index.entries),
+        vec![(indices[4], true)]
     );
+    assert_eq!(search_to_the_largest_index.last_index, indices[4]);
 }
 
 #[test]

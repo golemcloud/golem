@@ -18,8 +18,9 @@ use super::{
     PublicOplogPageLimits, SearchOplogRequest, SearchOplogResponse, Status, Stream, UsesAllDeps,
     WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, check_oplog_cursor_query,
     extract_owned_agent_id, get_public_oplog_entry, get_public_oplog_page, golem, min,
-    oplog_page_cursor, oplog_page_start, oplog_read_end, search_public_oplog_page,
+    oplog_page_cursor, oplog_page_start, search_public_oplog_page,
 };
+use golem_common::model::oplog::OplogRange;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -57,8 +58,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         let cursor = request.cursor.map(Into::into);
         check_oplog_cursor_query(&owned_agent_id, cursor.as_ref(), None)?;
-        let from = OplogIndex::from_u64(request.from_oplog_index).max(OplogIndex::INITIAL);
-        let end = oplog_read_end(from, request.to_oplog_index.map(OplogIndex::from_u64))?;
+        let range = oplog_range(Some(request.from_oplog_index), request.to_oplog_index)?;
 
         let component_service = self.component_service();
         let identity = self
@@ -79,7 +79,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id,
             agent_mode,
             cursor,
-            from,
+            range.start(),
         )
         .await?;
         let chunk = get_public_oplog_page(
@@ -92,7 +92,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_type_name.as_ref(),
             start_component_revision,
             start,
-            end,
+            range.end(),
             limits,
         )
         .await
@@ -180,11 +180,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         let cursor = request.cursor.map(Into::into);
         check_oplog_cursor_query(&owned_agent_id, cursor.as_ref(), Some(&request.query))?;
-        let from = request
-            .from_oplog_index
-            .map_or(OplogIndex::INITIAL, OplogIndex::from_u64)
-            .max(OplogIndex::INITIAL);
-        let end = oplog_read_end(from, request.to_oplog_index.map(OplogIndex::from_u64))?;
+        let range = oplog_range(request.from_oplog_index, request.to_oplog_index)?;
 
         let component_service = self.component_service();
         let identity = self
@@ -205,7 +201,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id,
             agent_mode,
             cursor,
-            from,
+            range.start(),
         )
         .await?;
         let chunk = search_public_oplog_page(
@@ -218,7 +214,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_type_name.as_ref(),
             start_component_revision,
             start,
-            end,
+            range.end(),
             limits,
             &request.query,
             self.services.config().limits.scan_budget,
@@ -246,6 +242,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ),
         })
     }
+}
+
+/// The range of an oplog read request. A range that ends before its start is an invalid request.
+fn oplog_range(from: Option<u64>, to: Option<u64>) -> Result<OplogRange, WorkerExecutorError> {
+    OplogRange::new(from.map(OplogIndex::from_u64), to.map(OplogIndex::from_u64))
+        .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))
 }
 
 /// The size of the chunks in which `GetOplogEntry` sends an encoded oplog entry.

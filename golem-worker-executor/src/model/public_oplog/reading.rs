@@ -140,8 +140,8 @@ pub async fn get_public_oplog_chunk(
 
 /// Reads an oplog page for a remote reader. The page omits entries that are larger than
 /// `limits.max_entry_bytes`, and ends early when the next entry does not fit in
-/// `limits.max_bytes`. The page reads no entry after `last_oplog_index`, and its `last_index` is
-/// the end of the read: the last index of the oplog, or `last_oplog_index` when that is earlier.
+/// `limits.max_bytes`. The page reads no entry after `last_oplog_index`. Its `last_index` is the
+/// end of the read: the last index of the oplog, or `last_oplog_index` when that is earlier.
 pub async fn get_public_oplog_page(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -155,12 +155,9 @@ pub async fn get_public_oplog_page(
     last_oplog_index: Option<OplogIndex>,
     limits: PublicOplogPageLimits,
 ) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
-    let count = last_oplog_index.map_or(limits.count, |last| {
-        let to_last = (last.as_u64() + 1).saturating_sub(initial_oplog_index.as_u64());
-        limits
-            .count
-            .min(usize::try_from(to_last).unwrap_or(usize::MAX))
-    });
+    let count = limits.count.min(
+        usize::try_from(entries_up_to(initial_oplog_index, last_oplog_index)).unwrap_or(usize::MAX),
+    );
     let (mut chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
@@ -176,10 +173,25 @@ pub async fn get_public_oplog_page(
         &mut RemotePage::new(limits),
     )
     .await?;
-    if let Some(last) = last_oplog_index {
-        chunk.last_index = chunk.last_index.min(last);
-    }
+    chunk.last_index = read_end(chunk.last_index, last_oplog_index);
     Ok(chunk)
+}
+
+/// The count of the oplog entries from `index` to `end`, including both. It is 0 when `end` is
+/// before `index`, and `u64::MAX` when there is no `end`. The count saturates, so an `end` at
+/// `u64::MAX` does not overflow.
+fn entries_up_to(index: OplogIndex, end: Option<OplogIndex>) -> u64 {
+    end.map_or(u64::MAX, |end| {
+        end.as_u64()
+            .checked_sub(index.as_u64())
+            .map_or(0, |distance| distance.saturating_add(1))
+    })
+}
+
+/// The last index of a read that ends at `end`, in an oplog whose last index is `oplog_last`:
+/// `end`, or the end of the oplog when `end` is after it or when there is no `end`.
+fn read_end(oplog_last: OplogIndex, end: Option<OplogIndex>) -> OplogIndex {
+    end.map_or(oplog_last, |end| end.min(oplog_last))
 }
 
 /// Reads one oplog entry in full. `component_revision` is the revision to decode the entry with,
@@ -450,12 +462,9 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     let query = Query::parse(query)?;
 
     loop {
-        let to_last = last_oplog_index.map_or(u64::MAX, |last| {
-            (last.as_u64() + 1).saturating_sub(current_index.as_u64())
-        });
         let chunk_size = (count.saturating_sub(results.len()) as u64)
             .min(budget.remaining_entries(scanned))
-            .min(to_last) as usize;
+            .min(entries_up_to(current_index, last_oplog_index)) as usize;
         let (chunk, page_full) = read_public_oplog_chunk(
             component_service.clone(),
             oplog_service.clone(),
@@ -475,7 +484,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
         results.extend(chunk.entries);
 
         scanned += chunk.next_oplog_index.as_u64() - current_index.as_u64();
-        last_index = last_oplog_index.map_or(chunk.last_index, |last| last.min(chunk.last_index));
+        last_index = read_end(chunk.last_index, last_oplog_index);
         current_index = chunk.next_oplog_index;
         current_component_revision = chunk.current_component_revision;
 
@@ -541,21 +550,6 @@ pub fn oplog_page_cursor(
     })
 }
 
-/// The last index of an oplog read from `from` to `to`. A read without `to` goes to the end of the
-/// oplog, and a `to` after the end of the oplog ends the read at the end. A range that ends before
-/// it starts is refused.
-pub fn oplog_read_end(
-    from: OplogIndex,
-    to: Option<OplogIndex>,
-) -> Result<Option<OplogIndex>, WorkerExecutorError> {
-    match to {
-        Some(to) if to < from => Err(WorkerExecutorError::invalid_request(format!(
-            "the oplog range ends at {to}, before its start at {from}"
-        ))),
-        to => Ok(to),
-    }
-}
-
 /// Refuses a cursor of the pages of another query as stale, because continuing it would mix the
 /// results of two reads. The check reads no storage, so a read makes it before it resolves the
 /// agent: a mismatched cursor then fails the same way whether or not the agent and its storage
@@ -619,5 +613,55 @@ pub async fn oplog_page_start(
                 find_component_revision_at(oplog_service, owned_agent_id, agent_mode, from).await?;
             Ok((from, revision))
         }
+    }
+}
+
+#[cfg(test)]
+mod range_tests {
+    use super::{entries_up_to, read_end};
+    use golem_common::model::oplog::OplogIndex;
+    use test_r::test;
+
+    #[test]
+    fn a_read_counts_the_entries_up_to_its_end_without_overflow() {
+        let index = OplogIndex::from_u64;
+        [
+            ((1, None), u64::MAX),
+            ((1, Some(1)), 1),
+            ((3, Some(7)), 5),
+            ((8, Some(7)), 0),
+            ((9, Some(7)), 0),
+            ((1, Some(u64::MAX)), u64::MAX),
+            ((2, Some(u64::MAX)), u64::MAX - 1),
+            ((u64::MAX, Some(u64::MAX)), 1),
+        ]
+        .into_iter()
+        .for_each(|((from, end), expected)| {
+            assert_eq!(
+                entries_up_to(index(from), end.map(index)),
+                expected,
+                "from {from} to {end:?}"
+            )
+        });
+    }
+
+    #[test]
+    fn a_read_ends_at_its_end_or_at_the_end_of_the_oplog() {
+        let index = OplogIndex::from_u64;
+        [
+            ((10, None), 10),
+            ((10, Some(4)), 4),
+            ((10, Some(10)), 10),
+            ((10, Some(11)), 10),
+            ((10, Some(u64::MAX)), 10),
+        ]
+        .into_iter()
+        .for_each(|((oplog_last, end), expected)| {
+            assert_eq!(
+                read_end(index(oplog_last), end.map(index)),
+                index(expected),
+                "oplog last {oplog_last}, end {end:?}"
+            )
+        });
     }
 }
