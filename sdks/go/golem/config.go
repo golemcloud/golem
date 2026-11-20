@@ -24,6 +24,7 @@ import (
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	secrets "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_secrets_types"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -40,33 +41,43 @@ import (
 //
 //	type ShopConfig struct {
 //	    Greeting string
-//	    APIKey   golem.Secret[string] // a secret field, at any depth
+//	    APIKey   golem.Secret[string]
 //	}
 //	var Shop = golem.DefineConfiguredAgent[ShopID, ShopConfig](spec)
 //
 // and read it from inside a method via [Context.Config] (or, in the constructor,
 // [InitContext.Config]):
 //
-//	cfg := golem.Config(Shop, ctx)  // ctx is the running agent's *Context[S]
-//	_ = cfg.Greeting                // local field — cached (worker-lifetime), so this is fast
+//	cfg := ctx.Config(Shop)        // ctx is the running agent's *Context[S]
+//	_ = cfg.Greeting                // static field — resolved by the selected owner revision
 //	_ = cfg.APIKey.MustGet()        // secret field — re-reads the host each call (live)
 //
-// Config is materialized ONCE per worker and cached, so calling golem.Config(Shop, ctx)
-// on a hot method is near-free: local fields are read from the host on the first
-// call and reused for the worker's life. Only **secret** fields stay live — a
-// [Secret] field is a lazy handle whose [Secret.Get] re-reads the host on every
-// call, so a *rotated* secret is observed and the user decides when to read (and
-// whether to store) it.
+// Each Config call reads static fields from the host's selected owner revision.
+// The SDK does not cache values read during replay across a revision update.
+// Values saved in application state remain the application's responsibility.
+// A [Secret] field is a lazy handle whose [Secret.Get] re-reads the host on every
+// call, so a rotated secret is observed when the application reads it.
 //
-// Each exported field of the config struct becomes a config key; nested structs
-// flatten into multi-segment paths (field names in lowerCamelCase, as record
-// fields are named), and any [Secret]-typed field becomes a secret. The
-// platform provisions the values (golem.yaml config/env/envDefaults/
-// secretDefaults + the CLI); the guest reads them at runtime through
-// golem:agent/host.get-config-value, keyed by the multi-segment path. Access is
-// gated by these declarations: reading an *undeclared* key traps, as does an
-// unset required key — declare a field's type as a pointer to read it back as
-// nil instead.
+// Each exported field becomes a config key in lowerCamelCase, including
+// initialisms (APIKey becomes apiKey). A struct field is one record value;
+// golemConfig:"nested" instead groups declarations under a multi-segment path.
+// A [Secret]-typed field declares a secret, not static data.
+//
+// The golemDefault tag declares a literal canonical JSON default:
+//
+//	type Settings struct {
+//	    MaxChars uint32 `golemDefault:"19"`
+//	    Label *string `golemDefault:"null"`
+//	}
+//
+// Defaults are validated against the field's schema and published in metadata.
+// The host completes missing static settings below deployment and creation
+// values. An explicit null, false, zero or empty value is not missing. Defaults
+// never run in the SDK and cannot supply secrets or other host-managed handles.
+// An omitted tag differs from golemDefault:"null" on an optional field.
+// The guest reads the host's resolved values through get-config-value and never
+// falls back locally. An unset required field is an error; use a pointer or
+// [Option] to permit absence.
 //
 // The wire type-name distinction between a plain value and a secret is the schema
 // node: a secret's value type is secret(inner). A secret read returns an opaque
@@ -80,7 +91,7 @@ type configDecl struct {
 	path         []string
 	typ          reflect.Type
 	restrict     *engine.Restriction
-	defaultValue witTypes.Option[types.SchemaValueTree]
+	defaultJSON witTypes.Option[string]
 }
 
 // NoConfig is the empty config type used by an agent that declares no config. It
@@ -133,7 +144,8 @@ type configLeaf struct {
 	typ    reflect.Type
 	index  []int
 	// tag is the field's golem restriction tag, if it has one.
-	tag string
+	tag          string
+	defaultJSON witTypes.Option[string]
 }
 
 var secretishType = reflect.TypeOf((*secretish)(nil)).Elem()
@@ -142,17 +154,15 @@ var secretishType = reflect.TypeOf((*secretish)(nil)).Elem()
 // implements the unexported secret interface), which flattens as a secret leaf.
 func isSecretType(t reflect.Type) bool { return t.Implements(secretishType) }
 
-// configLeaves flattens a config struct into its leaves. A Secret field is a
-// secret leaf; a plain (non-secret) struct field recurses; everything else is a
-// local leaf. Pure — shared by declaration (flattenConfigStruct) and read
-// (materializeConfig).
+// configLeaves describes the config fields. A golemConfig:"nested" field groups
+// declarations under its path; every other field is one schema value.
 func configLeaves(cfgType reflect.Type) ([]configLeaf, error) {
 	if cfgType.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("config type must be a struct, got %s", cfgType)
 	}
 	var leaves []configLeaf
-	var walk func(prefix []string, idx []int, t reflect.Type)
-	walk = func(prefix []string, idx []int, t reflect.Type) {
+	var walk func(prefix []string, idx []int, t reflect.Type) error
+	walk = func(prefix []string, idx []int, t reflect.Type) error {
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
 			if !f.IsExported() {
@@ -160,18 +170,38 @@ func configLeaves(cfgType reflect.Type) ([]configLeaf, error) {
 			}
 			path := append(clonePath(prefix), engine.SchemaName(f.Name))
 			index := append(append([]int(nil), idx...), i)
-			switch {
-			case isSecretType(f.Type):
-				leaves = append(leaves, configLeaf{common.AgentConfigSourceSecret, path, f.Type, index, f.Tag.Get("golem")})
-			case f.Type.Kind() == reflect.Struct:
-				walk(path, index, f.Type)
-			default:
-				leaves = append(leaves, configLeaf{common.AgentConfigSourceLocal, path, f.Type, index, f.Tag.Get("golem")})
+			lf := configLeaf{source: common.AgentConfigSourceLocal, path: path, typ: f.Type, index: index, tag: f.Tag.Get("golem")}
+			if value, ok := f.Tag.Lookup("golemDefault"); ok {
+				lf.defaultJSON = witTypes.Some(value)
 			}
+			switch grouping := f.Tag.Get("golemConfig"); grouping {
+			case "nested":
+				if f.Type.Kind() != reflect.Struct || isSecretType(f.Type) {
+					return fmt.Errorf("config %v: nested config must be a struct", path)
+				}
+				if lf.defaultJSON.IsSome() || lf.tag != "" {
+					return fmt.Errorf("config %v: declare defaults and restrictions on the nested fields", path)
+				}
+				if err := walk(path, index, f.Type); err != nil {
+					return err
+				}
+				continue
+			case "":
+			default:
+				return fmt.Errorf("config %v: unknown golemConfig tag %q", path, grouping)
+			}
+			if isSecretType(f.Type) {
+				lf.source = common.AgentConfigSourceSecret
+				if lf.defaultJSON.IsSome() {
+					return fmt.Errorf("config %v: Secret fields cannot declare code defaults", path)
+				}
+			}
+			leaves = append(leaves, lf)
 		}
+		return nil
 	}
-	walk(nil, nil, cfgType)
-	return leaves, nil
+	err := walk(nil, nil, cfgType)
+	return leaves, err
 }
 
 // flattenConfigStruct records every leaf of a config struct on the entry. The
@@ -184,18 +214,21 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 	}
 	for _, lf := range leaves {
 		recordConfigOn(d, e, agentName, lf.source, lf.path, lf.typ)
-		if lf.tag == "" || len(e.configs) == 0 || !pathsEqual(e.configs[len(e.configs)-1].path, lf.path) {
+		if len(e.configs) == 0 || !pathsEqual(e.configs[len(e.configs)-1].path, lf.path) {
 			continue
 		}
-		r, err := engine.ParseRestrictionTag(lf.tag)
-		if err == nil {
-			err = d.CheckRestriction(d.Compile(lf.typ), r)
+		if lf.tag != "" {
+			r, err := engine.ParseRestrictionTag(lf.tag)
+			if err == nil {
+				err = d.CheckRestriction(d.Compile(lf.typ), r)
+			}
+			if err != nil {
+				d.RecordErr(agentName, "", "config %v: %v", lf.path, err)
+				continue
+			}
+			e.configs[len(e.configs)-1].restrict = r
 		}
-		if err != nil {
-			d.RecordErr(agentName, "", "config %v: %v", lf.path, err)
-			continue
-		}
-		e.configs[len(e.configs)-1].restrict = r
+		e.configs[len(e.configs)-1].defaultJSON = lf.defaultJSON
 	}
 }
 
@@ -211,13 +244,10 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 //
 //	cfg := ctx.Config(shopagent.Agent)
 //
-// The config is materialized once per worker and cached, so repeated calls on a
-// hot method are near-free: its local fields are read from the host on the first
-// call and reused for the worker's life. Only its secret fields stay live — a
-// [Secret] field is a lazy handle whose [Secret.Get] re-reads the host each call,
-// so a rotated secret is observed and the user decides when to read (and whether
-// to store) it. A read failure has no in-band recovery, so it panics rather than
-// returning an error; the panic traps the component, as in Rust.
+// Each call reads static fields from the host's selected owner revision.
+// Secret fields are lazy handles whose [Secret.Get] reads the host each time.
+// A read failure has no in-band recovery, so it panics rather than returning an
+// error; the panic traps the component, as in Rust.
 //
 // def must be the running agent's own definition: another agent's config is not
 // this worker's, and reading it is a programming error, so it panics.
@@ -241,38 +271,19 @@ func checkConfigDefinition(running *instance, name string) error {
 }
 
 // Config reads the agent's config from within its constructor. It behaves like
-// [Context.Config] and populates the same per-worker cache the methods reuse.
+// [Context.Config]; saving the result in application state preserves that value.
 func (c *InitContext[Id, S, Cfg]) Config() Cfg {
 	return materializeAgentConfig[Cfg]()
 }
 
-// cachedAgentConfig returns the worker's already-materialized config, if any —
-// the cache-hit fast path with no host call. The host-backed miss path lives in
-// materializeAgentConfig.
-func cachedAgentConfig[Cfg any]() (Cfg, bool) {
-	if active != nil && active.config != nil {
-		return active.config.(Cfg), true
-	}
-	var zero Cfg
-	return zero, false
-}
-
-// materializeAgentConfig returns the agent's config, materializing it once per
-// worker and caching it on the running instance. On the first call it reads the
-// local leaves from the host (secret leaves become lazy handles) and stores the
-// Cfg; later calls return the cache. Host-backed on the miss path.
+// materializeAgentConfig reads static leaves from the host and builds lazy
+// handles for secret leaves. The host owns static-value revision selection.
 func materializeAgentConfig[Cfg any]() Cfg {
-	if cfg, ok := cachedAgentConfig[Cfg](); ok {
-		return cfg
-	}
 	cfg, err := materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
 		return readConfigLeaf(defs, lf)
 	})
 	if err != nil {
 		panic(err)
-	}
-	if active != nil {
-		active.config = cfg
 	}
 	return cfg
 }
@@ -341,10 +352,46 @@ func (d *definitions) buildConfigDecls(g *engine.GraphBuilder, cds []configDecl)
 			Source:       cd.source,
 			Path:         cd.path,
 			ValueType:    g.RestrictedNode(d.Compile(cd.typ), cd.restrict),
-			DefaultValue: cd.defaultValue,
 		})
 	}
 	return out
+}
+
+// prepareConfigMetadata validates static data and decodes source defaults through the
+// owning schema. It never supplies a runtime value: the host resolves defaults.
+func prepareConfigMetadata(at *common.AgentType, sources []configDecl) error {
+	if len(at.Config) == 0 {
+		return nil
+	}
+	converted, err := witschema.GraphToCore(at.Schema)
+	if err != nil {
+		return err
+	}
+	for i := range at.Config {
+		decl := &at.Config[i]
+		ref, err := converted.Ref(decl.ValueType)
+		if err != nil {
+			return err
+		}
+		if decl.Source == common.AgentConfigSourceLocal && ref.ContainsHandle() {
+			return fmt.Errorf("config %v: static data cannot contain Secret or other host-managed handles", decl.Path)
+		}
+		if sources[i].defaultJSON.IsSome() {
+			if decl.Source != common.AgentConfigSourceLocal {
+				return fmt.Errorf("config %v: only static data can declare code defaults", decl.Path)
+			}
+			value, err := ref.PackJSONBytes([]byte(sources[i].defaultJSON.Some()))
+			if err != nil {
+				return fmt.Errorf("config %v: invalid code default: %w", decl.Path, err)
+			}
+			tree, err := witschema.ValueToWit(value)
+			if err != nil {
+				return fmt.Errorf("config %v: invalid code default: %w", decl.Path, err)
+			}
+			decl.DefaultValue = witTypes.Some(tree)
+		}
+	}
+	return nil
 }
 
 // decodeConfigValue decodes a config value tree into T through T's codec. Pure.

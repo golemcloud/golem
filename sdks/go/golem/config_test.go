@@ -21,11 +21,10 @@ import (
 	"strings"
 	"testing"
 
-	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	secrets "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_secrets_types"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -44,7 +43,7 @@ type demoDBConfig struct {
 }
 type demoAppConfig struct {
 	Greeting string
-	Db       demoDBConfig
+	Db       demoDBConfig `golemConfig:"nested"`
 }
 
 // cfgConfiguredAgent registers the "Cfg" agent's definition (with config type Cfg
@@ -102,30 +101,18 @@ func TestConfigDeclarationsInMetadata(t *testing.T) {
 func TestConfigDefaultsInMetadata(t *testing.T) {
 	type cfg struct {
 		Unset    *string
-		Null     *string
-		Greeting string
+		Null     *string `golemDefault:"null"`
+		Greeting string  `golemDefault:"\"hello\""`
 		Password Secret[string]
 	}
 	withDefs(t, func(d *definitions) {
 		cfgConfiguredAgent[cfg](d)
-		toTree := func(value core.SchemaValue) types.SchemaValueTree {
-			tree, err := witschema.ValueToWit(value)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return tree
+		want := map[string]witTypes.Option[string]{
+			"unset":    witTypes.None[string](),
+			"null":     witTypes.Some("null"),
+			"greeting": witTypes.Some(`"hello"`),
+			"password": witTypes.None[string](),
 		}
-		want := map[string]witTypes.Option[types.SchemaValueTree]{
-			"unset":    witTypes.None[types.SchemaValueTree](),
-			"null":     witTypes.Some(toTree(core.OptionValue{})),
-			"greeting": witTypes.Some(toTree(core.StringValue{Value: "hello"})),
-			"password": witTypes.None[types.SchemaValueTree](),
-		}
-		for i := range d.agents["Cfg"].configs {
-			cd := &d.agents["Cfg"].configs[i]
-			cd.defaultValue = want[strings.Join(cd.path, "/")]
-		}
-
 		out, errs := d.discover()
 		if len(errs) != 0 {
 			t.Fatalf("unexpected definition errors: %v", errs)
@@ -133,12 +120,22 @@ func TestConfigDefaultsInMetadata(t *testing.T) {
 		if len(out[0].Config) != len(want) {
 			t.Fatalf("want %d config declarations, got %d", len(want), len(out[0].Config))
 		}
+		graph, err := witschema.GraphToCore(out[0].Schema)
+		if err != nil { t.Fatal(err) }
 		for _, decl := range out[0].Config {
 			key := strings.Join(decl.Path, "/")
 			expected, ok := want[key]
-			if !ok || decl.DefaultValue.IsSome() != expected.IsSome() ||
-				(expected.IsSome() && !reflect.DeepEqual(decl.DefaultValue.Some(), expected.Some())) {
+			if !ok || decl.DefaultValue.IsSome() != expected.IsSome() {
 				t.Errorf("%s: default = %v, want %v", key, decl.DefaultValue, expected)
+			}
+			if expected.IsSome() && decl.DefaultValue.IsSome() {
+				value, err := witschema.ValueToCore(decl.DefaultValue.Some())
+				if err != nil { t.Fatal(err) }
+				ref, err := graph.Ref(decl.ValueType)
+				if err != nil { t.Fatal(err) }
+				json, err := ref.UnpackJSONBytes(value)
+				if err != nil { t.Fatal(err) }
+				assertConfigJSON(t, json, []byte(expected.Some()))
 			}
 		}
 	})
@@ -342,32 +339,6 @@ func TestWithConfigUndeclaredRejected(t *testing.T) {
 	})
 }
 
-// TestConfigCacheHit — once a worker's config is materialized it is cached on the
-// instance; the pure cache-hit path returns it as-is with no host read (so a hot
-// method's Config(ctx) is near-free). Misses report ok=false so the caller reads.
-func TestConfigCacheHit(t *testing.T) {
-	prev := active
-	defer func() { active = prev }()
-
-	active = nil
-	if _, ok := cachedAgentConfig[demoAppConfig](); ok {
-		t.Fatal("miss expected with no active instance")
-	}
-	active = &instance{}
-	if _, ok := cachedAgentConfig[demoAppConfig](); ok {
-		t.Fatal("miss expected before the first materialize")
-	}
-
-	active.config = demoAppConfig{Greeting: "cached", Db: demoDBConfig{Url: "db://x"}}
-	got, ok := cachedAgentConfig[demoAppConfig]()
-	if !ok {
-		t.Fatal("hit expected after caching")
-	}
-	if got.Greeting != "cached" || got.Db.Url != "db://x" {
-		t.Fatalf("cached config = %+v", got)
-	}
-}
-
 func TestSecretErrorToGo(t *testing.T) {
 	cases := []struct {
 		name string
@@ -453,8 +424,7 @@ func TestConfigFieldsTakeRestrictionTags(t *testing.T) {
 	})
 }
 
-// Reading the config through another agent's definition is refused, instead of
-// caching a value of the wrong type for the running agent.
+// Reading the config through another agent's definition is refused.
 func TestConfigThroughAnotherAgentsDefinitionIsRefused(t *testing.T) {
 	running := &instance{def: &agentEntry{name: "Shop"}}
 	if err := checkConfigDefinition(running, "Shop"); err != nil {
