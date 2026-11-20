@@ -1243,6 +1243,192 @@ async fn check_static_config_reconstruction(
 }
 
 #[test]
+#[timeout("300s")]
+async fn rust_static_corpus_captures_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent::extraction::extract_agent_type_schemas;
+    use golem_common::schema::config::{
+        ConfigCatalogSources, ConfigLayer, ConfigOrigin, ConfigSchema, ConfigSourcePlan,
+    };
+    use golem_common::schema::render::to_json_value;
+    use serde_json::{Value, json};
+
+    let corpus: Value =
+        serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;
+    let agents = extract_agent_type_schemas(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", agent_sdk_rust.wasm_name)),
+        true,
+        false,
+    )
+    .await?;
+    let origin = |layer: &str| ConfigOrigin {
+        file: "<Rust config corpus>".into(),
+        path: vec!["config".into()],
+        layer: layer.into(),
+    };
+    let mut executed = 0;
+    let mut rejected = 0;
+    for case in corpus["staticCases"].as_array().unwrap() {
+        let agent_type = match case["schema"].as_str().unwrap() {
+            "reference" => "StaticDefaultsAgent",
+            "recordUnion" => "StaticDeliveryAgent",
+            "recursive" => "StaticRecursiveAgent",
+            "canonicalName" => "StaticNamedAgent",
+            "required" => "StaticRequiredAgent",
+            "optionalDefault" => "StaticOptionalAgent",
+            "emptyValues" => "StaticEmptyAgent",
+            // Invalid producer schemas cannot be exported with valid declarations.
+            "invalidDefault" | "reservedName" | "nestedSecret" => continue,
+            other => anyhow::bail!("uncovered static schema {other}"),
+        };
+        let id = case["id"].as_str().unwrap();
+        let agent = agents
+            .iter()
+            .find(|agent| agent.type_name.0 == agent_type)
+            .unwrap();
+        let schema =
+            ConfigSchema::from_declarations(&agent.schema, &agent.config, &origin("code"))?;
+        let mut catalog = ConfigCatalogSources::default();
+        catalog.add(
+            &serde_json::from_value(case["catalog"].clone())?,
+            &origin("catalog"),
+        )?;
+        let layers = case["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(index, value)| ConfigLayer {
+                origin: origin(&format!("layer{index}")),
+                value: value.clone(),
+            })
+            .collect::<Vec<_>>();
+        let plan = schema.resolve(&catalog, &layers, &origin("code"));
+        if let Some(error) = case["error"].as_str() {
+            let actual = plan
+                .expect_err("invalid fills must not reach owner creation")
+                .to_string();
+            assert!(actual.contains(error), "{id}: {actual}");
+            rejected += 1;
+            continue;
+        }
+        let mut fills = Vec::new();
+        for (field, plan) in schema.fields.iter().zip(plan?) {
+            // Component preparation captures defaults before the guest is created.
+            if !layers
+                .iter()
+                .any(|layer| layer.value.get(&field.path[0]).is_some())
+            {
+                continue;
+            }
+            let ConfigSourcePlan::Static(value) = plan.source else {
+                anyhow::bail!("{id}: unexpected managed binding");
+            };
+            fills.push(AgentConfigEntryDto {
+                path: field.path.clone(),
+                value: to_json_value(&schema.graph, &field.value_type, &value)?.into(),
+            });
+        }
+        let mut expected = case["expected"].clone();
+        if case["schema"] == "reference" {
+            let choice = expected["choice"].as_str().unwrap().to_string();
+            let tag = if choice.starts_with("selected:") {
+                "Text"
+            } else {
+                assert!(choice.starts_with("other:"));
+                "Other"
+            };
+            expected["choice"] = json!({tag: choice});
+        }
+        for mode in ["deployment", "creation"] {
+            let context = TestContext::new(last_unique_id);
+            let executor = start(deps, &context).await?;
+            let component = executor
+                .component_dep(&context.default_environment_id, agent_sdk_rust)
+                .with_agent_config(
+                    agent_type,
+                    if mode == "deployment" {
+                        fills.clone()
+                    } else {
+                        vec![]
+                    },
+                )
+                .store()
+                .await?;
+            let agent_id = agent_key!(agent_type, format!("{id}-{mode}"));
+            let worker_id = executor
+                .start_agent_with(
+                    &component.id,
+                    agent_id.clone(),
+                    HashMap::new(),
+                    if mode == "creation" {
+                        fills.clone()
+                    } else {
+                        vec![]
+                    },
+                )
+                .await?;
+            let actual = executor
+                .invoke_and_await_agent(&component, &agent_id, "read", data_value!())
+                .await?
+                .into_typed::<String>()?;
+            assert_eq!(
+                serde_json::from_str::<Value>(&actual)?,
+                expected,
+                "{id}/{mode}"
+            );
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            drop(executor);
+            let executor = start(deps, &context).await?;
+            let actual = executor
+                .invoke_and_await_agent(&component, &agent_id, "read", data_value!())
+                .await?
+                .into_typed::<String>()?;
+            assert_eq!(
+                serde_json::from_str::<Value>(&actual)?,
+                expected,
+                "{id}/{mode}/reconstructed"
+            );
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            for entry in &oplog {
+                if let PublicOplogEntry::Start(_) = &entry.entry {
+                    assert!(
+                        oplog.iter().any(|terminal| matches!(
+                            &terminal.entry,
+                            PublicOplogEntry::End(end) if end.start_index == entry.oplog_index
+                        )),
+                        "{id}/{mode}: unsettled call at {}",
+                        entry.oplog_index
+                    );
+                }
+            }
+            assert_eq!(
+                oplog
+                    .iter()
+                    .filter(|entry| matches!(
+                        &entry.entry,
+                        PublicOplogEntry::AgentInvocationFinished(_)
+                    ))
+                    .count(),
+                3,
+                "{id}/{mode}: constructor and two reads must finish"
+            );
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            executed += 1;
+        }
+    }
+    assert_eq!(executed, 22);
+    assert_eq!(rejected, 6);
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn agent_self_rpc_is_not_allowed(
     last_unique_id: &LastUniqueId,
