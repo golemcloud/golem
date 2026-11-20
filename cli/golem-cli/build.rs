@@ -23,7 +23,7 @@ use std::process::Command;
 static SKIP_ENV_VAR_NAME: &str = "GOLEM_BUILD_SKIP_SHADOW";
 const GENERATED_TEMPLATES_DIR_NAME: &str = "templates";
 const SKILL_DESTINATION: &str = ".agents/skills";
-const SUPPORTED_LANGUAGES: &[&str] = &["ts", "effect", "rust", "scala", "moonbit", "go"];
+const SUPPORTED_LANGUAGES: &[&str] = &["ts", "effect", "rust", "scala", "moonbit", "go", "python"];
 
 fn main() {
     println!("cargo::rerun-if-env-changed={SKIP_ENV_VAR_NAME}");

@@ -427,9 +427,12 @@ impl BridgeSdkTargetKind {
         }
     }
 
-    /// Every guest language generates agent clients in both modes and guest tool
-    /// clients; no language generates external tool clients.
-    pub fn supports(self, bridge_mode: BridgeMode, _language: GuestLanguage) -> bool {
+    /// Every guest language except Python generates agent clients in both modes
+    /// and guest tool clients; no language generates external tool clients.
+    pub fn supports(self, bridge_mode: BridgeMode, language: GuestLanguage) -> bool {
+        if language == GuestLanguage::Python {
+            return false;
+        }
         match (self, bridge_mode) {
             (Self::Agent, _) | (Self::Tool, BridgeMode::Guest) => true,
             (Self::Tool, BridgeMode::External) => false,
@@ -5987,6 +5990,14 @@ mod app_builder {
                         node_http_routers,
                     );
                     Self::validate_unique_file_targets(validation, &component_properties);
+                    if *component_layer_properties.guest_language.value()
+                        == Some(GuestLanguage::Python)
+                        && !component_properties.dependencies.is_empty()
+                    {
+                        validation.add_error(format!(
+                            "Component {component_name}: Python components cannot declare agent or tool dependencies yet, because Python guest bridges are not generated. Remove `dependencies`."
+                        ));
+                    }
                     self.validate_component_dependencies(
                         validation,
                         &component_name,
@@ -8987,6 +8998,36 @@ bridge:
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].contains("Expected 'component/name'"),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn python_components_reject_dependencies() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              py:
+                guestLanguage: python
+                componentWasm: dummy-component.wasm
+
+            components:
+              app:main:
+                templates: py
+                dependencies:
+                  tools: [search]
+        "# });
+
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0]
+                .contains("app:main: Python components cannot declare agent or tool dependencies"),
             "unexpected error: {}",
             errors[0]
         );

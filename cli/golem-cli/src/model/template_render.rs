@@ -128,6 +128,9 @@ impl<C: Serialize> TemplateRender<C> for app_raw::BuildCommand {
             app_raw::BuildCommand::PreinitializeJs(preinitialize_js) => Ok(
                 app_raw::BuildCommand::PreinitializeJs(preinitialize_js.render(env, ctx)?),
             ),
+            app_raw::BuildCommand::AssemblePython(assemble_python) => Ok(
+                app_raw::BuildCommand::AssemblePython(assemble_python.render(env, ctx)?),
+            ),
         }
     }
 }
@@ -220,6 +223,17 @@ impl<C: Serialize> TemplateRender<C> for app_raw::PreinitializeJs {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::PreinitializeJs {
             preinitialize_js: self.preinitialize_js.render(env, ctx)?,
+            into: self.into.render(env, ctx)?,
+        })
+    }
+}
+
+impl<C: Serialize> TemplateRender<C> for app_raw::AssemblePython {
+    fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
+        Ok(app_raw::AssemblePython {
+            assemble_python: self.assemble_python.render(env, ctx)?,
+            modules: self.modules.render(env, ctx)?,
+            pyproject: self.pyproject.render(env, ctx)?,
             into: self.into.render(env, ctx)?,
         })
     }

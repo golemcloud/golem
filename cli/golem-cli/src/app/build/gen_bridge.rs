@@ -1877,6 +1877,9 @@ async fn gen_bridge_sdk_target(
                                 GoBridgeMode::ExternalRest,
                             )?)
                         }
+                        (GuestLanguage::Python, _) => {
+                            bail!("agent bridge generation is not implemented for Python")
+                        }
                     };
 
                         fs::remove(&output_dir)?;
@@ -2136,6 +2139,9 @@ bridge:
 
     #[test]
     async fn mcp_manifest_targets_cover_all_languages_and_preserve_native_precedence() {
+        let languages = BridgeSdkTargetKind::Tool
+            .supported_languages(BridgeMode::Guest)
+            .collect::<Vec<_>>();
         let (application, _dir) = application_from_manifest(
             r#"
 app: imported-tools
@@ -2183,7 +2189,7 @@ tools:
                 .tool_bridge_sdk_dir("echo", GuestLanguage::Rust),
             rust_config: Default::default(),
         }];
-        for language in GuestLanguage::iter() {
+        for language in languages.iter().copied() {
             collect_tool_manifest_targets_for_entry(
                 &ctx,
                 &[],
@@ -2200,12 +2206,12 @@ tools:
             .unwrap();
         }
         // The local tool once, then an ambient and an imported tool per language.
-        assert_eq!(targets.len(), 1 + 2 * GuestLanguage::iter().count());
+        assert_eq!(targets.len(), 1 + 2 * languages.len());
         assert!(matches!(
             targets[0].source,
             BridgeSdkTargetSource::Local { .. }
         ));
-        for language in GuestLanguage::iter() {
+        for language in languages.iter().copied() {
             let names = targets
                 .iter()
                 .filter(|target| target.target_language == language)
@@ -2226,7 +2232,7 @@ tools:
                     BridgeSdkTargetSource::AmbientNative { .. }
                 ))
                 .count(),
-            GuestLanguage::iter().count()
+            languages.len()
         );
         assert!(
             targets
@@ -2489,7 +2495,7 @@ environments:
 
     #[test]
     async fn mcp_dependencies_require_resolved_metadata_before_consumer_build() {
-        for language in GuestLanguage::iter() {
+        for language in BridgeSdkTargetKind::Tool.supported_languages(BridgeMode::Guest) {
             let (application, _dir) = application_from_manifest(&format!(
                 r#"
 app: imported-tools
@@ -2781,7 +2787,7 @@ components:
 
     #[test]
     fn validate_supported_bridge_targets_accepts_supported_guest_targets() {
-        for language in GuestLanguage::iter() {
+        for language in BridgeSdkTargetKind::Tool.supported_languages(BridgeMode::Guest) {
             let agent_target = bridge_sdk_target_with_mode(
                 "AlphaAgent",
                 language,

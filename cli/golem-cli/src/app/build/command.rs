@@ -15,10 +15,10 @@
 use crate::app::build::go_inputs;
 use crate::app::build::go_toolchain::{GoToolchain, ensure_go_toolchain};
 use crate::app::build::task_result_marker::{
-    GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
-    GoModDepsMarkerHash, InjectToPrebuiltQuickJsCommandMarkerHash, MoonSyncDepsMarkerHash,
-    NpmInstallDepsMarkerHash, PreinitializeJsCommandMarkerHash, ResolvedExternalCommandMarkerHash,
-    TaskResultMarker,
+    AssemblePythonCommandMarkerHash, GenerateQuickJSCrateCommandMarkerHash,
+    GenerateQuickJSDTSCommandMarkerHash, GoModDepsMarkerHash,
+    InjectToPrebuiltQuickJsCommandMarkerHash, MoonSyncDepsMarkerHash, NpmInstallDepsMarkerHash,
+    PreinitializeJsCommandMarkerHash, ResolvedExternalCommandMarkerHash, TaskResultMarker,
 };
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
@@ -27,13 +27,16 @@ use crate::fs;
 use crate::log::{LogColorize, LogIndent, log_action, log_skipping_up_to_date, log_warn_action};
 use crate::model::app_raw;
 use crate::model::app_raw::{
-    GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
+    AssemblePython, GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs,
+    PreinitializeJs,
 };
 use crate::model::language::GuestLanguage;
 use crate::process::{CommandExt, normalized_program_name, resolve_command_for_execution, which};
-use anyhow::{Context as AnyhowContext, anyhow};
-use camino::Utf8Path;
+use crate::sdk_overrides::sdk_overrides;
+use anyhow::{Context as AnyhowContext, anyhow, bail};
+use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::component::ComponentName;
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use tokio::process::Command;
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
@@ -62,7 +65,225 @@ pub async fn execute_build_command(
         app_raw::BuildCommand::PreinitializeJs(command) => {
             execute_preinitialize_js(ctx, &base_build_dir, command).await
         }
+        app_raw::BuildCommand::AssemblePython(command) => {
+            execute_assemble_python(ctx, &base_build_dir, command).await
+        }
     }
+}
+
+async fn execute_assemble_python(
+    ctx: &BuildContext<'_>,
+    base_build_dir: &Path,
+    command: &AssemblePython,
+) -> anyhow::Result<()> {
+    let base_build_dir = Utf8Path::from_path(base_build_dir).unwrap();
+    let source_dir = base_build_dir.join(&command.assemble_python);
+    let pyproject = base_build_dir.join(&command.pyproject);
+    let output = base_build_dir.join(&command.into);
+    let wheel = python_sdk_wheel()?;
+    let wheel_digest = format!(
+        "{:x}",
+        Sha256::digest(
+            fs::read(&wheel)
+                .with_context(|| format!("cannot read the Python SDK wheel {wheel}"))?
+        )
+    );
+
+    let source_files = python_source_files(source_dir.as_std_path());
+
+    new_task_up_to_date_check(ctx)
+        .with_task_result_marker(AssemblePythonCommandMarkerHash {
+            build_dir: base_build_dir.as_std_path(),
+            command,
+            source_files: &source_files,
+            sdk_wheel: &wheel_digest,
+            prepared_identity: golem_python_assembler::PREPARED_IDENTITY,
+        })?
+        .with_sources(|| [&source_dir, &pyproject, &wheel])
+        .with_targets(|| [&output])
+        .run_async_or_skip(
+            || async {
+                log_action(
+                    "Assembling",
+                    format!(
+                        "Python modules in {} into {}",
+                        source_dir.log_color_highlight(),
+                        output.log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
+
+                check_python_dependencies(&pyproject)?;
+                let sdk = golem_python_assembler::read_sdk_wheel(wheel.as_std_path()).await?;
+                let modules = command
+                    .modules
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                let component = golem_python_assembler::build(
+                    sdk.prepared(),
+                    &golem_python_assembler::Application {
+                        sdk_dir: sdk.sdk_dir(),
+                        source_dir: source_dir.as_std_path(),
+                        entry_modules: &modules,
+                    },
+                )
+                .await?;
+
+                // Replace the output only after the build succeeded, so a failed
+                // build keeps the last valid component.
+                fs::create_dir_all(fs::parent_or_err(output.as_std_path())?)?;
+                let staged = Utf8PathBuf::from(format!("{output}.partial"));
+                fs::write(&staged, &component)?;
+                fs::rename(&staged, &output)
+            },
+            || {
+                log_skipping_up_to_date(format!(
+                    "assembling Python modules in {} into {}",
+                    source_dir.log_color_highlight(),
+                    output.log_color_highlight()
+                ));
+            },
+        )
+        .await
+}
+
+/// The paths of the files in a Python source directory, relative to it and
+/// sorted.
+///
+/// The modification-time check sees edited and added files, but not removed
+/// or renamed ones, so the task marker also covers this list.
+fn python_source_files(source_dir: &Path) -> Vec<String> {
+    walkdir::WalkDir::new(source_dir)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| !entry.file_type().is_dir())
+        .filter_map(|entry| {
+            entry
+                .path()
+                .strip_prefix(source_dir)
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
+/// The `golem-py-sdk` wheel that Python components build with.
+fn python_sdk_wheel() -> anyhow::Result<Utf8PathBuf> {
+    match &sdk_overrides()?.python_sdk_wheel {
+        Some(wheel) => Ok(Utf8PathBuf::from(wheel)),
+        None => bail!(
+            "the {} {} wheel is not published yet; build it with `cargo make python-sdk-wheel` \
+             in a Golem checkout and set GOLEM_PYTHON_SDK_WHEEL to its path",
+            golem_python_assembler::DISTRIBUTION,
+            golem_python_assembler::SDK_VERSION
+        ),
+    }
+}
+
+/// Fails when `pyproject.toml` declares a dependency other than the SDK, or
+/// a package source.
+///
+/// Python components contain only the application's modules and the SDK;
+/// third-party packages are not assembled into them. The SDK always comes
+/// from the wheel that the CLI builds with, so a project cannot select another
+/// source for it.
+fn check_python_dependencies(pyproject: &Utf8Path) -> anyhow::Result<()> {
+    let text = fs::read_to_string(pyproject)?;
+    let manifest: toml::Table =
+        toml::from_str(&text).with_context(|| format!("{pyproject} is not valid TOML"))?;
+    if let Some(uv) = manifest
+        .get("tool")
+        .and_then(|tool| tool.get("uv"))
+        .and_then(toml::Value::as_table)
+    {
+        // Only the setting names go into the error: source values can contain
+        // index or Git credentials.
+        let mut declared = Vec::new();
+        if let Some(sources) = uv.get("sources").and_then(toml::Value::as_table) {
+            declared.extend(
+                sources
+                    .keys()
+                    .map(|name| format!("`tool.uv.sources.{name}`")),
+            );
+        }
+        for key in ["index", "index-url", "extra-index-url", "find-links"] {
+            if uv.contains_key(key) {
+                declared.push(format!("`tool.uv.{key}`"));
+            }
+        }
+        if !declared.is_empty() {
+            bail!(
+                "{pyproject} declares the package source {}, but Python components build only \
+                 with the {} wheel of the Golem CLI; remove it. To build with a local SDK wheel, \
+                 set GOLEM_PYTHON_SDK_WHEEL instead",
+                declared.join(", "),
+                golem_python_assembler::DISTRIBUTION
+            );
+        }
+    }
+    let dependencies = match manifest
+        .get("project")
+        .and_then(|project| project.get("dependencies"))
+    {
+        None => return Ok(()),
+        Some(toml::Value::Array(dependencies)) => dependencies,
+        Some(_) => bail!("`project.dependencies` in {pyproject} is not a list"),
+    };
+    let sdk = format!(
+        "{}=={}",
+        golem_python_assembler::DISTRIBUTION,
+        golem_python_assembler::SDK_VERSION
+    );
+    let mut rejected = Vec::new();
+    for dependency in dependencies {
+        let Some(requirement) = dependency.as_str() else {
+            bail!("`project.dependencies` in {pyproject} contains a value that is not a string");
+        };
+        let name_end = requirement
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+            .unwrap_or(requirement.len());
+        let name = normalized_python_name(&requirement[..name_end]);
+        let specifier: String = requirement[name_end..]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        if name != golem_python_assembler::DISTRIBUTION {
+            rejected.push(format!("`{requirement}`"));
+        } else if specifier != format!("=={}", golem_python_assembler::SDK_VERSION) {
+            bail!(
+                "{pyproject} requires `{requirement}`, but this Golem CLI builds with `{sdk}`; \
+                 change the requirement to `{sdk}`"
+            );
+        }
+    }
+    if !rejected.is_empty() {
+        bail!(
+            "{pyproject} depends on {}, but Python components cannot contain third-party \
+             packages yet; remove them from `project.dependencies`, which may list only `{sdk}`",
+            rejected.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Normalizes a Python distribution name as PEP 503 does.
+fn normalized_python_name(name: &str) -> String {
+    let mut normalized = String::with_capacity(name.len());
+    let mut separator = false;
+    for c in name.chars() {
+        if matches!(c, '-' | '_' | '.') {
+            separator = true;
+        } else {
+            if separator && !normalized.is_empty() {
+                normalized.push('-');
+            }
+            separator = false;
+            normalized.push(c.to_ascii_lowercase());
+        }
+    }
+    normalized
 }
 
 fn execute_inject_to_prebuilt_quick_js(
@@ -768,4 +989,106 @@ fn apply_cargo_term_color_env(command: &mut Command, should_colorize: bool) {
 
     let color = if should_colorize { "always" } else { "never" };
     command.env("CARGO_TERM_COLOR", color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_python_dependencies;
+    use camino::Utf8PathBuf;
+    use test_r::test;
+
+    fn check(dependencies: &str) -> anyhow::Result<()> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::try_from(dir.path().join("pyproject.toml")).unwrap();
+        std::fs::write(&path, format!("[project]\nname = \"app\"\n{dependencies}")).unwrap();
+        check_python_dependencies(&path)
+    }
+
+    fn error(dependencies: &str) -> String {
+        format!("{:#}", check(dependencies).unwrap_err())
+    }
+
+    #[test]
+    fn python_dependencies_may_name_only_the_sdk() {
+        check("").unwrap();
+        check("dependencies = []").unwrap();
+        // PEP 503 normalizes the name; the version must be the exact pin.
+        check("dependencies = [\"Golem_Py.SDK == 0.0.0\"]").unwrap();
+
+        let message = error(
+            "dependencies = [\"golem-py-sdk==0.0.0\", \"requests>=2\", \"golem-py-sdk-extra\"]",
+        );
+        assert!(
+            message.contains("depends on `requests>=2`, `golem-py-sdk-extra`"),
+            "{message}"
+        );
+        assert!(
+            message.contains("cannot contain third-party packages"),
+            "{message}"
+        );
+
+        for requirement in ["golem-py-sdk", "golem-py-sdk==9.9.9", "golem-py-sdk>=0.0.0"] {
+            let message = error(&format!("dependencies = [\"{requirement}\"]"));
+            assert!(
+                message.contains(&format!(
+                    "requires `{requirement}`, but this Golem CLI builds with `golem-py-sdk==0.0.0`"
+                )),
+                "{message}"
+            );
+        }
+
+        let message = error("dependencies = \"golem-py-sdk==0.0.0\"");
+        assert!(message.contains("is not a list"), "{message}");
+
+        // A direct reference names another source for the SDK.
+        let message = error("dependencies = [\"golem-py-sdk @ file:///sdk.whl\"]");
+        assert!(
+            message.contains("requires `golem-py-sdk @ file:///sdk.whl`"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn python_projects_cannot_declare_package_sources() {
+        let pin = "dependencies = [\"golem-py-sdk==0.0.0\"]\n";
+        for (source, expected) in [
+            (
+                "[tool.uv.sources]\ngolem-py-sdk = { path = \"../patched-sdk\" }\n",
+                "`tool.uv.sources.golem-py-sdk`",
+            ),
+            (
+                "[tool.uv.sources]\ngolem-py-sdk = { git = \"https://TOKENSENTINEL@example.invalid/sdk.git\" }\n",
+                "`tool.uv.sources.golem-py-sdk`",
+            ),
+            (
+                "[[tool.uv.index]]\nname = \"private\"\nurl = \"https://USERSENTINEL:PASSSENTINEL@packages.example.invalid/simple\"\n",
+                "`tool.uv.index`",
+            ),
+            (
+                "[tool.uv]\nfind-links = [\"../wheels\"]\n",
+                "`tool.uv.find-links`",
+            ),
+        ] {
+            // Sources are rejected even when the project lists no dependencies.
+            for dependencies in [pin, ""] {
+                let message = error(&format!("{dependencies}{source}"));
+                assert!(
+                    message.contains(&format!("declares the package source {expected}, but")),
+                    "{message}"
+                );
+                assert!(message.contains("set GOLEM_PYTHON_SDK_WHEEL"), "{message}");
+                for value in [
+                    "patched-sdk",
+                    "wheels",
+                    "example.invalid",
+                    "TOKENSENTINEL",
+                    "USERSENTINEL",
+                    "PASSSENTINEL",
+                ] {
+                    assert!(!message.contains(value), "{value} is in {message}");
+                }
+            }
+        }
+        check(&format!("{pin}[tool.uv]\ndev-dependencies = []\n")).unwrap();
+    }
 }

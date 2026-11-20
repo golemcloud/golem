@@ -1844,6 +1844,7 @@ pub enum BuildCommand {
     QuickJSDTS(GenerateQuickJSDTS),
     InjectToPrebuiltQuickJs(InjectToPrebuiltQuickJs),
     PreinitializeJs(PreinitializeJs),
+    AssemblePython(AssemblePython),
 }
 
 impl BuildCommand {
@@ -1854,6 +1855,7 @@ impl BuildCommand {
             BuildCommand::QuickJSDTS(_) => None,
             BuildCommand::InjectToPrebuiltQuickJs(_) => None,
             BuildCommand::PreinitializeJs(_) => None,
+            BuildCommand::AssemblePython(_) => None,
         }
     }
 
@@ -1864,6 +1866,7 @@ impl BuildCommand {
             BuildCommand::QuickJSDTS(cmd) => vec![cmd.generate_quickjs_dts.clone()],
             BuildCommand::InjectToPrebuiltQuickJs(cmd) => vec![cmd.into.clone()],
             BuildCommand::PreinitializeJs(cmd) => vec![cmd.into.clone()],
+            BuildCommand::AssemblePython(cmd) => vec![cmd.into.clone()],
         }
     }
 }
@@ -1922,6 +1925,19 @@ pub struct PreinitializeJs {
     /// The path to the input WASM component to pre-initialize
     pub preinitialize_js: String,
     /// The path to the pre-initialized output WASM component
+    pub into: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AssemblePython {
+    /// The directory that contains the application's Python modules
+    pub assemble_python: String,
+    /// The entry modules that pre-initialization imports
+    pub modules: Vec<String>,
+    /// The path to the `pyproject.toml` that declares the application's dependencies
+    pub pyproject: String,
+    /// The path to the output WASM component
     pub into: String,
 }
 

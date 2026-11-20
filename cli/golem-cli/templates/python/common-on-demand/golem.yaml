@@ -1,0 +1,17 @@
+# golem-app-manifest-header
+
+componentTemplates:
+  python:
+    guestLanguage: python
+    presets:
+      # The CLI assembles the component from the modules in `src` and the
+      # golem-py-sdk wheel. It runs no Python on the host.
+      default:
+        default: true
+        build:
+        - assemblePython: "{{ componentDir }}/src"
+          modules:
+          - main
+          pyproject: "{{ componentDir }}/pyproject.toml"
+          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"

@@ -4166,6 +4166,7 @@ dependencies = [
  "golem-model-mock",
  "golem-native-tool",
  "golem-package",
+ "golem-python-assembler",
  "golem-schema",
  "heck",
  "hmac 0.12.1",

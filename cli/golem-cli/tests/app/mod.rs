@@ -47,6 +47,7 @@ mod moonbit_reflection;
 mod moonbit_tool_middleware;
 mod multipart_snapshot;
 mod oplog_export;
+mod python_agents;
 mod quantity_interop;
 mod remote_releases;
 mod rust_http_router;
@@ -165,6 +166,8 @@ tag_suite!(moonbit_reflection, deploy);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(multipart_snapshot, deploy);
 tag_suite!(oplog_export, deploy);
+// The Python tests need the golem-py-sdk wheel, which no CI job builds yet.
+tag_suite!(python_agents, python);
 tag_suite!(rust_http_router, agents_guest_bridge);
 tag_suite!(rust_minimal_exports, deploy);
 tag_suite!(rust_refined_tool_args, deploy);

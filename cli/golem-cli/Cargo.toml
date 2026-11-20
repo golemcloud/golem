@@ -37,6 +37,7 @@ golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true, features = ["javascript"] }
 golem-mcp-import = { workspace = true }
 golem-package = { workspace = true }
+golem-python-assembler = { workspace = true }
 golem-schema = { workspace = true }
 
 # External deps
