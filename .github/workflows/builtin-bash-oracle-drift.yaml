@@ -13,7 +13,11 @@ on:
       - ".github/workflows/builtin-bash-oracle-drift.yaml"
       - "builtin-tools/bash/conformance/oracle.Dockerfile"
       - "builtin-tools/bash/conformance/goldens/**"
-      - "builtin-tools/bash/conformance/conformance.py"
+      - "builtin-tools/bash/conformance/*.ts"
+      - "builtin-tools/bash/conformance/cases/**"
+      - "builtin-tools/bash/conformance/features.json"
+      - "builtin-tools/bash/conformance/package.json"
+      - "builtin-tools/bash/conformance/bun.lock"
   pull_request:
     branches:
       - "[0-9]+.[0-9]+.x"
@@ -21,7 +25,11 @@ on:
       - ".github/workflows/builtin-bash-oracle-drift.yaml"
       - "builtin-tools/bash/conformance/oracle.Dockerfile"
       - "builtin-tools/bash/conformance/goldens/**"
-      - "builtin-tools/bash/conformance/conformance.py"
+      - "builtin-tools/bash/conformance/*.ts"
+      - "builtin-tools/bash/conformance/cases/**"
+      - "builtin-tools/bash/conformance/features.json"
+      - "builtin-tools/bash/conformance/package.json"
+      - "builtin-tools/bash/conformance/bun.lock"
   schedule:
     # Mondays 06:00 UTC -- catches the oracle image's own upstream drifting (Alpine's index
     # publishing a newer package than the goldens were recorded with, say) with nothing in this repo
@@ -46,7 +54,9 @@ jobs:
         with:
           fetch-depth: 1
 
-      # `stale` is pure Python + Docker (it re-runs the oracle and compares with the recorded
+      - uses: oven-sh/setup-bun@v2
+
+      # `stale` uses Bun + Docker (it re-runs the oracle and compares with the recorded
       # goldens; it never builds or runs the wasm shell), so no wasm target and no Rust cache --
       # just enough of a toolchain for `cargo make` itself to run.
       - uses: ./.github/actions/setup-rust

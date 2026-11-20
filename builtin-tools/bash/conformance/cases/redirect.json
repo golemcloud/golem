@@ -1,0 +1,176 @@
+{
+  "tier": "pr",
+  "description": "Redirection forms beyond `exec`: order, duplication, noclobber, here-documents, fd variables.",
+  "cases": [
+    {
+      "name": "redirect: order of dup and file",
+      "script": "cd /tmp; { echo out; echo err >&2; } >f 2>&1; cat f; { echo out; echo err >&2; } 2>&1 >g | sed s/^/pipe:/; cat g",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: append and truncate",
+      "script": "cd /tmp; echo one >f; echo two >>f; cat f; : >f; wc -c <f; >f2 echo pre; cat f2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: both streams",
+      "script": "cd /tmp; { echo o; echo e >&2; } &>f; cat f; { echo o2; echo e2 >&2; } &>>f; cat f",
+      "tags": [
+        "redirection.both"
+      ],
+      "options": {}
+    },
+    {
+      "name": "redirect: noclobber",
+      "script": "cd /tmp; echo a >f; set -C; echo b >f; echo status=$?; echo c >|f; cat f; echo d >>f; cat f; set +C",
+      "tags": [
+        "redirection.noclobber"
+      ],
+      "options": {}
+    },
+    {
+      "name": "redirect: read and write descriptor",
+      "script": "cd /tmp; echo hello >f; exec 3<>f; read -u 3 w; echo $w; exec 3>&-",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: duplicate input",
+      "script": "cd /tmp; echo line >f; exec 4<f; cat <&4; exec 4<&-",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: move descriptors",
+      "script": "cd /tmp; exec 5>f; exec 6>&5-; echo moved >&6; exec 6>&-; cat f; echo x >&5; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: close stdout",
+      "script": "{ echo gone; } >&-; echo status=$?; echo visible",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: descriptor variables",
+      "script": "cd /tmp; exec {fd}>f; echo \"via $fd\" >&$fd; [ $fd -ge 10 ] && echo high; exec {fd}>&-; cat f",
+      "tags": [
+        "redirection.fd-variable"
+      ],
+      "options": {}
+    },
+    {
+      "name": "redirect: descriptor variable read",
+      "script": "cd /tmp; printf \"a\\nb\\n\" >f; exec {in}<f; read -u $in x; read -u $in y; echo $x$y; exec {in}<&-",
+      "tags": [
+        "redirection.fd-variable"
+      ],
+      "options": {}
+    },
+    {
+      "name": "redirect: here document expansion",
+      "script": "x=val; cat <<EOF\n$x $(echo sub) $((1+1)) \\$literal\nEOF",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: quoted here document",
+      "script": "x=val; cat <<'EOF'\n$x $(echo no)\nEOF\ncat <<\"E2\"\n$x\nE2",
+      "tags": [
+        "redirection.heredoc.quoted"
+      ],
+      "options": {}
+    },
+    {
+      "name": "redirect: here document tab stripping",
+      "script": "cat <<-EOF\n\tindented\n\t\tdeeper\n\tEOF",
+      "tags": [
+        "redirection.heredoc.strip"
+      ],
+      "options": {}
+    },
+    {
+      "name": "redirect: here documents on one command",
+      "script": "cat <<A - <<B\nfirst\nA\nsecond\nB",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: here document unterminated",
+      "script": "cat <<EOF\nno end",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: here string forms",
+      "script": "x=\"a b\"; cat <<< $x; cat <<< \"$x\"; wc -l <<< \"\"; read -r v <<< \"  spaced  \"; echo \"[$v]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: missing input file",
+      "script": "cat </tmp/nosuch; echo status=$?; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: missing output directory",
+      "script": "echo x >/tmp/nodir/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: ambiguous redirect",
+      "script": "e=; echo x >$e; echo status=$?; s=\"a b\"; echo x >$s; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: redirect a directory",
+      "script": "echo x >/tmp; echo status=$?; cat </tmp; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: stdin stdout stderr paths",
+      "script": "echo out >/dev/stdout; echo err >/dev/stderr 2>&1; echo in | cat /dev/stdin; echo fd | cat /dev/fd/0",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "redirect: redirections on compound commands",
+      "script": "cd /tmp; for i in 1 2; do echo $i; done >loop; if true; then echo if; fi >>loop; { echo grp; } >>loop; cat loop",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: input to a loop",
+      "script": "cd /tmp; printf \"1\\n2\\n\" >nums; while read n; do echo n$n; done <nums; s=0; while read n; do s=$((s+n)); done <nums; echo $s",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: per-command redirect does not persist",
+      "script": "cd /tmp; echo a >f 2>/dev/null; echo shown; ls nosuch 2>/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: numbered descriptor to file",
+      "script": "cd /tmp; { echo three >&3; } 3>f; cat f; echo x 1>&2 2>/dev/null",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "redirect: bad descriptor",
+      "script": "echo x >&7; echo status=$?; cat <&8; echo status=$?",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}
