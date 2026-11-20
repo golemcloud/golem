@@ -59,7 +59,7 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
-    #[tagged_as("agent_sdk_rust")]
+    #[tagged_as("agent_config_moonbit")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
@@ -1156,6 +1156,25 @@ async fn static_config_defaults_and_creation_overrides_survive_reconstruction(
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    check_static_config_reconstruction(last_unique_id, deps, agent_sdk_rust).await
+}
+
+#[test]
+#[timeout("120s")]
+async fn moonbit_static_config_defaults_and_creation_overrides_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_config_moonbit")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    check_static_config_reconstruction(last_unique_id, deps, component).await
+}
+
+async fn check_static_config_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    guest: &PrecompiledComponent,
+) -> anyhow::Result<()> {
     let corpus: serde_json::Value =
         serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;
     let reference = &corpus["reference"];
@@ -1174,7 +1193,7 @@ async fn static_config_defaults_and_creation_overrides_survive_reconstruction(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .component_dep(&context.default_environment_id, guest)
         .with_agent_config(agent_type, entries("deployment"))
         .store()
         .await?;

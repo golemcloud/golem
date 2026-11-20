@@ -122,17 +122,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let component_config = owner_component_metadata
                     .metadata
                     .agent_type_config(&agent_id.agent_type)
-                    .unwrap_or_default()
-                    .to_vec();
-                effective_agent_config(
-                    worker_metadata.config,
-                    component_config,
-                    &agent_type.schema,
-                    &agent_type.config,
-                )?
-                .into_iter()
-                .map(|(path, value)| TypedAgentConfigEntry { path, value })
-                .collect()
+                    .unwrap_or_default();
+                effective_agent_config(worker_metadata.config, component_config, &agent_type.config)
+                    .into_iter()
+                    .map(|(path, value)| TypedAgentConfigEntry { path, value })
+                    .collect()
             }
             ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
                 let schema = owner_component_metadata.metadata.config_schema();
@@ -142,10 +136,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .metadata
                         .component_provision_config()
                         .config
-                        .clone(),
-                    &schema.schema,
+                        .captures(),
                     &schema.declarations,
-                )?
+                )
                 .into_iter()
                 .map(|(path, value)| TypedAgentConfigEntry { path, value })
                 .collect()

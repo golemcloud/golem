@@ -936,7 +936,7 @@ pub async fn test_component_deletion_racing_runtime_derivation(deps: &Deps) {
             AgentTypeProvisionConfig {
                 initial_permissions: initial_card.clone(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: Default::default(),
                 plugins: Vec::new(),
                 files: Vec::new(),
             },
@@ -1092,7 +1092,7 @@ pub async fn test_component_deletion_racing_multi_parent_runtime_derivation(deps
     let provision_config = |card: PolymorphicCard| AgentTypeProvisionConfig {
         initial_permissions: card,
         env: BTreeMap::new(),
-        config: Vec::new(),
+        config: Default::default(),
         plugins: Vec::new(),
         files: Vec::new(),
     };
@@ -1266,7 +1266,7 @@ pub async fn test_component_deletion_racing_runtime_derivation_from_descendant(d
             AgentTypeProvisionConfig {
                 initial_permissions: initial_card.clone(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: Default::default(),
                 plugins: Vec::new(),
                 files: Vec::new(),
             },
@@ -2779,7 +2779,7 @@ pub async fn test_environment_deletion_revokes_component_card_runtime_descendant
             AgentTypeProvisionConfig {
                 initial_permissions: initial_card.clone(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: Default::default(),
                 plugins: Vec::new(),
                 files: Vec::new(),
             },
@@ -3525,7 +3525,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
             AgentTypeProvisionConfig {
                 initial_permissions: initial_card.clone(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: Default::default(),
                 plugins: Vec::new(),
                 files: Vec::new(),
             },
@@ -3619,7 +3619,7 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
             AgentTypeProvisionConfig {
                 initial_permissions: initial_card.clone(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: Default::default(),
                 plugins: Vec::new(),
                 files: Vec::new(),
             },
@@ -3822,7 +3822,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
             AgentTypeProvisionConfig {
                 initial_permissions: initial_card.clone(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: Default::default(),
                 plugins: Vec::new(),
                 files: Vec::new(),
             },
@@ -3912,7 +3912,7 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
             AgentTypeProvisionConfig {
                 initial_permissions: initial_card.clone(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: Default::default(),
                 plugins: Vec::new(),
                 files: Vec::new(),
             },
@@ -4023,7 +4023,7 @@ pub async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(
             AgentTypeProvisionConfig {
                 initial_permissions: initial_card.clone(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: Default::default(),
                 plugins: Vec::new(),
                 files: Vec::new(),
             },
@@ -4136,7 +4136,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
             AgentTypeProvisionConfig {
                 initial_permissions: initial_card.clone(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: Default::default(),
                 plugins: Vec::new(),
                 files: Vec::new(),
             },

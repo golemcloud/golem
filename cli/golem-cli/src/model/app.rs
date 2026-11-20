@@ -21,15 +21,11 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
 use crate::model::app_raw;
-use crate::model::cascade::error::StoreGetValueError;
-use crate::model::cascade::layer::Layer;
-use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::{OptionalProperty, OptionalPropertyTraceElem};
 use crate::model::cascade::property::tool_bindings::{ToolBindingState, ToolBindingsProperty};
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
-use crate::model::cascade::store::Store;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
@@ -40,6 +36,10 @@ use crate::model::tool_deployment::{
 };
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
+use golem_common::cascade::error::StoreGetValueError;
+use golem_common::cascade::layer::Layer;
+use golem_common::cascade::property::Property;
+use golem_common::cascade::store::Store;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
@@ -3042,8 +3042,9 @@ pub struct ComponentLayerProperties {
         OptionalProperty<ComponentLayer, IndexMap<String, app_raw::NodeHttpRouter>>,
     #[serde(skip)]
     node_http_routers_origin: Option<(PathBuf, ComponentLayerId, Option<String>)>,
-    pub config: JsonProperty<ComponentLayer>,
     #[serde(skip)]
+    pub config: JsonProperty<ComponentLayer>,
+    #[serde(rename = "configInputs")]
     pub config_layers: Vec<ConfigLayer>,
     pub initial_card: OptionalProperty<ComponentLayer, app_raw::ManifestInitialCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4334,15 +4335,15 @@ mod app_builder {
         PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
-    use crate::model::cascade::error::StoreGetValueError;
-    use crate::model::cascade::property::Property;
-    use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
     use crate::model::language::GuestLanguage;
     use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
+    use golem_common::cascade::error::StoreGetValueError;
+    use golem_common::cascade::property::Property;
+    use golem_common::cascade::store::Store;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
@@ -6566,8 +6567,8 @@ mod test {
         includes_from_yaml_file,
     };
     use crate::model::app_raw;
-    use crate::model::cascade::property::Property;
     use crate::model::language::GuestLanguage;
+    use golem_common::cascade::property::Property;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::ComponentName;
     use golem_common::model::domain_registration::Domain;
@@ -6695,6 +6696,20 @@ mod test {
                         ConfigSourcePlan::Static(SchemaValue::U32(4000))
                     );
                     assert_eq!(plan[2].origins[&vec!["port".into()]].layer, "code");
+                    let mut next_schema = schema.clone();
+                    next_schema.fields[2].default = Some(SchemaValue::U32(5000));
+                    let next = app
+                        .resolve_config(&next_schema, agent.config_layers(), &code)
+                        .unwrap();
+                    assert_eq!(next[0].source, plan[0].source);
+                    assert_eq!(
+                        next[2].source,
+                        ConfigSourcePlan::Static(SchemaValue::U32(5000))
+                    );
+                    assert_eq!(
+                        plan[2].source,
+                        ConfigSourcePlan::Static(SchemaValue::U32(4000))
+                    );
                 }
             });
             let tool = app
