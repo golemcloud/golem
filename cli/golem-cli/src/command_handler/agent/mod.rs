@@ -940,8 +940,27 @@ impl AgentCommandHandler {
         export: OplogExportArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+        let lookup_error = |error| {
+            if export.obfuscate {
+                oplog_export::read_failed(error)
+            } else {
+                error
+            }
+        };
+        let (agent_id_match, component, agent_id) = {
+            let _log_output = export
+                .obfuscate
+                .then(|| LogOutput::new(LogOutputTarget::TracingDebug));
+            let agent_id_match = self
+                .match_agent_id(agent_id.agent_id)
+                .await
+                .map_err(lookup_error)?;
+            let (component, agent_id) = self
+                .component_by_agent_id_match(&agent_id_match)
+                .await
+                .map_err(lookup_error)?;
+            (agent_id_match, component, agent_id)
+        };
 
         let batch_size = self.ctx.http_batch_size();
         if export.obfuscate {
@@ -1426,7 +1445,7 @@ impl AgentCommandHandler {
             .await
             .map_service_error()?
             .values;
-        deployments.sort_by(|a, b| b.revision.cmp(&a.revision));
+        deployments.sort_by_key(|deployment| std::cmp::Reverse(deployment.revision));
         let mut seen = BTreeSet::new();
         let mut types = Vec::new();
         for deployment in deployments {
@@ -1461,11 +1480,26 @@ impl AgentCommandHandler {
             .get_worker_metadata(&environment_id.0, &agent_id.0, None)
             .await
             .map_service_error()?;
+        let historical = self.historical_agent_types(environment_id).await?;
+        self.recorded_component_for_metadata(
+            &AgentMetadata::from(ComponentName(String::new()), metadata),
+            &historical,
+        )
+        .await
+    }
+
+    async fn recorded_component_for_metadata(
+        &self,
+        metadata: &AgentMetadata,
+        historical: &[DeployedRegisteredAgentType],
+    ) -> anyhow::Result<(ComponentDto, DeployedRegisteredAgentType)> {
+        let clients = self.ctx.golem_clients().await?;
+        let environment_id = metadata.environment_id;
+        let agent_id = metadata.agent_id;
         let name = metadata
             .agent_type_name
             .as_ref()
             .ok_or_else(|| anyhow!("Agent {agent_id} has no agent type"))?;
-        let historical = self.historical_agent_types(environment_id).await?;
         for mut agent_type in historical.iter().cloned() {
             if &agent_type.agent_type.type_name != name {
                 continue;
@@ -1497,7 +1531,9 @@ impl AgentCommandHandler {
                     break false;
                 };
                 if matches.workers.iter().any(|agent| {
-                    agent.agent_id == agent_id && agent.fingerprint == metadata.fingerprint
+                    agent.agent_id == agent_id
+                        && agent.fingerprint == metadata.fingerprint
+                        && agent.component_revision == metadata.component_revision
                 }) {
                     break true;
                 }
@@ -1546,10 +1582,12 @@ impl AgentCommandHandler {
                     .resolve_environment(EnvironmentResolveMode::Any)
                     .await?;
                 debug!("Finding agent type {}", agent_type_name.0);
-                let Some(agent_type) = self
-                    .historical_agent_types(environment.environment_id)
-                    .await?
-                    .into_iter()
+                let historical = Arc::new(
+                    self.historical_agent_types(environment.environment_id)
+                        .await?,
+                );
+                let Some(agent_type) = historical
+                    .iter()
                     .find(|agent_type| agent_type.agent_type.type_name == agent_type_name)
                 else {
                     log_error(format!(
@@ -1566,8 +1604,9 @@ impl AgentCommandHandler {
                             agent_type.implemented_by.component_revision,
                         )
                         .await?,
-                    agent_types: vec![agent_type.agent_type.type_name],
+                    agent_types: vec![agent_type.agent_type.type_name.clone()],
                     component_name_filter: component_name,
+                    historical,
                 }])
             }
             None => {
@@ -1578,9 +1617,10 @@ impl AgentCommandHandler {
                     .await?;
 
                 let environment = &selected_components.environment;
-                let historical = self
-                    .historical_agent_types(environment.environment_id)
-                    .await?;
+                let historical = Arc::new(
+                    self.historical_agent_types(environment.environment_id)
+                        .await?,
+                );
 
                 environment
                     .with_current_deployment_revision_or_default_warn(
@@ -1607,6 +1647,7 @@ impl AgentCommandHandler {
                                             component_name_filter: Some(
                                                 component.component_name.clone(),
                                             ),
+                                            historical: historical.clone(),
                                             component,
                                         });
                                     }
@@ -1632,6 +1673,7 @@ impl AgentCommandHandler {
                                                 &historical,
                                             ),
                                             component_name_filter: Some(component_name),
+                                            historical: historical.clone(),
                                             component,
                                         });
                                     }
@@ -1707,7 +1749,8 @@ impl AgentCommandHandler {
                 )
                 .await?;
 
-            view.agents.extend(self.agent_views(agents).await?);
+            view.agents
+                .extend(self.agent_views(agents, &target.historical).await?);
             for (agent_type, type_scan_cursor) in type_scan_cursors {
                 next_cursor.insert(target.component.id, &agent_type, type_scan_cursor);
             }
@@ -1730,11 +1773,12 @@ impl AgentCommandHandler {
     async fn agent_views(
         &self,
         agents: Vec<AgentMetadata>,
+        historical: &[DeployedRegisteredAgentType],
     ) -> anyhow::Result<Vec<AgentMetadataView>> {
         let mut views = Vec::with_capacity(agents.len());
         for mut agent in agents {
             let Ok((agent_component, _)) = self
-                .recorded_agent_component(agent.environment_id, agent.agent_id)
+                .recorded_component_for_metadata(&agent, historical)
                 .await
             else {
                 agent.component_name = ComponentName(String::new());
@@ -1847,7 +1891,7 @@ impl AgentCommandHandler {
                     )
                     .await?;
                 Ok((
-                    self.agent_views(agents).await?,
+                    self.agent_views(agents, &target.historical).await?,
                     cursors.into_iter().next().map(|(_, cursor)| cursor),
                 ))
             },
@@ -2056,19 +2100,15 @@ impl AgentCommandHandler {
         }) {
             bail!("Agent ID {agent_id} does not belong to the specified agent type");
         }
-        let component = self
-            .recorded_agent_component(environment.environment_id, agent_id)
+        let historical = self
+            .historical_agent_types(environment.environment_id)
             .await
-            .ok()
-            .map(|(component, _)| component);
-        let metadata = AgentMetadata::from(
-            component
-                .as_ref()
-                .map(|component| component.component_name.clone())
-                .unwrap_or_else(|| ComponentName(String::new())),
-            result,
-        );
-        let metadata_view = self.agent_views(vec![metadata]).await?.remove(0);
+            .unwrap_or_default();
+        let metadata = AgentMetadata::from(ComponentName(String::new()), result);
+        let metadata_view = self
+            .agent_views(vec![metadata], &historical)
+            .await?
+            .remove(0);
 
         self.ctx
             .log_handler()
@@ -3212,6 +3252,7 @@ struct AgentListTarget {
     component: ComponentDto,
     agent_types: Vec<AgentTypeName>,
     component_name_filter: Option<ComponentName>,
+    historical: Arc<Vec<DeployedRegisteredAgentType>>,
 }
 
 /// Current and historical types of this component, not its types' current implementers.

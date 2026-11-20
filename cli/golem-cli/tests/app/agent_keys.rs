@@ -376,10 +376,26 @@ async fn moved_types_keep_old_component_agents_reachable_and_out_of_a_new_compon
         "agent.create",
     );
     let (new_id, _) = reference(&new);
+    let router = ctx.env_mut()["GOLEM_BUILTIN_LOCAL_URL"].clone();
+    let proxy = super::oplog_export::RecordingProxy::start(router).await;
+    ctx.add_env_var("GOLEM_BUILTIN_LOCAL_URL", proxy.url.clone());
     let listed = document(
         &cli_json(&ctx, [cmd::AGENT, cmd::LIST, "CounterAgent"]).await,
         "agent.list",
     );
+    let requests = proxy.take();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| {
+                request.starts_with("GET ")
+                    && request.split('?').next().unwrap().ends_with("/deployments")
+            })
+            .count(),
+        1,
+        "a list operation must reuse its deployment history: {requests:?}"
+    );
+    ctx.add_env_var("GOLEM_BUILTIN_LOCAL_URL", proxy.bypass()[0].1);
     let agents = listed["agents"].as_array().unwrap();
     for (id, owner) in [(&old_id, COMPONENT_NAME), (&new_id, MOVED_COMPONENT_NAME)] {
         let row = agents
@@ -427,6 +443,54 @@ async fn moved_types_keep_old_component_agents_reachable_and_out_of_a_new_compon
     );
     invoke_ok(&ctx, &[&old_id, "value"], "1").await;
     invoke_ok(&ctx, &[&new_id, "value"], "0").await;
+
+    // Keep the list snapshot while the keyed UUID is recreated on its new component.
+    ctx.add_env_var("GOLEM_BUILTIN_LOCAL_URL", proxy.url.clone());
+    let (held, release) = proxy.hold_response(|request| {
+        request.starts_with("POST ")
+            && request.contains("/agents/find")
+            && !request.contains("component_name=")
+    });
+    let listing = cli_json(&ctx, [cmd::AGENT, cmd::LIST, "CounterAgent"]);
+    let recreate = async {
+        tokio::time::timeout(std::time::Duration::from_secs(60), held)
+            .await
+            .expect("the list response was not held")
+            .unwrap();
+        let deleted = ctx
+            .cli_with_env([flag::YES, cmd::AGENT, "delete", &old_id], &proxy.bypass())
+            .await;
+        assert!(deleted.success_or_dump());
+        let replacement = ctx
+            .cli_with_env(
+                [
+                    flag::YES,
+                    flag::FORMAT,
+                    "json",
+                    cmd::AGENT,
+                    cmd::CREATE,
+                    old_key,
+                    "--keyed",
+                ],
+                &proxy.bypass(),
+            )
+            .await;
+        let (replacement_id, replacement_fingerprint) =
+            reference(&document(&replacement, "agent.create"));
+        assert_eq!(replacement_id, old_id);
+        assert_ne!(replacement_fingerprint, old_fingerprint);
+        release.send(()).unwrap();
+    };
+    let (output, ()) = tokio::join!(listing, recreate);
+    let listed = document(&output, "agent.list");
+    let stale = listed["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["agentId"] == old_id)
+        .unwrap();
+    assert_eq!(stale["fingerprint"], old_fingerprint);
+    assert_eq!(stale["componentName"], "", "{stale}");
 }
 
 #[test]
