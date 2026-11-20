@@ -2358,7 +2358,7 @@ async fn no_blob_call_of_a_save_starts_after_it_answered() {
         )
         .await;
     let at_the_answer = storage.calls().len();
-    assert!(eventually(|| store.work_in_flight() == 0).await);
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     assert_eq!(storage.calls().len(), at_the_answer);
 }

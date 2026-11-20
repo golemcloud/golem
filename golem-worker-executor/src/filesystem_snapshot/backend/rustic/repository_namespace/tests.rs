@@ -654,14 +654,17 @@ async fn a_delete_all_during_a_later_run_of_a_restore_starts_only_after_the_rest
     }));
     let held = eventually(|| calls_of(&storage, "read_range") >= 2).await;
 
-    let mut deleting_all = Box::pin(store.delete_all(&scope, &Unlimited));
-    let pending = futures::poll!(deleting_all.as_mut()).is_pending();
-    let waited = pending && scope_deletes(&storage) == 0;
+    let deleting_all = AbortOnDropHandle::new(tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete_all(&scope, &Unlimited).await }
+    }));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let waited = scope_deletes(&storage) == 0 && !deleting_all.is_finished();
     storage.open_gate();
     let restored = tokio::time::timeout(LIMIT, restoring).await;
     let deleted_all = tokio::time::timeout(LIMIT, deleting_all).await;
 
-    assert!(matches!(deleted_all, Ok(Ok(()))), "{deleted_all:?}");
+    assert!(matches!(deleted_all, Ok(Ok(Ok(())))), "{deleted_all:?}");
     assert_eq!(
         (
             held,
@@ -1319,6 +1322,8 @@ mod drains {
     use crate::filesystem_snapshot::backend::rustic::test_support::*;
     use pretty_assertions::assert_eq;
     use test_r::{test, timeout};
+    /// The time that a test gives a delete of all snapshots that must wait, before it looks.
+    const WAIT: Duration = Duration::from_millis(200);
 
     /// The work that a call of the store left for its incarnation, held at the gate of the storage.
     #[derive(Clone, Copy, Debug)]
@@ -1415,11 +1420,17 @@ mod drains {
             }
         };
 
-        let mut deleting_all = Box::pin(store.delete_all(&scope, &Unlimited));
-        let pending = futures::poll!(deleting_all.as_mut()).is_pending();
-        let waited = pending && scope_deletes(&storage.calls()) == 0;
+        let deleting_all = AbortOnDropHandle::new(tokio::spawn({
+            let (store, scope) = (store.clone(), scope.clone());
+            async move { store.delete_all(&scope, &Unlimited).await }
+        }));
+        tokio::time::sleep(WAIT).await;
+        let waited = scope_deletes(&storage.calls()) == 0 && !deleting_all.is_finished();
         storage.open_gate();
-        let deleted_all = tokio::time::timeout(LIMIT, deleting_all).await.unwrap();
+        let deleted_all = tokio::time::timeout(LIMIT, deleting_all)
+            .await
+            .unwrap()
+            .unwrap();
         let ended = eventually(|| store.work_in_flight() == 0).await;
 
         (
@@ -1531,21 +1542,27 @@ mod drains {
             }
         }));
         let held = eventually(|| calls_with(&storage.calls(), "write") > 0).await;
-        let mut first = Box::pin(store.delete_all(&scope, &Unlimited));
-        let first_pending = futures::poll!(first.as_mut()).is_pending();
-        let mut second = Box::pin(store.delete_all(&scope, &Unlimited));
-        let second_pending = futures::poll!(second.as_mut()).is_pending();
-        let waited = first_pending && second_pending && scope_deletes(&storage.calls()) == 0;
+        let delete_all = || {
+            let (store, scope) = (store.clone(), scope.clone());
+            AbortOnDropHandle::new(tokio::spawn(async move {
+                store.delete_all(&scope, &Unlimited).await
+            }))
+        };
+        let first = delete_all();
+        tokio::time::sleep(WAIT).await;
+        let second = delete_all();
+
+        tokio::time::sleep(WAIT).await;
+        let waited =
+            scope_deletes(&storage.calls()) == 0 && !first.is_finished() && !second.is_finished();
         storage.open_gate();
         let saved = tokio::time::timeout(LIMIT, saving).await;
-        let (first, second) = tokio::join!(
-            tokio::time::timeout(LIMIT, first),
-            tokio::time::timeout(LIMIT, second)
-        );
+        let first = tokio::time::timeout(LIMIT, first).await;
+        let second = tokio::time::timeout(LIMIT, second).await;
 
         assert!(matches!(saved, Ok(Ok(Ok(_)))), "{saved:?}");
-        assert!(matches!(first, Ok(Ok(()))), "{first:?}");
-        assert!(matches!(second, Ok(Ok(()))), "{second:?}");
+        assert!(matches!(first, Ok(Ok(Ok(())))), "{first:?}");
+        assert!(matches!(second, Ok(Ok(Ok(())))), "{second:?}");
         assert_eq!(
             (held, waited, listed_names(&store, &scope).await),
             (true, true, Vec::<String>::new())
@@ -1588,18 +1605,26 @@ mod drains {
             }
         }));
         let held = eventually(|| calls_with(&storage.calls(), "write") > 0).await;
-        let mut first = Box::pin(store.delete_all(&scope, &Unlimited));
-        let first_waited = futures::poll!(first.as_mut()).is_pending();
+        let delete_all = || {
+            let (store, scope) = (store.clone(), scope.clone());
+            AbortOnDropHandle::new(tokio::spawn(async move {
+                store.delete_all(&scope, &Unlimited).await
+            }))
+        };
+        let first = delete_all();
+        tokio::time::sleep(WAIT).await;
+        let first_waited = !first.is_finished();
         drop(first);
-        let mut second = Box::pin(store.delete_all(&scope, &Unlimited));
-        let pending = futures::poll!(second.as_mut()).is_pending();
-        let waited = pending && scope_deletes(&storage.calls()) == 0;
+        let second = delete_all();
+
+        tokio::time::sleep(WAIT).await;
+        let waited = scope_deletes(&storage.calls()) == 0 && !second.is_finished();
         storage.open_gate();
         let saved = tokio::time::timeout(LIMIT, saving).await;
         let second = tokio::time::timeout(LIMIT, second).await;
 
         assert!(matches!(saved, Ok(Ok(Ok(_)))), "{saved:?}");
-        assert!(matches!(second, Ok(Ok(()))), "{second:?}");
+        assert!(matches!(second, Ok(Ok(Ok(())))), "{second:?}");
         assert_eq!(
             (
                 held,

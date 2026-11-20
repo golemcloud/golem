@@ -3318,13 +3318,14 @@ async fn jump_projection_finishes_without_its_producer(
             tokio::time::timeout(Duration::from_secs(1), producer).await???;
         }
         let sentinel = worker.add_to_oplog(OplogEntry::grow_memory(101)).await?;
-        let mut status = Box::pin(worker.get_last_known_status());
-        assert!(
-            poll!(status.as_mut()).is_pending(),
-            "status read bypassed reconstruction"
-        );
+        let status = tokio::spawn({
+            let worker = worker.clone();
+            async move { worker.get_last_known_status().await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!status.is_finished(), "status read bypassed reconstruction");
         repair.release();
-        let status = tokio::time::timeout(Duration::from_secs(20), status).await?;
+        let status = tokio::time::timeout(Duration::from_secs(20), status).await??;
         assert_eq!(status.oplog_idx, jump_index);
         assert_eq!(
             status.total_linear_memory_size,
