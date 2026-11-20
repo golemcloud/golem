@@ -105,7 +105,7 @@ wake is persisted as a scheduler action before automatic suspension (`worker/sus
 `WakeupScheduler::sleep_until`), and the shard-keyed `RunningWorkers` index is updated
 synchronously so a crash/reshard can enumerate workers with pending work
 (`worker/status_flusher.rs`). The status blob cache is an asynchronously flushed baseline only.
-Status, clean-checkpoint, invocation-result-index, and durable-stream-index cache namespaces include
+The status cache, clean-checkpoint, invocation-result-index, and durable-stream-index namespaces include
 the current `Create.instance_id` (`AgentFingerprint`). Readers select them only after resolving the
 authoritative `Create` entry, while resident workers carry that fingerprint directly. A delayed
 writer from a deleted incarnation therefore cannot mix fields into its replacement's derived state.

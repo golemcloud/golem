@@ -33,8 +33,9 @@ interactive examples; preserve unrelated content and verify changed walkthrough 
 
 Authoritative: oplog entries and payloads, `PendingAgentInvocation` / `AgentInvocationStarted` /
 `AgentInvocationFinished`, idempotency keys and recorded results, `Start`/`End`/`Cancelled` and
-`CompletionDelivered`/`CompletionDiscarded` markers, update and snapshot entries, and status folded
-from the oplog. Derived and disposable: `Store` memory, in-memory queues, caches, event
+`CompletionDelivered`/`CompletionDiscarded` markers, update and snapshot entries, the durable
+status baseline (`AgentStatusCheckpoint`), and status folded from that baseline and the oplog
+entries after it. Derived and disposable: `Store` memory, in-memory queues, caches, event
 subscriptions, spawned store tasks, sockets. Never let correctness after a restart depend on
 anything in the second list.
 

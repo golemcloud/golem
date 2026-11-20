@@ -21,16 +21,19 @@
 //! from index 1.
 //!
 //! [`StatusCheckpointer`] maintains a *separate* copy of the status — the checkpoint — written only
-//! at structurally clean boundaries where no jumpable region is open: at snapshot save and at
-//! throttled idle boundaries. Because it is never advanced into an open region, it always holds a
-//! baseline that predates any later jump, so the recompute can fold forward from it
+//! at structurally clean boundaries where no jumpable region is open: at snapshot save, at
+//! throttled idle boundaries, and at throttled boundaries during a long invocation
+//! (`checkpoint_status_mid_invocation`). Because it is never advanced into an open region, it
+//! always holds a baseline that predates any later jump, so the recompute can fold forward from it
 //! (see [`crate::worker::status::calculate_last_known_status_with_checkpoint`]).
 //!
 //! The checkpoint is the durable status baseline of the agent. It has no expiry, and an archive of
 //! the oplog keeps it. Its namespace contains the fingerprint of the agent, so a re-created agent
-//! never reads the baseline of an earlier incarnation. While the oplog starts at index 1, a
-//! write is best-effort: a failed (or stale, or missing) checkpoint only means a future recompute
-//! reads more oplog entries, never incorrect state.
+//! never reads the baseline of an earlier incarnation.
+//!
+//! A write is best-effort. Every oplog keeps its entries from index 1, so a failed, stale or
+//! missing checkpoint makes a later recompute read more oplog entries. The status that the
+//! recompute gives does not change.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -154,8 +157,9 @@ impl StatusCheckpointer {
     /// Never written once [`Self::begin_delete`] has run, so an in-flight write cannot resurrect the
     /// checkpoint after it is deleted.
     ///
-    /// Best-effort: a write failure is logged and metered, the baseline is left unchanged, and the
-    /// worker continues. The oplog remains the source of truth.
+    /// Best-effort: a write failure is logged and metered, the stored baseline stays as it was,
+    /// and the worker continues. Every oplog keeps its entries from index 1, so an older or
+    /// missing baseline makes a later fold longer and does not change the status.
     pub async fn maybe_checkpoint(&self, status: &AgentStatusRecord, reason: CheckpointReason) {
         if self.is_ephemeral || !self.enabled || self.writes_stopped() {
             return;

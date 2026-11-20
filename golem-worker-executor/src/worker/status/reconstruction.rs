@@ -106,8 +106,9 @@ where
         agent_mode,
         last_known,
         || async move {
-            // The checkpoint is only a fold baseline, and this function has no way to report a
-            // read failure: falling back to a full recompute costs time, not correctness.
+            // This function cannot report a read failure of the status baseline. Every oplog
+            // keeps its entries from index 1, so the full fold after a failed read gives the
+            // same status, in more time.
             worker_service
                 .read_status_checkpoint(owned_agent_id, fingerprint, agent_mode)
                 .await

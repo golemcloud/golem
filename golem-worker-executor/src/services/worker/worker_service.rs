@@ -220,10 +220,10 @@ impl WorkerService for DefaultWorkerService {
                             agent_mode,
                             None,
                             || async {
-                                // The checkpoint is only a fold baseline: a read failure here
-                                // costs a full recompute, not correctness, and the function has
-                                // no way to report it. The live cached status above is the read
-                                // that propagates.
+                                // The function cannot report a read failure of the status
+                                // baseline. Every oplog keeps its entries from index 1, so the
+                                // full fold after a failed read gives the same status, in more
+                                // time. The live cached status above is the read that propagates.
                                 self.read_status_checkpoint(owned_agent_id, fingerprint, agent_mode)
                                     .await
                                     .unwrap_or_else(|err| {
@@ -338,6 +338,11 @@ impl WorkerService for DefaultWorkerService {
         // removes nothing. A new owner claiming the shard between this check and the oplog delete
         // is still refused by that delete, which keeps the oplog: the state removed in between is
         // what the new owner rebuilds from it.
+        //
+        // The status baseline is part of that state. A refused or partial oplog delete keeps an
+        // oplog without its baseline. Every oplog keeps its entries from index 1, so the new owner
+        // folds the status from index 1 and writes a new baseline. The cost is a longer fold. The
+        // status does not change.
         if delete_current_oplog && let Some(epoch) = expected_epoch {
             self.oplog_service
                 .assert_owning_epoch(owned_agent_id, agent_mode, epoch)
