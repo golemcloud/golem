@@ -3171,6 +3171,43 @@ fn p2_tcp_stream_error_keeps_its_errno_and_kind_through_the_oplog() {
     assert_eq!(code.kind(), std::io::ErrorKind::ConnectionAborted);
     assert_eq!(code.to_string(), native.to_string(), "the message is kept");
 
+    // The reader fails with the Wasmtime sockets error code instead of the P2 one.
+    let read = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        wasmtime_wasi::sockets::ErrorCode::ConnectionReset,
+    )));
+    assert_eq!(
+        wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::from(&read),
+        wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::ConnectionReset
+    );
+
+    // Every code that a native stream can fail with comes back as the guest's
+    // `network-error-code`, which Wasmtime derives from the I/O error.
+    {
+        use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode;
+        for code in [
+            ErrorCode::AccessDenied,
+            ErrorCode::NotSupported,
+            ErrorCode::InvalidArgument,
+            ErrorCode::OutOfMemory,
+            ErrorCode::Timeout,
+            ErrorCode::ConcurrencyConflict,
+            ErrorCode::InvalidState,
+            ErrorCode::NewSocketLimit,
+            ErrorCode::AddressNotBindable,
+            ErrorCode::AddressInUse,
+            ErrorCode::RemoteUnreachable,
+            ErrorCode::ConnectionRefused,
+            ErrorCode::ConnectionReset,
+            ErrorCode::ConnectionAborted,
+            ErrorCode::DatagramTooLarge,
+        ] {
+            let error = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+                code,
+            )));
+            assert_eq!(ErrorCode::from(&error), code, "{code:?} through the oplog");
+        }
+    }
+
     let closed = SerializableTcpStreamError::from_stream_error(StreamError::Closed).unwrap();
     assert!(matches!(StreamError::from(closed), StreamError::Closed));
     assert!(SerializableTcpStreamError::from_stream_error(StreamError::trap("trap")).is_err());

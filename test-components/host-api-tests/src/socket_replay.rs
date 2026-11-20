@@ -287,6 +287,8 @@ pub trait SocketSession {
     /// result in the send log.
     fn p2_tcp_send_blocking(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
     fn p2_tcp_receive(&self, slot: String, len: u32) -> Result<Vec<u8>, String>;
+    /// Writes `data` with `write` and no `check-write` first, beyond the stream's write permit.
+    fn p2_tcp_write_unpermitted(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
     /// Connects a P2 TCP socket and drops it, in a read-only method.
     #[read_only]
     fn p2_tcp_connect_read_only(&self, port: u16) -> Result<(), String>;
@@ -940,6 +942,13 @@ impl SocketSession for SocketSessionImpl {
         })?;
         self.record(&slot, &data);
         Ok(data)
+    }
+
+    fn p2_tcp_write_unpermitted(&self, slot: String, data: Vec<u8>) -> Result<(), String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2Tcp { output, .. } => output.write(&data).map_err(stream_error),
+            _ => Err(format!("slot {slot} holds no P2 TCP socket")),
+        })
     }
 
     fn p2_tcp_connect_read_only(&self, port: u16) -> Result<(), String> {

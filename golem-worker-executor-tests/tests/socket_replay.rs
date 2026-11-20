@@ -1232,10 +1232,6 @@ async fn p2_tcp_write_error_replays_and_is_not_sent_again(
     }
     let live: Vec<Result<(), String>> = session.call("sends", data_value!()).await?;
     let error = live.last().unwrap().clone().unwrap_err();
-    assert!(
-        error.starts_with("last-operation-failed: "),
-        "the write error is returned: {error}"
-    );
     let (got, reconnected) = peer.await??;
     assert_eq!(got, b"one".to_vec());
     assert!(!reconnected, "no second connection");
@@ -1247,16 +1243,153 @@ async fn p2_tcp_write_error_replays_and_is_not_sent_again(
         .iter()
         .find(|end| end.contains("Result(Err {"))
         .expect("the failed write is recorded");
-    // `connection-reset` and `connection-aborted` are the cases 15 and 16 of the socket error
-    // code; `None` would mean that only the message was recorded.
-    assert!(
-        failed.contains("Enum { case: 15 }") || failed.contains("Enum { case: 16 }"),
-        "the failed write records the socket error code of the native stream: {failed}"
-    );
+    // Linux reports the reset to the next write; macOS may report the stream closed instead,
+    // which has no code.
+    if error != "closed" {
+        assert!(
+            error.starts_with("last-operation-failed: "),
+            "the write error is returned: {error}"
+        );
+        assert_records_reset_code(failed);
+    }
 
     session.restart_executor().await?;
     let replayed: Vec<Result<(), String>> = session.call("sends", data_value!()).await?;
     assert_eq!(replayed, live, "replay returns the same results and error");
+    session.finish().await
+}
+
+/// Asserts that a rendered End records `connection-reset` or `connection-aborted`, the cases 15
+/// and 16 of the socket error code; `None` would mean that only the message was recorded.
+fn assert_records_reset_code(end: &str) {
+    assert!(
+        end.contains("Enum { case: 15 }") || end.contains("Enum { case: 16 }"),
+        "the failure records the socket error code of the native stream: {end}"
+    );
+}
+
+/// A read error is recorded with the socket error code of the native stream. The peer resets
+/// the connection while the agent waits in a read; replay after a restart returns the same error.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_read_error_records_its_code_and_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let _peer = AbortOnDropHandle::new(tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        // Linger zero: the close resets the connection.
+        stream.set_zero_linger()?;
+        drop(stream);
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        Ok::<_, anyhow::Error>(())
+    }));
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-tcp-read-error",
+    )
+    .await?;
+
+    let connected: Result<(), String> = session
+        .call("p2_tcp_connect", data_value!("a".to_string(), port))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let read: Result<Vec<u8>, String> = session
+        .call("p2_tcp_receive", data_value!("a".to_string(), 3u32))
+        .await?;
+    let ends = ends_of(
+        &session.oplog().await?,
+        "sockets::tcp::input_stream::blocking_read",
+    );
+    let failed = ends
+        .iter()
+        .find(|end| end.contains("Result(Err {"))
+        .expect("the failed read is recorded");
+    // Linux reports the reset to the read; another OS may report the end of the stream, which
+    // the component returns as the bytes read so far.
+    if read.is_err() {
+        assert_records_reset_code(failed);
+    }
+
+    session.restart_executor().await?;
+    let replayed: Result<Vec<u8>, String> = session
+        .call("p2_tcp_receive", data_value!("a".to_string(), 3u32))
+        .await?;
+    assert_eq!(
+        replayed,
+        Err("last-operation-failed: connection reset".to_string()),
+        "after the restart the connection is lost"
+    );
+    session.finish().await
+}
+
+/// A `write` beyond the permit of `check-write` is a bug of the guest. The native stream traps,
+/// and the trap fails the invocation permanently: no retry replays the connect into a lost
+/// stream that would turn the bug into a lost connection.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_write_beyond_the_permit_fails_the_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-tcp-unpermitted",
+    )
+    .await?;
+
+    let connected: Result<(), String> = session
+        .call("p2_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let result = session
+        .executor()
+        .invoke_and_await_agent(
+            &session.component,
+            &session.agent_id,
+            "p2_tcp_write_unpermitted",
+            data_value!("a".to_string(), b"hello".to_vec()),
+        )
+        .await;
+    let error = format!(
+        "{:?}",
+        result.expect_err("the unpermitted write fails the invocation")
+    );
+    assert!(
+        error.contains("not permitted to write 5 bytes"),
+        "the invocation fails with the trap: {error}"
+    );
+    let ends = ends_of(
+        &session.oplog().await?,
+        "sockets::tcp::output_stream::write",
+    );
+    assert!(
+        ends.is_empty(),
+        "the unpermitted write completes with no recorded result: {ends:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        peer.connections()
+            .iter()
+            .all(|connection| connection.received.is_empty()),
+        "the peer gets nothing"
+    );
     session.finish().await
 }
 

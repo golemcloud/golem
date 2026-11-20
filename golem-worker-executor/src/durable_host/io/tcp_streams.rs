@@ -21,6 +21,7 @@
 //! that stand-in again, which fails with `connection-reset` and sends nothing.
 
 use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::io::native_wait::NativeIoWait;
 use crate::durable_host::io::streams::interruptible_tcp_input;
 use crate::durable_host::sockets::tcp::{LostTcpInputStream, LostTcpOutputStream};
@@ -39,7 +40,7 @@ use golem_common::model::oplog::{
     HostResponseSocketsTcpStreamFlush, HostResponseSocketsTcpStreamRead,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
-use wasmtime::component::Resource;
+use wasmtime::component::{Resource, ResourceTableError};
 use wasmtime_wasi::StreamError;
 use wasmtime_wasi::p2::bindings::io::streams::{
     HostInputStream, HostOutputStream, InputStream, OutputStream,
@@ -292,10 +293,28 @@ pub(super) async fn write<Ctx: WorkerCtx>(
             HostOutputStream::write(ctx.table(), output(rep), contents)
                 .await
                 .map(|()| len)
+                .map_err(write_beyond_permit_is_permanent)
         },
     )
     .await
     .map(|_| ())
+}
+
+/// The native stream traps when the guest writes more than `check-write` permitted. That is a
+/// deterministic bug of the guest, so the trap fails the invocation permanently: a retry would
+/// replay the connect into a lost stream and turn the bug into a lost connection.
+fn write_beyond_permit_is_permanent(error: StreamError) -> StreamError {
+    match error {
+        StreamError::Trap(trap) if trap.downcast_ref::<ResourceTableError>().is_none() => {
+            StreamError::Trap(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                ClassifiedHostError {
+                    kind: HostFailureKind::Permanent,
+                    message: trap.to_string(),
+                },
+            )))
+        }
+        other => other,
+    }
 }
 
 const MAX_BLOCKING_WRITE: usize = 4096;
@@ -351,6 +370,7 @@ pub(super) async fn write_zeroes<Ctx: WorkerCtx>(
             HostOutputStream::write_zeroes(ctx.table(), output(rep), len)
                 .await
                 .map(|()| len)
+                .map_err(write_beyond_permit_is_permanent)
         },
     )
     .await

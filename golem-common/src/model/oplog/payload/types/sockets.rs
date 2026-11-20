@@ -69,8 +69,9 @@ impl From<SerializableSocketError> for SocketError {
 
 impl SerializableTcpStreamError {
     /// The recorded form of a P2 TCP stream error. A trap is never recorded, so it is returned.
-    /// The native P2 TCP streams fail with a socket error code instead of an I/O error; the code
-    /// is recorded, so the guest's `network-error-code` gives it live and on replay.
+    /// The native P2 TCP streams fail with a socket error code instead of an I/O error: the
+    /// writer with the P2 `network` error code, the reader with the Wasmtime sockets error code.
+    /// The code is recorded, so the guest's `network-error-code` gives it live and on replay.
     pub fn from_stream_error(error: StreamError) -> Result<Self, wasmtime::Error> {
         match error {
             StreamError::Closed => Ok(Self::Closed),
@@ -80,7 +81,14 @@ impl SerializableTcpStreamError {
                 let code = match io {
                     Some(_) if os_error.is_some() => None,
                     Some(io) => Some(SocketErrorCode::from(io)),
-                    None => error.downcast_ref::<SocketErrorCode>().copied(),
+                    None => error
+                        .downcast_ref::<SocketErrorCode>()
+                        .copied()
+                        .or_else(|| {
+                            error
+                                .downcast_ref::<wasmtime_wasi::sockets::ErrorCode>()
+                                .map(|code| SocketErrorCode::from(*code))
+                        }),
                 };
                 Ok(Self::LastOperationFailed(SerializableTcpStreamFailure {
                     os_error,
@@ -102,14 +110,31 @@ impl From<SerializableTcpStreamError> for StreamError {
                     (Some(errno), _) => {
                         wasmtime::Error::from(std::io::Error::from_raw_os_error(errno))
                     }
-                    (None, Some(SerializableSocketErrorCode(code))) => wasmtime::Error::from(
-                        std::io::Error::new(io_error_kind(code), failure.message),
-                    ),
+                    (None, Some(SerializableSocketErrorCode(code))) => {
+                        wasmtime::Error::from(io_error(code, failure.message))
+                    }
                     (None, None) => wasmtime::Error::msg(failure.message),
                 };
                 StreamError::LastOperationFailed(error)
             }
         }
+    }
+}
+
+/// An I/O error that gives `code` back as the guest's `network-error-code`. Wasmtime maps an
+/// errno before the error kind, and some codes have only an errno that maps to them.
+fn io_error(code: SocketErrorCode, message: String) -> std::io::Error {
+    use rustix::io::Errno;
+    let errno = match code {
+        SocketErrorCode::RemoteUnreachable => Some(Errno::HOSTUNREACH),
+        SocketErrorCode::NewSocketLimit => Some(Errno::MFILE),
+        SocketErrorCode::ConcurrencyConflict => Some(Errno::ALREADY),
+        SocketErrorCode::DatagramTooLarge => Some(Errno::MSGSIZE),
+        _ => None,
+    };
+    match errno {
+        Some(errno) => std::io::Error::from_raw_os_error(errno.raw_os_error()),
+        None => std::io::Error::new(io_error_kind(code), message),
     }
 }
 

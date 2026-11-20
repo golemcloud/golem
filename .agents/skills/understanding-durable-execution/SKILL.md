@@ -978,11 +978,16 @@ durable call with no request payload:
 | `flush`, `blocking-flush` | `sockets::tcp::output_stream::{flush, blocking_flush}` | `WriteRemote` | the result |
 
 An error is recorded as `SerializableTcpStreamError` with its message and either the errno of an
-`std::io::Error` or a socket error code: that of an I/O error without an errno, or the P2 `ErrorCode`
-that the native P2 TCP streams of the Wasmtime fork fail with. Replay and live calls return the
-recorded form, rebuilt as an `std::io::Error` of the matching kind, so the guest gets the same error,
-message and `network-error-code` (for example `connection-reset` after a real peer reset) live and
-on replay. A trap is not recorded. A splice with a TCP stream on either side is made of the calls of its parts: the permit of
+`std::io::Error` or a socket error code: that of an I/O error without an errno, the P2 `ErrorCode`
+that the native P2 TCP output stream of the Wasmtime fork fails with, or the
+`wasmtime_wasi::sockets::ErrorCode` that its input stream fails with. Replay and live calls return
+the recorded form, rebuilt as an `std::io::Error` of the matching kind, so the guest gets the same
+error, message and `network-error-code` (for example `connection-reset` after a real peer reset)
+live and on replay. Codes with no `std::io::ErrorKind` that Wasmtime maps back
+(`remote-unreachable`, `new-socket-limit`, `concurrency-conflict`, `datagram-too-large`) are rebuilt
+as a raw OS error with the errno that Wasmtime maps to that code. A trap is not recorded. A `write`
+or `write-zeroes` beyond the permit traps with `not permitted to write`; that trap is a permanent
+error, so the invocation fails without a retry that would reach the lost stand-in. A splice with a TCP stream on either side is made of the calls of its parts: the permit of
 the destination (`check_write`, or `write_ready` for `blocking-splice`), the read of at most that
 many bytes, and the write of what was read. `blocking-splice` writes with `blocking_write_and_flush`
 like Wasmtime, so its bytes are sent when it returns; `splice` writes with `write`. A non-TCP side
