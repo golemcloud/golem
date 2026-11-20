@@ -349,6 +349,24 @@ async fn execute_external_command(
         .map(|dir| base_command_dir.join(dir))
         .unwrap_or_else(|| base_command_dir.to_path_buf());
 
+    let command_tokens = shlex::split(&command.command)
+        .ok_or_else(|| anyhow!("Failed to parse external command: {}", command.command))?;
+    let program = command_tokens.first().context("Empty command!")?;
+    let preparation = common_dependencies_for_tool(ctx, program, &build_dir, go_component)?;
+    if let Some(preparation) = &preparation {
+        if let Some(checked) = preparations {
+            anyhow::ensure!(
+                checked.contains(preparation),
+                "Build command requires unchecked dependency preparation {preparation:?}"
+            );
+        }
+        super::inspect::check_requirement(
+            &super::plan::BuildRequirement::Preparation {
+                preparation: preparation.clone(),
+            },
+            ctx.application_config(),
+        )?;
+    }
     let (sources, targets) = {
         if !command.sources.is_empty() && !command.targets.is_empty() {
             (
@@ -356,20 +374,30 @@ async fn execute_external_command(
                     app_root_dir,
                     &build_dir,
                     &command.sources,
-                    &[fs::GlobExpander::TsConfigInclude],
+                    &[fs::GlobExpander::TsConfigSources],
                 )?,
-                fs::compile_and_collect_globs(app_root_dir, &build_dir, &command.targets)?,
+                fs::compile_and_collect_required_globs(app_root_dir, &build_dir, &command.targets)?,
             )
         } else {
             (vec![], vec![])
         }
     };
 
+    let (npm_dependencies, dependencies_changed) =
+        if let Some(preparation @ CommonDependencies::Npm(root)) = &preparation {
+            let changed = ensure_common_dependencies(ctx, preparation).await?;
+            (Some(npm_dependency_inputs(root)?), changed)
+        } else {
+            (None, false)
+        };
+
     new_task_up_to_date_check(ctx)
         .with_task_result_marker(ResolvedExternalCommandMarkerHash {
             build_dir: &build_dir,
             command,
+            npm_dependencies,
         })?
+        .with_skip_check(dependencies_changed)
         .with_sources(|| sources)
         .with_targets(|| targets)
         .run_async_or_skip(
@@ -413,28 +441,14 @@ async fn execute_external_command(
                     }
                 }
 
-                let command_tokens = shlex::split(&command.command).ok_or_else(|| {
-                    anyhow::anyhow!("Failed to parse external command: {}", command.command)
-                })?;
-                if command_tokens.is_empty() {
-                    return Err(anyhow!("Empty command!"));
-                }
-
-                let preparation = common_dependencies_for_tool(
-                    ctx, command_tokens[0].as_str(), &build_dir, go_component,
-                )?;
-                if let Some(preparation) = preparation {
-                    if let Some(checked) = preparations {
-                        anyhow::ensure!(checked.contains(&preparation),
-                            "Build command requires unchecked dependency preparation {preparation:?}");
+                match &preparation {
+                    Some(CommonDependencies::Npm(root)) => {
+                        ensure_npm_dependencies(ctx, root).await?;
                     }
-                    super::inspect::check_requirement(
-                        &super::plan::BuildRequirement::Preparation {
-                            preparation: preparation.clone(),
-                        },
-                        ctx.application_config(),
-                    )?;
-                    ensure_common_dependencies(ctx, &preparation).await?;
+                    Some(preparation) => {
+                        ensure_common_dependencies(ctx, preparation).await?;
+                    }
+                    None => {}
                 }
 
                 // In a Go component `go` is the managed toolchain, not whatever is on PATH.
@@ -540,7 +554,9 @@ pub async fn ensure_common_deps_for_tool(
     go_component: bool,
 ) -> anyhow::Result<()> {
     match common_dependencies_for_tool(ctx, tool, build_dir, go_component)? {
-        Some(preparation) => ensure_common_dependencies(ctx, &preparation).await,
+        Some(preparation) => ensure_common_dependencies(ctx, &preparation)
+            .await
+            .map(|_| ()),
         None => Ok(()),
     }
 }
@@ -548,7 +564,7 @@ pub async fn ensure_common_deps_for_tool(
 async fn ensure_common_dependencies(
     ctx: &BuildContext<'_>,
     preparation: &CommonDependencies,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     match preparation {
         CommonDependencies::Npm(root) => {
             ctx.tools_with_ensured_common_deps()
@@ -561,7 +577,7 @@ async fn ensure_common_dependencies(
             let ensure_key = format!("moon:{}", root.display());
             ctx.tools_with_ensured_common_deps()
                 .ensure_common_deps_for_tool_once(&ensure_key, || async {
-                    ensure_moon_dependencies(ctx, root).await
+                    ensure_moon_dependencies(ctx, root).await.map(|_| false)
                 })
                 .await
         }
@@ -570,7 +586,9 @@ async fn ensure_common_dependencies(
             let ensure_key = format!("go:{}", root.display());
             ctx.tools_with_ensured_common_deps()
                 .ensure_common_deps_for_tool_once(&ensure_key, || async {
-                    ensure_go_dependencies(ctx, root, &toolchain).await
+                    ensure_go_dependencies(ctx, root, &toolchain)
+                        .await
+                        .map(|_| false)
                 })
                 .await
         }
@@ -580,23 +598,9 @@ async fn ensure_common_dependencies(
 async fn ensure_npm_dependencies(
     ctx: &BuildContext<'_>,
     app_root_dir: &Path,
-) -> anyhow::Result<()> {
-    let package_json_path = app_root_dir.join("package.json");
-    let package_lock_path = app_root_dir.join("package-lock.json");
+) -> anyhow::Result<bool> {
     let node_modules_path = app_root_dir.join("node_modules");
-
-    let package_json_hash = blake3::hash(&std::fs::read(&package_json_path)?)
-        .to_hex()
-        .to_string();
-    let package_lock_hash = if package_lock_path.exists() {
-        Some(
-            blake3::hash(&std::fs::read(&package_lock_path)?)
-                .to_hex()
-                .to_string(),
-        )
-    } else {
-        None
-    };
+    let (package_json_hash, package_lock_hash) = npm_dependency_inputs(app_root_dir)?;
 
     let marker = TaskResultMarker::new(
         &ctx.application().task_result_marker_dir(),
@@ -607,7 +611,7 @@ async fn ensure_npm_dependencies(
     )?;
 
     if marker.is_up_to_date() && std::fs::exists(&node_modules_path)? {
-        return Ok(());
+        return Ok(false);
     }
 
     if std::fs::exists(&node_modules_path)? {
@@ -629,7 +633,29 @@ async fn ensure_npm_dependencies(
         );
     }
 
-    marker.result(run_npm_install(app_root_dir).await)
+    marker.result(run_npm_install(app_root_dir).await)?;
+    let (package_json_hash, package_lock_hash) = npm_dependency_inputs(app_root_dir)?;
+    TaskResultMarker::new(
+        &ctx.application().task_result_marker_dir(),
+        NpmInstallDepsMarkerHash {
+            package_json_hash: &package_json_hash,
+            package_lock_hash: package_lock_hash.as_deref(),
+        },
+    )?
+    .success()?;
+    Ok(true)
+}
+
+fn npm_dependency_inputs(root: &Path) -> anyhow::Result<(String, Option<String>)> {
+    let manifest = blake3::hash(&std::fs::read(root.join("package.json"))?)
+        .to_hex()
+        .to_string();
+    let lock = match std::fs::read(root.join("package-lock.json")) {
+        Ok(bytes) => Some(blake3::hash(&bytes).to_hex().to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    Ok((manifest, lock))
 }
 
 async fn run_npm_install(app_root_dir: &Path) -> anyhow::Result<()> {

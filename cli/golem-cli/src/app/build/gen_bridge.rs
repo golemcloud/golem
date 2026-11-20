@@ -1797,6 +1797,7 @@ async fn gen_bridge_sdk_target(
             bridge_mode: target.bridge_mode,
             rust_config: target.rust_config.clone(),
         })?
+        .with_output_inventory(output_dir.as_std_path().to_path_buf())
         .with_sources(|| vec![&freshness_source])
         .with_targets(|| vec![&output_dir])
         .run_async_or_skip(

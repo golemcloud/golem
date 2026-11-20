@@ -35,6 +35,7 @@ mod go_mcp_import;
 mod go_native_tool;
 mod go_principal;
 mod go_tools;
+mod incremental_build;
 mod initial_cards;
 mod mcp_import;
 mod mcp_oauth;

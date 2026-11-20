@@ -502,9 +502,31 @@ pub fn compile_and_collect_globs(
     Ok(collect_glob_matches(&compiled_globs).into_iter().collect())
 }
 
+/// An unmatched required output invalidates the complete target set.
+pub fn compile_and_collect_required_globs(
+    root_dir_for_absolute_globs: &Path,
+    root_dir_for_relative_globs: &Path,
+    globs: &[String],
+) -> Result<Vec<PathBuf>, Error> {
+    let specs = compile_globs(
+        root_dir_for_absolute_globs,
+        root_dir_for_relative_globs,
+        globs,
+    )?;
+    let mut targets = BTreeSet::new();
+    for spec in &specs {
+        let matches = collect_single_glob_matches(spec);
+        if matches.is_empty() {
+            return Ok(Vec::new());
+        }
+        targets.extend(matches);
+    }
+    Ok(targets.into_iter().collect())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlobExpander {
-    TsConfigInclude,
+    TsConfigSources,
 }
 
 pub fn compile_and_collect_globs_with_expanders(
@@ -520,13 +542,13 @@ pub fn compile_and_collect_globs_with_expanders(
     )?;
     let mut matches = collect_glob_matches(&specs);
 
-    if expanders.contains(&GlobExpander::TsConfigInclude) {
+    if expanders.contains(&GlobExpander::TsConfigSources) {
         for spec in specs
             .iter()
             .filter(|spec| is_explicit_tsconfig_pattern(&spec.original_pattern))
         {
             for tsconfig in collect_single_glob_matches(spec) {
-                for include_pattern in read_tsconfig_include_patterns(&tsconfig) {
+                for include_pattern in read_tsconfig_source_patterns(&tsconfig) {
                     let include_specs = vec![compile_glob_spec(
                         root_dir_for_absolute_globs,
                         tsconfig.parent().unwrap_or(root_dir_for_relative_globs),
@@ -618,7 +640,7 @@ fn is_explicit_tsconfig_pattern(pattern: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn read_tsconfig_include_patterns(path: &Path) -> Vec<String> {
+fn read_tsconfig_source_patterns(path: &Path) -> Vec<String> {
     let Ok(contents) = read_to_string(path) else {
         return Vec::new();
     };
@@ -626,18 +648,34 @@ fn read_tsconfig_include_patterns(path: &Path) -> Vec<String> {
         return Vec::new();
     };
 
-    let Some(include) = json.get("include") else {
-        return Vec::new();
-    };
-
-    match include {
-        JsonValue::String(value) => vec![value.clone()],
-        JsonValue::Array(values) => values
+    let mut patterns = match json.get("include") {
+        Some(JsonValue::String(value)) => vec![value.clone()],
+        Some(JsonValue::Array(values)) => values
             .iter()
             .filter_map(|value| value.as_str().map(ToString::to_string))
             .collect(),
         _ => Vec::new(),
+    };
+    if let Some(options) = json.get("compilerOptions") {
+        let base = Path::new(
+            options
+                .get("baseUrl")
+                .and_then(JsonValue::as_str)
+                .unwrap_or(""),
+        );
+        if let Some(paths) = options.get("paths").and_then(JsonValue::as_object) {
+            for targets in paths.values().filter_map(JsonValue::as_array) {
+                for target in targets.iter().filter_map(JsonValue::as_str) {
+                    if let Ok(pattern) =
+                        path_to_unix_str(&normalize_path_lexically(&base.join(target)))
+                    {
+                        patterns.push(pattern);
+                    }
+                }
+            }
+        }
     }
+    patterns
 }
 
 #[cfg(not(windows))]
@@ -860,12 +898,18 @@ mod test {
         fs::write_str(
             build_dir.join("tsconfig.json"),
             r#"{
-  "include": ["src/**/*.ts", "shared.ts"]
+  "include": ["src/**/*.ts", "shared.ts"],
+  "compilerOptions": {
+    "baseUrl": "aliases",
+    "paths": {"client": ["../../generated/client.ts"]}
+  }
 }"#,
         )
         .unwrap();
         fs::write_str(build_dir.join("src/main.ts"), "export {};").unwrap();
         fs::write_str(build_dir.join("shared.ts"), "export {};").unwrap();
+        fs::write_str(app_root.join("generated/client.ts"), "export {};").unwrap();
+        fs::write_str(app_root.join("generated/unrelated.ts"), "export {};").unwrap();
 
         let patterns = vec!["tsconfig.json".to_string()];
 
@@ -875,7 +919,7 @@ mod test {
             app_root,
             &build_dir,
             &patterns,
-            &[fs::GlobExpander::TsConfigInclude],
+            &[fs::GlobExpander::TsConfigSources],
         )
         .unwrap();
 
@@ -890,6 +934,7 @@ mod test {
                 build_dir.join("tsconfig.json"),
                 build_dir.join("src/main.ts"),
                 build_dir.join("shared.ts"),
+                build_dir.join("../generated/client.ts"),
             ])
         );
     }
@@ -910,7 +955,7 @@ mod test {
             app_root,
             &build_dir,
             &patterns,
-            &[fs::GlobExpander::TsConfigInclude],
+            &[fs::GlobExpander::TsConfigSources],
         )
         .unwrap();
 

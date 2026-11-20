@@ -591,6 +591,187 @@ async fn host_build_preserves_component_exports_and_start_result() {
 }
 
 #[test]
+fn incremental_external_build_repairs_stale_and_missing_outputs_after_switching_commands() {
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let root = project.path();
+    std::fs::write(
+        root.join("seed.wasm"),
+        wat::parse_str(include_str!(
+            "../../../test-components/size-analysis/retention.wat"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("build.cjs"),
+        r#"
+        const fs = require('node:fs');
+        const value = process.argv[2];
+        fs.copyFileSync('seed.wasm', 'component.wasm');
+        fs.writeFileSync('product.txt', value);
+        fs.mkdirSync('required', {recursive:true});
+        fs.writeFileSync('required/result.txt', value);
+        fs.appendFileSync('trace', value);
+    "#,
+    )
+    .unwrap();
+    let set_time = |path: &Path, seconds| {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+            )
+            .unwrap();
+    };
+    for name in ["seed.wasm", "build.cjs"] {
+        set_time(&root.join(name), 10);
+    }
+    let build = |variant: &str| {
+        std::fs::write(root.join("golem.yaml"), format!(
+            "manifestVersion: 2.0.0\napp: incremental-outputs\nenvironments:\n  local: {{server: local}}\ncomponents:\n  app:main:\n    componentWasm: component.wasm\n    build:\n      - command: node build.cjs {variant}\n        sources: [seed.wasm, build.cjs, optional/**/*.txt]\n        targets: [component.wasm, product.txt, required/*.txt]\n"
+        )).unwrap();
+        let output = cli_command()
+            .current_dir(root)
+            .arg("--config-dir")
+            .arg(config.path())
+            .args(["--yes", "build", "--step", "build"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            std::fs::read(root.join("component.wasm")).unwrap(),
+            std::fs::read(root.join("seed.wasm")).unwrap()
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("product.txt")).unwrap(),
+            variant
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("required/result.txt")).unwrap(),
+            variant
+        );
+    };
+    for (variant, trace) in [
+        ("A", "A"),
+        ("A", "A"),
+        ("B", "AB"),
+        ("A", "ABA"),
+        ("A", "ABA"),
+    ] {
+        build(variant);
+        assert_eq!(std::fs::read_to_string(root.join("trace")).unwrap(), trace);
+    }
+    std::fs::write(root.join("product.txt"), "stale").unwrap();
+    set_time(&root.join("product.txt"), 1);
+    set_time(&root.join("component.wasm"), 30);
+    set_time(&root.join("required/result.txt"), 30);
+    build("A");
+    assert_eq!(std::fs::read_to_string(root.join("trace")).unwrap(), "ABAA");
+    for (missing, trace) in [("product.txt", "ABAAA"), ("required/result.txt", "ABAAAA")] {
+        std::fs::remove_file(root.join(missing)).unwrap();
+        build("A");
+        assert_eq!(std::fs::read_to_string(root.join("trace")).unwrap(), trace);
+        build("A");
+        assert_eq!(std::fs::read_to_string(root.join("trace")).unwrap(), trace);
+    }
+}
+
+#[test]
+fn lock_addition_and_removal_invalidate_all_selected_node_commands_without_check_effects() {
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let root = project.path();
+    std::fs::write(
+        root.join("seed.wasm"),
+        wat::parse_str(include_str!(
+            "../../../test-components/size-analysis/retention.wat"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"name":"lock-presence","version":"1.0.0","private":true}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".npmrc"),
+        "package-lock=false\noffline=true\naudit=false\nfund=false\n",
+    )
+    .unwrap();
+    std::fs::create_dir(root.join("node_modules")).unwrap();
+    std::fs::write(
+        root.join("build.cjs"),
+        r#"
+        const fs = require('node:fs');
+        const step = process.argv[2];
+        if (step === 'B') fs.copyFileSync('seed.wasm', 'component.wasm');
+        else fs.writeFileSync('check.txt', 'checked');
+        fs.appendFileSync('trace', step);
+    "#,
+    )
+    .unwrap();
+    std::fs::write(root.join("golem.yaml"),
+        "manifestVersion: 2.0.0\napp: lock-presence\nenvironments:\n  local: {server: local}\ncomponents:\n  app:main:\n    componentWasm: component.wasm\n    build:\n      - command: node build.cjs C\n        sources: [build.cjs, seed.wasm, package.json]\n        targets: [check.txt]\n      - command: node build.cjs B\n        sources: [build.cjs, seed.wasm, package.json]\n        targets: [component.wasm]\n"
+    ).unwrap();
+    let run = |args: &[&str]| {
+        let output = cli_command()
+            .current_dir(root)
+            .arg("--config-dir")
+            .arg(config.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    for (phase, present) in [false, true, false].into_iter().enumerate() {
+        if present {
+            std::fs::write(root.join("package-lock.json"), r#"{"name":"lock-presence","version":"1.0.0","lockfileVersion":3,"packages":{"":{"name":"lock-presence","version":"1.0.0"}}}"#).unwrap();
+        } else if root.join("package-lock.json").exists() {
+            std::fs::remove_file(root.join("package-lock.json")).unwrap();
+        }
+        let before = snapshot(root);
+        run(&["--yes", "build", "--step", "check"]);
+        assert_eq!(snapshot(root), before);
+        for _ in 0..2 {
+            run(&["--yes", "build", "--step", "build"]);
+            assert_eq!(
+                std::fs::read_to_string(root.join("trace")).unwrap(),
+                "CB".repeat(phase + 1)
+            );
+            assert_eq!(
+                std::fs::read_to_string(root.join("check.txt")).unwrap(),
+                "checked"
+            );
+            assert_eq!(
+                std::fs::read(root.join("component.wasm")).unwrap(),
+                std::fs::read(root.join("seed.wasm")).unwrap()
+            );
+        }
+    }
+    std::fs::remove_dir_all(root.join("node_modules")).unwrap();
+    run(&["clean"]);
+    assert!(!root.join("node_modules").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("trace")).unwrap(),
+        "CBCBCB"
+    );
+}
+
+#[test]
 fn serial_recipes_share_preparation_and_ignore_manifest_insertion_order() {
     let mut plans = Vec::new();
     for (reverse, fail) in [(false, false), (true, false), (false, true)] {

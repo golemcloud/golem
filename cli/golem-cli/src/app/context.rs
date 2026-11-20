@@ -49,7 +49,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails;
 use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
@@ -279,7 +279,7 @@ impl<'a> BuildContext<'a> {
 }
 
 pub struct ToolsWithEnsuredCommonDeps {
-    tools_with_ensured_common_deps: tokio::sync::RwLock<HashSet<String>>,
+    tools_with_ensured_common_deps: tokio::sync::RwLock<HashMap<String, bool>>,
 }
 
 impl Default for ToolsWithEnsuredCommonDeps {
@@ -291,30 +291,28 @@ impl Default for ToolsWithEnsuredCommonDeps {
 impl ToolsWithEnsuredCommonDeps {
     pub fn new() -> ToolsWithEnsuredCommonDeps {
         ToolsWithEnsuredCommonDeps {
-            tools_with_ensured_common_deps: tokio::sync::RwLock::new(HashSet::new()),
+            tools_with_ensured_common_deps: tokio::sync::RwLock::new(HashMap::new()),
         }
     }
 
     pub async fn ensure_common_deps_for_tool_once(
         &self,
         tool: &str,
-        ensure: impl AsyncFnOnce() -> anyhow::Result<()>,
-    ) -> anyhow::Result<()> {
-        if self
-            .tools_with_ensured_common_deps
-            .read()
-            .await
-            .contains(tool)
-        {
-            return Ok(());
+        ensure: impl AsyncFnOnce() -> anyhow::Result<bool>,
+    ) -> anyhow::Result<bool> {
+        if let Some(changed) = self.tools_with_ensured_common_deps.read().await.get(tool) {
+            return Ok(*changed);
         }
 
         let mut lock = self.tools_with_ensured_common_deps.write().await;
+        if let Some(changed) = lock.get(tool) {
+            return Ok(*changed);
+        }
 
         let result = ensure().await;
 
-        if result.is_ok() {
-            lock.insert(tool.to_string());
+        if let Ok(changed) = &result {
+            lock.insert(tool.to_string(), *changed);
         }
 
         result

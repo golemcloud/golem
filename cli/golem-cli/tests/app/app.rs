@@ -2244,6 +2244,31 @@ async fn dependency_guest_bridge_enabled_for_rust_consumer(_tracing: &Tracing) {
         ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
+
+    let bridge = ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client");
+    let source = bridge.join("src/lib.rs");
+    let expected = fs::read(&source).unwrap();
+    let manifest = bridge.join("Cargo.toml");
+    let unrelated = bridge.join("consumer-output");
+    fs::write(&unrelated, b"not a generator output").unwrap();
+    super::backdate_mtime(&unrelated);
+    for delete_source in [false, true, false] {
+        if delete_source {
+            std::fs::remove_file(&source).unwrap();
+        }
+        let previous_modified = std::fs::metadata(&manifest).unwrap().modified().unwrap();
+        let outputs = ctx
+            .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "gen-bridge"])
+            .await;
+        assert!(outputs.success_or_dump());
+        assert_eq!(fs::read(&source).unwrap(), expected);
+        if !delete_source {
+            assert_eq!(
+                std::fs::metadata(&manifest).unwrap().modified().unwrap(),
+                previous_modified
+            );
+        }
+    }
 }
 
 #[test]
