@@ -18,6 +18,7 @@ jobs:
         with:
           fetch-depth: 1
       - name: Check benchmark publisher access
+        timeout-minutes: 3
         env:
           BENCHMARK_RESULTS_TOKEN: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
         run: |
@@ -25,12 +26,22 @@ jobs:
             echo "::error::BENCHMARK_RESULTS_TOKEN is missing. Configure a token with contents write access to golemcloud/benchmark-results."
             exit 1
           fi
-          if ! curl --fail --silent --show-error \
-            -H "Authorization: Bearer $BENCHMARK_RESULTS_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/golemcloud/benchmark-results \
-            | jq -e '.permissions.push == true' > /dev/null; then
-            echo "::error::BENCHMARK_RESULTS_TOKEN cannot access golemcloud/benchmark-results with write permission. Check its expiration, repository access, and contents write permission."
+          authorization="$(printf 'x-access-token:%s' "$BENCHMARK_RESULTS_TOKEN" | base64 -w0)"
+          if ! status="$(curl --silent --show-error \
+            --retry 3 --retry-connrefused --retry-max-time 120 \
+            --connect-timeout 10 --max-time 30 \
+            --output /dev/null --write-out '%{http_code}' \
+            -H "AUTHORIZATION: basic $authorization" \
+            'https://github.com/golemcloud/benchmark-results.git/info/refs?service=git-receive-pack')"; then
+            echo "::error::Could not reach the benchmark publisher Git endpoint after retries. Check the network and GitHub service status."
+            exit 1
+          fi
+          if [[ "$status" == 401 || "$status" == 403 ]]; then
+            echo "::error::Git rejected BENCHMARK_RESULTS_TOKEN (HTTP $status). Check its expiration, repository access, and contents write permission."
+            exit 1
+          fi
+          if [[ "$status" != 200 ]]; then
+            echo "::error::Benchmark publisher Git endpoint returned HTTP $status after retries. Publication is unavailable."
             exit 1
           fi
       - uses: ./.github/actions/setup-rust
@@ -48,7 +59,6 @@ jobs:
 
       - uses: ./.github/actions/setup-js-wasm-tools
         with:
-          node-version: '24'
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
           wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}

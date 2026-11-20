@@ -13,7 +13,7 @@
 // limitations under the License.
 
 pub(crate) mod invocation_session;
-mod oplog_export;
+pub(crate) mod oplog_export;
 pub mod oplog_serve;
 mod stream;
 mod stream_output;
@@ -996,6 +996,9 @@ impl AgentCommandHandler {
                         batch_size,
                         cursor.as_ref(),
                         query.as_deref(),
+                        None,
+                        None,
+                        None,
                     )
                     .await
                     .map_service_error()?;
@@ -1097,6 +1100,9 @@ impl AgentCommandHandler {
                 self.ctx.http_batch_size(),
                 cursor.as_ref(),
                 query.as_deref(),
+                None,
+                None,
+                None,
             )
             .await
             .map_service_error()?;

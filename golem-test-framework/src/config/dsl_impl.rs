@@ -676,6 +676,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     100,
                     cursor.as_ref(),
                     None,
+                    None,
+                    None,
+                    None,
                 )
                 .await
                 .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
@@ -703,6 +706,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &agent_id.agent_id,
                 Some(OplogIndex::INITIAL.as_u64()),
                 1,
+                None,
+                None,
+                None,
                 None,
                 None,
             )
@@ -735,6 +741,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     100,
                     cursor.as_ref(),
                     Some(query),
+                    None,
+                    None,
+                    None,
                 )
                 .await
                 .map_err(|e| {

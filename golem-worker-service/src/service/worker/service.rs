@@ -14,8 +14,8 @@
 
 use super::WorkerResult;
 use super::{
-    ConnectWorkerStream, InvocationRequestStream, InvocationResponseStream, WorkerClient,
-    WorkerServiceError,
+    ConnectWorkerStream, InvocationRequestStream, InvocationResponseStream, OplogRangeRead,
+    WorkerClient, WorkerServiceError,
 };
 use crate::api::agents::{
     AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult, CreateAgentRequest,
@@ -1216,12 +1216,15 @@ impl WorkerService {
             .await
     }
 
+    /// Reads an oplog page. With `range`, the read is a range read: it reads no entry after
+    /// `range.to`, and the response accounts its scan.
     pub async fn get_oplog(
         &self,
         agent_id: &AgentId,
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
+        range: Option<OplogRangeRead>,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let component = self
@@ -1233,7 +1236,12 @@ impl WorkerService {
             .as_ref()
             .map(|cursor| cursor.next_oplog_index)
             .unwrap_or_else(|| from_oplog_index.into());
-        let end = start.checked_add(count.saturating_sub(1));
+        let end = start
+            .checked_add(count.saturating_sub(1))
+            .map(|end| match range {
+                Some(range) => end.min(range.to.into()),
+                None => end,
+            });
         authorize_oplog_permission(
             &auth_ctx,
             &component,
@@ -1248,6 +1256,7 @@ impl WorkerService {
                 from_oplog_index,
                 cursor,
                 count,
+                range,
                 component.environment_id,
                 auth_ctx,
             )
@@ -4914,6 +4923,7 @@ mod tests {
             _: OplogIndex,
             _: Option<OplogCursor>,
             _: u64,
+            _: Option<super::OplogRangeRead>,
             _: EnvironmentId,
             _: AuthCtx,
         ) -> Result<GetOplogResponse, super::WorkerServiceError> {
@@ -4923,6 +4933,7 @@ mod tests {
                 next: None,
                 first_index_in_chunk: 0,
                 last_index: 0,
+                scan: None,
             })
         }
 
@@ -4969,6 +4980,7 @@ mod tests {
                 next: None,
                 first_index_in_chunk: 0,
                 last_index: 0,
+                scan: None,
             })
         }
 
@@ -6059,6 +6071,7 @@ mod tests {
                 OplogIndex::from_u64(5),
                 None,
                 3,
+                None,
                 auth_ctx.clone(),
             )
             .await
