@@ -17,6 +17,11 @@
 
 use crate::Tracing;
 
+use crate::filesystem_snapshots::eventually;
+use anyhow::Context;
+use futures::{StreamExt, TryStreamExt};
+use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentStatus, OwnedAgentId, ShardAssignment, ShardId};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -84,35 +89,50 @@ async fn wait_until_archived(
             .await
             .map_err(anyhow::Error::msg)?;
     let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    while agent_oplog_length(deps, context, owned_agent_id).await? > 0
-        || scheduler
-            .count_due(jiff::Timestamp::MAX, &assignment)
-            .await?
-            > 0
-    {
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "the oplog of {owned_agent_id} was not archived"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    Ok(())
+    eventually(Duration::from_secs(60), || async {
+        let archived = agent_oplog_length(deps, context, owned_agent_id).await? == 0
+            && scheduler
+                .count_due(jiff::Timestamp::MAX, &assignment)
+                .await?
+                == 0;
+        Ok(archived.then_some(()))
+    })
+    .await
+    .with_context(|| format!("the oplog of {owned_agent_id} was not archived"))
 }
 
-/// Stops the worker once it settles after its last invocation, and retires it.
+/// Stops the worker once it settles after its last invocation, and retires it. The worker
+/// writes its status baseline at this idle boundary, when its invocation loop exits.
 async fn stop_when_idle(
     executor: &TestWorkerExecutor,
     owned_agent_id: &OwnedAgentId,
 ) -> anyhow::Result<()> {
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while !executor.stop_worker_if_idle(owned_agent_id).await? {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        anyhow::Ok(())
+    eventually(Duration::from_secs(10), || async {
+        Ok(executor
+            .stop_worker_if_idle(owned_agent_id)
+            .await?
+            .then_some(()))
     })
-    .await??;
+    .await?;
     executor.retire_unloaded_worker(owned_agent_id).await
+}
+
+/// Invokes `increment` on `agent` `count` times, one after the other.
+async fn increment(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent: &ParsedAgentKey,
+    count: usize,
+) -> anyhow::Result<()> {
+    futures::stream::iter(0..count)
+        .map(Ok)
+        .try_for_each(|_| async {
+            executor
+                .invoke_and_await_agent(component, agent, "increment", data_value!())
+                .await
+                .map(|_| ())
+        })
+        .await
 }
 
 /// A completed archive keeps the status baseline. After a real restart with no cached status, the
@@ -137,21 +157,22 @@ async fn a_restart_after_a_completed_archive_folds_the_status_from_the_baseline(
     let owned_agent_id = executor.start_agent(&component.id, agent.clone()).await?;
     let agent_id = owned_agent_id.agent_id;
 
-    // Three rounds, each archived on its own, leave three chunks: the first holds `Create`.
-    for _ in 0..3 {
-        for _ in 0..2 {
-            executor
-                .invoke_and_await_agent(&component, &agent, "increment", data_value!())
-                .await?;
-        }
-        wait_until_archived(deps, &context, &owned_agent_id).await?;
-    }
-    assert!(executor.stop_worker_if_idle(&owned_agent_id).await?);
-    executor.retire_unloaded_worker(&owned_agent_id).await?;
+    // Three rounds, each archived on its own, leave three chunks: the first holds `Create`. The
+    // stop after the second round writes a status baseline before the last archive.
+    increment(&executor, &component, &agent, 2).await?;
+    wait_until_archived(deps, &context, &owned_agent_id).await?;
+    increment(&executor, &component, &agent, 2).await?;
+    wait_until_archived(deps, &context, &owned_agent_id).await?;
+    stop_when_idle(&executor, &owned_agent_id).await?;
+    let before_last_archive = executor.status_checkpoint(&agent_id).await?;
+    increment(&executor, &component, &agent, 2).await?;
+    wait_until_archived(deps, &context, &owned_agent_id).await?;
+    let after_last_archive = executor.status_checkpoint(&agent_id).await?;
+    stop_when_idle(&executor, &owned_agent_id).await?;
     let baseline = executor
         .status_checkpoint(&agent_id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("the completed archive removed the status baseline"))?;
+        .ok_or_else(|| anyhow::anyhow!("the agent wrote no status baseline"))?;
     executor.remove_cached_status(&agent_id).await?;
     executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
@@ -180,6 +201,8 @@ async fn a_restart_after_a_completed_archive_folds_the_status_from_the_baseline(
     let executor = start(deps, &context).await?;
     let metadata = executor.get_worker_metadata(&owned_agent_id).await?;
 
+    assert!(before_last_archive.is_some());
+    assert_eq!(after_last_archive, before_last_archive);
     assert_eq!(metadata.status, AgentStatus::Idle);
     assert_eq!(executor.status_checkpoint(&agent_id).await?, Some(baseline));
     Ok(())
@@ -205,12 +228,7 @@ async fn a_re_created_agent_never_reads_the_baseline_of_the_deleted_one(
     let agent = agent_key!("Counter", "re-created-baseline");
     let owned_agent_id = executor.start_agent(&component.id, agent.clone()).await?;
     let agent_id = owned_agent_id.agent_id;
-    for _ in 0..3 {
-        executor
-            .invoke_and_await_agent(&component, &agent, "increment", data_value!())
-            .await?;
-    }
-    // The worker writes its baseline at the idle boundary, when its invocation loop exits.
+    increment(&executor, &component, &agent, 3).await?;
     stop_when_idle(&executor, &owned_agent_id).await?;
     let deleted = executor.agent_fingerprint(&agent_id).await?;
     let deleted_baseline = executor

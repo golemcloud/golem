@@ -11222,13 +11222,20 @@ fn cancelled_standalone_retention_survives_every_checkpoint_cut() {
 }
 
 mod status_baseline {
-    use super::region_fold::{automatic_admission, failed, idx, revert, succeeded};
+    use super::region_fold::{automatic_admission, failed, idx, succeeded};
     use super::*;
     use crate::services::worker::stored_split_status;
+    use golem_common::model::card::{AgentCardHolder, CardHolder, CardId, StoredCard};
+    use golem_common::model::durable_stream::{
+        LocalStreamId, SessionStreamRole, StreamCancellationRequest,
+        StreamConsumerCancelIntentRecord, StreamEndpointSide, StreamError, StreamRecordReference,
+        StreamRegistrationInvocation, StreamSessionKey, StreamTerminal, StreamTerminalAuthor,
+    };
     use proptest::prelude::*;
     use test_r::test;
 
-    /// One generated entry. A pick selects an earlier entry or value of the sequence by position.
+    /// One generated entry. A choice selects an earlier entry or value of the sequence by
+    /// position. A generated entry that has nothing to select gives a plain lifecycle entry.
     #[derive(Clone, Debug)]
     enum Generated {
         Pending,
@@ -11254,6 +11261,18 @@ mod status_baseline {
         UpdateFailed,
         Jump(u8),
         Revert(u8),
+        StreamSessionPrepared,
+        StreamCancelIntent(u8),
+        CardRevokeQueued,
+        CardRevoked(u8),
+        CardDerived,
+        CardTransferQueued(u8),
+        CardTransferStarted(u8),
+        CardTransferConfirmed(u8),
+        CardTransferReceived,
+        EntityStart(u8, bool),
+        EntityEnd(u8),
+        EntityDelivered(u8),
     }
 
     fn generated() -> impl Strategy<Value = Generated> {
@@ -11281,7 +11300,28 @@ mod status_baseline {
             Just(Generated::UpdateFailed),
             any::<u8>().prop_map(Generated::Jump),
             any::<u8>().prop_map(Generated::Revert),
+            Just(Generated::StreamSessionPrepared),
+            any::<u8>().prop_map(Generated::StreamCancelIntent),
+            Just(Generated::CardRevokeQueued),
+            any::<u8>().prop_map(Generated::CardRevoked),
+            Just(Generated::CardDerived),
+            any::<u8>().prop_map(Generated::CardTransferQueued),
+            any::<u8>().prop_map(Generated::CardTransferStarted),
+            any::<u8>().prop_map(Generated::CardTransferConfirmed),
+            Just(Generated::CardTransferReceived),
+            (any::<u8>(), any::<bool>())
+                .prop_map(|(parent, entity)| Generated::EntityStart(parent, entity)),
+            any::<u8>().prop_map(Generated::EntityEnd),
+            any::<u8>().prop_map(Generated::EntityDelivered),
         ]
+    }
+
+    /// A card transfer of the generated oplog: its id, its source card and the derived child.
+    #[derive(Clone)]
+    struct Transfer {
+        id: Uuid,
+        source_card_id: CardId,
+        child: StoredCard,
     }
 
     #[derive(Default)]
@@ -11290,146 +11330,326 @@ mod status_baseline {
         current: Option<InvocationId>,
         resources: Vec<AgentResourceId>,
         snapshot_name: Option<FilesystemSnapshotName>,
+        sessions: Vec<StreamSessionKey>,
+        queued_revokes: Vec<(OplogIndex, CardId)>,
+        transfers: Vec<Transfer>,
+        starts: Vec<OplogIndex>,
         entries: BTreeMap<OplogIndex, OplogEntry>,
+    }
+
+    /// The element of `values` that `choice` selects, if `values` is not empty.
+    fn select<T: Clone>(values: &[T], choice: u8) -> Option<T> {
+        (!values.is_empty()).then(|| values[usize::from(choice) % values.len()].clone())
+    }
+
+    /// The region from an earlier entry after `Create`, selected by `choice`, to the entry before
+    /// `index`. `None` when no entry is between `Create` and `index - 1`.
+    fn earlier_region(choice: u8, index: u64) -> Option<OplogRegion> {
+        (index > 3).then(|| {
+            OplogRegion::from_index_range(idx(2 + u64::from(choice) % (index - 3))..=idx(index - 1))
+        })
+    }
+
+    /// The card holder agent of `name`. Each name of at most 11 bytes gives its own agent.
+    fn holder(name: &str) -> CardHolder {
+        CardHolder::Agent(AgentCardHolder {
+            environment_id: EnvironmentId(Uuid::from_u128(7)),
+            agent_id: AgentId::from_parts(
+                7,
+                name.bytes().fold(0, |h, byte| (h << 8) | u128::from(byte)),
+            ),
+        })
+    }
+
+    fn stream_session(record: StreamSessionRecord) -> OplogEntry {
+        OplogEntry::StreamSession {
+            timestamp: Timestamp::from(1_000),
+            entity_parent_start_index: None,
+            record: OplogPayload::Inline(Box::new(record)),
+            summary: None,
+        }
+    }
+
+    fn entity_start(parent: Option<OplogIndex>, entity: bool) -> OplogEntry {
+        OplogEntry::Start {
+            timestamp: Timestamp::from(1_000),
+            parent_start_index: parent,
+            function_name: if entity {
+                HostFunctionName::GolemEntityInvoke
+            } else {
+                HostFunctionName::Custom("protocol".into())
+            },
+            invocation_id: None,
+            observational_owner: None,
+            driver: None,
+            request: None,
+            durable_function_type: DurableFunctionType::WriteRemote,
+            span_started: None,
+            denial: None,
+        }
+    }
+
+    /// The entry of `generated` at `index`, and the state after it.
+    fn entry(mut state: State, index: u64, generated: &Generated) -> (State, OplogEntry) {
+        let timestamp = Timestamp::from(1_000);
+        let grants = [
+            EnvironmentPluginGrantId(Uuid::from_u128(1)),
+            EnvironmentPluginGrantId(Uuid::from_u128(2)),
+        ];
+        let resource_type_id = || ResourceTypeId {
+            name: "resource".to_string(),
+            owner: "test:resources".to_string(),
+        };
+        let entry = match generated {
+            Generated::Pending => {
+                let key = InvocationId(Uuid::new_v4());
+                state.keys.push(key);
+                pending_invocation_entry(&key)
+            }
+            Generated::Started => {
+                let key = state
+                    .keys
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| InvocationId(Uuid::new_v4()));
+                state.current = Some(key);
+                started_invocation(&key)
+            }
+            Generated::Finished => {
+                let key = state
+                    .current
+                    .take()
+                    .unwrap_or_else(|| InvocationId(Uuid::new_v4()));
+                state.keys.retain(|pending| *pending != key);
+                finished_invocation(&key)
+            }
+            Generated::Cancelled(choice) => match select(&state.keys, *choice) {
+                Some(key) => {
+                    state.keys.retain(|pending| *pending != key);
+                    OplogEntry::CancelPendingInvocation {
+                        timestamp,
+                        invocation_id: key,
+                    }
+                }
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::InvocationFailed => invocation_error(
+                &state
+                    .current
+                    .unwrap_or_else(|| InvocationId(Uuid::new_v4())),
+            ),
+            Generated::RecoveryFailed => OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                None,
+                AgentError::TransientError("recovery failed".to_string()),
+                OplogIndex::INITIAL,
+                None,
+                None,
+                None,
+            ),
+            Generated::RecoverySucceeded => OplogEntry::RecoverySucceeded { timestamp },
+            Generated::GrowMemory(delta) => OplogEntry::GrowMemory {
+                timestamp,
+                delta: u64::from(*delta) * 65536,
+            },
+            Generated::CreateResource => {
+                let id = AgentResourceId(index);
+                state.resources.push(id);
+                OplogEntry::CreateResource {
+                    timestamp,
+                    entity_parent_start_index: None,
+                    id,
+                    resource_type_id: resource_type_id(),
+                }
+            }
+            Generated::DropResource(choice) => match select(&state.resources, *choice) {
+                Some(id) => {
+                    state.resources.retain(|resource| *resource != id);
+                    OplogEntry::DropResource {
+                        timestamp,
+                        entity_parent_start_index: None,
+                        id,
+                        resource_type_id: resource_type_id(),
+                    }
+                }
+                None => OplogEntry::Suspend { timestamp },
+            },
+            Generated::Snapshot(named) => {
+                state.snapshot_name = named.then(FilesystemSnapshotName::periodic);
+                update_fields_snapshot(state.snapshot_name.clone())
+            }
+            Generated::SnapshotConfirmed => match state.snapshot_name.clone() {
+                Some(name) => OplogEntry::snapshot_confirmed(name),
+                None => OplogEntry::Exited { timestamp },
+            },
+            Generated::Interrupted => OplogEntry::Interrupted { timestamp },
+            Generated::Suspended => OplogEntry::Suspend { timestamp },
+            Generated::Exited => OplogEntry::Exited { timestamp },
+            Generated::Restarted => OplogEntry::Restart { timestamp },
+            Generated::ActivatePlugin(second) => OplogEntry::ActivatePlugin {
+                timestamp,
+                plugin_grant_id: grants[usize::from(*second)],
+            },
+            Generated::DeactivatePlugin(second) => OplogEntry::DeactivatePlugin {
+                timestamp,
+                plugin_grant_id: grants[usize::from(*second)],
+            },
+            Generated::AutomaticAdmission => automatic_admission(index + 1),
+            Generated::UpdateSucceeded => succeeded(index + 1),
+            Generated::UpdateFailed => failed(index + 1, None),
+            Generated::Jump(choice) => earlier_region(*choice, index).map_or(
+                OplogEntry::Interrupted { timestamp },
+                |jump| OplogEntry::Jump {
+                    timestamp,
+                    entity_parent_start_index: None,
+                    jump,
+                },
+            ),
+            Generated::Revert(choice) => earlier_region(*choice, index)
+                .map_or(OplogEntry::Interrupted { timestamp }, OplogEntry::revert),
+            Generated::StreamSessionPrepared => {
+                let mut key = crate::durable_host::durable_stream::tests::identity().invocation;
+                key.idempotency_key = InvocationId(Uuid::new_v4());
+                state.sessions.push(key.clone());
+                stream_session(StreamSessionRecord::Prepared(
+                    crate::services::worker_fork::lineage::tests::prepared(&key),
+                ))
+            }
+            Generated::StreamCancelIntent(choice) => match select(&state.sessions, *choice) {
+                Some(key) => stream_session(StreamSessionRecord::ConsumerCancelIntent(
+                    StreamConsumerCancelIntentRecord {
+                        format_version: 1,
+                        session_key: StreamRegistrationInvocation::Remote(key),
+                        consumer_invocation: InvocationId(Uuid::new_v4()),
+                        source: StreamRecordReference::Local(LocalStreamId(idx(index))),
+                        epoch: u64::from(*choice),
+                        cancellation: StreamCancellationRequest {
+                            direction: SessionStreamRole::Output,
+                            side: StreamEndpointSide::Consumer,
+                            authored_by: StreamTerminalAuthor::Host,
+                            terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                                "stream cancelled".into(),
+                            )),
+                        },
+                    },
+                )),
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::CardRevokeQueued => {
+                let card_id = CardId::new();
+                state.queued_revokes.push((idx(index), card_id));
+                OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::revoke(card_id)))
+            }
+            Generated::CardRevoked(choice) => {
+                let (queued_event_index, card_id) = select(&state.queued_revokes, *choice)
+                    .unwrap_or_else(|| (idx(index), CardId::new()));
+                OplogEntry::CardRevoked {
+                    timestamp,
+                    entity_parent_start_index: None,
+                    queued_event_index,
+                    card_id,
+                    wallet_generation: 1,
+                }
+            }
+            Generated::CardDerived => {
+                let transfer = Transfer {
+                    id: Uuid::new_v4(),
+                    source_card_id: CardId::new(),
+                    child: StoredCard::from(test_card(CardId::new())),
+                };
+                state.transfers.push(transfer.clone());
+                OplogEntry::CardDerived {
+                    timestamp,
+                    entity_parent_start_index: None,
+                    card: Box::new(transfer.child),
+                    wallet_generation: 0,
+                    transfer_id: Some(transfer.id),
+                }
+            }
+            Generated::CardTransferQueued(choice) => match select(&state.transfers, *choice) {
+                Some(transfer) => OplogEntry::card_event_queued(
+                    None,
+                    Box::new(QueuedCardEvent::transfer_started_with_source(
+                        transfer.id,
+                        transfer.source_card_id,
+                        transfer.child,
+                        holder("target"),
+                    )),
+                ),
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::CardTransferStarted(choice) => match select(&state.transfers, *choice) {
+                Some(transfer) => OplogEntry::card_transfer_started(
+                    None,
+                    transfer.id,
+                    transfer.source_card_id,
+                    holder("source"),
+                    holder("target"),
+                    1,
+                ),
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::CardTransferConfirmed(choice) => match select(&state.transfers, *choice) {
+                Some(transfer) => OplogEntry::card_transfer_confirmed(
+                    None,
+                    transfer.id,
+                    transfer.source_card_id,
+                    transfer.child.card_id(),
+                    holder("target"),
+                ),
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::CardTransferReceived => OplogEntry::card_event_queued(
+                None,
+                Box::new(QueuedCardEvent::transfer_received(
+                    Uuid::new_v4(),
+                    CardId::new(),
+                    test_card(CardId::new()),
+                )),
+            ),
+            Generated::EntityStart(choice, entity) => {
+                let parent = select(&state.starts, *choice);
+                state.starts.push(idx(index));
+                entity_start(parent, *entity)
+            }
+            Generated::EntityEnd(choice) => match select(&state.starts, *choice) {
+                Some(start_index) => OplogEntry::End {
+                    timestamp,
+                    start_index,
+                    response: None,
+                    forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
+                },
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::EntityDelivered(choice) => match select(&state.starts, *choice) {
+                Some(start_index) => OplogEntry::CompletionDelivered {
+                    timestamp,
+                    start_index,
+                },
+                None => OplogEntry::Interrupted { timestamp },
+            },
+        };
+        (state, entry.rounded())
     }
 
     /// The oplog of `generated`: the `Create` of an agent at index 1, then one entry for each
     /// generated value.
     fn oplog(generated: &[Generated]) -> BTreeMap<OplogIndex, OplogEntry> {
-        let grants = [
-            EnvironmentPluginGrantId::new(),
-            EnvironmentPluginGrantId::new(),
-        ];
-        let timestamp = Timestamp::from(1_000);
         let create = TestCase::builder(1).build().entries[0].oplog_entry.clone();
-        let pick = |count: usize, pick: u8| (count > 0).then(|| pick as usize % count);
         generated
             .iter()
-            .enumerate()
+            .zip(2..)
             .fold(
                 State {
                     entries: BTreeMap::from([(OplogIndex::INITIAL, create)]),
                     ..State::default()
                 },
-                |mut state, (position, generated)| {
-                    let index = position as u64 + 2;
-                    let entry = match generated {
-                        Generated::Pending => {
-                            let key = InvocationId(Uuid::new_v4());
-                            state.keys.push(key);
-                            pending_invocation_entry(&key)
-                        }
-                        Generated::Started => {
-                            let key = state
-                                .keys
-                                .first()
-                                .copied()
-                                .unwrap_or_else(|| InvocationId(Uuid::new_v4()));
-                            state.current = Some(key);
-                            started_invocation(&key)
-                        }
-                        Generated::Finished => {
-                            let key = state
-                                .current
-                                .take()
-                                .unwrap_or_else(|| InvocationId(Uuid::new_v4()));
-                            state.keys.retain(|pending| *pending != key);
-                            finished_invocation(&key)
-                        }
-                        Generated::Cancelled(choice) => match pick(state.keys.len(), *choice) {
-                            Some(position) => OplogEntry::CancelPendingInvocation {
-                                timestamp,
-                                invocation_id: state.keys.remove(position),
-                            },
-                            None => OplogEntry::Interrupted { timestamp },
-                        },
-                        Generated::InvocationFailed => invocation_error(
-                            &state
-                                .current
-                                .unwrap_or_else(|| InvocationId(Uuid::new_v4())),
-                        ),
-                        Generated::RecoveryFailed => OplogEntry::error(
-                            None,
-                            OplogErrorKind::Recovery,
-                            None,
-                            AgentError::TransientError("recovery failed".to_string()),
-                            OplogIndex::INITIAL,
-                            None,
-                            None,
-                            None,
-                        ),
-                        Generated::RecoverySucceeded => OplogEntry::RecoverySucceeded { timestamp },
-                        Generated::GrowMemory(delta) => OplogEntry::GrowMemory {
-                            timestamp,
-                            delta: u64::from(*delta) * 65536,
-                        },
-                        Generated::CreateResource => {
-                            let id = AgentResourceId(index);
-                            state.resources.push(id);
-                            OplogEntry::CreateResource {
-                                timestamp,
-                                entity_parent_start_index: None,
-                                id,
-                                resource_type_id: ResourceTypeId {
-                                    name: "resource".to_string(),
-                                    owner: "test:resources".to_string(),
-                                },
-                            }
-                        }
-                        Generated::DropResource(choice) => {
-                            match pick(state.resources.len(), *choice) {
-                                Some(position) => OplogEntry::DropResource {
-                                    timestamp,
-                                    entity_parent_start_index: None,
-                                    id: state.resources.remove(position),
-                                    resource_type_id: ResourceTypeId {
-                                        name: "resource".to_string(),
-                                        owner: "test:resources".to_string(),
-                                    },
-                                },
-                                None => OplogEntry::Suspend { timestamp },
-                            }
-                        }
-                        Generated::Snapshot(named) => {
-                            state.snapshot_name = named.then(FilesystemSnapshotName::periodic);
-                            update_fields_snapshot(state.snapshot_name.clone())
-                        }
-                        Generated::SnapshotConfirmed => match state.snapshot_name.clone() {
-                            Some(name) => OplogEntry::snapshot_confirmed(name),
-                            None => OplogEntry::Exited { timestamp },
-                        },
-                        Generated::Interrupted => OplogEntry::Interrupted { timestamp },
-                        Generated::Suspended => OplogEntry::Suspend { timestamp },
-                        Generated::Exited => OplogEntry::Exited { timestamp },
-                        Generated::Restarted => OplogEntry::Restart { timestamp },
-                        Generated::ActivatePlugin(second) => OplogEntry::ActivatePlugin {
-                            timestamp,
-                            plugin_grant_id: grants[usize::from(*second)],
-                        },
-                        Generated::DeactivatePlugin(second) => OplogEntry::DeactivatePlugin {
-                            timestamp,
-                            plugin_grant_id: grants[usize::from(*second)],
-                        },
-                        Generated::AutomaticAdmission => automatic_admission(index + 1),
-                        Generated::UpdateSucceeded => succeeded(index + 1),
-                        Generated::UpdateFailed => failed(index + 1, None),
-                        Generated::Jump(start) | Generated::Revert(start) if index > 3 => {
-                            let start = 2 + u64::from(*start) % (index - 3);
-                            let end = index - 1;
-                            match generated {
-                                Generated::Jump(_) => OplogEntry::Jump {
-                                    timestamp,
-                                    entity_parent_start_index: None,
-                                    jump: OplogRegion::from_index_range(idx(start)..=idx(end)),
-                                },
-                                _ => revert(start, end),
-                            }
-                        }
-                        Generated::Jump(_) | Generated::Revert(_) => {
-                            OplogEntry::Interrupted { timestamp }
-                        }
-                    };
-                    state.entries.insert(idx(index), entry.rounded());
+                |state, (generated, index)| {
+                    let (mut state, entry) = entry(state, index, generated);
+                    state.entries.insert(idx(index), entry);
                     state
                 },
             )
@@ -11452,15 +11672,16 @@ mod status_baseline {
         #![proptest_config(ProptestConfig::with_cases(256))]
 
         /// A status baseline at any index, stored and read back, folds the rest of the oplog to
-        /// the status of a fold of the whole oplog, in every field. A fold that refuses the
-        /// baseline, because a later region covers its index, is allowed: the reader then falls
-        /// back to an earlier baseline.
+        /// the status of a fold of the whole oplog, in every field. A fold can refuse a baseline
+        /// when a later region covers its index; the reader then falls back to an earlier
+        /// baseline. A baseline at the last index has no later region, so its fold accepts it.
         #[test]
         fn a_fold_from_a_stored_baseline_equals_a_fold_of_the_whole_oplog(
             generated in proptest::collection::vec(generated(), 1..40),
         ) {
             let entries = oplog(&generated);
             let whole = fold(AgentStatusRecord::default(), entries.clone()).unwrap();
+            let last = *entries.keys().next_back().unwrap();
 
             entries.keys().try_for_each(|at| {
                 let (before, after): (BTreeMap<_, _>, BTreeMap<_, _>) = entries
@@ -11470,8 +11691,9 @@ mod status_baseline {
                 let baseline = fold(AgentStatusRecord::default(), before).unwrap();
                 let stored = stored_split_status(baseline.clone());
                 prop_assert_eq!(stored.as_ref(), Some(&baseline), "baseline at {}", at);
-                if let Some(status) = fold(stored.unwrap(), after) {
-                    prop_assert_eq!(&status, &whole, "baseline at {}", at);
+                match fold(stored.unwrap(), after) {
+                    Some(status) => prop_assert_eq!(&status, &whole, "baseline at {}", at),
+                    None => prop_assert_ne!(*at, last, "the baseline at the last index is refused"),
                 }
                 Ok(())
             })?;
