@@ -61,7 +61,7 @@ use golem_common::model::filesystem::{
     FILE_READ_CHUNK_SIZE, FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
     validate_file_read_path,
 };
-use golem_common::model::oplog::OplogCursor;
+use golem_common::model::oplog::{OplogCursor, OplogRange};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentStatus, FilterComparator, IdempotencyKey,
@@ -563,8 +563,7 @@ pub trait WorkerClient: Send + Sync {
     async fn get_oplog(
         &self,
         agent_id: &AgentId,
-        from_oplog_index: OplogIndex,
-        to_oplog_index: Option<OplogIndex>,
+        range: OplogRange,
         cursor: Option<OplogCursor>,
         count: u64,
         environment_id: EnvironmentId,
@@ -574,8 +573,7 @@ pub trait WorkerClient: Send + Sync {
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
-        from_oplog_index: Option<OplogIndex>,
-        to_oplog_index: Option<OplogIndex>,
+        range: OplogRange,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
@@ -1469,8 +1467,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn get_oplog(
         &self,
         agent_id: &AgentId,
-        from_oplog_index: OplogIndex,
-        to_oplog_index: Option<OplogIndex>,
+        range: OplogRange,
         cursor: Option<OplogCursor>,
         count: u64,
         environment_id: EnvironmentId,
@@ -1485,8 +1482,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 Box::pin(
                     worker_executor_client.get_oplog(workerexecutor::v1::GetOplogRequest {
                         agent_id: Some(agent_id.into()),
-                        from_oplog_index: from_oplog_index.into(),
-                        to_oplog_index: to_oplog_index.map(Into::into),
+                        from_oplog_index: range.start().into(),
+                        to_oplog_index: range.end().map(Into::into),
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
                         environment_id: Some(environment_id.into()),
@@ -1598,8 +1595,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
-        from_oplog_index: Option<OplogIndex>,
-        to_oplog_index: Option<OplogIndex>,
+        range: OplogRange,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
@@ -1621,8 +1617,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         count,
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        from_oplog_index: from_oplog_index.map(Into::into),
-                        to_oplog_index: to_oplog_index.map(Into::into),
+                        from_oplog_index: Some(range.start().into()),
+                        to_oplog_index: range.end().map(Into::into),
                     }),
                 )
             },

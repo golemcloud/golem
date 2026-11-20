@@ -74,7 +74,7 @@ use golem_common::model::invocation_session_public::{
     InvocationSelector, PublicConfigEntry, PublicErrorCode, PublicNativeToolTarget,
     PublicTypedValue,
 };
-use golem_common::model::oplog::OplogCursor;
+use golem_common::model::oplog::{OplogCursor, OplogRange};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
@@ -581,6 +581,29 @@ fn authorize_oplog_permission(
         .map_err(AuthServiceError::Unauthorized)?;
 
     Ok(())
+}
+
+/// The oplog resource that a read of `range` needs. The read starts at the cursor, or at the
+/// start of the range when there is no cursor. A page reads at most `page_count` entries, so it
+/// needs the oplog only up to its last entry or the end of the range, when that is earlier. A
+/// search has no `page_count`, because its count limits the matches and not the entries that it
+/// reads, so it needs the oplog up to the end of the range. The first page of a search of the
+/// whole oplog needs every oplog index.
+fn oplog_read_resource(
+    range: OplogRange,
+    cursor: Option<&OplogCursor>,
+    page_count: Option<u64>,
+) -> OplogResourcePattern {
+    let start = cursor.map_or(range.start().as_u64(), |cursor| cursor.next_oplog_index);
+    let page_end = page_count.and_then(|count| start.checked_add(count.saturating_sub(1)));
+    let end = match (page_end, range.end().map(u64::from)) {
+        (Some(page_end), Some(range_end)) => Some(page_end.min(range_end)),
+        (page_end, range_end) => page_end.or(range_end),
+    };
+    match (page_count, cursor, range == OplogRange::ALL) {
+        (None, None, true) => OplogResourcePattern::Any,
+        _ => OplogResourcePattern::range(Some(start), end),
+    }
 }
 
 fn authorize_filesystem_permission(
@@ -1219,8 +1242,7 @@ impl WorkerService {
     pub async fn get_oplog(
         &self,
         agent_id: &AgentId,
-        from_oplog_index: OplogIndex,
-        to_oplog_index: Option<OplogIndex>,
+        range: OplogRange,
         cursor: Option<OplogCursor>,
         count: u64,
         auth_ctx: AuthCtx,
@@ -1230,28 +1252,18 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        let start = cursor
-            .as_ref()
-            .map(|cursor| cursor.next_oplog_index)
-            .unwrap_or_else(|| from_oplog_index.into());
-        let end = match (start.checked_add(count.saturating_sub(1)), to_oplog_index) {
-            (Some(end), Some(to)) => Some(end.min(to.into())),
-            (end, None) => end,
-            (None, to) => to.map(Into::into),
-        };
         authorize_oplog_permission(
             &auth_ctx,
             &component,
             agent_id,
-            OplogResourcePattern::range(Some(start), end),
+            oplog_read_resource(range, cursor.as_ref(), Some(count)),
         )?;
 
         let result = self
             .worker_client
             .get_oplog(
                 agent_id,
-                from_oplog_index,
-                to_oplog_index,
+                range,
                 cursor,
                 count,
                 component.environment_id,
@@ -1298,8 +1310,7 @@ impl WorkerService {
     pub async fn search_oplog(
         &self,
         agent_id: &AgentId,
-        from_oplog_index: Option<OplogIndex>,
-        to_oplog_index: Option<OplogIndex>,
+        range: OplogRange,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
@@ -1310,14 +1321,18 @@ impl WorkerService {
             .get_current_by_id(agent_id.component_id)
             .await?;
 
-        authorize_oplog_permission(&auth_ctx, &component, agent_id, OplogResourcePattern::Any)?;
+        authorize_oplog_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            oplog_read_resource(range, cursor.as_ref(), None),
+        )?;
 
         let result = self
             .worker_client
             .search_oplog(
                 agent_id,
-                from_oplog_index,
-                to_oplog_index,
+                range,
                 cursor,
                 count,
                 query,
@@ -3948,7 +3963,7 @@ mod tests {
     use golem_common::model::golem_issuer::GolemIssuer;
     use golem_common::model::invocation_session_public::{InvocationSelector, PublicConfigEntry};
     use golem_common::model::json::NormalizedJsonValue;
-    use golem_common::model::oplog::{OplogCursor, OplogIndex};
+    use golem_common::model::oplog::{OplogCursor, OplogIndex, OplogRange};
     use golem_common::model::tool::{ToolBindingOwner, ToolName};
     use golem_common::model::{
         AgentFilter, AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, InvocationRequestKey,
@@ -4863,8 +4878,7 @@ mod tests {
         async fn get_oplog(
             &self,
             _: &AgentId,
-            _: OplogIndex,
-            _: Option<OplogIndex>,
+            _: OplogRange,
             _: Option<OplogCursor>,
             _: u64,
             _: EnvironmentId,
@@ -4910,8 +4924,7 @@ mod tests {
         async fn search_oplog(
             &self,
             _: &AgentId,
-            _: Option<OplogIndex>,
-            _: Option<OplogIndex>,
+            _: OplogRange,
             _: Option<OplogCursor>,
             _: u64,
             _: String,
@@ -5972,8 +5985,7 @@ mod tests {
             .worker_service
             .get_oplog(
                 &agent_id,
-                OplogIndex::from_u64(5),
-                None,
+                OplogRange::new(Some(OplogIndex::from_u64(5)), None).unwrap(),
                 None,
                 3,
                 auth_ctx.clone(),
@@ -6073,13 +6085,21 @@ mod tests {
             &agent_id,
             OplogResourcePattern::range(Some(5), Some(7)),
         )]);
+        let range = |to: Option<u64>| {
+            OplogRange::new(Some(OplogIndex::from_u64(5)), to.map(OplogIndex::from_u64)).unwrap()
+        };
         let get_oplog = |to: Option<u64>| {
-            harness.worker_service.get_oplog(
+            harness
+                .worker_service
+                .get_oplog(&agent_id, range(to), None, 50, auth_ctx.clone())
+        };
+        let search_oplog = |to: Option<u64>| {
+            harness.worker_service.search_oplog(
                 &agent_id,
-                OplogIndex::from_u64(5),
-                to.map(OplogIndex::from_u64),
+                range(to),
                 None,
                 50,
+                "error".to_string(),
                 auth_ctx.clone(),
             )
         };
@@ -6090,6 +6110,80 @@ mod tests {
             "a page of 50 entries from index 5 reads past the permitted index 7"
         );
         assert!(get_oplog(Some(8)).await.is_err());
+        search_oplog(Some(7)).await.unwrap();
+        assert!(
+            search_oplog(None).await.is_err(),
+            "a search from index 5 without an end reads past the permitted index 7"
+        );
+        assert!(search_oplog(Some(8)).await.is_err());
+    }
+
+    #[test]
+    fn an_oplog_read_needs_the_oplog_from_its_start_to_its_page_end_or_range_end() {
+        let index = OplogIndex::from_u64;
+        let range = |from: Option<u64>, to: Option<u64>| {
+            OplogRange::new(from.map(index), to.map(index)).unwrap()
+        };
+        let cursor = |next: u64| OplogCursor {
+            next_oplog_index: next,
+            current_component_revision: 0,
+            query_hash: String::new(),
+        };
+        let pattern = OplogResourcePattern::range;
+        [
+            // Pages: from the start, or the cursor, to the last entry of the page or the range.
+            (
+                (range(None, None), None, Some(50)),
+                pattern(Some(1), Some(50)),
+            ),
+            (
+                (range(Some(5), None), None, Some(3)),
+                pattern(Some(5), Some(7)),
+            ),
+            (
+                (range(Some(5), Some(6)), None, Some(3)),
+                pattern(Some(5), Some(6)),
+            ),
+            (
+                (range(Some(5), Some(9)), Some(cursor(8)), Some(3)),
+                pattern(Some(8), Some(9)),
+            ),
+            (
+                (range(Some(5), None), None, Some(0)),
+                pattern(Some(5), Some(5)),
+            ),
+            (
+                (range(Some(5), None), Some(cursor(u64::MAX)), Some(3)),
+                pattern(Some(u64::MAX), None),
+            ),
+            (
+                (range(Some(5), Some(9)), Some(cursor(u64::MAX)), Some(3)),
+                pattern(Some(u64::MAX), Some(9)),
+            ),
+            // Searches: from the start, or the cursor, to the end of the range.
+            ((range(None, None), None, None), OplogResourcePattern::Any),
+            (
+                (range(None, None), Some(cursor(8)), None),
+                pattern(Some(8), None),
+            ),
+            ((range(Some(5), None), None, None), pattern(Some(5), None)),
+            (
+                (range(None, Some(9)), None, None),
+                pattern(Some(1), Some(9)),
+            ),
+            (
+                (range(Some(5), Some(9)), Some(cursor(8)), None),
+                pattern(Some(8), Some(9)),
+            ),
+        ]
+        .into_iter()
+        .for_each(|((range, cursor, page_count), expected)| {
+            assert_eq!(
+                super::oplog_read_resource(range, cursor.as_ref(), page_count),
+                expected,
+                "{range:?}, {cursor:?}, page count {page_count:?}"
+            )
+        });
     }
 
     #[test]
