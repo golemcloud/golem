@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod cache_headers;
+pub(super) mod cache_headers;
 mod parameter_parsing;
 mod response_mapping;
 
@@ -31,13 +31,14 @@ use super::error::RequestHandlerError;
 use super::model::ResponseBody;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
-use crate::service::worker::WorkerService;
+use crate::service::worker::{AgentBinding, WorkerService};
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
-use golem_common::model::agent::{
-    AgentMode, AgentTarget, OidcPrincipal, ParsedAgentKey, Principal, ReadOnlyConfig,
-};
-use golem_common::model::{AgentFingerprint, AgentId};
+use golem_common::model::Timestamp;
+use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey, ReadOnlyConfig};
+use golem_common::model::caller::{Caller, Principal, UserPrincipal};
+use golem_common::model::caller::{Claims, Pair};
+use golem_common::model::{AgentFingerprint, AgentId, InvocationRequestKey, OwnedAgentId};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
 use golem_common::schema::validation::validate_value;
 use golem_common::schema::{
@@ -68,21 +69,37 @@ impl CallAgentHandler {
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         validate_query_parameters(request, behaviour, &[])?;
-        let phantom_id = resolve_phantom_id(
+        let binding = route_agent_binding(
             request,
             resolved_route,
             &behaviour.phantom_selection,
-            |phantom| (phantom && behaviour.agent_mode == AgentMode::Durable).then(Uuid::new_v4),
+            |phantom| {
+                if phantom {
+                    AgentBinding::Fresh
+                } else {
+                    AgentBinding::Constructor
+                }
+            },
         )?;
-
-        let agent_id = Self::build_agent_id(
+        let constructor = Self::route_constructor(
             resolved_route,
-            behaviour.component_id,
             &behaviour.agent_type,
             &behaviour.constructor_input,
             &behaviour.constructor_parameters,
-            phantom_id,
         )?;
+        let request_key = InvocationRequestKey::external(None, None);
+        let (target, component, freshness_disposition) = self
+            .worker_service
+            .bound_invocation_target(
+                behaviour.component_id,
+                &constructor,
+                binding,
+                &request_key,
+                &behaviour.method_name,
+                &AuthCtx::System,
+            )
+            .await?;
+        let agent_id = OwnedAgentId::new(resolved_route.route.environment_id, &target.agent_id);
 
         let request_method = request.underlying.method().clone();
 
@@ -93,6 +110,7 @@ impl CallAgentHandler {
         // executor implementation reads cached metadata / persisted oplog
         // state and does **not** wake or load the worker.
         if let Some(read_only) = behaviour.read_only.as_ref()
+            && freshness_disposition == InvocationFreshnessDisposition::MayExist
             && is_cacheable_method(&request_method)
             && supports_http_revalidation(read_only)
             && let Some(not_modified) = self
@@ -124,26 +142,27 @@ impl CallAgentHandler {
             tracing: Some(request.invocation_context().into()),
         });
 
-        let principal = principal_from_request(request)?;
-        debug!("Using principal for invocation: {principal:?}");
-        let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
+        let caller = caller_from_request(request)?;
+        debug!(kind = %caller.original.kind(), "Using caller for invocation");
+        let proto_caller: golem_api_grpc::proto::golem::component::Caller = caller.clone().into();
 
         let agent_response = self
             .worker_service
-            .invoke_agent(
-                &AgentTarget::Current(agent_id.clone()),
+            .dispatch_agent_invocation(
+                &component,
+                &target,
                 Some(behaviour.method_name.clone()),
                 Some(proto_method_parameters),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
-                golem_common::model::InvocationRequestKey::external(None, None),
+                request_key,
                 invocation_context,
-                false,
-                golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+                freshness_disposition,
                 Vec::new(),
+                resolved_route.route.environment_id,
+                component.account_id,
                 AuthCtx::System,
-                proto_principal,
-                Some(resolved_route.route.environment_id),
+                proto_caller,
                 None,
                 None,
             )
@@ -185,6 +204,7 @@ impl CallAgentHandler {
                 agent_fingerprint,
                 read_only,
                 behaviour,
+                &caller,
                 request.authenticated_session().is_some(),
             );
 
@@ -206,7 +226,7 @@ impl CallAgentHandler {
         &self,
         request: &RichRequest,
         behaviour: &CallAgentBehaviour,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         read_only: &ReadOnlyConfig,
     ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
         let Some(raw) = request
@@ -228,7 +248,16 @@ impl CallAgentHandler {
             return Ok(None);
         };
 
-        if !if_none_match_hits(&entries, agent_id, current_fingerprint, current_oplog) {
+        // The validator names the caller it was issued to, so only the same caller's request
+        // revalidates: a cache may send the ETag of another caller's stored response.
+        let caller = caller_from_request(request)?;
+        if !if_none_match_hits(
+            &entries,
+            agent_id,
+            current_fingerprint,
+            &caller,
+            current_oplog,
+        ) {
             return Ok(None);
         }
 
@@ -240,6 +269,7 @@ impl CallAgentHandler {
             Some(current_fingerprint),
             read_only,
             behaviour,
+            &caller,
             request.authenticated_session().is_some(),
         );
 
@@ -256,11 +286,11 @@ impl CallAgentHandler {
     /// the oplog index describe the same agent instance.
     async fn fetch_current_validator(
         &self,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
     ) -> Result<Option<(AgentFingerprint, OplogIndex)>, RequestHandlerError> {
         match self
             .worker_service
-            .get_metadata(agent_id, AuthCtx::System)
+            .get_metadata(agent_id, None, AuthCtx::System)
             .await
         {
             Ok(metadata) => Ok(Some((metadata.fingerprint, metadata.last_oplog_index))),
@@ -276,14 +306,13 @@ impl CallAgentHandler {
         }
     }
 
-    pub(super) fn build_agent_id(
+    /// The constructor of the agent of a route, from the path segments it binds.
+    pub(super) fn route_constructor(
         resolved_route: &ResolvedRouteEntry,
-        component_id: golem_common::model::component::ComponentId,
         agent_type: &golem_common::model::agent::AgentTypeName,
         constructor_input: &golem_service_base::custom_api::CompiledInputSchema,
         constructor_parameters: &[ConstructorParameter],
-        phantom_id: Option<Uuid>,
-    ) -> Result<AgentId, RequestHandlerError> {
+    ) -> Result<ParsedAgentKey, RequestHandlerError> {
         let mut fields = Vec::with_capacity(constructor_parameters.len());
 
         for param in constructor_parameters {
@@ -301,21 +330,16 @@ impl CallAgentHandler {
             }
         }
 
-        // The agent-id parameters travel as a self-contained `TypedSchemaValue`:
-        // the constructor's compiled `SchemaGraph` paired with the positional
-        // record of the (user-supplied) constructor parameters.
+        // The constructor parameters travel as a self-contained `TypedSchemaValue`: the
+        // constructor's compiled `SchemaGraph` paired with the positional record of the
+        // (user-supplied) constructor parameters.
         let parameters = TypedSchemaValue::new(
             constructor_input.graph.clone(),
             SchemaValue::Record { fields },
         );
 
-        let agent_id = ParsedAgentKey::try_new(agent_type.clone(), parameters, phantom_id)
-            .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })?;
-
-        Ok(AgentId {
-            component_id,
-            agent_id: agent_id.to_string(),
-        })
+        ParsedAgentKey::try_new(agent_type.clone(), parameters)
+            .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })
     }
 
     pub(super) fn resolve_method_arguments(
@@ -331,7 +355,7 @@ impl CallAgentHandler {
         // The producer emits `method_parameters` in user-supplied input
         // declaration order, so iterating them in order builds the positional
         // `SchemaValue::Record` the executor validates against (which excludes
-        // auto-injected fields like the principal).
+        // auto-injected fields like the caller).
         let mut values = Vec::with_capacity(behaviour.method_parameters.len());
         let mut input_fields = behaviour
             .method_input
@@ -530,15 +554,17 @@ fn is_cacheable_method(method: &Method) -> bool {
 
 /// Insert the cache headers for a read-only `AgentMethod` response into the
 /// given header map: `Cache-Control`, optionally `ETag` (when the cache policy
-/// supports HTTP revalidation), and `Vary` for header-bound method parameters.
-/// Credential-related Vary headers are also applied at the response boundary.
+/// supports HTTP revalidation, and specific to `caller`), and `Vary` for
+/// header-bound method parameters. Credential-related Vary headers are also
+/// applied at the response boundary.
 fn add_read_only_cache_headers(
     headers: &mut http::HeaderMap,
-    agent_id: &AgentId,
+    agent_id: &OwnedAgentId,
     oplog_index: Option<OplogIndex>,
     agent_fingerprint: Option<AgentFingerprint>,
     read_only: &ReadOnlyConfig,
     behaviour: &CallAgentBehaviour,
+    caller: &Caller,
     request_authenticated: bool,
 ) {
     apply_response_cache_headers(
@@ -563,7 +589,7 @@ fn add_read_only_cache_headers(
     {
         headers.insert(
             cache_header::ETAG,
-            http::HeaderValue::from_str(&build_etag_value(agent_id, fp, idx)).unwrap(),
+            http::HeaderValue::from_str(&build_etag_value(agent_id, fp, caller, idx)).unwrap(),
         );
     }
 
@@ -574,61 +600,71 @@ fn add_read_only_cache_headers(
     }
 }
 
-pub(super) fn resolve_phantom_id(
+/// The agent that a route selects beside its constructor. An agent ID that the request
+/// selects with a path segment or a query parameter names an existing agent; `policy` gives
+/// the binding of a route that selects none.
+pub(super) fn route_agent_binding(
     request: &RichRequest,
     resolved_route: &ResolvedRouteEntry,
     selection: &PhantomSelection,
-    policy: impl FnOnce(bool) -> Option<Uuid>,
-) -> Result<Option<Uuid>, RequestHandlerError> {
+    policy: impl FnOnce(bool) -> AgentBinding,
+) -> Result<AgentBinding, RequestHandlerError> {
     let value = match selection {
         PhantomSelection::Policy { phantom } => return Ok(policy(*phantom)),
-        PhantomSelection::Original => return Ok(None),
+        PhantomSelection::Original => return Ok(AgentBinding::Constructor),
         PhantomSelection::Path { index } => {
             resolved_route.captured_path_parameters[usize::from(*index)].as_str()
         }
         PhantomSelection::Query { name, optional } => {
             match request.query_params().get(name).map(Vec::as_slice) {
                 Some([value]) => value.as_str(),
-                None if *optional => return Ok(None),
+                None if *optional => return Ok(AgentBinding::Constructor),
                 None | Some([]) => {
                     return Err(RequestHandlerError::MissingValue {
-                        expected: "phantom UUID query selector",
+                        expected: "agent ID query selector",
                     });
                 }
                 _ => {
                     return Err(RequestHandlerError::TooManyValues {
-                        expected: "phantom UUID query selector",
+                        expected: "agent ID query selector",
                     });
                 }
             }
         }
     };
     Uuid::parse_str(value)
-        .map(Some)
+        .map(|uuid| AgentBinding::Id(AgentId(uuid)))
         .map_err(|_| RequestHandlerError::ValueParsingFailed {
             value: value.into(),
-            expected: "UUID",
+            expected: "agent ID",
         })
 }
 
-pub(super) fn principal_from_request(
-    request: &RichRequest,
-) -> Result<Principal, RequestHandlerError> {
+/// The caller of a request: the user of its authenticated session, or anonymous. The pair is the
+/// session's issuer and subject exactly as written, never the email or the name. The claims are
+/// the session's claim set, kept as the JSON text that was serialized.
+pub(super) fn caller_from_request(request: &RichRequest) -> Result<Caller, RequestHandlerError> {
     match request.authenticated_session() {
-        Some(session) => Ok(Principal::Oidc(OidcPrincipal {
-            sub: session.subject.clone(),
-            issuer: session.issuer.clone(),
-            email: session.email.clone(),
-            name: session.name.clone(),
-            email_verified: session.email_verified,
-            given_name: session.given_name.clone(),
-            family_name: session.family_name.clone(),
-            picture: session.picture.clone(),
-            preferred_username: session.preferred_username.clone(),
-            claims: serde_json::to_string(&session.claims)
-                .map_err(|e| anyhow!("CoreIdTokenClaims serialization error: {e}"))?,
-        })),
-        None => Ok(Principal::anonymous()),
+        Some(session) => {
+            let claims_json = serde_json::to_string(&session.claims)
+                .map_err(|e| anyhow!("CoreIdTokenClaims serialization error: {e}"))?;
+            let claims = Claims::from_json(claims_json)
+                .map_err(|e| anyhow!("the session claims are not a valid claim set: {e}"))?;
+            let authenticated_at = session
+                .claims
+                .auth_time()
+                .unwrap_or_else(|| session.claims.issue_time());
+            let authenticated_at = Timestamp::from(
+                u64::try_from(authenticated_at.timestamp_millis())
+                    .map_err(|_| anyhow!("the session claims have a time before 1970"))?,
+            );
+            Ok(Caller::entry(Principal::User(UserPrincipal {
+                pair: Pair::new(session.issuer.clone(), session.subject.clone()),
+                claims,
+                authenticated_at,
+            })))
+        }
+        None => Ok(Caller::anonymous()),
     }
 }
 
@@ -636,9 +672,70 @@ pub(super) fn principal_from_request(
 mod tests {
     use super::*;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::model::agent::AgentMode;
     use golem_common::schema::{InputSchema, SchemaGraph, SchemaType};
     use golem_service_base::custom_api::{CompiledInputSchema, PathSegmentType};
     use test_r::test;
+
+    fn oidc_session(issuer: &str, subject: &str) -> crate::custom_api::model::OidcSession {
+        use chrono::{TimeDelta, Utc};
+        use openidconnect::{
+            EmptyAdditionalClaims, IdTokenClaims, IssuerUrl, StandardClaims, SubjectIdentifier,
+        };
+
+        let issued_at = Utc::now();
+        crate::custom_api::model::OidcSession {
+            subject: subject.to_string(),
+            issuer: issuer.to_string(),
+            email: Some("ana@acme.example".to_string()),
+            name: Some("Ana".to_string()),
+            email_verified: Some(true),
+            given_name: None,
+            family_name: None,
+            picture: None,
+            preferred_username: Some("ana".to_string()),
+            claims: IdTokenClaims::new(
+                IssuerUrl::new(issuer.to_string()).unwrap(),
+                Vec::new(),
+                issued_at + TimeDelta::hours(1),
+                issued_at,
+                StandardClaims::new(SubjectIdentifier::new(subject.to_string())),
+                EmptyAdditionalClaims {},
+            ),
+            scopes: Default::default(),
+            expires_at: issued_at + TimeDelta::hours(1),
+        }
+    }
+
+    #[test]
+    fn caller_from_request_builds_the_user_pair_from_issuer_and_sub() {
+        let mut request = RichRequest::new(poem::Request::default());
+        assert_eq!(caller_from_request(&request).unwrap(), Caller::anonymous());
+
+        let session = oidc_session("https://login.acme.example/", "Ana.Example");
+        let claims_text = serde_json::to_string(&session.claims).unwrap();
+        request.set_authenticated_session(session);
+
+        let caller = caller_from_request(&request).unwrap();
+        assert!(caller.tokens.is_empty());
+        assert_eq!(
+            caller.original.kind(),
+            golem_common::model::caller::Kind::User
+        );
+        // Both roles hold the same user.
+        assert!(caller.original.equals(&caller.immediate));
+        // The pair is the issuer and subject as written, never the email or the name.
+        assert_eq!(
+            caller.original.pair().unwrap().to_string(),
+            "(\"https://login.acme.example/\",\"Ana.Example\")"
+        );
+        let Principal::User(user) = &caller.original else {
+            panic!("expected a user");
+        };
+        // The claims text is the exact serialization of the session's claims.
+        assert_eq!(user.claims.as_json(), claims_text);
+        assert!(!format!("{:?}", caller.original.pair()).contains("ana@acme.example"));
+    }
 
     #[test]
     async fn query_ownership_rejects_unknown_and_malformed_names_without_requiring_arguments() {
@@ -877,7 +974,6 @@ mod tests {
                 }
                 behaviour.read_only = Some(ReadOnlyConfig {
                     cache_policy: CachePolicy::UntilWrite(Default::default()),
-                    uses_principal: false,
                 });
                 let error = handler
                     .handle_call_agent_behaviour(&mut RichRequest::new(request), &route, &behaviour)
@@ -900,7 +996,7 @@ mod tests {
     }
 
     #[test]
-    async fn explicit_phantom_selection_validates_decoded_queries_and_capture_ordinals() {
+    async fn explicit_agent_selection_validates_decoded_queries_and_capture_ordinals() {
         let p = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
         let q = "8badf00d-1234-4567-89ab-0123456789ab";
         let resolver = test_resolver(vec![test_route(
@@ -919,14 +1015,14 @@ mod tests {
             .unwrap();
         let path = PhantomSelection::Path { index: 1.into() };
         assert_eq!(
-            resolve_phantom_id(
+            route_agent_binding(
                 &RichRequest::new(route_request),
                 &resolved,
                 &path,
                 |_| panic!("explicit selection must not use policy")
             )
             .unwrap(),
-            Some(p)
+            AgentBinding::Id(AgentId(p))
         );
         for optional in [false, true] {
             let selection = PhantomSelection::Query {
@@ -945,11 +1041,11 @@ mod tests {
                         .finish(),
                 );
                 assert_eq!(
-                    resolve_phantom_id(&request, &resolved, &selection, |_| panic!(
+                    route_agent_binding(&request, &resolved, &selection, |_| panic!(
                         "explicit selection must not use policy"
                     ))
                     .unwrap(),
-                    Some(p)
+                    AgentBinding::Id(AgentId(p))
                 );
             }
             for query in [
@@ -965,7 +1061,7 @@ mod tests {
                         .finish(),
                 );
                 assert!(
-                    resolve_phantom_id(&request, &resolved, &selection, |_| panic!(
+                    route_agent_binding(&request, &resolved, &selection, |_| panic!(
                         "invalid explicit selection must not use policy"
                     ))
                     .is_err()
@@ -976,39 +1072,39 @@ mod tests {
                     .uri("/base".parse().unwrap())
                     .finish(),
             );
-            let result = resolve_phantom_id(&request, &resolved, &selection, |_| {
+            let result = route_agent_binding(&request, &resolved, &selection, |_| {
                 panic!("optional omission must not use policy")
             });
             if optional {
-                assert_eq!(result.unwrap(), None);
+                assert_eq!(result.unwrap(), AgentBinding::Constructor);
             } else {
                 assert!(result.is_err());
             }
         }
         let request = RichRequest::new(poem::Request::builder().finish());
         assert_eq!(
-            resolve_phantom_id(
+            route_agent_binding(
                 &request,
                 &resolved,
                 &PhantomSelection::Original,
                 |_| panic!("original must not use policy")
             )
             .unwrap(),
-            None
+            AgentBinding::Constructor
         );
         for phantom in [false, true] {
             assert_eq!(
-                resolve_phantom_id(
+                route_agent_binding(
                     &request,
                     &resolved,
                     &PhantomSelection::Policy { phantom },
                     |flag| {
                         assert_eq!(flag, phantom);
-                        Some(p)
+                        AgentBinding::Fresh
                     }
                 )
                 .unwrap(),
-                Some(p)
+                AgentBinding::Fresh
             );
         }
         let constructor = CompiledInputSchema {
@@ -1036,40 +1132,299 @@ mod tests {
                 parameter_type: PathSegmentType::Str,
             },
         ];
-        let component_id = golem_common::model::component::ComponentId::new();
         let agent_type = golem_common::model::agent::AgentTypeName("selected".into());
-        let id = CallAgentHandler::build_agent_id(
-            &resolved,
-            component_id,
-            &agent_type,
-            &constructor,
-            &bindings,
-            Some(p),
-        )
-        .unwrap();
-        assert_eq!(id.agent_id, format!("selected(\"d7\",\"west\")[{p}]"));
+        let constructor_key =
+            CallAgentHandler::route_constructor(&resolved, &agent_type, &constructor, &bindings)
+                .unwrap();
+        assert_eq!(constructor_key.to_string(), "selected(\"d7\",\"west\")");
         resolved.captured_path_parameters[0] = "d9".into();
-        let other = CallAgentHandler::build_agent_id(
-            &resolved,
-            component_id,
-            &agent_type,
-            &constructor,
-            &bindings,
-            Some(p),
+        let other =
+            CallAgentHandler::route_constructor(&resolved, &agent_type, &constructor, &bindings)
+                .unwrap();
+        assert_eq!(other.to_string(), "selected(\"d9\",\"west\")");
+    }
+
+    /// Ana signs in on a `SessionFromHeader` route and reads a read-only method; then Ben uses the
+    /// same browser. RFC 9111 4.1: a stored response is selected for a later request only when
+    /// every request header that `Vary` names has the same value, so a private response must
+    /// vary on the session header, and the validator of a response is never accepted for
+    /// another session.
+    #[test]
+    async fn a_private_response_is_never_reused_for_another_session() {
+        use golem_common::model::agent::{CachePolicy, CachePolicyTtl};
+        use golem_service_base::custom_api::{RouteSecurity, SessionFromHeaderRouteSecurity};
+
+        let mut route = test_route(1, "/profile", Some("GET"), "typed");
+        route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+            header_name: "X-Session".into(),
+        });
+        let resolver = test_resolver(vec![route]);
+        let route_request = poem::Request::builder()
+            .uri("/profile".parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let resolved = resolver
+            .resolve_matching_route(&route_request)
+            .await
+            .unwrap();
+        let crate::custom_api::model::RichRouteBehaviour::CallAgent(behaviour) =
+            &resolved.route.behavior
+        else {
+            panic!("expected an agent route");
+        };
+        let agent_id = OwnedAgentId::new(resolved.route.environment_id, &AgentId::from_parts(7, 1));
+        let fingerprint = AgentFingerprint(Uuid::nil());
+        let index = OplogIndex::from_u64(7);
+        let user = |subject: &str| {
+            Caller::entry(Principal::User(UserPrincipal {
+                pair: Pair::new(
+                    "https://login.acme.example/".to_string(),
+                    subject.to_string(),
+                ),
+                claims: Claims::from_json("{}".to_string()).unwrap(),
+                authenticated_at: Timestamp::from(0u64),
+            }))
+        };
+        let session = |value: &'static str| {
+            let mut headers = http::HeaderMap::new();
+            headers.insert("x-session", http::HeaderValue::from_static(value));
+            headers
+        };
+
+        let mut failures = Vec::new();
+        for cache_policy in [
+            CachePolicy::UntilWrite(golem_schema::Empty {}),
+            CachePolicy::Ttl(CachePolicyTtl {
+                duration_nanos: 60_000_000_000,
+            }),
+        ] {
+            let read_only = ReadOnlyConfig { cache_policy };
+            let ana_request = session("session-of-ana");
+            let ben_request = session("session-of-ben");
+            let mut ana_response = http::HeaderMap::new();
+            add_read_only_cache_headers(
+                &mut ana_response,
+                &agent_id,
+                Some(index),
+                Some(fingerprint),
+                &read_only,
+                behaviour,
+                &user("ana"),
+                true,
+            );
+            // The response boundary adds the session header of a `SessionFromHeader` route to
+            // `Vary` (`request_handler::finish_selected_response`); do the same here.
+            crate::custom_api::cache_headers::add_vary_headers(&mut ana_response, &["x-session"]);
+            let vary = ana_response
+                .get(http::header::VARY)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            let reusable_for_ben = vary
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .all(|name| ana_request.get(name) == ben_request.get(name));
+            // Ben's conditional request with Ana's ETag: the validator names Ana, so the worker
+            // service does not answer 304 for Ben, and the agent runs for him.
+            let etag = ana_response
+                .get(http::header::ETAG)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            let ben_gets_304 = if_none_match_hits(
+                &parse_if_none_match_entries(&etag),
+                &agent_id,
+                fingerprint,
+                &user("ben"),
+                index,
+            );
+            println!(
+                "{:?}: cache-control={:?} vary={vary:?} ana's stored response reusable for ben={reusable_for_ben} ben's revalidation gets 304={ben_gets_304}",
+                read_only.cache_policy,
+                ana_response.get(http::header::CACHE_CONTROL),
+            );
+            if reusable_for_ben {
+                failures.push(format!(
+                    "{:?}: Ana's stored response",
+                    read_only.cache_policy
+                ));
+            }
+            // A cache may send the ETag of a stored response that Vary does not select, and
+            // reuse that response when the answer is 304.
+            if ben_gets_304 {
+                failures.push(format!(
+                    "{:?}: Ben's revalidation with Ana's ETag",
+                    read_only.cache_policy
+                ));
+            }
+
+            // A public answer (anonymous, no credential) and a private one name the same
+            // credential headers.
+            let mut public_response = http::HeaderMap::new();
+            add_read_only_cache_headers(
+                &mut public_response,
+                &agent_id,
+                Some(index),
+                Some(fingerprint),
+                &read_only,
+                behaviour,
+                &Caller::anonymous(),
+                false,
+            );
+            crate::custom_api::cache_headers::add_vary_headers(
+                &mut public_response,
+                &["x-session"],
+            );
+            for response in [&ana_response, &public_response] {
+                let vary = response
+                    .get(http::header::VARY)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                for name in ["authorization", "cookie", "golem-token", "x-session"] {
+                    assert!(
+                        vary.split(',').any(|entry| entry.trim() == name),
+                        "{:?}: Vary {vary:?} must name {name}",
+                        read_only.cache_policy
+                    );
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "Ana's private response can be served to Ben by the browser cache for {failures:?}"
+        );
+    }
+
+    /// The route, the agent and the validator inputs of one read-only response, for the ETag
+    /// tests below.
+    async fn read_only_profile_route() -> (
+        crate::custom_api::route_resolver::ResolvedRouteEntry,
+        OwnedAgentId,
+        AgentFingerprint,
+        OplogIndex,
+        ReadOnlyConfig,
+    ) {
+        use golem_common::model::agent::{CachePolicy, CachePolicyTtl};
+        use golem_service_base::custom_api::{RouteSecurity, SessionFromHeaderRouteSecurity};
+
+        let mut route = test_route(1, "/profile", Some("GET"), "typed");
+        route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+            header_name: "X-Session".into(),
+        });
+        let resolver = test_resolver(vec![route]);
+        let request = poem::Request::builder()
+            .uri("/profile".parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let resolved = resolver.resolve_matching_route(&request).await.unwrap();
+        let crate::custom_api::model::RichRouteBehaviour::CallAgent(_) = &resolved.route.behavior
+        else {
+            panic!("expected an agent route");
+        };
+        let agent_id = OwnedAgentId::new(resolved.route.environment_id, &AgentId::from_parts(7, 1));
+        let read_only = ReadOnlyConfig {
+            cache_policy: CachePolicy::Ttl(CachePolicyTtl {
+                duration_nanos: 60_000_000_000,
+            }),
+        };
+        (
+            resolved,
+            agent_id,
+            AgentFingerprint(Uuid::nil()),
+            OplogIndex::from_u64(7),
+            read_only,
         )
-        .unwrap();
-        assert_eq!(other.agent_id, format!("selected(\"d9\",\"west\")[{p}]"));
-        assert_ne!(id, other);
-        let other_component = CallAgentHandler::build_agent_id(
+    }
+
+    fn signed_in_user(subject: &str) -> Caller {
+        Caller::entry(Principal::User(UserPrincipal {
+            pair: Pair::new(
+                "https://login.acme.example/".to_string(),
+                subject.to_string(),
+            ),
+            claims: Claims::from_json("{}".to_string()).unwrap(),
+            authenticated_at: Timestamp::from(0u64),
+        }))
+    }
+
+    /// The ETag that a read-only response to `caller` carries.
+    fn etag_for(
+        resolved: &crate::custom_api::route_resolver::ResolvedRouteEntry,
+        agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+        index: OplogIndex,
+        read_only: &ReadOnlyConfig,
+        caller: &Caller,
+    ) -> String {
+        let crate::custom_api::model::RichRouteBehaviour::CallAgent(behaviour) =
+            &resolved.route.behavior
+        else {
+            panic!("expected an agent route");
+        };
+        let mut response = http::HeaderMap::new();
+        add_read_only_cache_headers(
+            &mut response,
+            agent_id,
+            Some(index),
+            Some(fingerprint),
+            read_only,
+            behaviour,
+            caller,
+            false,
+        );
+        response[http::header::ETAG].to_str().unwrap().to_string()
+    }
+
+    /// Ana reads a read-only method and gets an ETag. Ben, another session, then sends a
+    /// conditional request with Ana's ETag, as a cache may do for a stored response that `Vary`
+    /// does not select. A read-only call appends nothing to the oplog, so the index is the same:
+    /// the validator must still not match, or the 304 lets the cache show Ana's body to Ben.
+    #[test]
+    async fn another_callers_etag_never_revalidates_a_request() {
+        let (resolved, agent_id, fingerprint, index, read_only) = read_only_profile_route().await;
+        let ana_etag = etag_for(
             &resolved,
-            golem_common::model::component::ComponentId::new(),
-            &agent_type,
-            &constructor,
-            &bindings,
-            Some(p),
-        )
-        .unwrap();
-        assert_eq!(other.agent_id, other_component.agent_id);
-        assert_ne!(other, other_component);
+            &agent_id,
+            fingerprint,
+            index,
+            &read_only,
+            &signed_in_user("ana"),
+        );
+        let ben_gets_304 = if_none_match_hits(
+            &parse_if_none_match_entries(&ana_etag),
+            &agent_id,
+            fingerprint,
+            &signed_in_user("ben"),
+            index,
+        );
+        assert!(
+            !ben_gets_304,
+            "Ana's ETag {ana_etag} revalidates Ben's request: 304 for another caller"
+        );
+    }
+
+    /// The ETag of a response still revalidates the same caller's next request while the agent's
+    /// oplog has not moved.
+    #[test]
+    async fn the_same_callers_etag_still_revalidates() {
+        let (resolved, agent_id, fingerprint, index, read_only) = read_only_profile_route().await;
+        let ana_etag = etag_for(
+            &resolved,
+            &agent_id,
+            fingerprint,
+            index,
+            &read_only,
+            &signed_in_user("ana"),
+        );
+        assert!(if_none_match_hits(
+            &parse_if_none_match_entries(&ana_etag),
+            &agent_id,
+            fingerprint,
+            &signed_in_user("ana"),
+            index,
+        ));
     }
 }

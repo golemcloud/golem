@@ -25,11 +25,11 @@ use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
 use golem_common::model::{
-    AgentId, IdempotencyKey, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
+    IdempotencyKey, OwnedAgentId, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
 };
-use golem_common::schema::{ParsedAgentKey, TypedSchemaValue};
+use golem_common::schema::TypedSchemaValue;
 use golem_common::serialization::deserialize;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::storage::scheduler::{
     ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
@@ -113,12 +113,18 @@ impl SchedulerStorage for HoldFirstWake {
         id: &ScheduleId,
         owner: uuid::Uuid,
         until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.extend_lease(id, owner, until).await
+        self.inner.extend_lease(id, owner, until, now).await
     }
 
-    async fn ack(&self, id: &ScheduleId, owner: uuid::Uuid) -> Result<bool, SchedulerStorageError> {
-        self.inner.ack(id, owner).await
+    async fn ack(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.ack(id, owner, now).await
     }
 }
 
@@ -139,7 +145,7 @@ async fn schedule_at(
     executor
         .invoke_and_await_agent(
             component,
-            &agent_id!("ScheduledInvocationClient", CLIENT),
+            &agent_key!("ScheduledInvocationClient", CLIENT),
             "schedule_at",
             schedule_input(server_name, due),
         )
@@ -190,7 +196,7 @@ fn scheduled(oplog: &[PublicOplogEntryWithIndex]) -> Scheduled {
 /// target would register its wakes again and start its due work, hiding a lost wake.
 async fn wait_for_scheduled_start(
     executor: &TestWorkerExecutor,
-    target: &AgentId,
+    target: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(60), async {
         while scheduled(&executor.get_oplog(target, OplogIndex::INITIAL).await?)
@@ -208,12 +214,18 @@ async fn wait_for_scheduled_start(
 async fn counter(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    agent: &ParsedAgentKey,
+    agent: &OwnedAgentId,
 ) -> anyhow::Result<u64> {
-    executor
-        .invoke_and_await_agent(component, agent, "get_global_value", data_value!())
-        .await?
-        .into_typed::<u64>()
+    crate::agent::invoke_and_await_agent_by_id(
+        executor,
+        component,
+        agent,
+        None,
+        "get_global_value",
+        data_value!(),
+    )
+    .await?
+    .into_typed::<u64>()
 }
 
 /// Waits until the target's counter reaches `expected`, then checks that it stays there and that
@@ -221,12 +233,11 @@ async fn counter(
 async fn assert_ran_once(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    server: &ParsedAgentKey,
-    target: &AgentId,
+    target: &OwnedAgentId,
     expected: u64,
 ) -> anyhow::Result<()> {
     tokio::time::timeout(Duration::from_secs(60), async {
-        while counter(executor, component, server).await? < expected {
+        while counter(executor, component, target).await? < expected {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         anyhow::Ok(())
@@ -235,7 +246,7 @@ async fn assert_ran_once(
     .map_err(|_| anyhow::anyhow!("the scheduled invocation never ran"))??;
     // A duplicate execution would come from a second wake or a recovery start; give it time.
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert_eq!(counter(executor, component, server).await?, expected);
+    assert_eq!(counter(executor, component, target).await?, expected);
     let scheduled = scheduled(&executor.get_oplog(target, OplogIndex::INITIAL).await?);
     assert_eq!(
         scheduled.keys.len(),
@@ -254,16 +265,16 @@ async fn start_agents(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
     server_name: &str,
-) -> anyhow::Result<(ParsedAgentKey, AgentId)> {
-    let server = agent_id!("ScheduledInvocationServer", server_name);
-    let target = executor.start_agent(&component.id, server.clone()).await?;
+) -> anyhow::Result<OwnedAgentId> {
+    let server = agent_key!("ScheduledInvocationServer", server_name);
+    let target = executor.start_agent(&component.id, server).await?;
     executor
         .start_agent(
             &component.id,
-            agent_id!("ScheduledInvocationClient", CLIENT),
+            agent_key!("ScheduledInvocationClient", CLIENT),
         )
         .await?;
-    Ok((server, target))
+    Ok(target)
 }
 
 /// The executor is lost after the target committed the scheduled invocation and before the wake
@@ -299,8 +310,8 @@ async fn scheduled_invocation_lost_before_its_wake_is_stored_runs_once(
         .store()
         .await?;
     let server_name = "lost-before-wake";
-    let (server, target) = start_agents(&executor, &component, server_name).await?;
-    let client = agent_id!("ScheduledInvocationClient", CLIENT);
+    let target = start_agents(&executor, &component, server_name).await?;
+    let client = agent_key!("ScheduledInvocationClient", CLIENT);
     let due = Utc::now() + chrono::Duration::seconds(10);
     let key = IdempotencyKey::fresh();
     let invocation = {
@@ -340,7 +351,7 @@ async fn scheduled_invocation_lost_before_its_wake_is_stored_runs_once(
     .await??;
     assert!(Utc::now() < due, "the repair must precede the deadline");
     wait_for_scheduled_start(&executor, &target).await?;
-    assert_ran_once(&executor, &component, &server, &target, SCHEDULED_INCREMENT).await
+    assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await
 }
 
 /// The executor is lost after the wake was stored and before it fired. After the restart the
@@ -361,7 +372,7 @@ async fn scheduled_invocation_survives_a_restart_before_its_wake_fires(
         .store()
         .await?;
     let server_name = "restart-before-fire";
-    let (server, target) = start_agents(&executor, &component, server_name).await?;
+    let target = start_agents(&executor, &component, server_name).await?;
     let due = Utc::now() + chrono::Duration::seconds(8);
     schedule_at(&executor, &component, server_name, due).await?;
     drop(executor);
@@ -369,7 +380,7 @@ async fn scheduled_invocation_survives_a_restart_before_its_wake_fires(
     let executor = start_with_overrides(deps, &context, overrides).await?;
     assert!(Utc::now() < due, "the restart must precede the deadline");
     wait_for_scheduled_start(&executor, &target).await?;
-    assert_ran_once(&executor, &component, &server, &target, SCHEDULED_INCREMENT).await
+    assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await
 }
 
 /// The receipt the guest gets names the invocation the target commits, which is the invocation
@@ -391,8 +402,8 @@ async fn schedule_receipt_names_the_scheduled_invocation_and_replays_without_the
         .store()
         .await?;
     let server_name = "receipt";
-    let (server, target) = start_agents(&executor, &component, server_name).await?;
-    let client = agent_id!("ScheduledInvocationClient", CLIENT);
+    let target = start_agents(&executor, &component, server_name).await?;
+    let client = agent_key!("ScheduledInvocationClient", CLIENT);
     let receipt = |executor: &TestWorkerExecutor| {
         let executor = executor.clone();
         let component = component.clone();
@@ -419,7 +430,7 @@ async fn schedule_receipt_names_the_scheduled_invocation_and_replays_without_the
     let receipt_before_restart = receipt(&executor).await?;
 
     wait_for_scheduled_start(&executor, &target).await?;
-    assert_ran_once(&executor, &component, &server, &target, SCHEDULED_INCREMENT).await?;
+    assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await?;
     let committed = scheduled(&executor.get_oplog(&target, OplogIndex::INITIAL).await?);
     assert_eq!(
         receipt_before_restart,
@@ -453,17 +464,19 @@ async fn scheduled_invocation_lost_at_its_start_runs_once_after_a_restart(
         .store()
         .await?;
     let server_name = "lost-at-start";
-    let (server, target) = start_agents(&executor, &component, server_name).await?;
+    let target = start_agents(&executor, &component, server_name).await?;
     let due = Utc::now() + chrono::Duration::seconds(3);
     schedule_at(&executor, &component, server_name, due).await?;
-    let mut started = executor.gate_next_invocation_started_append(&target).await;
+    let mut started = executor
+        .gate_next_invocation_started_append(&target.agent_id)
+        .await;
     tokio::time::timeout(Duration::from_secs(30), started.entered()).await?;
     started.abort();
     drop(executor);
 
     let executor = start_with_overrides(deps, &context, overrides).await?;
     wait_for_scheduled_start(&executor, &target).await?;
-    assert_ran_once(&executor, &component, &server, &target, SCHEDULED_INCREMENT).await
+    assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await
 }
 
 /// Deleting the target before its deadline leaves a stale wake, which neither recreates the
@@ -483,7 +496,7 @@ async fn deleted_scheduled_target_is_not_recreated_by_its_wake(
         .store()
         .await?;
     let server_name = "deleted";
-    let (_, target) = start_agents(&executor, &component, server_name).await?;
+    let target = start_agents(&executor, &component, server_name).await?;
     let due = Utc::now() + chrono::Duration::seconds(5);
     schedule_at(&executor, &component, server_name, due).await?;
     executor.delete_worker(&target).await?;
@@ -511,7 +524,7 @@ async fn schedule_in_the_past_runs_on_the_next_tick(
         .store()
         .await?;
     let server_name = "past";
-    let (server, target) = start_agents(&executor, &component, server_name).await?;
+    let target = start_agents(&executor, &component, server_name).await?;
     schedule_at(
         &executor,
         &component,
@@ -519,7 +532,7 @@ async fn schedule_in_the_past_runs_on_the_next_tick(
         Utc::now() - chrono::Duration::seconds(60),
     )
     .await?;
-    assert_ran_once(&executor, &component, &server, &target, SCHEDULED_INCREMENT).await
+    assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await
 }
 
 /// An agent that schedules an invocation on itself from its constructor is not blocked by its
@@ -548,23 +561,27 @@ async fn constructor_schedule_on_itself_is_accepted_and_runs(
         .store()
         .await?;
     let mut targets = Vec::new();
-    for phantom in [None, Some(uuid::Uuid::new_v4())] {
-        let agent = agent_id!("ConstructorSelfScheduler", "constructor-self", 0u64)
-            .with_phantom_id(phantom)
-            .map_err(anyhow::Error::msg)?;
-        let target = executor.start_agent(&component.id, agent.clone()).await?;
-        assert_ran_once(&executor, &component, &agent, &target, 1).await?;
-        targets.push((agent, target));
+    let agent = agent_key!("ConstructorSelfScheduler", "constructor-self", 0u64);
+    for keyed in [true, false] {
+        let target = if keyed {
+            executor.start_agent(&component.id, agent.clone()).await?
+        } else {
+            crate::agent::create_unkeyed_agent(&executor, &component, &agent).await?
+        };
+        assert_ran_once(&executor, &component, &target, 1).await?;
+        targets.push(target);
     }
     drop(executor);
     let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
-    for (agent, target) in targets {
-        assert_ran_once(&executor, &component, &agent, &target, 1).await?;
+    for target in targets {
+        assert_ran_once(&executor, &component, &target, 1).await?;
         let entries = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+        // The client of another agent type rejects the binding in the guest, from
+        // `GOLEM_AGENT_TYPE`, so only the constructor's own binding reaches the host.
         assert_eq!(entries.iter().filter(|entry| matches!(
             &entry.entry,
             PublicOplogEntry::Start(call) if call.function_name == "golem::rpc::wasm-rpc::bind-self"
-        )).count(), 2, "reconstruction must reuse both bindings, including the rejected typed client");
+        )).count(), 1, "reconstruction must reuse the constructor's binding");
         assert_eq!(
             entries
                 .iter()
@@ -603,11 +620,13 @@ async fn fork_preserves_completed_and_incomplete_self_bindings(
             .component_dep(&context.default_environment_id, agent_rpc_rust)
             .store()
             .await?;
-        let source = agent_id!("ConstructorSelfScheduler", "fork-self-binding", 0u64);
+        let source = agent_key!("ConstructorSelfScheduler", "fork-self-binding", 0u64);
         let source_id = executor.start_agent(&component.id, source.clone()).await?;
-        assert_ran_once(&executor, &component, &source, &source_id, 1).await?;
+        assert_ran_once(&executor, &component, &source_id, 1).await?;
         let key = IdempotencyKey::fresh();
-        let mut end = executor.gate_next_call_end(&source_id, after_end).await;
+        let mut end = executor
+            .gate_next_call_end(&source_id.agent_id, after_end)
+            .await;
         let invocation = {
             let executor = executor.clone();
             let component = component.clone();
@@ -625,15 +644,23 @@ async fn fork_preserves_completed_and_incomplete_self_bindings(
                     .await
             })
         };
-        tokio::time::timeout(Duration::from_secs(30), end.entered()).await?;
-        let prefix = executor.get_oplog(&source_id, OplogIndex::INITIAL).await?;
-        assert!(
-            prefix
-                .iter()
-                .any(|entry| entry.oplog_index == end.start_index()
+        // The client reads `GOLEM_AGENT_TYPE` through a durable environment read before it
+        // binds, so the gate moves on to the next End until it holds the binding's End.
+        let prefix = loop {
+            tokio::time::timeout(Duration::from_secs(30), end.entered()).await?;
+            let prefix = executor.get_oplog(&source_id, OplogIndex::INITIAL).await?;
+            if prefix.iter().any(|entry| {
+                entry.oplog_index == end.start_index()
                     && matches!(&entry.entry, PublicOplogEntry::Start(call)
-                if call.function_name == "golem::rpc::wasm-rpc::bind-self"))
-        );
+                        if call.function_name == "golem::rpc::wasm-rpc::bind-self")
+            }) {
+                break prefix;
+            }
+            let next = executor
+                .gate_next_call_end(&source_id.agent_id, after_end)
+                .await;
+            drop(std::mem::replace(&mut end, next));
+        };
         assert_eq!(
             prefix.iter().any(|entry| matches!(&entry.entry,
                 PublicOplogEntry::End(call) if call.start_index == end.start_index())),
@@ -644,30 +671,31 @@ async fn fork_preserves_completed_and_incomplete_self_bindings(
         drop(end);
         assert_eq!(
             invocation.await??.into_typed::<String>()?,
-            source.to_string()
+            source_id.agent_id.to_string()
         );
-        let target = source
-            .with_phantom_id(Some(uuid::Uuid::new_v4()))
-            .map_err(anyhow::Error::msg)?;
-        executor
-            .fork_worker(&source_id, &target.to_string(), cut)
-            .await?;
+        let target = executor.fork_worker(&source_id, cut).await?;
         assert_eq!(
-            executor
-                .invoke_and_await_agent(&component, &target, "last_binding_id", data_value!())
-                .await?
-                .into_typed::<Option<String>>()?,
-            Some(source.to_string()),
+            crate::agent::invoke_and_await_agent_by_id(
+                &executor,
+                &component,
+                &target,
+                None,
+                "last_binding_id",
+                data_value!()
+            )
+            .await?
+            .into_typed::<Option<String>>()?,
+            Some(source_id.agent_id.to_string()),
             "fork replay must preserve the recorded binding ID"
         );
         tokio::time::timeout(Duration::from_secs(30), async {
-            while counter(&executor, &component, &source).await? < 15 {
+            while counter(&executor, &component, &source_id).await? < 15 {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             anyhow::Ok(())
         })
         .await??;
-        assert_eq!(counter(&executor, &component, &source).await?, 15);
+        assert_eq!(counter(&executor, &component, &source_id).await?, 15);
         let source_schedules =
             scheduled(&executor.get_oplog(&source_id, OplogIndex::INITIAL).await?);
         assert_eq!(
@@ -721,8 +749,8 @@ async fn durable_schedule_retry_with_the_same_key_commits_one_invocation(
         .store()
         .await?;
     let server_name = "same-key-retry";
-    let (server, target) = start_agents(&executor, &component, server_name).await?;
-    let client = agent_id!("ScheduledInvocationClient", CLIENT);
+    let target = start_agents(&executor, &component, server_name).await?;
+    let client = agent_key!("ScheduledInvocationClient", CLIENT);
     let due = Utc::now() + chrono::Duration::seconds(10);
     let key = IdempotencyKey::fresh();
     let invocation = {
@@ -763,5 +791,5 @@ async fn durable_schedule_retry_with_the_same_key_commits_one_invocation(
     );
     assert!(Utc::now() < due, "the repair must precede the deadline");
     wait_for_scheduled_start(&executor, &target).await?;
-    assert_ran_once(&executor, &component, &server, &target, SCHEDULED_INCREMENT).await
+    assert_ran_once(&executor, &component, &target, SCHEDULED_INCREMENT).await
 }

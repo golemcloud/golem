@@ -27,7 +27,7 @@ const Worker = defineAgentClient({
   },
 });
 
-const client = Worker.client.get({}, undefined, { scopeCard: scope });
+const client = Worker.client.upsert({}, { scopeCard: scope });
 client.take({ card }, { scopeCard: scope });
 client.run({ scopeCard: null });
 permissions.deriveScope([card, scope], {});
@@ -35,7 +35,7 @@ permissions.deriveScope([card, scope], {});
 // @ts-expect-error a persistent card is not a scope card
 client.run({ scopeCard: card });
 // @ts-expect-error the client default must be a scope card
-Worker.client.get({}, undefined, { scopeCard: card });
+Worker.client.upsert({}, { scopeCard: card });
 // @ts-expect-error a scope card cannot be an RPC argument
 client.take({ card: scope });
 // @ts-expect-error a scope card cannot be revoked
@@ -114,7 +114,7 @@ const AnyFlagWorker = defineAgentClient({
   },
 });
 async function anyFlagTypesAsConcrete(): Promise<PermissionCard> {
-  const anyFlagClient = AnyFlagWorker.client.get({});
+  const anyFlagClient = AnyFlagWorker.client.upsert({});
   // @ts-expect-error the `any` flag types the parameter as a concrete card
   await anyFlagClient.take({ card: template });
   return anyFlagClient.take({ card });

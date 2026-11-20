@@ -17,7 +17,7 @@ steps:
       effect: >
         I want to test the `Counter` agent in the Effect-based test-app project using Golem's
         TypeScript REPL binding. Write a TypeScript script file in the test-app directory that
-        gets the agent instance named "c1" with `Counter.get("c1")`, calls `increment` twice,
+        gets the keyed agent instance named "c1" with `Counter.upsert("c1")`, calls `increment` twice,
         then run it with `golem repl` in script mode.
       scala: *non-effect-repl-script-prompt
       moonbit: *non-effect-repl-script-prompt

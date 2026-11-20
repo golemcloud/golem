@@ -8,8 +8,8 @@
 // NOTE (parameter order): the new schema model preserves the user-supplied
 // declaration order for method parameters (matching the Rust/TS SDKs). The Golem
 // runtime's `build_http_agent_method_parameters` classifies path/query/header vs
-// body but keeps declaration order, and auto-injected `Principal` params keep
-// their declared slot (excluded from the wire record out-of-band). So generated
+// body but keeps declaration order, and `InvocationContext` params keep
+// their declared slot (excluded from the wire record: the SDK injects them). So generated
 // dispatch decodes parameters positionally in declaration order — there is no
 // HTTP-specific reordering.
 

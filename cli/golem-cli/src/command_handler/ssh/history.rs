@@ -30,11 +30,10 @@ pub fn history_file(
     server: &str,
     application: &str,
     environment: &str,
-    component: &str,
     agent: &str,
 ) -> PathBuf {
     let mut hasher = blake3::Hasher::new();
-    for part in [server, application, environment, component, agent] {
+    for part in [server, application, environment, agent] {
         hasher.update(part.as_bytes());
         hasher.update(&[0]);
     }
@@ -168,16 +167,9 @@ mod tests {
     use test_r::test;
 
     fn file(server: &str, environment: &str, agent: &str) -> String {
-        history_file(
-            Path::new("/cfg"),
-            server,
-            "app",
-            environment,
-            "component-1",
-            agent,
-        )
-        .display()
-        .to_string()
+        history_file(Path::new("/cfg"), server, "app", environment, agent)
+            .display()
+            .to_string()
     }
 
     #[test]

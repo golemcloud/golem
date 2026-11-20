@@ -17,7 +17,7 @@ pub async fn initialize(String, @types.SchemaValueTree, @async-core.TaskGroup[Un
 
 pub async fn invoke(String, @types.SchemaValueTree, @async-core.TaskGroup[Unit]) -> Result[@types.SchemaValueTree?, @common.AgentError]
 
-pub async fn load(@host.Snapshot, @async-core.TaskGroup[Unit]) -> Result[Unit, String]
+pub async fn load(@host.Snapshot, @types.SchemaValueTree, @async-core.TaskGroup[Unit]) -> Result[Unit, String]
 
 pub async fn save(@async-core.TaskGroup[Unit]) -> @host.Snapshot
 

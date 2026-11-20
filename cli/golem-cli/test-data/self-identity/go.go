@@ -4,7 +4,6 @@ package identity
 import (
 	"encoding/json"
 	"strconv"
-	"strings"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/durability"
@@ -30,14 +29,13 @@ type state struct {
 // carries the saving agent's id rather than reading its own.
 func (s *state) Save() ([]byte, error) {
 	saved := *s
-	saved.SnapshotIdentity = golem.MustGetSelfMetadata().AgentID.AgentID
+	saved.SnapshotIdentity = golem.MustGetSelfMetadata().AgentID.String()
 	return json.Marshal(saved)
 }
 
 func (s *state) Load(b []byte) error { return json.Unmarshal(b, s) }
 
-type ForkNamedIn struct {
-	Name   string
+type ForkAtIn struct {
 	Cutoff string
 }
 
@@ -50,16 +48,16 @@ func define[Id named](name string, snapshot golem.SnapshotPolicy) {
 	def := golem.DefineAgent[Id](golem.Spec{Name: name, Snapshot: snapshot})
 	observe := def.Method[golem.Unit, string]("observe")
 	status := def.Method[golem.Unit, string]("status")
-	forkNamed := def.Method[ForkNamedIn, golem.Unit]("forkNamed")
+	forkAt := def.Method[ForkAtIn, string]("forkAt")
 	forkSelf := def.Method[golem.Unit, string]("forkSelf")
 
 	impl := def.ImplementConfigured(func(ic *golem.InitContext[Id, state, golem.NoConfig]) *state {
-		return &state{Configured: struct{ Name string }(ic.ID()).Name, Saved: ic.AgentID(), Trace: []string{}}
+		return &state{Configured: struct{ Name string }(ic.ID()).Name, Saved: ic.AgentID().String(), Trace: []string{}}
 	})
 	impl.Handle(observe, func(ctx *golem.Context[state], _ golem.Unit) string {
-		self := ctx.AgentID()
+		self := ctx.AgentID().String()
 		// Different durable calls make an incorrect historical identity diverge.
-		if strings.Contains(self, `"parent"`) {
+		if self == ctx.State.Saved {
 			golem.MustGetSelfMetadata()
 		} else {
 			durability.GenerateIdempotencyKey()
@@ -70,31 +68,27 @@ func define[Id named](name string, snapshot golem.SnapshotPolicy) {
 	impl.Handle(status, func(ctx *golem.Context[state], _ golem.Unit) string {
 		current := ctx.AgentID()
 		metadata := golem.MustGetSelfMetadata()
-		addressed, _ := golem.GetAgentMetadata(golem.AgentID{ComponentID: metadata.AgentID.ComponentID, AgentID: current})
+		addressed, _ := golem.GetAgentMetadata(current)
 		out, _ := json.Marshal(map[string]any{
 			"configured":       ctx.State.Configured,
 			"saved":            ctx.State.Saved,
 			"trace":            ctx.State.Trace,
 			"snapshotIdentity": ctx.State.SnapshotIdentity,
 			"lastFork":         ctx.State.LastFork,
-			"current":          current,
-			"metadata":         metadata.AgentID.AgentID,
-			"addressed":        addressed.AgentID.AgentID,
+			"current":          current.String(),
+			"metadata":         metadata.AgentID.String(),
+			"addressed":        addressed.AgentID.String(),
 		})
 		return string(out)
 	})
-	impl.Handle(forkNamed, func(ctx *golem.Context[state], in ForkNamedIn) golem.Unit {
+	impl.Handle(forkAt, func(ctx *golem.Context[state], in ForkAtIn) string {
 		cutoff := golem.Must(strconv.ParseUint(in.Cutoff, 10, 64))
-		source := golem.AgentID{ComponentID: golem.MustGetSelfMetadata().AgentID.ComponentID, AgentID: ctx.AgentID()}
-		target := golem.AgentID{ComponentID: source.ComponentID, AgentID: def.AgentID(Id(struct{ Name string }{in.Name}), golem.None[golem.UUID]())}
-		golem.MustForkAgent(source, target, cutoff)
-		return golem.Unit{}
+		return golem.MustForkAgent(ctx.AgentID(), cutoff).String()
 	})
 	impl.Handle(forkSelf, func(ctx *golem.Context[state], _ golem.Unit) string {
-		before := ctx.AgentID()
-		forked, phantom := golem.MustForkSelf()
-		after := ctx.AgentID()
-		parsed := golem.Must(golem.ParseAgentID[Id](before))
+		before := ctx.AgentID().String()
+		forked, forkedID := golem.MustForkSelf()
+		after := ctx.AgentID().String()
 		tag := "original"
 		if forked {
 			tag = "forked"
@@ -103,7 +97,7 @@ func define[Id named](name string, snapshot golem.SnapshotPolicy) {
 			"before": before,
 			"after":  after,
 			"tag":    tag,
-			"target": def.AgentID(parsed.ID, golem.Some(phantom)),
+			"target": forkedID.String(),
 		})
 		ctx.State.LastFork = string(out)
 		return ctx.State.LastFork

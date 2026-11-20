@@ -80,7 +80,15 @@ fn manual_pending_update(target: u64, admission: Option<u64>) -> OplogEntry {
 }
 
 fn failed(target: u64, attempt: Option<u64>) -> OplogEntry {
-    OplogEntry::failed_update(revision(target), None, None, attempt.map(idx), None)
+    OplogEntry::failed_update(
+        revision(target),
+        None,
+        None,
+        attempt.map(idx),
+        None,
+        golem_common::model::oplog::UpdateFailureClass::Other,
+        None,
+    )
 }
 
 fn succeeded(target: u64) -> OplogEntry {

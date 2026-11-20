@@ -125,7 +125,7 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
         caller_component.revision,
         Some(deployment),
     );
-    let agent_id = agent_id!("TrappedLeafObserver", "silent-primary");
+    let agent_id = agent_key!("TrappedLeafObserver", "silent-primary");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -147,7 +147,7 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
             Vec::new(),
         )
         .await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned = worker_id.clone();
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     worker.await_ready_to_process_commands().await?;
 
@@ -169,7 +169,7 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
     let ready = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
             // Flush accepted Starts so the held schedule can be inspected in storage.
-            executor.commit_oplog(&worker_id).await?;
+            executor.commit_oplog(&worker_id.agent_id).await?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             let parent = oplog.iter().find_map(|entry| {
                 matches!(&entry.attribution, PublicOplogEntryAttribution::Entity(entity)
@@ -229,7 +229,7 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
         .expect("release independently trapping child");
     let settled = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            executor.commit_oplog(&worker_id).await?;
+            executor.commit_oplog(&worker_id.agent_id).await?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             if has_end(&oplog, child)
                 && worker.owner_execution().tool_operation_metadata().operations.is_empty()

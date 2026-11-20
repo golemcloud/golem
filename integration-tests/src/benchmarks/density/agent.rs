@@ -67,14 +67,15 @@ use crate::benchmarks::density::ceiling::{
 };
 use crate::benchmarks::density::prep::PrepManifest;
 use crate::benchmarks::density::{AgentMode, ComponentSharing};
+use crate::benchmarks::lookup_keyed_agent;
 use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use golem_common::agent_id;
+use golem_common::agent_key;
 use golem_common::data_value;
+use golem_common::model::AgentEvent;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::PublicOplogEntry;
-use golem_common::model::{AgentEvent, AgentId};
 use golem_common::schema::TypedSchemaValue;
 use golem_test_framework::benchmark::{
     BenchmarkRecorder, BenchmarkResult, BenchmarkRunResult, ResultKey, RunConfig,
@@ -512,7 +513,7 @@ fn agent_for_index<'a>(
     components: &'a [ComponentDto],
 ) -> anyhow::Result<(&'a ComponentDto, ParsedAgentKey)> {
     let agent_type = config.agent_type();
-    let agent_id = agent_id!(agent_type, format!("{}-{index}", config.cell_name()));
+    let agent_id = agent_key!(agent_type, format!("{}-{index}", config.cell_name()));
     let component = match config.sharing {
         ComponentSharing::Shared => components
             .first()
@@ -1023,25 +1024,29 @@ async fn cleanup_cell_agents(
         config.cell_name()
     );
 
-    let agent_ids: Vec<AgentId> = (0..count)
-        .filter_map(|index| {
-            let (component, parsed) = agent_for_index(config, index, components).ok()?;
-            AgentId::from_agent_id(component.id, &parsed).ok()
-        })
+    let agents: Vec<(&ComponentDto, ParsedAgentKey)> = (0..count)
+        .filter_map(|index| agent_for_index(config, index, components).ok())
         .collect();
 
     // Stop issuing deletes once a request fails to reach the executor: a flood
     // of transport errors means it has gone unhealthy, and continuing only
     // stalls on per-request timeouts.
     let transport_failed = Arc::new(AtomicBool::new(false));
-    let delete_all = futures::stream::iter(agent_ids).for_each_concurrent(
+    let delete_all = futures::stream::iter(agents).for_each_concurrent(
         DELETE_CONCURRENCY,
-        |agent_id| {
+        |(component, parsed)| {
             let transport_failed = transport_failed.clone();
             async move {
                 if transport_failed.load(Ordering::Relaxed) {
                     return;
                 }
+                let agent_id = match lookup_keyed_agent(user, component, &parsed).await {
+                    Ok(agent_id) => agent_id,
+                    Err(err) => {
+                        debug!("Density-agent: agent {parsed} not found: {err:?}");
+                        return;
+                    }
+                };
                 if let Err(err) = user.delete_worker(&agent_id).await {
                     let text = err.to_string();
                     if text.contains("AGENT_NOT_FOUND") {
@@ -1192,7 +1197,7 @@ async fn wait_for_invocation_path(
     let component = components
         .first()
         .ok_or_else(|| anyhow::anyhow!("no component available for restart canary"))?;
-    let agent = agent_id!(
+    let agent = agent_key!(
         EPHEMERAL_AGENT_TYPE,
         format!("{}-invocation-path-canary-{label}", config.cell_name())
     );
@@ -1968,11 +1973,11 @@ async fn start_snapshot_event_capture(
             return None;
         }
     };
-    let agent_id = match AgentId::from_agent_id(component.id, &parsed) {
+    let agent_id = match lookup_keyed_agent(user, component, &parsed).await {
         Ok(agent_id) => agent_id,
         Err(err) => {
             warn!(
-                "Density-agent[{}]: failed to build snapshot event stream agent id {index}: {err}",
+                "Density-agent[{}]: failed to look up snapshot event stream agent {index}: {err:?}",
                 config.cell_name()
             );
             return None;
@@ -2114,8 +2119,7 @@ async fn collect_resume_oplog_last_indices(
     let indices: Vec<anyhow::Result<u64>> = futures::stream::iter(0..prefill)
         .map(|index| async move {
             let (component, parsed) = agent_for_index(config, index, components)?;
-            let agent_id = AgentId::from_agent_id(component.id, &parsed)
-                .map_err(|err| anyhow::anyhow!(err))?;
+            let agent_id = lookup_keyed_agent(user, component, &parsed).await?;
             user.oplog_max_index(&agent_id).await.map(u64::from)
         })
         .buffer_unordered(RESUME_WARMUP_CONCURRENCY)
@@ -2135,8 +2139,7 @@ async fn assert_sampled_resume_snapshots_present(
     let sampled = prefill.min(3);
     for index in 0..sampled {
         let (component, parsed) = agent_for_index(config, index, components)?;
-        let agent_id =
-            AgentId::from_agent_id(component.id, &parsed).map_err(|err| anyhow::anyhow!(err))?;
+        let agent_id = lookup_keyed_agent(user, component, &parsed).await?;
         let snapshot_entries = user.search_oplog(&agent_id, "snapshot").await?;
         let snapshot_indices: Vec<_> = snapshot_entries
             .iter()

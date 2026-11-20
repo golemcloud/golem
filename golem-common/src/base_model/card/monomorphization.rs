@@ -32,7 +32,9 @@ pub struct AgentPermissionMonomorphizationContext {
     pub application: ApplicationName,
     pub environment: EnvironmentName,
     pub component: ComponentName,
-    pub agent_name: String,
+    /// The leaf that a `?agent` slot takes: the running agent, or for an envelope, a
+    /// placeholder that the envelope widens.
+    pub agent: AgentOwnerLeaf,
     pub owner: RecipientOwnerContext,
 }
 
@@ -563,7 +565,7 @@ impl MonomorphizeOwner<AgentOwnerPattern> for PolymorphicAgentOwnerPattern {
                 application: context.application.clone(),
                 environment: context.environment.clone(),
                 component: context.component.clone(),
-                agent: AgentOwnerLeafPattern::Agent(context.agent_name.clone()),
+                agent: AgentOwnerLeafPattern::Agent(context.agent.clone()),
             },
         }
     }
@@ -702,7 +704,10 @@ mod tests {
             application: ApplicationName::try_from("shop").unwrap(),
             environment: EnvironmentName::try_from("prod").unwrap(),
             component: ComponentName("cart-svc".to_string()),
-            agent_name: "Cart(alice)".to_string(),
+            agent: AgentOwnerLeaf {
+                agent_id: crate::base_model::AgentId::from_parts(7, 1),
+                agent_type: Some(AgentTypeName("Cart".to_string())),
+            },
             owner: RecipientOwnerContext::AgentType(AgentTypeName("Cart".to_string())),
         }
     }
@@ -751,10 +756,20 @@ mod tests {
         })
     }
 
-    fn agent_target(owner: &str, verb: AgentVerb) -> PermissionTarget {
+    /// The target of a running agent: its owner carries the trusted name of its type, as
+    /// Golem builds it from the agent's Create entry.
+    fn agent_target(owner: &str, agent_type: &str, verb: AgentVerb) -> PermissionTarget {
+        let mut owner = AgentOwnerPattern::parse(owner).unwrap();
+        if let AgentOwnerPattern::Agent {
+            agent: AgentOwnerLeafPattern::Agent(leaf),
+            ..
+        } = &mut owner
+        {
+            leaf.agent_type = Some(AgentTypeName(agent_type.to_string()));
+        }
         PermissionTarget::Agent(ClassPermissionTarget::<AgentClass> {
             verb: Some(verb),
-            owner: AgentOwnerPattern::parse(owner).unwrap(),
+            owner,
             resource: AgentResourcePattern::Any,
         })
     }
@@ -792,7 +807,8 @@ mod tests {
             Some(&scope_card),
         );
         let request = agent_target(
-            "owner@example.com/shop/prod/cart-svc/Cart(alice)",
+            "owner@example.com/shop/prod/cart-svc/00000007-0000-8000-8000-000000000001",
+            "Cart",
             AgentVerb::View,
         );
 
@@ -836,7 +852,8 @@ mod tests {
             expires_at: None,
         };
         let request = agent_target(
-            "owner@example.com/shop/prod/cart-svc/Cart(alice)",
+            "owner@example.com/shop/prod/cart-svc/00000007-0000-8000-8000-000000000001",
+            "Cart",
             AgentVerb::View,
         );
 
@@ -919,7 +936,8 @@ mod tests {
         assert!(
             surface
                 .authorize(&agent_target(
-                    "owner@example.com/shop/prod/cart-svc/Cart(alice)",
+                    "owner@example.com/shop/prod/cart-svc/00000007-0000-8000-8000-000000000001",
+                    "Cart",
                     AgentVerb::View,
                 ))
                 .unwrap()
@@ -927,7 +945,8 @@ mod tests {
         assert!(
             !surface
                 .authorize(&agent_target(
-                    "owner@example.com/shop/prod/cart-svc/Cart(bob)",
+                    "owner@example.com/shop/prod/cart-svc/00000007-0000-8000-8000-000000000002",
+                    "Cart",
                     AgentVerb::View,
                 ))
                 .unwrap()
@@ -1062,7 +1081,8 @@ mod tests {
         assert!(
             surface
                 .authorize(&agent_target(
-                    "owner@example.com/shop/prod/cart-svc/Cart",
+                    "owner@example.com/shop/prod/cart-svc/00000007-0000-8000-8000-000000000003",
+                    "Cart",
                     AgentVerb::Invoke,
                 ))
                 .unwrap()
@@ -1070,8 +1090,8 @@ mod tests {
         assert!(
             surface
                 .authorize(&agent_target(
-                    "owner@example.com/shop/prod/inventory-svc/Inventory(bob)",
-                    AgentVerb::Invoke,
+                    "owner@example.com/shop/prod/inventory-svc/00000007-0000-8000-8000-000000000004",
+                    "Inventory",AgentVerb::Invoke,
                 ))
                 .unwrap()
         );
@@ -1083,7 +1103,8 @@ mod tests {
         assert!(
             !surface
                 .authorize(&agent_target(
-                    "owner@example.com/shop/dev/cart-svc/Cart",
+                    "owner@example.com/shop/dev/cart-svc/00000007-0000-8000-8000-000000000003",
+                    "Cart",
                     AgentVerb::Invoke,
                 ))
                 .unwrap()

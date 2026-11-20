@@ -68,7 +68,7 @@ pub mod oplog_unreadable;
 pub mod owner_tool_isolation;
 mod panic_watch;
 pub mod permission_cards_scala;
-pub mod rdbms;
+pub mod rdbms_guest;
 pub mod rdbms_service;
 pub mod readonly;
 pub mod resource_limits;
@@ -85,6 +85,7 @@ pub mod scheduler_storage;
 mod scheduler_waits;
 pub mod scope_cards;
 pub mod socket_replay;
+pub mod stale_writer;
 pub mod suspension_races;
 pub mod tool_discovery;
 pub mod tool_runtime_bypass;
@@ -122,6 +123,18 @@ pub fn raw_params(
     build_input_record(elements).expect("raw_params: build_input_record failed")
 }
 
+/// A fresh agent ID of type tag 7 in a fresh environment, for storage tests that need an agent
+/// namespace no other test shares.
+pub fn fresh_owned_agent_id() -> golem_common::model::OwnedAgentId {
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::type_id::TypeId;
+    use golem_common::model::{AgentId, OwnedAgentId};
+    OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId::random(TypeId::try_from(7u32).expect("7 is a valid type tag")),
+    )
+}
+
 tag_suite!(api, group1);
 tag_suite!(scheduled_durable, group1);
 tag_suite!(scheduled_ephemeral, group1);
@@ -132,7 +145,7 @@ tag_suite!(keyvalue, group1);
 tag_suite!(in_function_retry, in_function_retry);
 tag_suite!(http, group1);
 tag_suite!(external_durable_stream, group1);
-tag_suite!(rdbms, group1);
+tag_suite!(rdbms_guest, group1);
 
 tag_suite!(hot_update, group2);
 tag_suite!(instance_layer, group2);

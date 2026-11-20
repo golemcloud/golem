@@ -545,3 +545,40 @@ test "parse_value_types rejects multimodal nested in golem_schema variant" {
     ),
   )
 }
+
+///|
+test "golem_schema record field rejects Principal, Caller and TokenProvenance" {
+  for
+    ty in [
+      "@common.Principal", "@agents.Caller", "TokenProvenance", "Array[@agentCommon.Principal]",
+      "@tool.Principal?",
+    ] {
+    let content = "#derive.golem_schema\npub(all) struct Holder {\n  who : \{ty}\n}\n"
+    let result = capture_agent_parse_error(fn() raise AgentParseError {
+      parse_value_types([("holder.mbt", content)]) |> ignore
+    })
+    match result {
+      Err(AgentParseError(msg)) => {
+        assert_true(
+          msg.contains("Field 'who' of #derive.golem_schema type 'Holder'"),
+        )
+        assert_true(msg.contains(live_value_message))
+      }
+      Ok(_) =>
+        abort("expected a live value in a value type to be refused: " + ty)
+    }
+  }
+}
+
+///|
+test "golem_schema variant payload rejects a live value" {
+  let content =
+    #|#derive.golem_schema
+    #|pub(all) enum Who {
+    #|  Named(@common.Principal)
+    #|}
+  let result = capture_agent_parse_error(fn() raise AgentParseError {
+    parse_value_types([("who.mbt", content)]) |> ignore
+  })
+  assert_true(result is Err(_))
+}

@@ -72,9 +72,13 @@ impl HttpRouter for StaticHttpRouterImpl {
     }
 
     async fn openapi(&self) -> String {
-        use golem_rust::agentic::{get_agent_id, get_principal};
+        use golem_rust::agentic::get_agent_id;
         use golem_rust::golem_agentic::golem::agent::common::Principal;
-        assert!(matches!(get_principal(), Some(Principal::Anonymous)));
+        use golem_rust::golem_agentic::golem::agent::invocation_context;
+        assert!(matches!(
+            invocation_context::caller().immediate,
+            Principal::Anonymous
+        ));
         if std::env::var("TEST_OPENAPI_INVALID").as_deref() == Ok("true") {
             return "invalid-provider-document".to_string();
         }
@@ -85,7 +89,7 @@ impl HttpRouter for StaticHttpRouterImpl {
                 "/": {"get": {"responses": {"200": {"description": "root"}}}},
                 "/echo/": {"post": {"operationId": "rawEcho", "responses": {"200": {"description": "echo"}}}}
             },
-            "x-provider-agent": get_agent_id().agent_id,
+            "x-provider-agent": get_agent_id().uuid.to_string(),
             "x-provider-revision": golem_rust::get_self_metadata().unwrap().component_revision
         }).to_string()
     }
@@ -127,7 +131,10 @@ impl HttpRouter for RawHttpRouterImpl {
             "/catch-input" => {
                 headers.push(header(
                     "x-echo-agent",
-                    golem_rust::agentic::get_agent_id().agent_id.as_bytes(),
+                    golem_rust::agentic::get_agent_id()
+                        .uuid
+                        .to_string()
+                        .as_bytes(),
                 ));
                 let mut input = request.body;
                 let mut bytes = Vec::new();

@@ -22,7 +22,7 @@ automatically derive all the serialization, RPC bindings, and metadata generatio
 ## Metadata permissions
 
 `AgentHostApi.getSelfMetadata()` requires view permission on the running agent.
-The `BaseAgent` identity getters (`agentId`, `agentType`, and `agentName`) use this
+The `BaseAgent` identity getters (`agentId` and `agentType`) use this
 operation and therefore require the same permission. Snapshot loading also reads
 self metadata unconditionally. Ordinary agent initialization does not read self
 metadata unless application code calls an identity getter or a metadata operation.
@@ -120,28 +120,43 @@ object NameAgentModule {
 
 ### Connect as a Client
 
-From another component, connect to a remote agent:
+The sbt and Mill plugins generate a `<Agent>Client` object for every agent definition. From another
+agent, get a client of a remote agent:
 
 ```scala
-import golem.runtime.rpc.AgentClient
+import golem.AgentId
 import scala.concurrent.Future
 
-val agentType = AgentClient.agentType[NameAgent] // uses @agentDefinition + NameAgent input type
+// The keyed agent of the constructor parameters. The host creates it when it is missing.
+// Throws `AgentRpcException` when the host rejects the client.
+val counter: CounterAgentRemote = CounterAgentClient.upsert("shard-id")
 
-// Connect and invoke
-val result: Future[NameAgent] = AgentClient.connect(agentType, ())
+// A new agent. Without `keyed`, the agent has no key and gets a new ID. With `keyed = true`, it
+// is the keyed agent, and an existing one fails with `AgentRpcError.Conflict`. Config
+// overrides are optional named parameters, and `env` is added to the manifest environment.
+val created: Future[CounterAgentRemote] = CounterAgentClient.create("shard-id", env = Map("MODE" -> "test"))
+
+// The existing agent with the given ID. Never creates the agent; an unknown ID fails with
+// `AgentRpcError.NotFound`.
+def byId(id: AgentId): Future[CounterAgentRemote] = CounterAgentClient.getById(id)
+
+// The host-assigned ID of the agent behind a client.
+val id: Future[AgentId] = counter.agentId()
 ```
+
+`AgentId` is a UUID. It does not hold the agent type or the constructor parameters, so the SDK
+cannot compute it offline: ask a client for it, or read it from agent metadata. Ephemeral agents
+only have `upsert`; every invocation runs on a new one-shot instance.
 
 ### Remote invocation variants (await/trigger/schedule)
 
-All agent methods support three invocation styles. Use `get(...)` and the
-`trigger` / `schedule` members on the returned agent:
+All agent methods support three invocation styles. Use the `trigger` / `schedule` members on the
+client:
 
 ```scala
 import golem.Datetime
-import golem.*
 
-val agent = CounterAgent.get("shard-id")
+val agent = CounterAgentClient.upsert("shard-id")
 
 // Await (normal method call)
 agent.increment()
@@ -155,7 +170,6 @@ agent.schedule.increment(Datetime.afterSeconds(5))
 
 Notes:
 
-- Requires Scala 3.
 - `trigger.*` / `schedule.*` always return `Future[Unit]` by design.
 
 ### Custom data types (Schemas)
@@ -172,51 +186,6 @@ For example (Scala 3):
 import zio.blocks.schema.Schema
 
 final case class State(value: Int) derives Schema
-```
-
-### Optional companion ergonomics (Scala-only)
-
-If you want `Shard.get(...)` / `Shard.getPhantom(...)` style ergonomics, Scala requires a companion `object Shard` to exist.
-Today this is a one-liner:
-
-```scala
-import golem.runtime.annotations.{DurabilityMode, agentDefinition, agentImplementation, description}
-import golem.runtime.autowire.{AgentDefinition, AgentImplementation}
-import golem.{AgentCompanion, BaseAgent}
-
-import java.util.UUID
-import scala.concurrent.Future
-
-@agentDefinition(mode = DurabilityMode.Durable)
-trait Shard extends BaseAgent {
-
-  class Id(val arg0: String, val arg1: Int)
-
-  @description("Get a value from the table")
-  def get(key: String): Future[Option[String]]
-
-  @description("Set a value in the table")
-  def set(key: String, value: String): Unit
-}
-
-object Shard extends AgentCompanion[Shard]
-
-@agentImplementation()
-final class ShardImpl(input: (String, Int)) extends Shard {
-  override def get(key: String): Future[Option[String]] = Future.successful(None)
-  override def set(key: String, value: String): Unit = ()
-}
-
-object ShardModule {
-  val definition: AgentDefinition[Shard] =
-    AgentImplementation.registerClass[Shard, ShardImpl]
-}
-
-object Example {
-  val shard1 = Shard.get("a", 1)
-  val shard2 = Shard.getPhantom("a", 1, UUID.randomUUID())
-  // shard1.flatMap(_.set("a", "b")) ...
-}
 ```
 
 ## Project structure (public vs. internal)

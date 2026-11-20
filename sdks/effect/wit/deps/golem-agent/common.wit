@@ -2,7 +2,7 @@ package golem:agent@2.0.0;
 
 interface common {
   use golem:core/types@2.0.0.{schema-graph, type-node-index, typed-schema-value,
-    metadata-envelope, agent-id, account-id, component-id};
+    metadata-envelope, agent-id, account-id, environment-id, uuid, datetime};
   use golem:core/http@2.0.0.{http-route-mode, durable-stream-route-options,
     http-method as concrete-http-method, path-segment as neutral-path-segment,
     header-variable, query-variable, file-mapping, file-response-header};
@@ -39,10 +39,9 @@ interface common {
     http-router,
   }
 
-  /// Associates an agent type with a component that implements it
+  /// An agent type deployed in the current environment
   record registered-agent-type {
     agent-type: agent-type,
-    implemented-by: component-id
   }
 
   /// Dependent agent type. All schema roots inside it resolve against its own
@@ -70,11 +69,6 @@ interface common {
 
   variant field-source {
     user-supplied,
-    auto-injected(auto-injected-kind),
-  }
-
-  enum auto-injected-kind {
-    principal,
   }
 
   /// Output is either unit (no value) or a single value of the given type.
@@ -96,7 +90,6 @@ interface common {
 
   record read-only-config {
     cache-policy:    cache-policy,
-    uses-principal:  bool,
   }
 
   variant cache-policy {
@@ -164,42 +157,73 @@ interface common {
     required: bool,
   }
 
+  /// The (issuer, subject) pair of one principal. A reference is data: holding one grants
+  /// nothing. Two references name the same principal exactly when both strings are equal,
+  /// byte for byte.
+  record principal-ref {
+    issuer:  string,
+    subject: string,
+  }
+
+  /// One identity, as Golem verified it. Every kind except anonymous has a pair.
   variant principal {
-    oidc(oidc-principal),
+    user(user-principal),
+    account(account-principal),
     agent(agent-principal),
-    golem-user(golem-user-principal),
-    anonymous
+    tool(tool-principal),
+    anonymous,
   }
 
-  record oidc-principal {
-    sub:      string,
-    issuer: string,
-
-    email:    option<string>,
-    name:     option<string>,
-    email-verified: option<bool>,
-    given-name:     option<string>,
-    family-name:    option<string>,
-    picture:        option<string>,
-    preferred-username:       option<string>,
-
-    claims: string,
+  /// A user, authenticated by a sign-in provider: the provider's pair.
+  record user-principal {
+    pair:             principal-ref,
+    /// The verified claims, as the JSON object that Golem received.
+    claims:           string,
+    authenticated-at: datetime,
   }
 
+  enum account-authentication {
+    api-token,
+    bootstrap-token,
+    sign-in,
+  }
+
+  /// An account: (Golem issuer, "account:<account-id>").
+  record account-principal {
+    pair:           principal-ref,
+    account-id:     account-id,
+    authentication: account-authentication,
+  }
+
+  /// An agent: (Golem issuer, "agent:<agent-id>/<fingerprint>").
   record agent-principal {
-    agent-id: agent-id,
+    pair:           principal-ref,
+    agent-id:       agent-id,
+    agent-type:     string,
+    environment-id: environment-id,
   }
 
-  record golem-user-principal {
-    account-id: account-id
+  /// A tool: (Golem issuer, "tool:<environment-id>/<tool-name>").
+  record tool-principal {
+    pair:           principal-ref,
+    environment-id: environment-id,
+    tool-name:      string,
   }
 
-  /// The principals that caused an invocation.
+  /// A token that the request presented, and the reference of its maker. It never holds the
+  /// token's value.
+  record token-provenance {
+    id:    uuid,
+    maker: option<principal-ref>,
+  }
+
+  /// The principals that caused an invocation, and the tokens presented at the entry point.
   record caller {
     /// The principal at the root of the call tree.
     original:  principal,
     /// The principal that made this call.
     immediate: principal,
+    tokens:    list<token-provenance>,
   }
 
   record agent-constructor {

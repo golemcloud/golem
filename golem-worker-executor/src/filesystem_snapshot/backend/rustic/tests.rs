@@ -155,6 +155,25 @@ fn rustic_store_keeps_the_contract(r: &mut DynamicTestRegistration) {
     });
 }
 
+#[test_gen]
+fn rustic_filesystem_store_keeps_the_contract(r: &mut DynamicTestRegistration) {
+    crate::filesystem_snapshot::tests::register_contract(r, || {
+        let root = Arc::new(tempfile::tempdir().unwrap());
+        std::fs::create_dir(root.path().join("compilation_cache")).unwrap();
+        std::fs::create_dir(root.path().join("custom_data")).unwrap();
+        let open: OpenStore = Arc::new(move || {
+            let storage =
+                golem_service_base::storage::blob::fs::FileSystemBlobStorage::attach_existing(
+                    root.path(),
+                )
+                .unwrap();
+            Arc::new(RusticSnapshotStore::new(Arc::new(storage), &config()))
+                as Arc<dyn FilesystemSnapshotStore>
+        });
+        open
+    });
+}
+
 #[test]
 #[timeout("120s")]
 async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {

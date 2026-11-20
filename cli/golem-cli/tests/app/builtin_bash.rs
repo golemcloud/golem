@@ -413,7 +413,7 @@ async fn component_tool_final_receipt_lookup_does_not_repeat_execution() {
     assert_ne!(key, seed);
     uuid::Uuid::parse_str(key).expect("the receipt contains the final invocation UUID");
     assert_result(&decode_result(receipt), "execution=1\n", "", 0);
-    let owner = format!("{}:{}", owner.component_id.0, owner.agent_id);
+    let owner = owner.to_string();
     for _ in 0..2 {
         let found = lookup_on(&ctx, &owner, key).await;
         assert_eq!(found["agentId"], receipt["agentId"]);
@@ -453,21 +453,18 @@ async fn component_tool_final_receipt_lookup_does_not_repeat_execution() {
     let live: Value = serde_json::from_slice(output.stdout()).unwrap();
     let target: golem_common::model::invocation_session_public::PublicNativeToolTarget =
         serde_json::from_value(live["target"].clone()).unwrap();
-    let golem_common::model::invocation_session_public::PublicNativeToolTarget::Agent {
-        component_id,
-        agent_id,
-    } = target
+    let golem_common::model::invocation_session_public::PublicNativeToolTarget::Agent { agent_id } =
+        target
     else {
         panic!("live receipt must contain the actual accepted owner: {live:#}")
     };
     let key = live["idempotencyKey"].as_str().unwrap();
     uuid::Uuid::parse_str(key).expect("live receipt contains the accepted invocation UUID");
     assert_ne!(key, "component-tool-live-final-lookup-not-a-uuid");
-    let owner = format!("{component_id}:{agent_id}");
+    let owner = agent_id.to_string();
     for _ in 0..2 {
         let found = lookup_on(&ctx, &owner, key).await;
-        assert_eq!(found["agentId"]["agentId"], agent_id);
-        assert_eq!(found["agentId"]["componentId"], component_id.to_string());
+        assert_eq!(found["agentId"], owner);
         assert_eq!(found["idempotencyKey"], key);
         assert_result(&decode_result(&found), "execution=2\n", "", 0);
         assert_eq!(calls.load(Ordering::SeqCst), 2);

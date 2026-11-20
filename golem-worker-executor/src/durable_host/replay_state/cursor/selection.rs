@@ -418,10 +418,16 @@ impl CursorTx<'_> {
             claim.expected_parent_start_index(),
         ) {
             Some(bodies) => Ok(MissingStart::Blocked(BlockedOn::ActiveBody(bodies))),
-            None => Err(WorkerExecutorError::unexpected_oplog_entry(
-                claim.expected_description(),
-                "no matching Start between the replay cursor and the replay target".to_string(),
-            )),
+            None => {
+                // The first unconsumed entry that the claiming owner would consume next.
+                let (index, entry) = match self.st.replay_buffer.front() {
+                    Some((index, entry)) => (*index, Some(entry)),
+                    None => (self.cursor.last_replayed_index().next(), None),
+                };
+                Err(WorkerExecutorError::replay_divergence(
+                    claim.divergence_at(index, entry),
+                ))
+            }
         }
     }
 
@@ -532,23 +538,39 @@ impl CursorTx<'_> {
         false
     }
 
-    /// Whether a `Start` nobody has claimed yet carries `invocation_id`: a retained one, or one
-    /// between the cursor and the replay target.
+    /// A `Start` nobody has claimed yet that carries `invocation_id`, with its index: a retained
+    /// one, or one between the cursor and the replay target.
     pub(in crate::durable_host::replay_state) fn unclaimed_start_with_invocation_id(
         &self,
         invocation_id: DurableInvocationId,
-    ) -> bool {
+    ) -> Option<(OplogIndex, RecordedStart)> {
         self.retained_start_with_invocation_id(invocation_id)
-            || self
-                .unclaimed_start_ahead(invocation_id, |_| true)
-                .is_some()
+            .or_else(|| {
+                let index = self.unclaimed_start_ahead(invocation_id, |_| true)?;
+                let recorded = self
+                    .cursor
+                    .start_invocation_ids
+                    .lock()
+                    .unwrap()
+                    .get(&invocation_id)?
+                    .get(&index)?
+                    .clone();
+                Some((index, recorded))
+            })
     }
 
-    fn retained_start_with_invocation_id(&self, invocation_id: DurableInvocationId) -> bool {
+    fn retained_start_with_invocation_id(
+        &self,
+        invocation_id: DurableInvocationId,
+    ) -> Option<(OplogIndex, RecordedStart)> {
         self.st
             .starts
-            .retained_values()
-            .any(|retained| start_invocation_id(&retained.entry) == Some(invocation_id))
+            .retained_iter()
+            .find_map(|(index, retained)| {
+                (start_invocation_id(&retained.entry) == Some(invocation_id))
+                    .then(|| RecordedStart::of(&retained.entry).map(|recorded| (*index, recorded)))
+                    .flatten()
+            })
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
@@ -706,7 +728,9 @@ impl CursorTx<'_> {
         // Retained calls precede the cursor and all remaining delivery boundaries. A sibling
         // may have drained a conflicting Start while this claim waited for an earlier delivery.
         if let Some(invocation_id) = claim.expected_invocation_id()
-            && self.retained_start_with_invocation_id(invocation_id)
+            && self
+                .retained_start_with_invocation_id(invocation_id)
+                .is_some()
             && self
                 .unclaimed_start_ahead(invocation_id, |recorded| claim.matches_recorded(recorded))
                 .is_none()

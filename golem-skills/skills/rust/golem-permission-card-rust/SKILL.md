@@ -121,10 +121,10 @@ invocation. A `&WalletCard` converts into a parent.
 let wallet = permissions::wallet();
 let scope: ScopeCard = permissions::derive_scope(&[(&wallet[0]).into()], &bounds)?;
 
-let client = ReceiverClient::get("target".to_string());
+let client = ReceiverClient::upsert("target".to_string());
 client.with_scope_card(&scope).process(input).await;    // one call
 
-let mut client = ReceiverClient::get("target".to_string());
+let mut client = ReceiverClient::upsert("target".to_string());
 client.set_default_scope_card(&scope);                  // every awaited call
 client.process(input).await;
 client.clear_default_scope_card();
@@ -167,7 +167,7 @@ Sending a card moves it to the receiver:
 
 ```rust
 async fn forward(card: PermissionCard) -> PermissionCard {
-    ReceiverClient::get("target".to_string()).accept(card).await
+    ReceiverClient::upsert("target".to_string()).accept(card).await
 }
 ```
 

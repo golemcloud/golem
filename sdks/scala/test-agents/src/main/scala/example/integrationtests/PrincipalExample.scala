@@ -16,19 +16,19 @@
 
 package example.integrationtests
 
-import golem.{BaseAgent, Principal}
+import golem.{BaseAgent, InvocationContext}
 import golem.runtime.annotations.{agentDefinition, description}
 
 import scala.concurrent.Future
 
 @agentDefinition()
-@description("Example agent with Principal injection in constructor")
+@description("Example agent that reads its caller from the InvocationContext")
 trait PrincipalAgent extends BaseAgent {
   class Id(val value: String)
 
   @description("Returns who created this agent")
   def whoCreated(): Future[String]
 
-  @description("Returns the current caller principal")
-  def currentCaller(principal: Principal): Future[String]
+  @description("Returns the current caller")
+  def currentCaller(context: InvocationContext): Future[String]
 }

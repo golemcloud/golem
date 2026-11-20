@@ -23,18 +23,13 @@ import golem.schema.{MetadataEnvelope, SchemaGraph}
  * `golem:agent@2.0.0` boundary.
  *
  * `UserSupplied` parameters consume one field of the input record (in
- * declaration order). `AutoInjectedPrincipal` parameters are injected by the
- * runtime and never consume a record field.
- *
- * Note: the Scala SDK currently emits only `UserSupplied` named fields,
- * omitting the (internally injected) principal from the input schema;
- * `AutoInjectedPrincipal` is reserved for future cross-SDK metadata parity.
+ * declaration order). The invocation context is injected by the runtime and is
+ * never part of the input schema.
  */
 sealed trait FieldSource extends Product with Serializable
 
 object FieldSource {
-  case object UserSupplied          extends FieldSource
-  case object AutoInjectedPrincipal extends FieldSource
+  case object UserSupplied extends FieldSource
 }
 
 /**

@@ -15,17 +15,13 @@
 package golem
 
 import (
-	"fmt"
-	"reflect"
-
 	"github.com/golemcloud/golem/sdks/go/core/values"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/identity"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
-// UUID is a 128-bit identifier, lowering to the WIT uuid type; it is also the
-// phantom id of an ephemeral agent instance. See [values.UUID].
+// UUID is a 128-bit identifier, lowering to the WIT uuid type. See
+// [values.UUID].
 type UUID = values.UUID
 
 // ParseUUID reads the 8-4-4-4-12 hexadecimal form of a UUID.
@@ -35,51 +31,15 @@ func uuidFromWit(w types.Uuid) UUID { return engine.UUIDFromWit(w) }
 
 func uuidToWit(u UUID) types.Uuid { return engine.UUIDToWit(u) }
 
-// ParsedAgentID is the typed decomposition of an agent id string: the agent
-// type name, the constructor parameters decoded back into the Id type, and the
-// phantom id (present for phantom/ephemeral instances).
-type ParsedAgentID[Id any] struct {
-	TypeName  string
-	ID        Id
-	PhantomID Option[UUID]
-}
+// AgentID is the ID of an agent: an opaque UUID that Golem issues, whose text
+// form is the UUID. It names an agent within one environment. The agent's type
+// and constructor parameters cannot be read out of it: address an agent by its
+// parameters with Upsert, and by its ID with GetByID. See [values.AgentID].
+type AgentID = values.AgentID
 
-// ParseAgentID decodes an agent id string (e.g. from [Context.AgentID] or a
-// method parameter carrying another agent's id) into its typed form.
-//
-// Id must be the target agent's Id struct — the same type used with
-// [DefineAgent]/[AgentDefinition.Get] — so the constructor parameters decode back into it.
-// It calls the host, so it must run inside an invocation.
-func ParseAgentID[Id any](agentID string) (ParsedAgentID[Id], error) {
-	t, failure := identity.Parse(agentID)
-	if failure != nil {
-		return ParsedAgentID[Id]{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, agentErrorToGo(failure.AgentError))
-	}
+// AgentIDFromUUID is the agent ID whose UUID is u.
+func AgentIDFromUUID(u UUID) AgentID { return values.AgentIDFromUUID(u) }
 
-	id, err := decodeAgentIDParams[Id](t.Constructor.Value)
-	if err != nil {
-		return ParsedAgentID[Id]{}, fmt.Errorf("golem: agent id %q: %w", agentID, err)
-	}
+func agentIDFromWit(w types.AgentId) AgentID { return AgentIDFromUUID(uuidFromWit(w.Uuid)) }
 
-	phantom := None[UUID]()
-	if t.PhantomID.IsSome() {
-		phantom = Some(uuidFromWit(t.PhantomID.Some()))
-	}
-	return ParsedAgentID[Id]{TypeName: t.TypeName, ID: id, PhantomID: phantom}, nil
-}
-
-// decodeAgentIDParams decodes a constructor-parameter value tree into the Id
-// struct — the same positional record decode initialize uses for the raw
-// constructor input.
-func decodeAgentIDParams[Id any](value types.SchemaValueTree) (Id, error) {
-	var zero Id
-	idType := reflect.TypeFor[Id]()
-	if idType.Kind() != reflect.Struct {
-		return zero, fmt.Errorf("id type %s must be a struct", idType)
-	}
-	idVal := reflect.New(idType).Elem()
-	if err := decodeParams(value, defs.StructFields(idType), idVal, nil); err != nil {
-		return zero, err
-	}
-	return idVal.Interface().(Id), nil
-}
+func agentIDToWit(id AgentID) types.AgentId { return types.AgentId{Uuid: uuidToWit(id.UUID())} }

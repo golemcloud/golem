@@ -1,6 +1,6 @@
 ---
 name: golem-list-and-filter-agents
-description: "Listing and querying agents with filters. Use when listing all agents, filtering agents by name, status, revision, creation time, or environment variables, or paginating through agent results."
+description: "Listing and querying agents with filters. Use when listing all agents, filtering agents by key, agent ID, status, revision, creation time, or environment variables, or paginating through agent results."
 ---
 
 # Listing and Filtering Agents
@@ -13,7 +13,7 @@ Both `golem` and `golem-cli` can be used — all commands below work with either
 golem agent list
 ```
 
-Lists agents across all deployed components in the current application. The output includes each agent's name, component, status, and revision.
+Lists agents across all deployed components in the current application. The output includes each agent's agent ID, agent type, key (for keyed agents), component, status, and revision.
 
 By default only durable agents are listed. Use `--mode ephemeral` or `--mode all` to include ephemeral agents (`--mode` is ignored when a `mode` filter is passed via `--filter`).
 
@@ -45,24 +45,27 @@ One filter can also combine conditions with `and`, `or`, `not` and parentheses. 
 golem agent list --filter '(status = Failed or status = Retrying) and not env.MODE = test'
 ```
 
-A value needs double quotes when it contains whitespace outside parentheses, starts with `(` or `"`, or has unbalanced parentheses or quotes. Inside quotes, write `\"` for a quote and `\\` for a backslash. Agent IDs such as `CounterAgent("a b", 2)` need no extra quotes:
+A value needs double quotes when it contains whitespace outside parentheses, starts with `(` or `"`, or has unbalanced parentheses or quotes. Inside quotes, write `\"` for a quote and `\\` for a backslash. Keys such as `CounterAgent("a b", 2)` need no extra quotes:
 
 ```shell
-golem agent list --filter 'name = CounterAgent("a b", 2)'
-golem agent list --filter 'name startswith "CounterAgent("'
+golem agent list --filter 'key = CounterAgent("a b", 2)'
+golem agent list --filter 'key startswith "CounterAgent("'
 ```
 
 #### Filterable Properties
 
 | Property | Comparators | Example |
 |----------|------------|---------|
-| `name` | `=`, `!=`, `like`, `notlike`, `startswith` | `--filter "name = CounterAgent(\"c1\")"` |
+| `key` | `=`, `!=`, `like`, `notlike`, `startswith` | `--filter "key = CounterAgent(\"c1\")"` |
+| `id` | `=`, `!=`, `>`, `>=`, `<`, `<=` | `--filter "id = 00000007-0000-8000-8000-000000000001"` |
 | `status` | `=`, `!=`, `>`, `>=`, `<`, `<=` | `--filter "status = Running"` |
 | `revision` | `=`, `!=`, `>`, `>=`, `<`, `<=` | `--filter "revision >= 2"` |
 | `mode` | `=`, `!=` | `--filter "mode = ephemeral"` |
 | `created_at` | `=`, `!=`, `>`, `>=`, `<`, `<=` | `--filter "created_at > 2025-01-01T00:00:00Z"` |
 | `env.<VAR>` | `=`, `!=`, `like`, `notlike`, `startswith` | `--filter "env.MODE = production"` |
 | `config.<PATH>` | `=`, `!=`, `like`, `notlike`, `startswith` | `--filter "config.db.host = localhost"` |
+
+`key` compares the canonical key text `Type(parameters)` of a keyed agent; an agent without a key never matches it. `id` compares the agent ID, a UUID.
 
 #### Agent Status Values
 
@@ -78,7 +81,7 @@ Valid status values: `Running`, `Idle`, `Suspended`, `Interrupted`, `Retrying`, 
 | `notlike` | — | Does not contain substring |
 | `startswith` | — | Starts with prefix |
 
-#### Numeric/Ordinal Comparators (for `status`, `revision`, `created_at`)
+#### Numeric/Ordinal Comparators (for `id`, `status`, `revision`, `created_at`)
 
 | Comparator | Aliases | Description |
 |-----------|---------|-------------|
@@ -94,7 +97,7 @@ Valid status values: `Running`, `Idle`, `Suspended`, `Interrupted`, `Retrying`, 
 Multiple `--filter` flags are combined with AND:
 
 ```shell
-golem agent list --filter "status = Running" --filter "name like counter"
+golem agent list --filter "status = Running" --filter "key like counter"
 ```
 
 ### Pagination
@@ -108,9 +111,9 @@ golem agent list --max-count 10 --scan-cursor '<cursor-from-previous-output>'
 
 The cursor is an opaque value returned in the output when there are more results. Pass it back unchanged in the next call to get the next page.
 
-> **Note**: Without `--page`, `--scan-cursor` requires a single component to be selected (either via `--component-name` or by being in a single-component application directory).
+> **Note**: `--max-count` applies to each listed agent type. One cursor covers every listed agent type, so pass it back with the same agent type or component selection; the next page continues each type that still has more results.
 
-Use `--page` to read one page across all selected components, in the order of their names. A page has at most `--max-count` agents (default 50). On a server whose indexed storage is Redis, `--max-count` is a target, not a limit: Redis `SCAN` treats its count as a hint, so a page can have more agents. Do not rely on the page size; follow the `cursor`. The output has a `cursor` when there can be more agents; pass it back unchanged as `--scan-cursor` with `--page`, and stop when a page has no `cursor`. A page can end early at the server's scan budget, so it can have fewer agents, or none, and still have a cursor.
+Use `--page` to read one page across all selected components and their agent types, in name order. A page has at most `--max-count` agents (default 50). On a server whose indexed storage is Redis, `--max-count` is a target, not a limit: Redis `SCAN` treats its count as a hint, so a page can have more agents. Do not rely on the page size; follow the `cursor`. Pass it back unchanged as `--scan-cursor` with `--page`, and stop when `cursor` is null. A page can end early at the server's scan budget, so it can have fewer agents, or none, and still have a cursor.
 
 ```shell
 golem --format json agent list --page --max-count 10
@@ -153,9 +156,9 @@ List agents of a specific type:
 golem agent list CounterAgent
 ```
 
-Find agents by name pattern:
+Find keyed agents by key pattern:
 ```shell
-golem agent list --filter "name like test"
+golem agent list --filter "key like test"
 ```
 
 List agents with a specific environment variable value:

@@ -17,8 +17,8 @@ use crate::base_model::agent::{
     AgentHttpAuthDetails, AgentTypeName, CorsOptions, HttpEndpointDetails, SnapshottingConfig,
 };
 use crate::schema::agent::{
-    AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AutoInjectedKind,
-    InputSchema, NamedField, OutputSchema,
+    AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, InputSchema,
+    NamedField, OutputSchema,
 };
 use crate::schema::{NamedFieldType, SchemaTypeDef, TypeId};
 use golem_schema::Empty;
@@ -550,24 +550,6 @@ fn router_roles_are_distinct_and_closed() {
     let InputSchema::Parameters(fields) = &mut wrong_name.methods[0].input_schema;
     fields[0].name = "input".into();
     assert!(wrong_name.validate().is_err());
-}
-
-#[test]
-fn principal_allowed_only_alongside_handler_request() {
-    let principal = NamedField::auto_injected(
-        "principal",
-        AutoInjectedKind::Principal,
-        SchemaType::string(),
-    );
-    let mut router = from_case("metadata-arbitrary-handler-name");
-    let InputSchema::Parameters(fields) = &mut router.methods[0].input_schema;
-    fields.insert(0, principal.clone());
-    router.validate().unwrap();
-    router.constructor.input_schema = InputSchema::parameters([principal.clone()]);
-    assert!(router.validate().is_err());
-    let mut provider = from_case("metadata-provider-only");
-    provider.methods[0].input_schema = InputSchema::parameters([principal]);
-    assert!(provider.validate().is_err());
 }
 
 #[test]

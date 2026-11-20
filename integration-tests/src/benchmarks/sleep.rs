@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{cleanup_user_state, delete_workers};
+use crate::benchmarks::{cleanup_user_state, delete_workers, lookup_keyed_agents};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::model::AgentId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
 };
@@ -109,7 +108,7 @@ impl Benchmark for Sleep {
 
         let mut agent_ids = vec![];
         for n in 0..self.config.size {
-            let agent_id = agent_id!("RustBenchmarkAgent", format!("test-{n}"));
+            let agent_id = agent_key!("RustBenchmarkAgent", format!("test-{n}"));
             agent_ids.push(agent_id);
         }
 
@@ -189,11 +188,8 @@ impl Benchmark for Sleep {
         context: Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
-        let agent_ids: Vec<AgentId> = context
-            .agent_ids
-            .iter()
-            .filter_map(|agent_id| AgentId::from_agent_id(context.component.id, agent_id).ok())
-            .collect();
+        let agent_ids =
+            lookup_keyed_agents(&context.user, &context.component, &context.agent_ids).await;
         delete_workers(&context.user, &agent_ids, &recorder).await;
         cleanup_user_state(&context.user, &context.env_id, &recorder).await;
         Ok(())

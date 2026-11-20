@@ -80,7 +80,12 @@ pub(super) async fn wait_for_input_poll(
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             executor.commit_oplog(id).await?;
-            let entries = executor.get_oplog(id, OplogIndex::INITIAL).await?;
+            let entries = executor
+                .get_oplog(
+                    &OwnedAgentId::new(executor.context.default_environment_id, id),
+                    OplogIndex::INITIAL,
+                )
+                .await?;
             if let Ok(start) = input_poll(&entries, key, count, None) {
                 return Ok::<_, anyhow::Error>(start);
             }

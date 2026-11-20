@@ -10,4 +10,5 @@ enum AgentStatus {
   RETRYING = 4;
   FAILED = 5;
   EXITED = 6;
+  SANDBOXED = 7;
 }

@@ -43,9 +43,7 @@ use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
 use golem_common::schema::agent::AgentTypeKind;
 use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::schema_type::{NamedFieldType, SchemaType};
-use golem_common::schema::{
-    AgentTypeSchema, FieldSource, InputSchema, SchemaGraph, find_host_managed_type,
-};
+use golem_common::schema::{AgentTypeSchema, InputSchema, SchemaGraph, find_host_managed_type};
 use heck::ToKebabCase;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -102,14 +100,12 @@ pub(crate) fn validate_host_managed_agent_bridge_policy(
         anyhow::bail!("HTTP routers do not have ordinary agent clients");
     }
     for field in agent.constructor.input_schema.fields() {
-        if matches!(field.source, FieldSource::UserSupplied) {
-            validate_host_managed_bridge_root(
-                agent,
-                mode,
-                &field.schema,
-                &format!("constructor parameter `{}`", field.name),
-            )?;
-        }
+        validate_host_managed_bridge_root(
+            agent,
+            mode,
+            &field.schema,
+            &format!("constructor parameter `{}`", field.name),
+        )?;
     }
 
     for config in &agent.config {
@@ -126,14 +122,12 @@ pub(crate) fn validate_host_managed_agent_bridge_policy(
     if mode == BridgeMode::External {
         for method in &agent.methods {
             for field in method.input_schema.fields() {
-                if matches!(field.source, FieldSource::UserSupplied) {
-                    validate_host_managed_bridge_root(
-                        agent,
-                        mode,
-                        &field.schema,
-                        &format!("method `{}` input parameter `{}`", method.name, field.name),
-                    )?;
-                }
+                validate_host_managed_bridge_root(
+                    agent,
+                    mode,
+                    &field.schema,
+                    &format!("method `{}` input parameter `{}`", method.name, field.name),
+                )?;
             }
 
             if let Some(output) = method.output_schema.schema() {

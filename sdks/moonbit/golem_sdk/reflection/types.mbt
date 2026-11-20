@@ -26,6 +26,8 @@ pub(all) enum AgentRpcError {
   InvalidType(String)
   InvalidAgentId(String)
   Custom(@model.TypedSchemaValue)
+  /// A keyed create found an agent that already has the key.
+  Conflict(String)
 } derive(Debug, Eq)
 
 ///|
@@ -35,22 +37,10 @@ pub(all) enum AgentMode {
 } derive(Debug, Eq)
 
 ///|
-/// A reusable agent identity. Ephemeral invocation addresses do not have one
-/// before invocation; their final identity is returned in invocation metadata.
-pub(all) struct ParsedAgentId {
-  value : String
-} derive(Debug, Eq)
-
-///|
-pub(all) struct ParsedAgentIdParts {
-  type_name : String
-  constructor_value : @model.SchemaValue
-  phantom_id : @schema.Uuid?
-} derive(Debug, Eq)
-
-///|
+/// The final identity of one invocation. For an ephemeral agent type,
+/// `agent_id` is the ID of the one-shot instance that ran it.
 pub(all) struct InvocationMetadata {
-  agent_id : ParsedAgentId
+  agent_id : @schema.AgentId
   invocation_id : @rpc.InvocationId
 } derive(Debug, Eq)
 
@@ -64,14 +54,6 @@ pub(all) struct Invocation[T] {
 pub(all) struct ScheduledInvocation {
   metadata : InvocationMetadata
   cancellation_token : @agentHost.CancellationToken
-}
-
-///|
-/// Both identities produced when attempting to create a durable phantom.
-pub(all) struct CreatedPhantomClient {
-  agent_id : ParsedAgentId
-  phantom_id : @schema.Uuid
-  client : DynamicAgentClient
 }
 
 ///|
@@ -103,6 +85,7 @@ fn rpc_error(error : @agentHost.RpcError) -> ReflectError {
       Denied(message) => AgentRpcError::Denied(message)
       NotFound(message) => AgentRpcError::NotFound(message)
       RemoteInternalError(message) => AgentRpcError::RemoteInternal(message)
+      Conflict(message) => AgentRpcError::Conflict(message)
       RemoteAgentError(error) =>
         match error {
           InvalidInput(message) => AgentRpcError::InvalidInput(message)

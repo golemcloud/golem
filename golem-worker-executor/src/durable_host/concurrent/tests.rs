@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use crate::durable_host::durability::find_durable_call_trap_context;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::{
-    HostRequestNoInput, HostResponseMonotonicClockTimestamp, LogLevel,
+    HostRequestNoInput, HostResponseMonotonicClockTimestamp, LogLevel, ReplayDivergence, ReplayStep,
 };
 use golem_common::model::{NamedRetryPolicy, Predicate, RetryPolicy, RetryPolicyState};
 use std::time::Duration;
@@ -318,10 +318,7 @@ async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "completion-delivery-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
         },
         seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -452,12 +449,9 @@ async fn completion_delivery_delivered_records_marker_via_drain() {
 /// agent resident on it - over one agent that another executor now owns.
 #[test]
 async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
-    let agent_id = golem_common::model::AgentId {
-        component_id: golem_common::model::component::ComponentId::new(),
-        agent_id: "fenced-completion-marker-test".to_string(),
-    };
+    let agent_id = golem_common::model::AgentId::from_parts(7, 2);
     let oplog = Arc::new(InMemoryOplog::fenced(crate::services::oplog::OplogFence {
-        agent_id: agent_id.clone(),
+        agent_id,
         expected_epoch: golem_common::model::ShardEpoch(3),
         actual_epoch: Some(golem_common::model::ShardEpoch(4)),
     }));
@@ -515,10 +509,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "completion-marker-order-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 3),
         },
         seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -1129,10 +1120,7 @@ async fn tail_gated_token_over_crash_tail(
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "tail-gated-token-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 4),
         },
         oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -1772,10 +1760,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     let persist_replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "concurrent-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 5),
         },
         persist_oplog.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -2625,9 +2610,15 @@ fn undelivered_cancellation_direct_divergence_error() {
         cancelled_idx: idx(5),
     };
     match terminal.direct_divergence_error() {
-        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => {
-            assert_eq!(expected, "End or Cancelled { partial: Some(..) }");
-            assert!(got.contains("Cancelled without partial at 5"), "{got}");
+        WorkerExecutorError::UnexpectedOplogEntry { divergence } => {
+            assert_eq!(
+                *divergence,
+                ReplayDivergence::described(
+                    idx(5),
+                    "End or Cancelled { partial: Some(..) }",
+                    "Cancelled without partial at 5",
+                )
+            );
         }
         other => panic!("expected UnexpectedOplogEntry, got {other:?}"),
     }
@@ -2867,11 +2858,19 @@ fn undelivered_discarded_completion_direct_divergence_error() {
         response: None,
     };
     match terminal.direct_divergence_error() {
-        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => {
-            assert_eq!(expected, "End delivered to the guest");
+        WorkerExecutorError::UnexpectedOplogEntry { divergence } => {
+            assert_eq!(divergence.oplog_index, idx(8));
+            assert_eq!(
+                divergence.expected,
+                ReplayStep::described("End delivered to the guest")
+            );
             assert!(
-                got.contains("End at 7 marked CompletionDiscarded at 8"),
-                "{got}"
+                divergence
+                    .actual
+                    .to_string()
+                    .contains("End at 7 marked CompletionDiscarded at 8"),
+                "{}",
+                divergence.actual
             );
         }
         other => panic!("expected UnexpectedOplogEntry, got {other:?}"),

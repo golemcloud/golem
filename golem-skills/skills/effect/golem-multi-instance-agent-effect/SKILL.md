@@ -1,21 +1,22 @@
 ---
 name: golem-multi-instance-agent-effect
-description: "Creating and reconnecting multiple Effect-based agent instances with identical agent id fields. Use for phantom agents, newPhantom/getPhantom, phantom IDs, or independent per-instance state with @golemcloud/effect-golem."
+description: "Creating and reconnecting multiple Effect-based agent instances with identical agent id fields. Use for agents without a key, client.create/client.getById, agent IDs, or independent per-instance state with @golemcloud/effect-golem."
 ---
 
-# Phantom Agents in Effect Golem
+# Multiple Agents with Identical Agent Id Fields in Effect Golem
 
-Phantom agents give otherwise identical agent id fields an additional UUID identity. A
-regular durable agent is addressed only by its agent id fields, so repeated `client.get`
-calls reach the same instance. Each durable `client.newPhantom` call generates a fresh UUID and therefore
-addresses an independent instance with its own state.
+Every agent has an agent ID: a UUID that Golem issues. The `Type(params)` text of the agent type
+and its agent id fields is the agent's key. Repeated `client.upsert` calls with the same agent id
+record reach the same keyed agent. Each durable `client.create` call without `keyed` creates a new
+agent without a key: it has a new agent ID and its own state, and only that ID reaches it again.
 
 ```text
-Collector("shared")
-Collector("shared")[a09f61a8-677a-40ea-9ebe-437a0df51749]
+Collector("shared")                                   key: the keyed agent
+Collector[a09f61a8-677a-80ea-9ebe-437a0df51749]       ID
+a09f61a8-677a-80ea-9ebe-437a0df51749                  ID
 ```
 
-The bracketed UUID is part of the agent ID. The regular and phantom IDs above never share state.
+The keyed agent and the agents without a key above never share state.
 
 ## Typed Client API
 
@@ -24,19 +25,21 @@ agent id records and return `Effect` values. This table describes durable target
 
 | API | Meaning |
 | --- | --- |
-| `Agent.client.get({ name: "shared" })` | Address the regular durable instance |
-| `Agent.client.newPhantom({ name: "shared" })` | Address a fresh phantom and return a handle with `phantomId: string` |
-| `Agent.client.getPhantom({ name: "shared" }, phantomId)` | Reconnect to the phantom with that UUID string |
+| `Agent.client.upsert({ name: "shared" })` | Address the keyed agent, and create it when it is missing |
+| `Agent.client.create({ name: "shared" })` | Create a new agent without a key, with a new agent ID |
+| `Agent.client.create({ name: "shared" }, { keyed: true })` | Create the keyed agent; fails with an `RpcCallError` whose cause is `conflict` when it exists |
+| `Agent.client.getById(agentId)` | Reconnect to the existing agent with that typed `AgentId`; an unknown ID fails with a `not-found` cause |
+| `remote.agentId` | Effect that reads the typed `AgentId` of the connected agent |
 
-All three forms optionally accept the client options record as their last argument. Do not use
-positional agent id fields, put the UUID in the agent id record, reverse the
-`getPhantom` arguments, or translate static methods from the Promise-based TypeScript SDK.
+`upsert` and `getById` accept `{ scopeCard }` as their last argument; `create` accepts
+`{ keyed, config, env, scopeCard }`. Do not use positional agent id fields, put the ID in the
+agent id record, or translate static methods from the Promise-based TypeScript SDK.
 
 Remote methods also take their declared named parameter record. Pass `{}` to a no-parameter
 method. Yield both the client constructor Effect and each remote method Effect:
 
 ```typescript
-const collector = yield* Collector.client.newPhantom({ name });
+const collector = yield* Collector.client.create({ name });
 yield* collector.addValue({ value: 10 });
 const total = yield* collector.getTotal({});
 ```
@@ -49,8 +52,8 @@ compensation and explicit guest-code attempts.
 
 ## Stateful Multi-Instance Example
 
-Define the target as a normal durable agent. Phantom identity changes how an instance is addressed;
-it does not require a different agent definition.
+Define the target as a normal durable agent. Whether an agent has a key changes how it is
+addressed; it does not require a different agent definition.
 
 ```typescript
 import { Effect, Ref, Schema } from "effect";
@@ -98,22 +101,22 @@ export const Collector = defineAgent({
   snapshot: Snapshot.ref<ReadonlyArray<number>>(),
 });
 
-export const PhantomCoordinator = defineAgent({
-  name: "PhantomCoordinator",
+export const CollectorCoordinator = defineAgent({
+  name: "CollectorCoordinator",
   mode: "durable",
   id: {
     name: Schema.String,
   },
   methods: {
-    spawnAndFillPhantom: method({
+    spawnAndFillCollector: method({
       input: {},
       success: Schema.Number,
     }),
-    spawnTwoPhantoms: method({
+    spawnTwoCollectors: method({
       input: {},
       success: Schema.Array(Schema.Number),
     }),
-    readNonPhantomCollector: method({
+    readKeyedCollector: method({
       input: {},
       success: Schema.Number,
     }),
@@ -121,18 +124,18 @@ export const PhantomCoordinator = defineAgent({
 }).implement({
   init: ({ name }) => Effect.succeed(name),
   methods: (name) => ({
-    spawnAndFillPhantom: () =>
+    spawnAndFillCollector: () =>
       Effect.gen(function* () {
-        const collector = yield* Collector.client.newPhantom({ name });
+        const collector = yield* Collector.client.create({ name });
         yield* collector.addValue({ value: 10 });
         yield* collector.addValue({ value: 20 });
         return yield* collector.getTotal({});
       }).pipe(Effect.scoped, Effect.orDie),
 
-    spawnTwoPhantoms: () =>
+    spawnTwoCollectors: () =>
       Effect.gen(function* () {
-        const first = yield* Collector.client.newPhantom({ name });
-        const second = yield* Collector.client.newPhantom({ name });
+        const first = yield* Collector.client.create({ name });
+        const second = yield* Collector.client.create({ name });
 
         yield* first.addValue({ value: 1 });
         yield* second.addValue({ value: 2 });
@@ -142,9 +145,9 @@ export const PhantomCoordinator = defineAgent({
         return [firstTotal, secondTotal];
       }).pipe(Effect.scoped, Effect.orDie),
 
-    readNonPhantomCollector: () =>
+    readKeyedCollector: () =>
       Effect.gen(function* () {
-        const collector = yield* Collector.client.get({ name });
+        const collector = yield* Collector.client.upsert({ name });
         return yield* collector.getTotal({});
       }).pipe(Effect.scoped, Effect.orDie),
   }),
@@ -155,59 +158,58 @@ In an existing application, merge the coordinator methods and handlers into the 
 instead of registering a duplicate agent type. Import every implementation module from
 `src/main.ts` using its emitted `.js` suffix.
 
-## Save and Reconnect to a Phantom
+## Save and Reconnect by Agent ID
 
-`newPhantom` adds a canonical UUID string to the returned remote handle. Persist that string in
-schema-serializable durable state if another invocation must reconnect later:
+Read the typed `AgentId` of a created agent with `remote.agentId`. Persist it in
+schema-serializable durable state with the `Ids.AgentId` schema, or as text with
+`AgentId.format`, if another invocation must reconnect later:
 
 ```typescript
-const first = yield* Collector.client.newPhantom({ name: "shared" });
-const savedPhantomId: string = first.phantomId;
+import { AgentId } from "@golemcloud/effect-golem";
 
-const sameInstance = yield* Collector.client.getPhantom(
-  { name: "shared" },
-  savedPhantomId,
-);
+const first = yield* Collector.client.create({ name: "shared" });
+const firstId = yield* first.agentId;
+const savedText: string = AgentId.format(firstId);
+
+const sameInstance = yield* Collector.client.getById(yield* AgentId.parse(savedText));
 const values = yield* sameInstance.getValues({});
 ```
 
-Calling `getPhantom` again with the same agent id record and UUID is idempotent. No UUID helper
-is needed: `newPhantom` already returns the format accepted by `getPhantom`. The caller can capture
-`remote.phantomId`. Inside the implementation, read the self identity and parse its encoded ID:
+`getById` never creates an agent: an unknown ID, or the ID of an agent of another type, fails with
+an `RpcCallError` whose cause is `not-found`. `AgentId.parse` checks only the UUID text form and
+fails with `AgentIdParseError`. Inside the implementation, read the agent's own ID:
 
 ```typescript
-import { AgentIdentity, SelfAgentId } from "@golemcloud/effect-golem";
+import { SelfAgentId } from "@golemcloud/effect-golem";
 
-const ownPhantomId = Effect.gen(function* () {
-  const self = yield* SelfAgentId.SelfAgentId;
-  const identity = yield* AgentIdentity.parse(self.agentId);
-  return identity.phantomId; // undefined for a regular identity
+const ownId = Effect.gen(function* () {
+  return yield* SelfAgentId.SelfAgentId; // AgentId
 });
 ```
 
-Self metadata reads require view permission on the running agent, not merely an identity-only
-grant. `Agents.getSelfMetadata` exposes the same identity plus full metadata, including stored
-environment and config fields. Handle parse errors; self host failures through `SelfAgentId` are
-defects. Read again after a fork rather than relying on a previously saved identity.
+Golem also sets `GOLEM_AGENT_ID`, `GOLEM_AGENT_TYPE`, and, only for a keyed agent,
+`GOLEM_AGENT_KEY` in the agent's environment. Self metadata reads require view permission on the
+running agent. `Agents.getSelfMetadata` exposes the same ID plus full metadata, including stored
+environment and config fields. Self host failures through `SelfAgentId` are defects. Read again
+after a fork rather than relying on a previously saved ID.
 
 ## Ephemeral and HTTP Cases
 
-- A durable agent client exposes `get`, `newPhantom`, and `getPhantom`.
-- An ephemeral agent client exposes only `newPhantom` and `getPhantom`; it cannot be addressed by
-  agent id fields alone and its state is not durable. Unlike durable `newPhantom`, ephemeral
-  `newPhantom` returns an `EphemeralRemoteAgent` directly, without a `phantomId` property. Its
-  awaited method calls return `{ value, metadata }`. Do not use the durable save-and-reconnect
-  example to capture a UUID from an ephemeral handle.
+- A durable agent client exposes `bindSelf`, `upsert`, `create`, and `getById`.
+- An ephemeral agent client exposes only `upsert`; each invocation runs on a new one-shot
+  instance and its state is not durable. An `EphemeralRemoteAgent` has no `agentId`; its awaited
+  method calls return `{ value, metadata }`, and `metadata.agentId` is the ID of the one-shot
+  instance. Do not use the durable save-and-reconnect example with an ephemeral handle.
 
 ```typescript
 const ephemeralCall = Effect.gen(function* () {
-  const remote = yield* EphemeralWorker.client.newPhantom({ name: "task" });
+  const remote = yield* EphemeralWorker.client.upsert({ name: "task" });
   const { value, metadata } = yield* remote.run({});
   return { value, metadata };
 });
 ```
 
-- To route every HTTP request to a fresh phantom instance, use the mount option:
+- To route every HTTP request to a fresh agent instance, use the mount option:
 
 ```typescript
 import { Http } from "@golemcloud/effect-golem";
@@ -215,14 +217,15 @@ import { Http } from "@golemcloud/effect-golem";
 http: Http.mount("/api/{name}", { phantomAgent: true }),
 ```
 
-This HTTP option asks the host for a fresh instance per request. It does not expose the generated
-UUID to the handler.
+This HTTP option asks the host for a fresh instance per request. The handler reads the instance's
+ID with `SelfAgentId.SelfAgentId`.
 
 ## Key Constraints
 
-- Two `newPhantom` calls with identical agent id records produce independent identities.
-- `client.get` with the same agent id record reaches the same regular durable agent.
-- Phantom and regular instances with identical agent id records do not share state.
-- `phantomId` is a lowercase hyphenated UUID string; pass it directly to `getPhantom`.
+- Two `create` calls without `keyed` and with identical agent id records produce independent agents.
+- `client.upsert` with the same agent id record reaches the same keyed agent.
+- Agents without a key and the keyed agent with identical agent id records do not share state.
+- An agent ID is opaque: it does not contain the agent type name or the agent id fields. Get it
+  from `remote.agentId`, `SelfAgentId.SelfAgentId`, or the CLI; never build one yourself.
 - Keep remote inputs as named records and execute RPC by yielding the returned Effects.
-- Do not invent `getOwnPhantomId`, positional client constructors, or Promise-based wrappers.
+- Do not invent positional client constructors or Promise-based wrappers.

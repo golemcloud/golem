@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::auth::{AuthCtx, AuthEffectiveSurface, UserAuth
 use golem_api_grpc::proto::golem::common::AccountId;
 use golem_api_grpc::proto::golem::worker::{InvocationRejectionReason, InvocationStart};
 use golem_common::base_model::agent::Snapshotting;
-use golem_common::base_model::component::{ComponentId, ComponentRevision};
+use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::component_metadata::{ComponentMetadata, KnownExports};
 use golem_common::base_model::durable_stream::{
     AttachmentId, DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle, MAX_DURABLE_STREAM_ITEM_SIZE,
@@ -37,9 +37,8 @@ use golem_common::base_model::durable_stream::{
     StreamValuePathStep,
 };
 use golem_common::base_model::environment::EnvironmentId;
-use golem_common::model::agent::{
-    AgentMode, AgentTypeName, InvocationFreshnessDisposition, Principal,
-};
+use golem_common::model::agent::{AgentMode, AgentTypeName, InvocationFreshnessDisposition};
+use golem_common::model::caller::Caller;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OplogIndex};
 use golem_common::schema::SchemaValue;
@@ -375,16 +374,16 @@ fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
         }],
         BTreeMap::new(),
     );
-    let component_id = ComponentId(uuid::Uuid::from_u128(1));
     let environment_id = EnvironmentId(uuid::Uuid::from_u128(2));
-    let callee = AgentId {
-        component_id,
-        agent_id: "test-agent()".to_string(),
-    };
+    let callee = AgentId::from_parts(7, 1);
     let idempotency_key = golem_common::model::InvocationId::from(uuid::Uuid::from_u128(901));
     let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(3));
     let request = InvocationStart {
-        agent_id: Some(callee.into()),
+        target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
+            target: Some(
+                golem_api_grpc::proto::golem::worker::agent_target::Target::Id(callee.into()),
+            ),
+        }),
         method_name: Some("run".to_string()),
         idempotency_key: Some(IdempotencyKey::from_uuid(idempotency_key.0).into()),
         environment_id: Some(environment_id.into()),
@@ -411,10 +410,18 @@ fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
             ],
         },
         invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::anonymous(),
+        caller: Caller::anonymous(),
         scope_card: None,
     };
     (request, metadata, invocation)
+}
+
+/// The agent ID that the ID target of `request` names.
+fn callee_of(request: &InvocationStart) -> AgentId {
+    super::request::start_agent_id(request)
+        .unwrap()
+        .try_into()
+        .unwrap()
 }
 
 fn foreign_mapping(
@@ -423,7 +430,7 @@ fn foreign_mapping(
     request: &InvocationStart,
 ) -> StreamSessionMappingRecord {
     let environment_id: EnvironmentId = request.environment_id.unwrap().try_into().unwrap();
-    let callee: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
+    let callee: AgentId = callee_of(request);
     let callee_fingerprint = AgentFingerprint(request.expected_callee_fingerprint.unwrap().into());
     let idempotency_key = request
         .idempotency_key
@@ -440,7 +447,7 @@ fn foreign_mapping(
                 1_000 + u128::from(transport_stream_id),
             )),
             producer_environment_id: environment_id,
-            producer: callee.clone(),
+            producer: callee,
             expected_producer_fingerprint: callee_fingerprint,
             producer_generation: OplogIndex::NONE,
             source_invocation: StreamInvocationId {
@@ -460,7 +467,7 @@ fn foreign_mapping(
 fn durable_request_identity_ignores_tracing_but_preserves_execution_config() {
     let (mut request, metadata, invocation) = builder_fixture();
     request.context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-        parent: request.agent_id.clone(),
+        parent: super::request::start_agent_id(&request),
         env: (0..16)
             .map(|n| (format!("key-{n}"), format!("value-{n}")))
             .collect(),
@@ -470,6 +477,8 @@ fn durable_request_identity_ignores_tracing_but_preserves_execution_config() {
         let (accepted, _) = tokio::sync::oneshot::channel();
         build_durable_streaming_request(
             request,
+            callee_of(request),
+            Some(&AgentTypeName("test-agent".to_string())),
             &metadata,
             ComponentRevision::INITIAL,
             AgentFingerprint(uuid::Uuid::from_u128(3)),
@@ -518,28 +527,25 @@ fn durable_request_identity_ignores_tracing_but_preserves_execution_config() {
 #[test]
 fn durable_rpc_origin_is_persisted_and_requires_an_agent_caller() {
     let (mut request, metadata, invocation) = builder_fixture();
-    let caller: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
-    request.principal = Some(
-        Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: caller.clone(),
-        })
-        .into(),
-    );
+    let caller: AgentId = callee_of(&request);
+    request.caller = Some(crate::test_callers::agent_caller(caller).into());
     request.context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
         parent: Some(caller.into()),
         ..Default::default()
     });
     let origin = golem_api_grpc::proto::golem::worker::StreamInvocationIdentity {
         callee_environment_id: request.environment_id,
-        callee: request.agent_id.clone(),
+        callee: super::request::start_agent_id(&request),
         callee_fingerprint: Some(uuid::Uuid::from_u128(91).into()),
         idempotency_key: Some(uuid::Uuid::from_u128(902).into()),
     };
-    request.origin_invocation = Some(origin.clone());
+    request.origin_invocation = Some(origin);
     let build = |request: &InvocationStart| {
         let (accepted, _) = tokio::sync::oneshot::channel();
         build_durable_streaming_request(
             request,
+            callee_of(request),
+            Some(&AgentTypeName("test-agent".to_string())),
             &metadata,
             ComponentRevision::INITIAL,
             AgentFingerprint(uuid::Uuid::from_u128(3)),
@@ -565,8 +571,8 @@ fn durable_rpc_origin_is_persisted_and_requires_an_agent_caller() {
     for mutation in 0..9 {
         let mut invalid = request.clone();
         match mutation {
-            0 => invalid.principal = None,
-            1 => invalid.principal = Some(Principal::anonymous().into()),
+            0 => invalid.caller = None,
+            1 => invalid.caller = Some(Caller::anonymous().into()),
             2 => invalid.context.as_mut().unwrap().parent = None,
             3 => {
                 invalid
@@ -591,15 +597,10 @@ fn durable_rpc_origin_is_persisted_and_requires_an_agent_caller() {
                     .callee_fingerprint = Some(uuid::Uuid::nil().into())
             }
             7 => invalid.origin_invocation.as_mut().unwrap().idempotency_key = None,
-            8 => invalid
-                .context
-                .as_mut()
-                .unwrap()
-                .parent
-                .as_mut()
-                .unwrap()
-                .name
-                .push_str("-different"),
+            8 => {
+                invalid.context.as_mut().unwrap().parent =
+                    Some(crate::test_agent_id("different").into())
+            }
             _ => unreachable!(),
         }
         assert!(
@@ -619,13 +620,16 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
     };
     use golem_service_base::model::auth::AuthCtx;
 
-    let authority_for = |name: &str| {
+    let authority_for = |agent_id: AgentId| {
         let context = AgentPermissionMonomorphizationContext {
             account: golem_common::model::account::AccountEmail::new("owner@example.com"),
             application: "application".parse().unwrap(),
             environment: "environment".parse().unwrap(),
             component: golem_common::model::component::ComponentName("component".into()),
-            agent_name: name.into(),
+            agent: golem_common::model::card::owner::AgentOwnerLeaf {
+                agent_id,
+                agent_type: Some(golem_common::model::agent::AgentTypeName("Agent".into())),
+            },
             owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
                 golem_common::model::agent::AgentTypeName("Agent".into()),
             ),
@@ -649,14 +653,9 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
         )
     };
     let (mut request, metadata, invocation) = builder_fixture();
-    let caller: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
-    request.principal = Some(
-        Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: caller.clone(),
-        })
-        .into(),
-    );
-    request.auth_ctx = Some(authority_for(&caller.agent_id).into());
+    let caller: AgentId = callee_of(&request);
+    request.caller = Some(crate::test_callers::agent_caller(caller).into());
+    request.auth_ctx = Some(authority_for(caller).into());
     request.context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
         parent: Some(caller.into()),
         ..Default::default()
@@ -664,7 +663,7 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
     request.origin_invocation = Some(
         golem_api_grpc::proto::golem::worker::StreamInvocationIdentity {
             callee_environment_id: request.environment_id,
-            callee: request.agent_id.clone(),
+            callee: super::request::start_agent_id(&request),
             callee_fingerprint: Some(uuid::Uuid::from_u128(91).into()),
             idempotency_key: Some(uuid::Uuid::from_u128(902).into()),
         },
@@ -690,6 +689,8 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
         let (accepted, _) = tokio::sync::oneshot::channel();
         let mut built = build_durable_streaming_request(
             request,
+            callee_of(request),
+            Some(&AgentTypeName("test-agent".to_string())),
             &metadata,
             ComponentRevision::INITIAL,
             AgentFingerprint(uuid::Uuid::from_u128(3)),
@@ -708,20 +709,15 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
     };
     let original = build(&request);
     let mut fork = request.clone();
-    let mut parent = fork.context.as_ref().unwrap().parent.clone().unwrap();
-    parent.name.push_str("-fork");
-    fork.context.as_mut().unwrap().parent = Some(parent.clone());
-    fork.auth_ctx = Some(authority_for(&parent.name).into());
-    fork.principal = Some(
-        Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: parent.clone().try_into().unwrap(),
-        })
-        .into(),
-    );
+    let fork_agent_id = crate::test_agent_id("fork");
+    let parent: golem_api_grpc::proto::golem::worker::AgentId = fork_agent_id.into();
+    fork.context.as_mut().unwrap().parent = Some(parent);
+    fork.auth_ctx = Some(authority_for(fork_agent_id).into());
+    fork.caller = Some(crate::test_callers::agent_caller(fork_agent_id).into());
     fork.attempt_id = Some(uuid::Uuid::new_v4().into());
     for mapping in &mut fork.durable_input_mappings {
         let handle = mapping.handle.as_mut().unwrap();
-        handle.producer = Some(parent.clone());
+        handle.producer = Some(parent);
         handle.expected_producer_fingerprint = Some(uuid::Uuid::from_u128(92).into());
         handle.stream_id = Some(uuid::Uuid::new_v4().into());
     }
@@ -732,7 +728,7 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
     assert!(same_origin_stream_invocation(&original, &original));
     for change in 0..4 {
         let mut changed = fork.clone();
-        let AuthCtx::Agent(mut authority) = authority_for(&parent.name) else {
+        let AuthCtx::Agent(mut authority) = authority_for(fork_agent_id) else {
             unreachable!()
         };
         match change {
@@ -823,6 +819,8 @@ fn durable_request_builder_preserves_size_precedence_and_stream_metadata_order()
     let (acceptance_committed, _) = tokio::sync::oneshot::channel();
     let error = match build_durable_streaming_request(
         &request,
+        callee_of(&request),
+        Some(&AgentTypeName("test-agent".to_string())),
         &metadata,
         ComponentRevision::INITIAL,
         AgentFingerprint(uuid::Uuid::from_u128(3)),
@@ -845,6 +843,8 @@ fn durable_request_builder_preserves_size_precedence_and_stream_metadata_order()
     let (acceptance_committed, _) = tokio::sync::oneshot::channel();
     let built = build_durable_streaming_request(
         &request,
+        callee_of(&request),
+        Some(&AgentTypeName("test-agent".to_string())),
         &metadata,
         ComponentRevision::INITIAL,
         AgentFingerprint(uuid::Uuid::from_u128(3)),
@@ -862,7 +862,7 @@ fn durable_request_builder_preserves_size_precedence_and_stream_metadata_order()
         built.attempt.attachment_id,
         AttachmentId::primary(
             request.environment_id.unwrap().try_into().unwrap(),
-            &request.agent_id.clone().unwrap().try_into().unwrap(),
+            &callee_of(&request),
             &uuid::Uuid::from_u128(901).into(),
         )
         .unwrap()
@@ -961,6 +961,8 @@ fn durable_request_builder_preserves_size_precedence_and_stream_metadata_order()
     let (acceptance_committed, _) = tokio::sync::oneshot::channel();
     let built = build_durable_streaming_request(
         &request,
+        callee_of(&request),
+        Some(&AgentTypeName("test-agent".to_string())),
         &metadata,
         ComponentRevision::INITIAL,
         AgentFingerprint(uuid::Uuid::from_u128(3)),
@@ -1032,10 +1034,7 @@ fn invocation_freshness_decodes_known_fresh_explicitly() {
 #[test]
 fn durable_streaming_requires_matching_callee_fingerprint() {
     let actual = AgentFingerprint::new();
-    let agent_id = AgentId {
-        component_id: ComponentId(uuid::Uuid::from_u128(1)),
-        agent_id: "Counter(\"a\")".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
     let missing = require_expected_callee_fingerprint(None, actual, &agent_id).unwrap_err();
     assert!(
         missing
@@ -1084,7 +1083,7 @@ fn durable_stream_identity_ignores_non_authoritative_account_email() {
     assert_eq!(
         effective_session_identity(&auth_ctx("old@example.com"), &None).unwrap(),
         effective_session_identity(&auth_ctx("new@example.com"), &None).unwrap(),
-        "resume identity must pin the effective principal/grant, not mutable account metadata"
+        "resume identity must pin the effective caller/grant, not mutable account metadata"
     );
 }
 
@@ -1156,7 +1155,7 @@ fn durable_start_failures_use_their_explicit_protocol_reasons() {
             InvocationRejectionReason::InvalidAttachmentState,
         ),
         (
-            "Unauthorized: principal changed",
+            "Unauthorized: caller changed",
             InvocationRejectionReason::Unauthorized,
         ),
         (

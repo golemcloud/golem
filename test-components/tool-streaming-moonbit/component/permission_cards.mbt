@@ -57,11 +57,18 @@ fn inspect_bounds(grant : @permissions.PatternGrant) -> @permissions.Bounds {
 }
 
 ///|
+/// The text form of this agent's ID.
+fn self_agent_id_text() -> String {
+  @schema.AgentId::from_wit(@api.get_self_metadata().agent_id).to_string()
+}
+
+///|
+/// The holder of the agent whose ID has the text form `agent_id`.
 fn self_holder(agent_id : String) -> @permissions.Holder {
-  Agent({
-    component_id: @api.get_self_metadata().agent_id.component_id,
-    agent_id,
-  })
+  let id = @schema.AgentId::parse(agent_id) catch {
+    _ => abort("invalid agent ID: \{agent_id}")
+  }
+  Agent(id)
 }
 
 ///|
@@ -282,7 +289,7 @@ pub async fn MoonBitPermissionAgent::scope_rpc(
   ignore(self)
   let root = require_template_root()
   defer root.drop()
-  let caller = @api.get_self_metadata().agent_id.agent_id
+  let caller = self_agent_id_text()
   let template_grant = try {
     let bounds = @permissions.Bounds::new(lower_positive=[
       template_oplog_grant(root),
@@ -302,7 +309,7 @@ pub async fn MoonBitPermissionAgent::scope_rpc(
     error => return Err(error.to_string())
   }
   defer scope.drop()
-  let client = MoonBitPermissionAgentClient::get(target) catch {
+  let client = MoonBitPermissionAgentClient::upsert(target) catch {
     error => return Err(repr(error))
   }
   defer client.drop()
@@ -325,7 +332,7 @@ pub async fn MoonBitPermissionAgent::scope_rpc(
 /// wallet lists as a `Scope` entry, as
 /// `present/<parent is the root>/<lower-positive grant count>`, or `absent`,
 /// followed by `/readable` when this agent can read the oplog of the agent
-/// `viewed` of this component and `/denied` otherwise.
+/// whose ID has the text form `viewed`, and `/denied` otherwise.
 pub fn MoonBitPermissionAgent::scope_report(
   self : Self,
   viewed : String,
@@ -362,8 +369,8 @@ pub fn MoonBitPermissionAgent::wallet_card_count(self : Self) -> UInt32 {
 
 ///|
 /// Step 5: derives a card that grants card inspection and reading this agent's
-/// oplog from the wallet, and installs it on `target_agent_id` in this
-/// component. `owner` is this agent's owner path. Returns whether installing
+/// oplog from the wallet, and installs it on the agent whose ID has the text form
+/// `target_agent_id`. `owner` is this agent's owner path. Returns whether installing
 /// moved the card.
 pub fn MoonBitPermissionAgent::install_on(
   self : Self,
@@ -426,21 +433,16 @@ pub fn MoonBitPermissionAgent::revoke_installed_card(
 }
 
 ///|
-/// Whether this agent can read the oplog of the agent `viewed` of this
-/// component. The read starts past the end of the oplog, so it checks the
+/// Whether this agent can read the oplog of the agent whose ID has the text form
+/// `viewed`. The read starts past the end of the oplog, so it checks the
 /// authority without projecting any entry.
 pub fn MoonBitPermissionAgent::can_read_oplog(
   self : Self,
   viewed : String,
 ) -> Bool {
   ignore(self)
-  let oplog = @oplogRaw.GetOplog::get_oplog(
-    {
-      component_id: @api.get_self_metadata().agent_id.component_id,
-      agent_id: viewed,
-    },
-    1_000_000,
-  )
+  let viewed_id = @schema.AgentId::parse(viewed) catch { _ => return false }
+  let oplog = @oplogRaw.GetOplog::get_oplog(viewed_id.to_wit(), 1_000_000)
   defer oplog.drop()
   oplog.get_next() is Ok(_)
 }

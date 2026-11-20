@@ -37,11 +37,11 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("Networking", "p2-cross-splice-completion-history");
+    let name = agent_key!("Networking", "p2-cross-splice-completion-history");
     let id = executor.start_agent(&component.id, name.clone()).await?;
-    wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id.clone())
         .await
         .unwrap()
         .primary();
@@ -76,10 +76,12 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
     })));
     let result = async {
         let (mut input, mut output) = peers(&source, &destination).await?;
-        let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
+        let (selected, release) = executor
+            .gate_next_invocation_outcome_append(&id.agent_id)
+            .await;
         echo(&mut input, &mut output).await?;
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        executor.commit_oplog(&id).await?;
+        executor.commit_oplog(&id.agent_id).await?;
         let starts = cross_setup(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 2)?;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
@@ -195,7 +197,7 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
     finish_input_test(
         result,
         &executor,
-        &id,
+        &id.agent_id,
         &worker,
         &mut invocation,
         &mut refresh,

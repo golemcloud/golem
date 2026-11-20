@@ -62,11 +62,11 @@ async fn completion_and_history(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("Networking", "p2-multi-poll-completion-history");
+    let name = agent_key!("Networking", "p2-multi-poll-completion-history");
     let id = executor.start_agent(&component.id, name.clone()).await?;
-    wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id.clone())
         .await
         .unwrap()
         .primary();
@@ -80,7 +80,9 @@ async fn completion_and_history(
     let first_port = listeners[0].local_addr()?.port();
     let second_port = listeners[1].local_addr()?.port();
     let key = IdempotencyKey::fresh();
-    let stored_key = executor.external_invocation_key(&id, &key, method).await?;
+    let stored_key = executor
+        .external_invocation_key(&id.agent_id, &key, method)
+        .await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -101,11 +103,11 @@ async fn completion_and_history(
     let result = async {
         let mut effects = PeerEffects::default();
         let mut peers = accept_pair(&listeners, &mut effects).await?;
-        let start = wait_for_input_poll(&executor, &id, &stored_key, count).await?;
-        let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
+        let start = wait_for_input_poll(&executor, &id.agent_id, &stored_key, count).await?;
+        let (selected, release) = executor.gate_next_invocation_outcome_append(&id.agent_id).await;
         release_second(&mut peers, &mut effects).await?;
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        executor.commit_oplog(&id).await?;
+        executor.commit_oplog(&id.agent_id).await?;
         let completed_poll = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         let recorded = poll_result(&completed_poll, start)?;
         assert_indices(&recorded, duplicate)?;
@@ -157,7 +159,7 @@ async fn completion_and_history(
         // oplog: the historical peers get no connection.
         let fresh_key = IdempotencyKey::fresh();
         let stored_fresh_key = executor
-            .external_invocation_key(&id, &fresh_key, method)
+            .external_invocation_key(&id.agent_id, &fresh_key, method)
             .await?;
         let fresh = executor.invoke_and_await_agent_with_key(
             &component, &name, &fresh_key, method, data_value!(first_port, second_port),

@@ -41,7 +41,7 @@ test "generate_client_code - counter agent with no-arg methods" {
   debug_inspect(
     output,
     content=(
-      #|"///|\n///\npub(all) struct CounterClient {\n  client : @rpc.AgentClient\n}\n\n///|\n///\n/// Binds the current durable incarnation without creating it or waiting for initialization.\n///\n/// Use this to schedule work on self from inside the constructor. Normal `get` reuses\n/// an initialized agent without rerunning its constructor, but waits for an unfinished\n/// constructor. Calling `get` on self from that constructor would therefore deadlock.\n///\n/// Scheduled work runs after construction finishes. This does not make awaited\n/// self-calls reentrant or bypass method permissions. A different client type raises\n/// an error. Replay preserves the recorded incarnation.\npub fn CounterClient::bind_self() -> CounterClient raise {\n  { client: @rpc.AgentClient::bind_self(\"Counter\"), }\n}\n\n///|\n///\npub fn CounterClient::get(name : String) -> CounterClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([name])\n  let client = @rpc.AgentClient::get(\"Counter\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn CounterClient::new_phantom(name : String) -> CounterClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([name])\n  let client = @rpc.AgentClient::new_phantom(\"Counter\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn CounterClient::get_phantom(name : String, phantom_id : @schema.Uuid) -> CounterClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([name])\n  let client = \n    @rpc.AgentClient::get_phantom(\"Counter\", constructor_input, phantom_id)\n  { client, }\n}\n\n///|\n///\npub fn CounterClient::get_agent_id(self : CounterClient) -> String raise @common.AgentError {\n  self.client.get_agent_id()\n}\n\n///|\n///\npub fn CounterClient::phantom_id(self : CounterClient) -> @schema.Uuid? {\n  self.client.phantom_id()\n}\n\n///|\n///\npub fn CounterClient::drop(self : CounterClient) -> Unit {\n  self.client.drop()\n}\n\n///|\n///\npub fn CounterClient::set_default_scope_card(\n  self : CounterClient,\n  card : @permissions.ScopeCard?,\n) -> Unit {\n  self.client.set_default_scope_card(card)\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped(\n  name : String,\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::get(name)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped_new_phantom(\n  name : String,\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::new_phantom(name)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped_get_phantom(\n  name : String,\n  phantom_id : @schema.Uuid,\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::get_phantom(name, phantom_id)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn CounterClient::increment(\n  self : CounterClient,\n  scope_card? : @permissions.ScopeCard,\n) -> Unit {\n  self.client.check_scope_card(scope_card?)\n  let input = @agents.encode_wire_input_async([])\n  let response = self.client.invoke_and_await(\"increment\", input, scope_card?)\n  @agents.discard_optional_wire_value(response.value)\n}\n\n///|\n///\npub fn CounterClient::trigger_increment(self : CounterClient) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.invoke(\"increment\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_increment(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.schedule_invocation(scheduled_at, \"increment\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_cancelable_increment(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"increment\", input)\n    .cancellation_token\n}\n\n///|\n///\npub async fn CounterClient::get_value(\n  self : CounterClient,\n  scope_card? : @permissions.ScopeCard,\n) -> UInt64 {\n  self.client.check_scope_card(scope_card?)\n  let input = @agents.encode_wire_input_async([])\n  let response = self.client.invoke_and_await(\"get_value\", input, scope_card?)\n  let result = response.value\n  match result {\n    Some(tree) => @agents.decode_wire_output(tree, \"Counter.get_value\")\n    None => {\n      raise  @common.AgentError::InvalidType(\n        \"Counter.get_value: expected a return value, got none\",\n      )\n    }\n  }\n}\n\n///|\n///\npub fn CounterClient::trigger_get_value(self : CounterClient) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.invoke(\"get_value\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_get_value(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.schedule_invocation(scheduled_at, \"get_value\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_cancelable_get_value(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"get_value\", input)\n    .cancellation_token\n}\n\n"
+      #|"///|\n///\npub(all) struct CounterClient {\n  client : @rpc.AgentClient\n}\n\n///|\n///\n/// Binds the current durable incarnation without creating it or waiting for initialization.\n///\n/// Use this to schedule work on self from inside the constructor. `upsert` reuses\n/// an initialized agent without rerunning its constructor, but waits for an unfinished\n/// constructor. Calling `upsert` on self from that constructor would therefore deadlock.\n///\n/// Scheduled work runs after construction finishes. This does not make awaited\n/// self-calls reentrant or bypass method permissions. A different client type raises\n/// an error. Replay preserves the recorded incarnation.\npub fn CounterClient::bind_self() -> CounterClient raise {\n  { client: @rpc.AgentClient::bind_self(\"Counter\"), }\n}\n\n///|\n///\n/// Connects to the agent that the constructor parameters key. The host creates\n/// the agent when it is missing and reuses it otherwise.\npub fn CounterClient::upsert(name : String) -> CounterClient raise {\n  let constructor_input = @agents.encode_wire_input([name])\n  let client = @rpc.AgentClient::upsert(\"Counter\", constructor_input)\n  { client, }\n}\n\n///|\n///\n/// Connects to the existing agent with the given ID. Never creates an agent: an\n/// unknown ID, or the ID of an agent of another type, raises `RpcError::NotFound`.\npub fn CounterClient::get_by_id(agent_id : @schema.AgentId) -> CounterClient raise @agentHost.RpcError {\n  let client = @rpc.AgentClient::get_by_id(\"Counter\", agent_id)\n  { client, }\n}\n\n///|\n///\n/// Creates a new agent and returns after its initialization. With `keyed`, the new\n/// agent is the agent that the constructor parameters key, and the creation raises\n/// `RpcError::Conflict` when that agent already exists; otherwise the new agent has\n/// no key and a new ID. `env` adds environment variables to the ones the manifest\n/// defines.\npub async fn CounterClient::create(\n  name : String,\n  keyed? : Bool = false,\n  env? : Array[(String, String)] = [],\n) -> CounterClient {\n  let constructor_input = @agents.encode_wire_input([name])\n  let client = \n    @rpc.AgentClient::create(\"Counter\", constructor_input, keyed~, env~)\n  { client, }\n}\n\n///|\n///\n/// The ID of the agent. On a client of `upsert`, the host creates the agent when\n/// it is missing, without invoking a method.\npub async fn CounterClient::agent_id(self : CounterClient) -> @schema.AgentId {\n  self.client.agent_id()\n}\n\n///|\n///\npub fn CounterClient::drop(self : CounterClient) -> Unit {\n  self.client.drop()\n}\n\n///|\n///\npub fn CounterClient::set_default_scope_card(\n  self : CounterClient,\n  card : @permissions.ScopeCard?,\n) -> Unit {\n  self.client.set_default_scope_card(card)\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped_upsert(\n  name : String,\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::upsert(name)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped_get_by_id(\n  agent_id : @schema.AgentId,\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::get_by_id(agent_id)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] CounterClient::scoped_create(\n  name : String,\n  keyed? : Bool = false,\n  env? : Array[(String, String)] = [],\n  f : async (CounterClient) -> T,\n) -> T {\n  let client = CounterClient::create(name, keyed~, env~)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn CounterClient::increment(\n  self : CounterClient,\n  scope_card? : @permissions.ScopeCard,\n) -> Unit {\n  self.client.check_scope_card(scope_card?)\n  let input = @agents.encode_wire_input_async([])\n  let response = self.client.invoke_and_await(\"increment\", input, scope_card?)\n  @agents.discard_optional_wire_value(response.value)\n}\n\n///|\n///\npub fn CounterClient::trigger_increment(self : CounterClient) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.invoke(\"increment\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_increment(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.schedule_invocation(scheduled_at, \"increment\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_cancelable_increment(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"increment\", input)\n    .cancellation_token\n}\n\n///|\n///\npub async fn CounterClient::get_value(\n  self : CounterClient,\n  scope_card? : @permissions.ScopeCard,\n) -> UInt64 {\n  self.client.check_scope_card(scope_card?)\n  let input = @agents.encode_wire_input_async([])\n  let response = self.client.invoke_and_await(\"get_value\", input, scope_card?)\n  let result = response.value\n  match result {\n    Some(tree) => @agents.decode_wire_output(tree, \"Counter.get_value\")\n    None => {\n      raise  @common.AgentError::InvalidType(\n        \"Counter.get_value: expected a return value, got none\",\n      )\n    }\n  }\n}\n\n///|\n///\npub fn CounterClient::trigger_get_value(self : CounterClient) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.invoke(\"get_value\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_get_value(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  let _ = self.client.schedule_invocation(scheduled_at, \"get_value\", input)\n  \n}\n\n///|\n///\npub fn CounterClient::schedule_cancelable_get_value(\n  self : CounterClient,\n  scheduled_at : @systemClock.Instant,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_wire_input([])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"get_value\", input)\n    .cancellation_token\n}\n\n"
     ),
   )
 }
@@ -82,13 +82,13 @@ test "generate_client_code - agent with params" {
   debug_inspect(
     output,
     content=(
-      #|"///|\n///\npub(all) struct TaskManagerClient {\n  client : @rpc.AgentClient\n}\n\n///|\n///\n/// Binds the current durable incarnation without creating it or waiting for initialization.\n///\n/// Use this to schedule work on self from inside the constructor. Normal `get` reuses\n/// an initialized agent without rerunning its constructor, but waits for an unfinished\n/// constructor. Calling `get` on self from that constructor would therefore deadlock.\n///\n/// Scheduled work runs after construction finishes. This does not make awaited\n/// self-calls reentrant or bypass method permissions. A different client type raises\n/// an error. Replay preserves the recorded incarnation.\npub fn TaskManagerClient::bind_self() -> TaskManagerClient raise {\n  { client: @rpc.AgentClient::bind_self(\"TaskManager\"), }\n}\n\n///|\n///\npub fn TaskManagerClient::get() -> TaskManagerClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([])\n  let client = @rpc.AgentClient::get(\"TaskManager\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn TaskManagerClient::new_phantom() -> TaskManagerClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([])\n  let client = @rpc.AgentClient::new_phantom(\"TaskManager\", constructor_input)\n  { client, }\n}\n\n///|\n///\npub fn TaskManagerClient::get_phantom(phantom_id : @schema.Uuid) -> TaskManagerClient raise @common.AgentError {\n  let constructor_input = @agents.encode_wire_input([])\n  let client = \n    @rpc.AgentClient::get_phantom(\"TaskManager\", constructor_input, phantom_id)\n  { client, }\n}\n\n///|\n///\npub fn TaskManagerClient::get_agent_id(self : TaskManagerClient) -> String raise @common.AgentError {\n  self.client.get_agent_id()\n}\n\n///|\n///\npub fn TaskManagerClient::phantom_id(self : TaskManagerClient) -> @schema.Uuid? {\n  self.client.phantom_id()\n}\n\n///|\n///\npub fn TaskManagerClient::drop(self : TaskManagerClient) -> Unit {\n  self.client.drop()\n}\n\n///|\n///\npub fn TaskManagerClient::set_default_scope_card(\n  self : TaskManagerClient,\n  card : @permissions.ScopeCard?,\n) -> Unit {\n  self.client.set_default_scope_card(card)\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped(f : async (TaskManagerClient) -> T) -> T {\n  let client = TaskManagerClient::get()\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped_new_phantom(\n  f : async (TaskManagerClient) -> T,\n) -> T {\n  let client = TaskManagerClient::new_phantom()\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped_get_phantom(\n  phantom_id : @schema.Uuid,\n  f : async (TaskManagerClient) -> T,\n) -> T {\n  let client = TaskManagerClient::get_phantom(phantom_id)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn TaskManagerClient::add_task(\n  self : TaskManagerClient,\n  task : TaskInfo,\n  scope_card? : @permissions.ScopeCard,\n) -> UInt64 {\n  self.client.check_scope_card(scope_card?)\n  let input = @agents.encode_wire_input_async([task])\n  let response = self.client.invoke_and_await(\"add_task\", input, scope_card?)\n  let result = response.value\n  match result {\n    Some(tree) => @agents.decode_wire_output(tree, \"TaskManager.add_task\")\n    None => {\n      raise  @common.AgentError::InvalidType(\n        \"TaskManager.add_task: expected a return value, got none\",\n      )\n    }\n  }\n}\n\n///|\n///\npub fn TaskManagerClient::trigger_add_task(\n  self : TaskManagerClient,\n  task : TaskInfo,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([task])\n  let _ = self.client.invoke(\"add_task\", input)\n  \n}\n\n///|\n///\npub fn TaskManagerClient::schedule_add_task(\n  self : TaskManagerClient,\n  scheduled_at : @systemClock.Instant,\n  task : TaskInfo,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([task])\n  let _ = self.client.schedule_invocation(scheduled_at, \"add_task\", input)\n  \n}\n\n///|\n///\npub fn TaskManagerClient::schedule_cancelable_add_task(\n  self : TaskManagerClient,\n  scheduled_at : @systemClock.Instant,\n  task : TaskInfo,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_wire_input([task])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"add_task\", input)\n    .cancellation_token\n}\n\n"
+      #|"///|\n///\npub(all) struct TaskManagerClient {\n  client : @rpc.AgentClient\n}\n\n///|\n///\n/// Binds the current durable incarnation without creating it or waiting for initialization.\n///\n/// Use this to schedule work on self from inside the constructor. `upsert` reuses\n/// an initialized agent without rerunning its constructor, but waits for an unfinished\n/// constructor. Calling `upsert` on self from that constructor would therefore deadlock.\n///\n/// Scheduled work runs after construction finishes. This does not make awaited\n/// self-calls reentrant or bypass method permissions. A different client type raises\n/// an error. Replay preserves the recorded incarnation.\npub fn TaskManagerClient::bind_self() -> TaskManagerClient raise {\n  { client: @rpc.AgentClient::bind_self(\"TaskManager\"), }\n}\n\n///|\n///\n/// Connects to the agent that the constructor parameters key. The host creates\n/// the agent when it is missing and reuses it otherwise.\npub fn TaskManagerClient::upsert() -> TaskManagerClient raise {\n  let constructor_input = @agents.encode_wire_input([])\n  let client = @rpc.AgentClient::upsert(\"TaskManager\", constructor_input)\n  { client, }\n}\n\n///|\n///\n/// Connects to the existing agent with the given ID. Never creates an agent: an\n/// unknown ID, or the ID of an agent of another type, raises `RpcError::NotFound`.\npub fn TaskManagerClient::get_by_id(agent_id : @schema.AgentId) -> TaskManagerClient raise @agentHost.RpcError {\n  let client = @rpc.AgentClient::get_by_id(\"TaskManager\", agent_id)\n  { client, }\n}\n\n///|\n///\n/// Creates a new agent and returns after its initialization. With `keyed`, the new\n/// agent is the agent that the constructor parameters key, and the creation raises\n/// `RpcError::Conflict` when that agent already exists; otherwise the new agent has\n/// no key and a new ID. `env` adds environment variables to the ones the manifest\n/// defines.\npub async fn TaskManagerClient::create(\n  keyed? : Bool = false,\n  env? : Array[(String, String)] = [],\n) -> TaskManagerClient {\n  let constructor_input = @agents.encode_wire_input([])\n  let client = \n    @rpc.AgentClient::create(\"TaskManager\", constructor_input, keyed~, env~)\n  { client, }\n}\n\n///|\n///\n/// The ID of the agent. On a client of `upsert`, the host creates the agent when\n/// it is missing, without invoking a method.\npub async fn TaskManagerClient::agent_id(self : TaskManagerClient) -> @schema.AgentId {\n  self.client.agent_id()\n}\n\n///|\n///\npub fn TaskManagerClient::drop(self : TaskManagerClient) -> Unit {\n  self.client.drop()\n}\n\n///|\n///\npub fn TaskManagerClient::set_default_scope_card(\n  self : TaskManagerClient,\n  card : @permissions.ScopeCard?,\n) -> Unit {\n  self.client.set_default_scope_card(card)\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped_upsert(\n  f : async (TaskManagerClient) -> T,\n) -> T {\n  let client = TaskManagerClient::upsert()\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped_get_by_id(\n  agent_id : @schema.AgentId,\n  f : async (TaskManagerClient) -> T,\n) -> T {\n  let client = TaskManagerClient::get_by_id(agent_id)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn[T] TaskManagerClient::scoped_create(\n  keyed? : Bool = false,\n  env? : Array[(String, String)] = [],\n  f : async (TaskManagerClient) -> T,\n) -> T {\n  let client = TaskManagerClient::create(keyed~, env~)\n  defer client.drop()\n  f(client)\n}\n\n///|\n///\npub async fn TaskManagerClient::add_task(\n  self : TaskManagerClient,\n  task : TaskInfo,\n  scope_card? : @permissions.ScopeCard,\n) -> UInt64 {\n  self.client.check_scope_card(scope_card?)\n  let input = @agents.encode_wire_input_async([task])\n  let response = self.client.invoke_and_await(\"add_task\", input, scope_card?)\n  let result = response.value\n  match result {\n    Some(tree) => @agents.decode_wire_output(tree, \"TaskManager.add_task\")\n    None => {\n      raise  @common.AgentError::InvalidType(\n        \"TaskManager.add_task: expected a return value, got none\",\n      )\n    }\n  }\n}\n\n///|\n///\npub fn TaskManagerClient::trigger_add_task(\n  self : TaskManagerClient,\n  task : TaskInfo,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([task])\n  let _ = self.client.invoke(\"add_task\", input)\n  \n}\n\n///|\n///\npub fn TaskManagerClient::schedule_add_task(\n  self : TaskManagerClient,\n  scheduled_at : @systemClock.Instant,\n  task : TaskInfo,\n) -> Unit raise @common.AgentError {\n  let input = @agents.encode_wire_input([task])\n  let _ = self.client.schedule_invocation(scheduled_at, \"add_task\", input)\n  \n}\n\n///|\n///\npub fn TaskManagerClient::schedule_cancelable_add_task(\n  self : TaskManagerClient,\n  scheduled_at : @systemClock.Instant,\n  task : TaskInfo,\n) -> @agentHost.CancellationToken raise @common.AgentError {\n  let input = @agents.encode_wire_input([task])\n  self\n    .client\n    .schedule_cancelable_invocation(scheduled_at, \"add_task\", input)\n    .cancellation_token\n}\n\n"
     ),
   )
 }
 
 ///|
-test "generate_client_code - all secret config generates no with_config methods" {
+test "generate_client_code - all secret config generates no config override" {
   let agent : @lib.AgentInfo = {
     name: "SecretAgent",
     description: "Agent with all-secret config",
@@ -140,11 +140,13 @@ test "generate_client_code - all secret config generates no with_config methods"
     agent_package="",
   )
   let output = @formatter.impls_to_string(impls)
-  assert_false(output.contains("with_config"))
+  assert_true(output.contains("SecretAgentClient::create"))
+  assert_false(output.contains("config?"))
+  assert_false(output.contains("Override"))
 }
 
 ///|
-test "generate_client_code - mixed config generates with_config methods" {
+test "generate_client_code - mixed config passes overrides through create" {
   let agent : @lib.AgentInfo = {
     name: "ConfiguredAgent",
     description: "Agent with mixed config",
@@ -201,24 +203,39 @@ test "generate_client_code - mixed config generates with_config methods" {
     agent_package="",
   )
   let output = @formatter.impls_to_string(impls)
-  // Should contain the 6 with_config variants
-  assert_true(output.contains("get_with_config"))
-  assert_true(output.contains("new_phantom_with_config"))
-  assert_true(output.contains("get_phantom_with_config"))
-  assert_true(output.contains("scoped_with_config"))
-  assert_true(output.contains("scoped_new_phantom_with_config"))
-  assert_true(output.contains("scoped_get_phantom_with_config"))
-  // Should reference the override type and walker
-  assert_true(output.contains("MixedConfigOverride"))
-  assert_true(output.contains("collect_mixed_config_overrides"))
-  // Should call the _with_config runtime methods
-  assert_true(output.contains("AgentClient::get_with_config"))
-  assert_true(output.contains("AgentClient::new_phantom_with_config"))
-  assert_true(output.contains("AgentClient::get_phantom_with_config"))
+    .replace_all(old=" ", new="")
+    .replace_all(old="\n", new="")
+  assert_true(
+    output.contains(
+      "pubasyncfnConfiguredAgentClient::create(name:String,keyed?:Bool=false,config?:MixedConfigOverride,env?:Array[(String,String)]=[],)->ConfiguredAgentClient{",
+    ),
+  )
+  assert_true(
+    output.contains(
+      "letagent_config=matchconfig{Some(config)=>collect_mixed_config_overrides(config,[])None=>[]}",
+    ),
+  )
+  assert_true(
+    output.contains(
+      "@rpc.AgentClient::create(\"ConfiguredAgent\",constructor_input,keyed~,config=agent_config,env~,)",
+    ),
+  )
+  assert_true(
+    output.contains(
+      "letclient=ConfiguredAgentClient::create(name,keyed~,config?,env~)",
+    ),
+  )
+  // `upsert` takes no overrides.
+  assert_true(
+    output.contains(
+      "pubfnConfiguredAgentClient::upsert(name:String)->ConfiguredAgentClientraise{",
+    ),
+  )
+  assert_false(output.contains("with_config"))
 }
 
 ///|
-test "generate_client_code - ephemeral agent supports logical and known phantom constructors" {
+test "generate_client_code - ephemeral agent connects only through upsert" {
   let agent : @lib.AgentInfo = {
     name: "EphemeralWorker",
     description: "An ephemeral worker",
@@ -268,15 +285,16 @@ test "generate_client_code - ephemeral agent supports logical and known phantom 
   )
   let output = @formatter.impls_to_string(impls)
 
-  assert_false(output.contains("pub fn EphemeralWorkerClient::get("))
-  assert_true(output.contains("get_phantom("))
-  assert_false(output.contains("get_with_config"))
-  assert_false(output.contains("scoped_with_config"))
-  assert_true(output.contains("new_phantom_with_config"))
-  assert_true(output.contains("get_phantom_with_config"))
-  assert_true(output.contains("scoped_new_phantom_with_config"))
-  assert_true(output.contains("scoped_get_phantom_with_config"))
-  assert_true(output.contains("AgentClient::ephemeral"))
+  assert_true(output.contains("pub fn EphemeralWorkerClient::upsert("))
+  assert_true(output.contains("@rpc.AgentClient::upsert(\"EphemeralWorker\""))
+  assert_true(output.contains("EphemeralWorkerClient::scoped_upsert("))
+  // The host creates, gets by ID and reports agent IDs only for durable
+  // agents, and an ephemeral agent takes no config overrides.
+  assert_false(output.contains("create"))
+  assert_false(output.contains("get_by_id"))
+  assert_false(output.contains("agent_id()"))
+  assert_false(output.contains("bind_self"))
+  assert_false(output.contains("Override"))
   assert_true(output.contains("InvocationResult"))
   assert_true(output.contains("response.metadata"))
   assert_true(output.contains("@rpc.InvocationMetadata"))
@@ -589,7 +607,7 @@ test "generate_client_code - no _with_config for all-secret config" {
     @lib.generate_client_code([agent], config_types~),
   )
   assert_true(output.contains("SecretAgentClient"))
-  assert_false(output.contains("with_config"))
+  assert_false(output.contains("config?"))
 }
 
 ///|
@@ -999,6 +1017,83 @@ test "generate_client_code rejects a method named set_default_scope_card" {
       assert_true(
         msg.contains(
           "method name 'set_default_scope_card' is reserved for the generated client method",
+        ),
+      )
+    Ok(_) => abort("expected the reserved method name to be rejected")
+  }
+}
+
+///|
+test "generate_client_code renames constructor parameters named like create options" {
+  let agent : @lib.AgentInfo = {
+    ..scope_card_test_agent("run", []),
+    constructor_params: [
+      ("keyed", @lib.ParamType::Simple("Bool")),
+      ("env", @lib.ParamType::Simple("String")),
+      ("keyed_", @lib.ParamType::Simple("Int")),
+    ],
+  }
+  let output = @formatter.impls_to_string(@lib.generate_client_code([agent]))
+    .replace_all(old=" ", new="")
+    .replace_all(old="\n", new="")
+  assert_true(
+    output.contains(
+      "pubasyncfnDelegatorClient::create(keyed__:Bool,env_:String,keyed_:Int,keyed?:Bool=false,env?:Array[(String,String)]=[],)->DelegatorClient{letconstructor_input=@agents.encode_wire_input([keyed__,env_,keyed_])",
+    ),
+  )
+  // `upsert` has no labels, so its parameters keep their names.
+  assert_true(
+    output.contains(
+      "pubfnDelegatorClient::upsert(keyed:Bool,env:String,keyed_:Int)->DelegatorClientraise{letconstructor_input=@agents.encode_wire_input([keyed,env,keyed_])",
+    ),
+  )
+}
+
+///|
+test "generate_client_code - durable client maps to upsert, get_by_id, create and agent_id" {
+  let agent = scope_card_test_agent("run", [])
+  let output = @formatter.impls_to_string(@lib.generate_client_code([agent]))
+    .replace_all(old=" ", new="")
+    .replace_all(old="\n", new="")
+  assert_true(
+    output.contains(
+      "letclient=@rpc.AgentClient::upsert(\"Delegator\",constructor_input)",
+    ),
+  )
+  assert_true(
+    output.contains(
+      "pubfnDelegatorClient::get_by_id(agent_id:@schema.AgentId)->DelegatorClientraise@agentHost.RpcError{letclient=@rpc.AgentClient::get_by_id(\"Delegator\",agent_id)",
+    ),
+  )
+  assert_true(
+    output.contains(
+      "@rpc.AgentClient::create(\"Delegator\",constructor_input,keyed~,env~)",
+    ),
+  )
+  assert_true(
+    output.contains(
+      "pubasyncfnDelegatorClient::agent_id(self:DelegatorClient)->@schema.AgentId{self.client.agent_id()}",
+    ),
+  )
+  assert_true(
+    output.contains(
+      "letclient=DelegatorClient::get_by_id(agent_id)deferclient.drop()",
+    ),
+  )
+  assert_false(output.contains("phantom"))
+}
+
+///|
+test "generate_client_code rejects a durable method named agent_id" {
+  let agent = scope_card_test_agent("agent_id", [])
+  match
+    capture_agent_parse_error(fn() raise @lib.AgentParseError {
+      @lib.generate_client_code([agent])
+    }) {
+    Err(@lib.AgentParseError(msg)) =>
+      assert_true(
+        msg.contains(
+          "method name 'agent_id' is reserved for the generated method that returns the agent ID",
         ),
       )
     Ok(_) => abort("expected the reserved method name to be rejected")

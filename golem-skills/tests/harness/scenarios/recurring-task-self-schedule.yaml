@@ -68,7 +68,7 @@ steps:
         method-level `Http.get("/count")` metadata.
 
         Use the real Effect SDK self-scheduling API:
-        `RecordingPollerDefinition.client.get({ name })`, followed by
+        `RecordingPollerDefinition.client.upsert({ name })`, followed by
         `self.poll.schedule(scheduledAt, {})`. Construct `scheduledAt` as
         `{ seconds: bigint, nanoseconds: number }` by yielding `DateTime.now` and
         converting it with `DateTime.toEpochMillis(...)`. The future poll must be

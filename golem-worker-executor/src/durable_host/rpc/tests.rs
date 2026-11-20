@@ -17,21 +17,22 @@ use crate::durable_host::durable_stream::SessionError;
 use crate::services::oplog::CommitLevel;
 use crate::services::rpc::Rpc;
 use crate::services::rpc::RpcDemand;
+use crate::worker::target::ResolvedTarget;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostPayloadPair;
-use golem_common::model::oplog::host_functions::GolemRpcWasmRpcNew;
+use golem_common::model::oplog::host_functions::GolemRpcWasmRpcUpsert;
 use golem_common::model::{InvocationRequestKey, OwnedInvocationId};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::wit::PermissionCardHandleDropper;
@@ -106,7 +107,7 @@ async fn an_unreadable_oplog_while_cancelling_unbound_inputs_traps_for_recovery(
     let producer = DurableStreamStore::load_with_commit(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
         commit,
@@ -236,7 +237,7 @@ fn logical_ephemeral_rpc_connection_creation_is_local_durability() {
                 max_in_function_retry_delay: Duration::ZERO,
                 durable_wait: false,
             },
-            GolemRpcWasmRpcNew::FQFN,
+            GolemRpcWasmRpcUpsert::FQFN,
         );
         assert!(retry.can_reexecute_on_incomplete_replay());
     }
@@ -326,12 +327,13 @@ impl PermissionCardHandleDropper for TableCapabilityDropper {
 impl Rpc for ActivatingRpc {
     async fn create_and_initialize(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
+        _exclusive: bool,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: IdempotencyKey,
@@ -371,13 +373,13 @@ impl Rpc for ActivatingRpc {
 
     async fn create_demand(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: Option<IdempotencyKey>,
@@ -391,8 +393,7 @@ impl Rpc for ActivatingRpc {
 
     async fn invoke_and_await(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -402,6 +403,7 @@ impl Rpc for ActivatingRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _scope_card: Option<ScopeCard>,
@@ -413,8 +415,7 @@ impl Rpc for ActivatingRpc {
 
     async fn invoke(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -424,6 +425,7 @@ impl Rpc for ActivatingRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
@@ -435,12 +437,13 @@ impl Rpc for ActivatingRpc {
 impl Rpc for RecordingScopeCardRpc {
     async fn create_and_initialize(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
+        _exclusive: bool,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: IdempotencyKey,
@@ -479,13 +482,13 @@ impl Rpc for RecordingScopeCardRpc {
 
     async fn create_demand(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
         _method_name: &str,
         _self_created_by: AccountId,
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: Option<IdempotencyKey>,
@@ -498,8 +501,7 @@ impl Rpc for RecordingScopeCardRpc {
 
     async fn invoke_and_await(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -509,6 +511,7 @@ impl Rpc for RecordingScopeCardRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
@@ -519,8 +522,7 @@ impl Rpc for RecordingScopeCardRpc {
 
     async fn invoke(
         &self,
-        _target: AgentTarget,
-        _environment_id: EnvironmentId,
+        _target: ResolvedTarget,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         _expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -530,6 +532,7 @@ impl Rpc for RecordingScopeCardRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
@@ -537,11 +540,8 @@ impl Rpc for RecordingScopeCardRpc {
     }
 }
 
-fn agent_id(name: &str) -> AgentId {
-    AgentId {
-        component_id: ComponentId(Uuid::from_u128(1)),
-        agent_id: name.to_string(),
-    }
+fn agent_id(h: u128) -> AgentId {
+    AgentId::from_parts(7, h)
 }
 
 fn cancellation_token(owner: OwnedAgentId, recipient: OwnedAgentId) -> CancellationTokenEntry {
@@ -558,8 +558,8 @@ fn cancellation_token(owner: OwnedAgentId, recipient: OwnedAgentId) -> Cancellat
 
 #[test]
 fn scheduled_invocation_owner_can_cancel_its_token() {
-    let owner = OwnedAgentId::new(EnvironmentId::new(), &agent_id("owner"));
-    let recipient = OwnedAgentId::new(EnvironmentId::new(), &agent_id("recipient"));
+    let owner = OwnedAgentId::new(EnvironmentId::new(), &agent_id(1));
+    let recipient = OwnedAgentId::new(EnvironmentId::new(), &agent_id(2));
     let token = cancellation_token(owner.clone(), recipient);
 
     assert_eq!(validate_cancellation_token_owner(&token, &owner), Ok(()));
@@ -567,9 +567,9 @@ fn scheduled_invocation_owner_can_cancel_its_token() {
 
 #[test]
 fn scheduled_invocation_non_owner_cannot_cancel_token() {
-    let owner = OwnedAgentId::new(EnvironmentId::new(), &agent_id("owner"));
-    let recipient = OwnedAgentId::new(EnvironmentId::new(), &agent_id("recipient"));
-    let non_owner = OwnedAgentId::new(EnvironmentId::new(), &agent_id("non-owner"));
+    let owner = OwnedAgentId::new(EnvironmentId::new(), &agent_id(1));
+    let recipient = OwnedAgentId::new(EnvironmentId::new(), &agent_id(2));
+    let non_owner = OwnedAgentId::new(EnvironmentId::new(), &agent_id(3));
     let token = cancellation_token(owner, recipient);
 
     assert!(matches!(
@@ -591,12 +591,13 @@ async fn replay_pending_activation_makes_no_create_request() {
     let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
         None,
         rpc.clone(),
-        OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
+        ResolvedTarget::existing(OwnedAgentId::new(EnvironmentId::new(), &agent_id(4))),
         IdempotencyKey::new("replay-pending-activation".to_string()),
         "run".to_string(),
         SchemaValue::Tuple { elements: vec![] },
         AccountId::new(),
-        agent_id("caller"),
+        agent_id(5),
+        crate::test_callers::agent_caller(agent_id(5)),
         vec![],
         vec![],
         InvocationContextStack::fresh(),
@@ -645,12 +646,13 @@ async fn await_dispatch_forwards_the_resolved_scope_card_to_the_rpc_layer() {
     let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
         None,
         rpc.clone(),
-        OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
+        ResolvedTarget::existing(OwnedAgentId::new(EnvironmentId::new(), &agent_id(4))),
         IdempotencyKey::new("scope-card-dispatch".to_string()),
         "run".to_string(),
         SchemaValue::Tuple { elements: vec![] },
         AccountId::new(),
-        agent_id("caller"),
+        agent_id(5),
+        crate::test_callers::agent_caller(agent_id(5)),
         vec![],
         vec![],
         InvocationContextStack::fresh(),
@@ -804,33 +806,33 @@ fn rejected_rpc_creation_drains_every_config_handle() {
 fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
     let environment_id = EnvironmentId::new();
     let component_id = ComponentId(Uuid::from_u128(1));
-    let logical_agent_id = ParsedAgentKey::try_new(
+    let type_id = golem_common::model::type_id::TypeId::try_from(7u32).unwrap();
+    let constructor = ParsedAgentKey::try_new(
         golem_common::model::agent::AgentTypeName("ephemeral-target".to_string()),
         data_value!("constructor"),
-        None,
     )
     .unwrap();
-    let logical_agent = AgentId::from_agent_id(component_id, &logical_agent_id).unwrap();
-    let logical_owned_agent = OwnedAgentId::new(environment_id, &logical_agent);
+    let ephemeral = EphemeralRpcTarget {
+        type_id,
+        component_id,
+        constructor,
+    };
+    let logical_owned_agent = OwnedAgentId::new(environment_id, &agent_id(6));
     let first_key = IdempotencyKey::new("first-call".to_string());
 
-    let first = invocation_target_agent_id(
-        &logical_owned_agent,
-        Some(&logical_agent_id),
-        &first_key,
-        "run",
-    )
-    .unwrap();
+    let first =
+        invocation_target_agent_id(&logical_owned_agent, Some(&ephemeral), &first_key, "run")
+            .unwrap();
     let first_retry = invocation_target_agent_id(
         &logical_owned_agent,
-        Some(&logical_agent_id),
+        Some(&ephemeral),
         &IdempotencyKey::new("first-call".to_string()),
         "run",
     )
     .unwrap();
     let second = invocation_target_agent_id(
         &logical_owned_agent,
-        Some(&logical_agent_id),
+        Some(&ephemeral),
         &IdempotencyKey::new("second-call".to_string()),
         "run",
     )
@@ -839,25 +841,19 @@ fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
     assert_eq!(first, first_retry);
     assert_ne!(first, second);
     assert_eq!(first.environment_id, environment_id);
-    assert_eq!(first.component_id(), component_id);
-    let expected_owner = logical_agent_id
-        .with_ephemeral_invocation_phantom(
-            &InvocationRequestKey::Internal(first_key.clone()).owner_key("run"),
-        )
-        .unwrap();
+    assert_eq!(first.agent_id().type_id(), Some(type_id));
     assert_eq!(
         first.agent_id(),
-        AgentId::from_agent_id(component_id, &expected_owner).unwrap()
+        AgentId::ephemeral_invocation(
+            environment_id,
+            type_id,
+            &InvocationRequestKey::Internal(first_key.clone()).owner_key("run"),
+        )
     );
     assert_ne!(
         first,
-        invocation_target_agent_id(
-            &logical_owned_agent,
-            Some(&logical_agent_id),
-            &first_key,
-            "other"
-        )
-        .unwrap()
+        invocation_target_agent_id(&logical_owned_agent, Some(&ephemeral), &first_key, "other")
+            .unwrap()
     );
     let invocation_id = InvocationRequestKey::Internal(first_key.clone()).finalize(
         first.agent_id(),
@@ -865,7 +861,7 @@ fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
         "run",
     );
     let metadata = invocation_metadata(&invocation_id);
-    assert_eq!(metadata.agent_id, first.agent_id.agent_id);
+    assert_eq!(AgentId::from(metadata.agent_id), first.agent_id());
     let golem_schema::schema::wit::wire::InvocationOwner::Agent(owner) =
         metadata.invocation_id.owner
     else {
@@ -914,15 +910,15 @@ fn final_rpc_metadata_uses_recorded_preparation_and_schedule_receipts() {
         HostResponseGolemRpcPrepareInvocation, HostResponseGolemRpcScheduledInvocation,
     };
 
-    let target = agent_id("ephemeral-target");
+    let target = agent_id(6);
     let key = InvocationRequestKey::Internal(IdempotencyKey::from("child"));
     let preparation = HostResponseGolemRpcPrepareInvocation {
         result: Ok(AgentFingerprint(Uuid::from_u128(42))),
     };
     let bytes = desert_rust::serialize_to_byte_vec(&preparation).unwrap();
     let replayed: HostResponseGolemRpcPrepareInvocation = desert_rust::deserialize(&bytes).unwrap();
-    let final_id = key.finalize(target.clone(), preparation.result.unwrap(), "run");
-    let replayed_id = key.finalize(target.clone(), replayed.result.unwrap(), "run");
+    let final_id = key.finalize(target, preparation.result.unwrap(), "run");
+    let replayed_id = key.finalize(target, replayed.result.unwrap(), "run");
     assert_eq!(
         Uuid::from(invocation_metadata(&final_id).invocation_id.id),
         Uuid::from(invocation_metadata(&replayed_id).invocation_id.id)

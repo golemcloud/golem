@@ -375,7 +375,7 @@ impl RetirementReason {
                 expected_epoch,
                 actual_epoch,
             } => Some(Self::Fenced(Some(OplogFence {
-                agent_id: agent_id.clone(),
+                agent_id: *agent_id,
                 expected_epoch: ShardEpoch(*expected_epoch),
                 actual_epoch: actual_epoch.map(ShardEpoch),
             }))),

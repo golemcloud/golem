@@ -116,7 +116,7 @@ where
             .await
             .or_default()
             .get_mut()
-            .insert(agent_id.clone());
+            .insert(*agent_id);
 
         Ok(pool)
     }

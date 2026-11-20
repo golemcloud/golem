@@ -1,5 +1,6 @@
 use super::*;
 use golem_common::model::Timestamp;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 macro_rules! repeated_stop_case {
@@ -94,14 +95,17 @@ async fn repeated_stop(
         .store()
         .await?;
     let seed_id = executor
-        .start_agent(&component.id, agent_id!("Networking", "repeated-stop-seed"))
+        .start_agent(
+            &component.id,
+            agent_key!("Networking", "repeated-stop-seed"),
+        )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -110,25 +114,21 @@ async fn repeated_stop(
     .await?;
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("Networking", "repeated-stop")
+        agent_key!("Networking", "repeated-stop")
     } else {
-        agent_id!("EphemeralNetworking", "repeated-stop")
+        agent_key!("EphemeralNetworking", "repeated-stop")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                Operation::Read.method(),
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        Operation::Read.method(),
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -136,7 +136,16 @@ async fn repeated_stop(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            Operation::Read.method(),
+        ),
     )
     .await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -166,7 +175,7 @@ async fn repeated_stop(
             loop {
                 executor.commit_oplog(&id).await?;
                 if input_setup(
-                    &executor.get_oplog(&id, OplogIndex::INITIAL).await?,
+                    &executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
                     Operation::Read,
                 )
                 .is_ok()
@@ -271,7 +280,7 @@ async fn repeated_stop(
         join_request(&mut refresh, "stop refresh").await?;
         ensure!(receipt.try_recv().is_err(), "one stop receipt only");
         ensure!(raw.try_recv().is_err(), "one typed publication only");
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         let entries = worker
             .oplog()
@@ -340,7 +349,7 @@ async fn repeated_stop(
             registry.set_policy(grant);
             start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
             join_request(&mut refresh, "policy refresh").await?;
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             // The pending read fails with the lost connection, and the fixture reconnects.
             let (mut peer, _) =
                 tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
@@ -349,7 +358,7 @@ async fn repeated_stop(
                 join_request(&mut invocation, "invocation result").await??,
                 1,
             )?;
-            let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (2, 2));
             assert_settled_history(&history)?;
             Operation::Read.assert_result(

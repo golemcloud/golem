@@ -36,11 +36,11 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("Networking", "p3-udp-completion");
+    let name = agent_key!("Networking", "p3-udp-completion");
     let id = executor.start_agent(&component.id, name.clone()).await?;
-    wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id.clone())
         .await
         .unwrap()
         .primary();
@@ -59,7 +59,7 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
     let mut failure_address = None;
     let key = IdempotencyKey::fresh();
     let stored_key = executor
-        .external_invocation_key(&id, &key, "udp_receive_wait_p3")
+        .external_invocation_key(&id.agent_id, &key, "udp_receive_wait_p3")
         .await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
@@ -81,13 +81,13 @@ async fn durable_p3_udp_receive_completion_before_quota_stop(
     let result = async {
         ensure!(ready_address(&peer).await? == address);
         failure_address = Some(address);
-        let start = admitted_receive(&executor, &id).await?;
-        let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
+        let start = admitted_receive(&executor, &id.agent_id).await?;
+        let (selected, release) = executor.gate_next_invocation_outcome_append(&id.agent_id).await;
         let sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await?;
         ensure!(sender.send_to(b"completed", address).await? == 9);
         drop(sender);
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
-        executor.commit_oplog(&id).await?;
+        executor.commit_oplog(&id.agent_id).await?;
         ensure!(receive_start(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, 1)? == start);
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();

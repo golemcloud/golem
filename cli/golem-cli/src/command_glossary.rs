@@ -19,21 +19,30 @@
 
 // ── <AGENT_ID> ────────────────────────────────────────────────────────────────
 
-pub const AGENT_ID_SHORT: &str = "Agent ID, accepted formats:
+pub const AGENT_ID_SHORT: &str = "Agent address, accepted formats:
   <AGENT_TYPE>(<AGENT_PARAMETERS>)
+  <AGENT_TYPE>[<AGENT_ID>]
+  <AGENT_ID>
   <ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
   <APPLICATION>/<ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
   <ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)";
 
-pub const AGENT_ID_LONG: &str = "Agent ID — fully-qualified address of an agent instance.
+pub const AGENT_ID_LONG: &str = "Agent address — a key or an agent ID, optionally qualified.
 
-Forms (most → least qualified). Missing prefix segments default to the value
+Forms (least → most qualified). Missing prefix segments default to the value
 selected by `-A`/`-E`/`--profile` or by the current working directory:
 
   <AGENT_TYPE>(<AGENT_PARAMETERS>)
+  <AGENT_TYPE>[<AGENT_ID>]
+  <AGENT_ID>
   <ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
   <APPLICATION>/<ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
   <ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+
+`<AGENT_TYPE>(<AGENT_PARAMETERS>)` is a key: it addresses the keyed agent of the
+constructor parameters. `<AGENT_TYPE>[<AGENT_ID>]` and a bare `<AGENT_ID>` address
+an agent by its agent ID, a UUID that Golem issues; an agent created without a key
+is reached only this way. Both ID forms take the same prefixes.
 
 Components:
   <AGENT_TYPE>        Name of a deployed agent type, in the agent's source-language

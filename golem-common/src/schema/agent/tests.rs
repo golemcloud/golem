@@ -15,9 +15,9 @@
 use crate::base_model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
-    AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
-    ParsedAgentKey, contains_stream_in_graph, json_input_schema_value_to_typed_schema_value,
-    reachable_defs, typed_schema_value_with_projected_defs,
+    AgentTypeSchema, FieldSource, InputSchema, NamedField, OutputSchema, ParsedAgentKey,
+    contains_stream_in_graph, json_input_schema_value_to_typed_schema_value, reachable_defs,
+    typed_schema_value_with_projected_defs,
 };
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, TypeId};
@@ -29,7 +29,6 @@ use golem_schema::Empty;
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
-use uuid::Uuid;
 
 // --- Builders / convenience ---
 
@@ -37,19 +36,12 @@ use uuid::Uuid;
 fn input_schema_parameters_builder_collects_fields() {
     let s = InputSchema::parameters([
         NamedField::user_supplied("name", SchemaType::string()),
-        NamedField::auto_injected(
-            "principal",
-            AutoInjectedKind::Principal,
-            SchemaType::string(),
-        ),
+        NamedField::user_supplied("count", SchemaType::u32()),
     ]);
     assert_eq!(s.fields().len(), 2);
     assert_eq!(s.fields()[0].name, "name");
     assert!(matches!(s.fields()[0].source, FieldSource::UserSupplied));
-    assert!(matches!(
-        s.fields()[1].source,
-        FieldSource::AutoInjected(AutoInjectedKind::Principal)
-    ));
+    assert!(matches!(s.fields()[1].source, FieldSource::UserSupplied));
 }
 
 #[test]
@@ -94,28 +86,24 @@ fn field_source_user_supplied_serde_shape() {
 }
 
 #[test]
-fn field_source_auto_injected_serde_shape() {
-    let v = serde_json::to_value(FieldSource::AutoInjected(AutoInjectedKind::Principal)).unwrap();
-    assert_eq!(v, json!({"tag": "auto-injected", "value": "principal"}));
-}
-
-#[test]
-fn auto_injected_kind_serde_is_kebab_case_string() {
-    let v = serde_json::to_value(AutoInjectedKind::Principal).unwrap();
-    assert_eq!(v, json!("principal"));
+fn field_source_has_only_user_supplied() {
+    let back: FieldSource = serde_json::from_value(json!({"tag": "user-supplied"})).unwrap();
+    assert_eq!(back, FieldSource::UserSupplied);
+    assert!(
+        serde_json::from_value::<FieldSource>(
+            json!({"tag": "auto-injected", "value": "principal"})
+        )
+        .is_err()
+    );
 }
 
 // --- Round-trips for fixed shapes ---
 
 #[test]
-fn input_schema_round_trip_mixed_sources() {
+fn input_schema_round_trip() {
     let s = InputSchema::Parameters(vec![
         NamedField::user_supplied("name", SchemaType::string()),
-        NamedField::auto_injected(
-            "principal",
-            AutoInjectedKind::Principal,
-            SchemaType::string(),
-        ),
+        NamedField::user_supplied("principal", SchemaType::string()),
     ]);
     let json = serde_json::to_string(&s).unwrap();
     let back: InputSchema = serde_json::from_str(&json).unwrap();
@@ -165,28 +153,12 @@ fn sample_parameters() -> TypedSchemaValue {
 
 proptest! {
     #[test]
-    fn parsed_agent_id_phantom_id_round_trips(
-        phantom_present in any::<bool>(),
-    ) {
-        let phantom_id = phantom_present.then(Uuid::new_v4);
-        let id = ParsedAgentKey::new(
-            AgentTypeName("weather-agent".into()),
-            sample_parameters(),
-            phantom_id,
-        );
-        let json = serde_json::to_string(&id).unwrap();
-        let back: ParsedAgentKey = serde_json::from_str(&json).unwrap();
-        prop_assert_eq!(back, id);
-    }
-
-    #[test]
     fn parsed_agent_id_agent_type_round_trips(
         type_name in "[a-z][a-z0-9-]{0,32}",
     ) {
         let id = ParsedAgentKey::new(
             AgentTypeName(type_name),
             sample_parameters(),
-            None,
         );
         let json = serde_json::to_string(&id).unwrap();
         let back: ParsedAgentKey = serde_json::from_str(&json).unwrap();
@@ -199,29 +171,10 @@ proptest! {
 #[test]
 fn parsed_agent_id_rejects_missing_parameters() {
     let raw = json!({
-        "agent_type": "weather-agent",
-        "phantom_id": null
+        "agent_type": "weather-agent"
     });
     let res: Result<ParsedAgentKey, _> = serde_json::from_value(raw);
     assert!(res.is_err());
-}
-
-#[test]
-fn parsed_agent_id_accepts_absent_phantom_id() {
-    let parameters = TypedSchemaValue::new(
-        crate::schema::graph::SchemaGraph::anonymous(SchemaType::string()),
-        SchemaValue::String("alice".into()),
-    );
-    let json = serde_json::to_value(ParsedAgentKey::new(
-        AgentTypeName("weather-agent".into()),
-        parameters.clone(),
-        None,
-    ))
-    .unwrap();
-    let mut obj = json.as_object().unwrap().clone();
-    obj.remove("phantom_id");
-    let back: ParsedAgentKey = serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
-    assert!(back.phantom_id.is_none());
 }
 
 // --- SchemaGraph::empty() and agent-layer carrier ---
@@ -546,29 +499,19 @@ fn json_input_projected_result_round_trips_and_revalidates() {
 }
 
 #[test]
-fn json_input_with_auto_injected_field_validates_caller_only_record() {
-    // A method/constructor input schema that mixes user-supplied fields with an
-    // auto-injected `principal` field. The REST caller supplies only the
-    // user-supplied values (the host fills the principal out of band), so the
-    // caller-only record must validate, and the synthesized self-contained root
-    // must describe exactly the user-supplied fields.
+fn json_input_validates_every_declared_field() {
+    // The synthesized self-contained root describes exactly the declared fields.
     let input_schema = InputSchema::parameters([
         NamedField::user_supplied("count", SchemaType::u32()),
         NamedField::user_supplied("label", SchemaType::string()),
-        NamedField::auto_injected(
-            "principal",
-            AutoInjectedKind::Principal,
-            SchemaType::string(),
-        ),
     ]);
-    // Caller supplies only the two user-supplied values.
     let value = SchemaValue::Record {
         fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
     };
 
     let typed =
         json_input_schema_value_to_typed_schema_value(value, &SchemaGraph::empty(), &input_schema)
-            .expect("caller-only record (excluding auto-injected fields) must validate");
+            .expect("a record with every declared field must validate");
 
     let SchemaType::Record { fields, .. } = typed.root_type() else {
         panic!("expected record root, got {:?}", typed.root_type());
@@ -826,11 +769,6 @@ fn method_input_validation_matches_owned_conversion() {
         "compare",
         vec![
             NamedField::user_supplied("name", SchemaType::string()),
-            NamedField::auto_injected(
-                "principal",
-                AutoInjectedKind::Principal,
-                SchemaType::string(),
-            ),
             NamedField::user_supplied("count", SchemaType::u64()),
         ],
         OutputSchema::Unit,
@@ -893,14 +831,10 @@ fn method_input_validation_matches_owned_conversion() {
     )]);
     let recursive_method = self::method(
         "recursive",
-        vec![
-            NamedField::auto_injected(
-                "principal",
-                AutoInjectedKind::Principal,
-                SchemaType::string(),
-            ),
-            NamedField::user_supplied("node", SchemaType::ref_to(TypeId::new("Node"))),
-        ],
+        vec![NamedField::user_supplied(
+            "node",
+            SchemaType::ref_to(TypeId::new("Node")),
+        )],
         OutputSchema::Unit,
     );
     for label in ["valid", "x"] {
@@ -970,29 +904,6 @@ fn validate_rejects_future_in_unreferenced_shared_definition() {
         err.contains(
             "shared type definition 'UnusedFuture' contains the unsupported type 'future'"
         ),
-        "unexpected error: {err}"
-    );
-}
-
-#[test]
-fn validate_rejects_stream_in_auto_injected_method_parameter() {
-    let agent = AgentTypeSchema {
-        methods: vec![method(
-            "invalid",
-            vec![NamedField::auto_injected(
-                "principal",
-                AutoInjectedKind::Principal,
-                SchemaType::stream(Some(SchemaType::string())),
-            )],
-            OutputSchema::Unit,
-        )],
-        ..sample_agent_type()
-    };
-    let err = agent
-        .validate()
-        .expect_err("auto-injected streams must be rejected");
-    assert!(
-        err.contains("stream values are not allowed in scope Boundary"),
         "unexpected error: {err}"
     );
 }

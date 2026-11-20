@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::dispatch_target;
 use super::{
     DurableStreamingTaskParams, PreparedRpcInvocation, RpcTargetActivation, RpcTask, RpcTaskError,
     TaskRetryParams, WasmRpcEntry, activate_rpc_target, ensure_rpc_target_activated,
@@ -35,6 +36,7 @@ use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
 use crate::services::rpc::Rpc;
 use crate::services::rpc::RpcError as InternalRpcError;
+use crate::worker::target::ResolvedTarget;
 use crate::workerctx::InvocationContextManagement;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
@@ -47,11 +49,10 @@ use golem_common::model::NamedRetryPolicy;
 use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::OwnedInvocationId;
-use golem_common::model::RetryContext;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::durable_stream::StreamInvocationId;
 use golem_common::model::durable_stream::StreamRegistrationInvocation;
@@ -80,7 +81,8 @@ pub(super) fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
         InternalRpcError::ProtocolError { .. }
         | InternalRpcError::Denied { .. }
         | InternalRpcError::NotFound { .. }
-        | InternalRpcError::RemoteAgentError { .. } => HostFailureKind::Permanent,
+        | InternalRpcError::RemoteAgentError { .. }
+        | InternalRpcError::Conflict { .. } => HostFailureKind::Permanent,
         InternalRpcError::RemoteInternalError { .. } => HostFailureKind::Transient,
     }
 }
@@ -218,8 +220,7 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
             }
         };
 
-        let retry_properties =
-            RetryContext::rpc("invoke-and-await", &remote_agent_id, &prepared.method_name);
+        let retry_properties = prepared.retry_properties("invoke-and-await", &remote_agent_id);
         let result: Result<SchemaValue, InternalRpcError> = loop {
             let stack = ctx.clone_as_inherited_stack(span.span_id());
             let interrupt_signal = ctx
@@ -229,7 +230,8 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
                 .create_await_interrupt_signal();
             let rpc = ctx.rpc();
             let created_by = ctx.created_by();
-            let agent_id = ctx.agent_id().clone();
+            let agent_id = *ctx.agent_id();
+            let caller = Caller::entry(ctx.self_principal());
             let dispatch_freshness = freshness_disposition;
             freshness_disposition = InvocationFreshnessDisposition::MayExist;
 
@@ -244,8 +246,7 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
                 let interrupt_signal = interrupt_signal.map(Error::from);
                 let either_result = futures::future::select(
                     rpc.invoke_and_await(
-                        AgentTarget::Current(remote_agent_id.agent_id()),
-                        remote_agent_id.environment_id,
+                        dispatch_target(&remote_agent_id, prepared.ephemeral.as_ref()),
                         Some(idempotency_key.clone()),
                         dispatch_freshness,
                         expected_callee_fingerprint,
@@ -255,6 +256,7 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
                         &agent_id,
                         &prepared.env,
                         stack,
+                        &caller,
                         prepared.config.clone(),
                         &auth_ctx,
                         scope_card.clone(),
@@ -350,7 +352,7 @@ pub(super) async fn run_invoke<Ctx: WorkerCtx>(
             }
         };
 
-        let retry_properties = RetryContext::rpc("invoke", &remote_agent_id, &prepared.method_name);
+        let retry_properties = prepared.retry_properties("invoke", &remote_agent_id);
         let result = loop {
             let stack = ctx.clone_as_inherited_stack(span.span_id());
             let dispatch_freshness = freshness_disposition;
@@ -366,8 +368,7 @@ pub(super) async fn run_invoke<Ctx: WorkerCtx>(
             let result = ctx
                 .rpc()
                 .invoke(
-                    AgentTarget::Current(remote_agent_id.agent_id()),
-                    remote_agent_id.environment_id,
+                    dispatch_target(&remote_agent_id, prepared.ephemeral.as_ref()),
                     Some(idempotency_key.clone()),
                     dispatch_freshness,
                     expected_callee_fingerprint,
@@ -377,6 +378,7 @@ pub(super) async fn run_invoke<Ctx: WorkerCtx>(
                     ctx.agent_id(),
                     &prepared.env,
                     stack,
+                    &Caller::entry(ctx.self_principal()),
                     prepared.config.clone(),
                     &auth_ctx,
                 )
@@ -461,12 +463,13 @@ pub(super) fn known_fresh_dispatch_allowed(is_live: bool, is_ephemeral: bool) ->
 pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     activity: Option<crate::worker::suspension::RpcActivity>,
     rpc: Arc<dyn Rpc>,
-    remote_agent_id: OwnedAgentId,
+    remote_target: ResolvedTarget,
     idempotency_key: IdempotencyKey,
     method_name: String,
     input: SchemaValue,
     created_by: AccountId,
     agent_id: AgentId,
+    caller: Caller,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
     stack: InvocationContextStack,
@@ -485,7 +488,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     // the invocation. It links back rather than running inside its span. See
     // `TraceOrigin`.
     let origin = TraceOrigin::capture_current();
-    let caller_agent_id = agent_id.clone();
+    let caller_agent_id = agent_id;
 
     // Built here, while the values are still borrowable, so nothing is cloned for
     // it and the fields stay lazy. The root of its own trace, so it has to say
@@ -496,7 +499,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         Level::INFO,
         "rpc_invoke_retry",
         agent_id = %caller_agent_id,
-        target_agent_id = %remote_agent_id.agent_id,
+        target_agent_id = %remote_target.owned_agent_id.agent_id,
         method = %method_name,
         idempotency_key = %idempotency_key,
     );
@@ -505,12 +508,13 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     let remote = revoker.clone();
     let invoke = move || {
         let rpc = rpc.clone();
-        let remote_agent_id = remote_agent_id.clone();
+        let remote_target = remote_target.clone();
         let idempotency_key = idempotency_key.clone();
         let method_name = method_name.clone();
         let input = input.clone();
         let created_by = created_by;
-        let agent_id = agent_id.clone();
+        let agent_id = agent_id;
+        let caller = caller.clone();
         let env = env.clone();
         let stack = stack.clone();
         let auth_ctx = auth_ctx.clone();
@@ -524,10 +528,11 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                 if let Some(target_activation) = target_activation {
                     let demand = activate_rpc_target(
                         rpc.as_ref(),
-                        &remote_agent_id,
+                        &remote_target.owned_agent_id,
                         &method_name,
                         created_by,
                         &agent_id,
+                        &caller,
                         &target_activation.env,
                         stack.clone(),
                         target_activation.config,
@@ -544,8 +549,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                 };
 
             let invocation = rpc.invoke_and_await(
-                AgentTarget::Current(remote_agent_id.agent_id()),
-                remote_agent_id.environment_id,
+                remote_target,
                 Some(idempotency_key),
                 freshness_disposition,
                 expected_callee_fingerprint,
@@ -555,6 +559,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                 &agent_id,
                 &env,
                 stack,
+                &caller,
                 config,
                 &auth_ctx,
                 scope_card,
@@ -635,7 +640,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
 
 pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_agent_id: &OwnedAgentId,
+    remote_target: &ResolvedTarget,
     idempotency_key: IdempotencyKey,
     method_name: String,
     input: SchemaValue,
@@ -643,6 +648,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
     config: Vec<AgentConfigEntryDto>,
     deferred_activation: Option<RpcTargetActivation>,
     expected_callee_fingerprint: Option<AgentFingerprint>,
+    mut retry_properties: golem_common::model::retry_policy::RetryProperties,
     span_id: &SpanId,
     retry_point: OplogIndex,
     retrying_start_index: OplogIndex,
@@ -651,8 +657,6 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
     auth_ctx: AuthCtx,
 ) -> RpcTask {
     let retry_params = {
-        let mut retry_properties =
-            RetryContext::rpc("invoke-and-await", remote_agent_id, &method_name);
         ctx.state.enrich_retry_properties(&mut retry_properties);
         Some(TaskRetryParams {
             environment_state_service: ctx.state.environment_state_service.clone(),
@@ -679,12 +683,13 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
     spawn_rpc_task_with_retry(
         activity,
         ctx.rpc(),
-        remote_agent_id.clone(),
+        remote_target.clone(),
         idempotency_key,
         method_name,
         input,
         ctx.created_by(),
-        ctx.agent_id().clone(),
+        *ctx.agent_id(),
+        Caller::entry(ctx.self_principal()),
         env,
         config,
         ctx.clone_as_inherited_stack(span_id),
@@ -757,7 +762,7 @@ pub(super) async fn await_streaming_rpc_acceptance(
 
 pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_agent_id: OwnedAgentId,
+    remote_target: ResolvedTarget,
     idempotency_key: IdempotencyKey,
     method_name: String,
     params: DurableStreamingTaskParams,
@@ -770,7 +775,8 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
 ) -> RpcTask {
     let rpc = ctx.rpc();
     let created_by = ctx.created_by();
-    let agent_id = ctx.agent_id().clone();
+    let agent_id = *ctx.agent_id();
+    let caller = Caller::entry(ctx.self_principal());
     let stack = ctx.clone_as_inherited_stack(span_id);
     let activity = ctx.runtime_suspension.as_ref().map(|runtime| {
         runtime.rpc_activity(
@@ -791,10 +797,11 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                     Some(
                         activate_rpc_target(
                             rpc.as_ref(),
-                            &remote_agent_id,
+                            &remote_target.owned_agent_id,
                             &method_name,
                             created_by,
                             &agent_id,
+                            &caller,
                             &target_activation.env,
                             stack.clone(),
                             target_activation.config,
@@ -813,8 +820,7 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                     remote.as_ref(),
                     acceptance,
                     rpc.invoke_and_await_streaming(
-                        AgentTarget::Current(remote_agent_id.agent_id()),
-                        remote_agent_id.environment_id,
+                        remote_target,
                         idempotency_key,
                         method_name,
                         params.input,
@@ -827,6 +833,7 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                         &agent_id,
                         &env,
                         stack,
+                        &caller,
                         config,
                         &auth_ctx,
                         scope_card,

@@ -17,8 +17,7 @@ use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
 };
-use golem_common::model::OwnedAgentId;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::{HasActiveAgents, HasOplog};
@@ -215,11 +214,11 @@ async fn lifecycle_interrupt_is_handled_after_permit_before_reconstruction_finis
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("Clock", "interrupt-after-permit-before-reconstruction");
+    let parsed_agent_id = agent_key!("Clock", "interrupt-after-permit-before-reconstruction");
     let worker_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     executor
         .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
         .await?;
@@ -301,14 +300,14 @@ async fn ordinary_interrupt_completes_only_after_owner_retirement(
             .component_dep(&context.default_environment_id, host_api_tests)
             .store()
             .await?;
-        let parsed_agent_id = agent_id!("Clock", format!("interrupt-retirement-{action:?}"));
+        let parsed_agent_id = agent_key!("Clock", format!("interrupt-retirement-{action:?}"));
         let worker_id = executor
             .start_agent(&component.id, parsed_agent_id.clone())
             .await?;
-        let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let owned_agent_id = worker_id.clone();
         let old = executor.active_agent(&owned_agent_id).await.unwrap();
 
-        let mut invocation_gate = executor.gate_next_agent_invocation_success(&worker_id);
+        let mut invocation_gate = executor.gate_next_agent_invocation_success(&worker_id.agent_id);
         let invocation = tokio::spawn({
             let executor = executor.clone();
             let component = component.clone();
@@ -401,11 +400,11 @@ async fn abandoned_deletion_finishes_after_the_invocation_loop_exits(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed = agent_id!("Clock", "abandoned-deletion");
+    let parsed = agent_key!("Clock", "abandoned-deletion");
     let agent_id = executor.start_agent(&component.id, parsed.clone()).await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    let owned = agent_id.clone();
     let old = executor.active_agent(&owned).await.unwrap();
-    let mut gate = executor.gate_next_agent_invocation_success(&agent_id);
+    let mut gate = executor.gate_next_agent_invocation_success(&agent_id.agent_id);
     let invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -518,11 +517,11 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("Clock", "shard-retirement-owner");
+    let parsed_agent_id = agent_key!("Clock", "shard-retirement-owner");
     let agent_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    let owned_agent_id = agent_id.clone();
     for (cycle, replace_assignment) in [false, true].into_iter().enumerate() {
         let revision = cycle as u64 + 1;
         executor
@@ -530,7 +529,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
             .await?;
         let old = executor.active_agent(&owned_agent_id).await.unwrap();
         let blocked_completion = if replace_assignment {
-            let mut gate = executor.gate_next_agent_invocation_success(&agent_id);
+            let mut gate = executor.gate_next_agent_invocation_success(&agent_id.agent_id);
             let executor = executor.clone();
             let component = component.clone();
             let parsed_agent_id = parsed_agent_id.clone();
@@ -605,6 +604,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
                     .clone()
                     .invoke(golem_common::model::AgentInvocation::SaveSnapshot {
                         idempotency_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
+                        caller: golem_common::model::caller::Caller::anonymous(),
                     })
                     .await
                     .is_err()
@@ -738,14 +738,14 @@ async fn a_push_of_zero_shards_is_refused_rather_than_applied(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("Clock", "zero-shard-push");
+    let parsed_agent_id = agent_key!("Clock", "zero-shard-push");
     let agent_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    let owned_agent_id = agent_id.clone();
 
     let mut client = executor.client.clone();
     let refused = client
@@ -805,14 +805,14 @@ async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("Clock", "stale-revoke-owner");
+    let parsed_agent_id = agent_key!("Clock", "stale-revoke-owner");
     let agent_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    let owned_agent_id = agent_id.clone();
     assert!(executor.worker_is_loaded(&owned_agent_id).await);
 
     // The single-shard bootstrap owns shard 0, so this agent is on it.
@@ -902,14 +902,14 @@ async fn a_delivery_that_raises_a_kept_shards_epoch_gives_its_agents_up(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("Clock", "epoch-raise-owner");
+    let parsed_agent_id = agent_key!("Clock", "epoch-raise-owner");
     let agent_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    let owned_agent_id = agent_id.clone();
     assert!(executor.worker_is_loaded(&owned_agent_id).await);
 
     // The single-shard bootstrap holds shard 0 at epoch 0, so the agent's oplog asserts epoch 0.
@@ -998,14 +998,14 @@ async fn unloaded_workers_are_evicted_after_ttl_only_when_exclusively_cached(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("Clock", "ttl-eviction-owner");
+    let parsed_agent_id = agent_key!("Clock", "ttl-eviction-owner");
     let agent_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    let owned_agent_id = agent_id.clone();
 
     tokio::time::sleep(TEST_TTL * 4).await;
     assert!(
@@ -1072,14 +1072,14 @@ async fn ttl_eviction_removes_the_evicted_owners_card_interests(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("Clock", "ttl-card-interest-owner");
+    let parsed_agent_id = agent_key!("Clock", "ttl-card-interest-owner");
     let agent_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
     executor
         .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    let owned_agent_id = agent_id.clone();
 
     assert!(
         !executor.tracked_card_ids().await.is_empty(),
@@ -1128,14 +1128,12 @@ async fn an_agent_whose_shard_leaves_while_it_is_being_created_is_given_up_once_
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = golem_common::model::AgentId {
-        component_id: component.id,
-        agent_id: agent_id!("Clock", "created-while-the-shard-leaves").to_string(),
-    };
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    let agent = agent_key!("Clock", "created-while-the-shard-leaves");
+    let agent_id = executor.keyed_agent_id(context.default_environment_id, &agent)?;
+    let owned_agent_id = agent_id.clone();
     // The harness learns the executor's agent registry from the first agent that runs, and the
     // agent under test never does.
-    let warm_up = agent_id!("Clock", "created-while-the-shard-leaves-warm-up");
+    let warm_up = agent_key!("Clock", "created-while-the-shard-leaves-warm-up");
     executor.start_agent(&component.id, warm_up.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &warm_up, "healthcheck", data_value!())
@@ -1144,22 +1142,13 @@ async fn an_agent_whose_shard_leaves_while_it_is_being_created_is_given_up_once_
     // Creation pauses with the oplog open at the epoch the assignment held, before the agent is
     // published.
     let mut gate = executor
-        .gate_next_agent_initialization_enqueue(&agent_id)
+        .gate_next_agent_initialization_enqueue(&agent_id.agent_id)
         .await;
     let creation = tokio::spawn({
         let mut client = executor.client.clone();
         let request = CreateWorkerRequest {
-            agent_id: Some(agent_id.clone().into()),
-            component_owner_account_id: Some(context.account_id.into()),
-            environment_id: Some(context.default_environment_id.into()),
-            env: std::collections::HashMap::new(),
-            config: Vec::new(),
             ignore_already_existing: false,
-            auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
-            invocation_context: None,
-            idempotency_key: None,
-            freshness_disposition: 0,
+            ..executor.create_keyed_worker_request(&component.id, &agent)?
         };
         async move { client.prepare_worker(request).await }
     });

@@ -34,7 +34,7 @@ use crate::worker::entity_invocation::{
 use crate::worker::owner_lane::OwnerInvocationId;
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
-use golem_common::model::agent::{AgentPrincipal, Principal};
+use golem_common::model::caller::Caller;
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
     EntityInvocationPlan, EntityInvocationPlanReference, EntityInvocationRequest,
@@ -122,7 +122,7 @@ enum EntityReconstructionOutcome<R, H> {
 pub struct EntityInvocationDurability {
     handle: DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>,
     scope: EntityInvocationScope,
-    principal: Principal,
+    caller: Caller,
     parent: OwnerInvocationId,
     call_mode: EntityCallMode,
     operation: EntityInvocationDescriptor,
@@ -309,7 +309,7 @@ impl EntityInvocationDurability {
         parent: OwnerInvocationId,
         key_context: &EntityInvocationKeyContext,
         entity: AgentEntity,
-        principal: Principal,
+        caller: Caller,
         call_mode: EntityCallMode,
         operation: EntityInvocationDescriptor,
         plan: EntityInvocationPlanReference,
@@ -332,7 +332,7 @@ impl EntityInvocationDurability {
             entity: entity.clone(),
             call_mode,
             operation,
-            principal,
+            caller,
             plan,
             authority_wallet: store
                 .with(|mut access| get_ctx(access.data_mut()).agent_wallet_cards_snapshot()),
@@ -453,7 +453,8 @@ impl EntityInvocationDurability {
             // The original incomplete-child repair retained the child after refusing its
             // parent's live admission. Reconstruct and validate that child here as well.
         }
-        match load_recorded_request(store, get_ctx, handle.start_index()).await? {
+        let start_index = handle.start_index();
+        match load_recorded_request(store, get_ctx, start_index).await? {
             HostRequest::EntityInvocation(request) => {
                 let metadata =
                     desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)
@@ -494,10 +495,11 @@ impl EntityInvocationDurability {
                 let expected = skipped_tool_terminal(request.error).await?;
                 let response = match handle.replay_reconstruction_access(store, get_ctx).await? {
                     ReconstructionReplayOutcome::Replayed(recorded) => {
-                        validate_recorded_rejection_terminal(recorded, &expected)?
+                        validate_recorded_rejection_terminal(start_index, recorded, &expected)?
                     }
                     ReconstructionReplayOutcome::Cancelled(_) => {
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            start_index,
                             "completed predispatch rejection terminal",
                             "cancelled rejection terminal",
                         ));
@@ -518,8 +520,9 @@ impl EntityInvocationDurability {
                 Ok(ToolInvocationReplayOutcome::Rejected(Box::new(response)))
             }
             actual => Err(WorkerExecutorError::unexpected_oplog_entry(
-                "accepted entity invocation or predispatch tool rejection request",
+                start_index,
                 format!("{actual:?}"),
+                "accepted entity invocation or predispatch tool rejection request",
             )),
         }
     }
@@ -541,7 +544,7 @@ impl EntityInvocationDurability {
         Ctx: WorkerCtx,
     {
         let parent_start_index = parent.start_index();
-        let (owner, invocation_scope_card, enclosing_invocation_id, interest) =
+        let (owner, invocation_scope_card, enclosing_invocation_id, interest, calling_principal) =
             store.with(|mut access| {
                 let ctx = get_ctx(access.data_mut());
                 (
@@ -549,6 +552,7 @@ impl EntityInvocationDurability {
                     ctx.current_invocation_scope_card(),
                     ctx.current_invocation_id(),
                     ctx.state.owner_wallet.interest.clone(),
+                    ctx.self_principal(),
                 )
             });
         let invocation_id = EntityInvocationId::new(
@@ -566,9 +570,6 @@ impl EntityInvocationDurability {
                 .map(|scope| scope.root_card_ids.as_slice())
                 .unwrap_or_default(),
         );
-        let calling_principal = Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        });
         let idempotency_key = uuid::Uuid::new_v5(
             &key_context.caller_key.0,
             format!(
@@ -596,7 +597,7 @@ impl EntityInvocationDurability {
                     .expect("replayed entity invocation must own a reconstruction claim"),
             )
         };
-        let principal = metadata.principal;
+        let caller = metadata.caller;
         let activation = Arc::new(resolved_position.layer().activation().clone());
         let execution_mode = if handle.is_live() {
             InvocationExecutionMode::Live
@@ -637,7 +638,7 @@ impl EntityInvocationDurability {
         Ok(Self {
             handle,
             scope,
-            principal,
+            caller,
             parent,
             call_mode: metadata.call_mode,
             operation,
@@ -662,8 +663,8 @@ impl EntityInvocationDurability {
         self.scope_interest.clone()
     }
 
-    pub fn principal(&self) -> &Principal {
-        &self.principal
+    pub fn caller(&self) -> &Caller {
+        &self.caller
     }
 
     pub fn operation(&self) -> &EntityInvocationDescriptor {
@@ -704,7 +705,7 @@ impl EntityInvocationDurability {
         let Self {
             handle,
             scope,
-            principal,
+            caller,
             parent,
             call_mode,
             operation,
@@ -716,17 +717,20 @@ impl EntityInvocationDurability {
         // An empty body has nothing to reconstruct before the caller can replay its later
         // host calls. Those calls must advance the cursor before incomplete repair can finish.
         ready_for_caller_replay();
+        let start_index = handle.start_index();
         let (handle, cancelled) = match handle.replay_entity_owned(context, false).await? {
             ReconstructionReplayOutcome::Incomplete(handle) => (handle, false),
             ReconstructionReplayOutcome::LiveAdmissionCancelled(handle) => (handle, true),
             ReconstructionReplayOutcome::Replayed(_) => {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    start_index,
                     "incomplete entity invocation Start",
                     "completed entity invocation terminal",
                 ));
             }
             ReconstructionReplayOutcome::Cancelled(_) => {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    start_index,
                     "incomplete entity invocation Start",
                     "cancelled entity invocation terminal",
                 ));
@@ -760,7 +764,7 @@ impl EntityInvocationDurability {
         let durability = Self {
             handle,
             scope,
-            principal,
+            caller,
             parent,
             call_mode,
             operation,
@@ -797,6 +801,7 @@ impl EntityInvocationDurability {
             .await?
             .ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    self.handle.start_index(),
                     format!(
                         "recorded terminal for completed entity invocation {}",
                         self.scope.invocation_id()
@@ -815,8 +820,9 @@ impl EntityInvocationDurability {
             } => (response, true),
             actual => {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "entity End response or Cancelled partial response",
+                    self.handle.start_index(),
                     format!("{actual:?}"),
+                    "entity End response or Cancelled partial response",
                 ));
             }
         };
@@ -827,6 +833,7 @@ impl EntityInvocationDurability {
         })?;
         let response: HostResponseEntityInvocation = response.try_into().map_err(|actual| {
             WorkerExecutorError::unexpected_oplog_entry(
+                self.handle.start_index(),
                 "entity invocation terminal response",
                 actual,
             )
@@ -847,6 +854,7 @@ impl EntityInvocationDurability {
         response: HostResponseEntityInvocation,
     ) -> Result<EntityInvocationDurabilityOutcome, WorkerExecutorError> {
         let completed = self.scope.mode() == InvocationExecutionMode::ReplayingCompleted;
+        let start_index = self.handle.start_index();
         let span_id = self
             .scope
             .span_started()
@@ -872,6 +880,7 @@ impl EntityInvocationDurability {
                 ReconstructionReplayOutcome::Replayed(recorded) if recorded == response => recorded,
                 ReconstructionReplayOutcome::Replayed(recorded) => {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        start_index,
                         "recorded no-body entity terminal",
                         format!("preflight selected {response:?}, replay returned {recorded:?}"),
                     ));
@@ -908,6 +917,7 @@ impl EntityInvocationDurability {
         context: &EntitySettlementContext<Ctx>,
     ) -> Result<EntityInvocationDurabilityOutcome, WorkerExecutorError> {
         let completed = self.scope.mode() == InvocationExecutionMode::ReplayingCompleted;
+        let start_index = self.handle.start_index();
         let Self {
             handle,
             mut historical_reconstruction,
@@ -926,10 +936,11 @@ impl EntityInvocationDurability {
         } else {
             match handle.replay_entity_owned(context, completed).await? {
                 ReconstructionReplayOutcome::Cancelled(recorded) => {
-                    validate_recorded_cancellation_terminal(recorded, &response)?
+                    validate_recorded_cancellation_terminal(start_index, recorded, &response)?
                 }
                 ReconstructionReplayOutcome::Replayed(_) => {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        start_index,
                         "cancelled entity invocation terminal",
                         "completed entity invocation terminal",
                     ));
@@ -1324,6 +1335,7 @@ pub(crate) async fn cancelled_tool_terminal(
 }
 
 fn validate_recorded_rejection_terminal(
+    start_index: OplogIndex,
     recorded: HostResponseEntityInvocation,
     expected: &HostResponseEntityInvocation,
 ) -> Result<HostResponseEntityInvocation, WorkerExecutorError> {
@@ -1331,6 +1343,7 @@ fn validate_recorded_rejection_terminal(
         Ok(recorded)
     } else {
         Err(WorkerExecutorError::unexpected_oplog_entry(
+            start_index,
             "predispatch rejection terminal matching its recorded Start decision",
             "completed rejection terminal carried a different response",
         ))
@@ -1338,6 +1351,7 @@ fn validate_recorded_rejection_terminal(
 }
 
 fn validate_recorded_cancellation_terminal(
+    start_index: OplogIndex,
     recorded: HostResponseEntityInvocation,
     expected: &HostResponseEntityInvocation,
 ) -> Result<HostResponseEntityInvocation, WorkerExecutorError> {
@@ -1345,6 +1359,7 @@ fn validate_recorded_cancellation_terminal(
         Ok(recorded)
     } else {
         Err(WorkerExecutorError::unexpected_oplog_entry(
+            start_index,
             "recorded skipped-body tool cancellation terminal",
             "cancelled entity terminal carried a different partial response",
         ))
@@ -1371,8 +1386,9 @@ where
             let request = load_recorded_request(store, get_ctx, *root_start_index).await?;
             let HostRequest::EntityInvocation(request) = request else {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "root entity invocation request",
+                    *root_start_index,
                     format!("{request:?}"),
+                    "root entity invocation request",
                 ));
             };
             Some(request.metadata)
@@ -1452,8 +1468,9 @@ where
     } = entry
     else {
         return Err(WorkerExecutorError::unexpected_oplog_entry(
-            format!("entity invocation Start with request at {start_index}"),
+            start_index,
             format!("{entry:?}"),
+            format!("entity invocation Start with request at {start_index}"),
         ));
     };
     oplog.download_payload(request).await.map_err(|error| {
@@ -1493,6 +1510,7 @@ async fn ensure_body_claimed_retained_descendants<R, H>(
     {
         None => Ok(()),
         Some(unclaimed) => Err(WorkerExecutorError::unexpected_oplog_entry(
+            unclaimed,
             format!("completed replay body for {invocation}"),
             format!("entity body returned before consuming its recorded descendant at {unclaimed}"),
         )),
@@ -1588,7 +1606,7 @@ where
                         replay_result = &mut replay => replay_result,
                         stalled_at = &mut structural_stall => {
                             let stalled_at = stalled_at?;
-                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(stalled_at,
                                 format!("completed replay body for {invocation}"),
                                 format!("entity body returned before consuming its recorded descendant at {stalled_at}"),
                             ));
@@ -1642,6 +1660,7 @@ where
             };
             if reconstructed != EntityBodyOutcome::Completed(recorded) {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    invocation.start_index(),
                     format!("recorded entity invocation result for {invocation}"),
                     format!("reconstructed a different result for {invocation}"),
                 ));
@@ -1702,7 +1721,8 @@ pub(crate) mod tests {
     use super::*;
     use golem_common::model::AgentId;
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::agent::{AgentPrincipal, AgentTypeName};
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::caller::{AgentPrincipal, Principal};
     use golem_common::model::component::ComponentId;
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::entity::{
@@ -1730,10 +1750,7 @@ pub(crate) mod tests {
     fn invocation() -> EntityInvocationId {
         let owner = golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".to_string(),
-            },
+            &AgentId::from_parts(7, 1),
         );
         EntityInvocationId::new(
             OwnedAgentEntityId {
@@ -1927,9 +1944,13 @@ pub(crate) mod tests {
                     errors: Vec::new(),
                 },
             }),
-            principal: Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id,
-            }),
+            caller: Caller::entry(Principal::Agent(AgentPrincipal::of_agent(
+                "https://golem.test".to_string(),
+                owner.agent_id,
+                golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
+                AgentTypeName("Test".to_string()),
+                owner.environment_id,
+            ))),
             plan,
             authority_wallet: Vec::new(),
         })
@@ -2100,15 +2121,35 @@ pub(crate) mod tests {
         .unwrap();
 
         assert_eq!(
-            validate_recorded_cancellation_terminal(cancellation.clone(), &cancellation).unwrap(),
+            validate_recorded_cancellation_terminal(
+                OplogIndex::from_u64(1),
+                cancellation.clone(),
+                &cancellation
+            )
+            .unwrap(),
             cancellation.clone()
         );
-        assert!(validate_recorded_cancellation_terminal(rejection.clone(), &cancellation).is_err());
+        assert!(
+            validate_recorded_cancellation_terminal(
+                OplogIndex::from_u64(1),
+                rejection.clone(),
+                &cancellation
+            )
+            .is_err()
+        );
         assert_eq!(
-            validate_recorded_rejection_terminal(rejection.clone(), &rejection).unwrap(),
+            validate_recorded_rejection_terminal(
+                OplogIndex::from_u64(1),
+                rejection.clone(),
+                &rejection
+            )
+            .unwrap(),
             rejection.clone()
         );
-        assert!(validate_recorded_rejection_terminal(cancellation, &rejection).is_err());
+        assert!(
+            validate_recorded_rejection_terminal(OplogIndex::from_u64(1), cancellation, &rejection)
+                .is_err()
+        );
     }
 
     #[test]

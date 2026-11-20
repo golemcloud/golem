@@ -65,6 +65,10 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
     let events = ctx.state.replay_state.take_new_replay_events_for(root);
     for event in events {
         let (event, receipt) = event.into_projection();
+        let event_index = receipt.as_ref().map_or_else(
+            || ctx.state.replay_state.last_replayed_index(),
+            |receipt| receipt.index,
+        );
         let receipt = receipt.or_else(|| {
             matches!(event, ReplayEvent::ReplayFinished).then(|| owner.latest_replay_receipt())
         });
@@ -235,7 +239,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                         wallet.generation = projection.wallet.generation;
                     }
                 } else if update.is_none() {
-                    wallet.apply_replay_event(&owner_id.agent_id, &event)?;
+                    wallet.apply_replay_event(event_index, &owner_id.agent_id, &event)?;
                 }
                 let finalized_update = pending_update.is_some();
                 let live_scope_roots = if matches!(event, ReplayEvent::ReplayFinished) {
@@ -411,9 +415,6 @@ pub(super) fn apply<Ctx: WorkerCtx>(
         _ => &[],
     };
     ctx.clear_invocation_scope_if_roots_include(revoked);
-    if let ReplayEvent::ForkReplayed { new_phantom_id } = &prepared.event {
-        ctx.state.current_phantom_id = Some(*new_phantom_id);
-    }
     if prepared.finalized_update {
         ctx.state.automatic_update_unsettled = false;
     }

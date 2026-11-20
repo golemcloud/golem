@@ -16,9 +16,9 @@ use crate::Tracing;
 use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
 use golem_common::model::retry_policy::RetryPolicyState;
 use golem_common::model::{
-    AgentId, AgentStatus, NamedRetryPolicy, Predicate, PredicateValue, RetryConfig, RetryPolicy,
+    AgentStatus, NamedRetryPolicy, Predicate, PredicateValue, RetryConfig, RetryPolicy,
 };
-use golem_common::{agent_id, data_value, phantom_agent_id};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
@@ -80,7 +80,7 @@ fn time_box_retry_overrides() -> TestExecutorOverrides {
 
 async fn semantic_retry_authorizations(
     executor: &impl TestDsl,
-    worker_id: &AgentId,
+    worker_id: &golem_common::model::OwnedAgentId,
 ) -> anyhow::Result<Vec<(OplogIndex, OplogIndex, RetryPolicyState)>> {
     Ok(executor
         .get_oplog(worker_id, OplogIndex::INITIAL)
@@ -205,7 +205,7 @@ async fn assert_streaming_time_box_handoff(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
-    let agent_id = agent_id!(agent_type);
+    let agent_id = agent_key!(agent_type);
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -291,7 +291,7 @@ async fn interrupt_worker_during_delayed_recovery_retry(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = phantom_agent_id!("HttpClient", uuid::Uuid::new_v4());
+    let agent_id = agent_key!("HttpClient");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -348,7 +348,7 @@ async fn time_box_elapsed_budget_survives_reconstruction(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
-    let agent_id = phantom_agent_id!("HttpClient", uuid::Uuid::new_v4());
+    let agent_id = agent_key!("HttpClient");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -458,7 +458,7 @@ async fn delete_worker_during_delayed_recovery_retry(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
 
-    let agent_id = phantom_agent_id!("HttpClient", uuid::Uuid::new_v4());
+    let agent_id = agent_key!("HttpClient");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;

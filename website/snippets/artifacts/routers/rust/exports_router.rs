@@ -18,7 +18,7 @@ async fn export(request: HttpRequest)
       body: empty() });
   };
   // that user's agent builds the CSV now and streams it:
-  let csv = AnalystAgentClient::get(m[1].to_string())? //@
+  let csv = AnalystAgentClient::upsert(m[1].to_string())? //@
     .export_csv(m[2].to_string()).await?;
   Ok(HttpResponse { status: 200, headers: vec![
     header("content-type", "text/csv"), //@

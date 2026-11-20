@@ -2,7 +2,7 @@
 
 import { Tabs } from "@/components/tabs"
 
-Use reflection when your application selects an agent type or method at runtime. You can discover deployed types, inspect and validate their schemas, construct agent IDs, address phantom agents, and invoke methods without importing the target's definition.
+Use reflection when your application selects an agent type or method at runtime. You can discover deployed types, inspect and validate their schemas, address agents by key or agent ID, and invoke methods without importing the target's definition.
 
 For ordinary application code, prefer [Agent-to-Agent communication](/next/develop/rpc), including generated guest bridges between components. Reflection is useful for gateways and adapters whose target is not known at build time.
 
@@ -17,9 +17,9 @@ Normal RPC is not reflection. It provides the strongest compile-time experience 
 
 Caller-defined static clients are useful for integrations that deliberately
 own a typed view of another component. A full agent definition can create and
-identify agents and validate known configuration declarations. A method-only
-definition can bind an existing durable identity, but cannot validate an
-identity or configuration declarations it does not describe. Caller-defined
+address agents and validate known configuration declarations. A method-only
+definition can connect to an existing durable agent by its agent ID, but cannot
+validate a constructor or configuration declarations it does not describe. Caller-defined
 tool definitions similarly provide typed access to a selected tool surface.
 
 Discovered clients are the default choice when the deployed environment is the
@@ -28,7 +28,7 @@ by that snapshot. The snapshot does not change under the caller: rediscover
 explicitly when a newer deployment should be used.
 
 Fully dynamic clients are the lowest-level option. They invoke an existing
-durable agent identity or an explicit tool command using schema-native values.
+durable agent or an explicit tool command using schema-native values.
 Use them for gateways, adapters, and other infrastructure that intentionally
 keeps schema selection, packing, and result validation separate from
 transport.
@@ -63,7 +63,7 @@ export async function inspectAndCallCounter() {
   if (!checked.success) throw new Error(JSON.stringify(checked.issues))
   console.log(available.map(type => type.name), add.input.toJsonSchema())
 
-  const client = counterType.client.get({ name: "main" })
+  const client = counterType.client.upsert({ name: "main" })
   const result = await client.method("add").invoke(args)
   console.log(result.value, result.metadata.agentId)
   return result
@@ -91,7 +91,7 @@ export const inspectAndCallCounter = Effect.gen(function* () {
   if (!checked.success) return yield* Effect.fail(checked.issues)
   yield* Effect.log(available.map(type => type.name), add.input.toJsonSchema())
 
-  const client = yield* counterType.client.get({ name: "main" })
+  const client = yield* counterType.client.upsert({ name: "main" })
   const method = yield* client.method("add")
   return yield* method.invoke(args)
 }).pipe(Effect.scoped)
@@ -115,7 +115,7 @@ let input_schema = add.input().to_json_schema(true);
 let output_schema = add.output().map(|schema| schema.to_json_schema(true));
 let constructor_schema = counter_type.constructor_input().to_json_schema(true);
 
-let client = counter_type.client().get_json(&json!({ "name": "main" }))?;
+let client = counter_type.client().upsert_json(&json!({ "name": "main" }))?;
 let result = client.method("add")?.invoke_json(&args).await?;
 println!("{:?}: {:?}", result.metadata, result.value);
 ```
@@ -144,7 +144,7 @@ val prepared = for {
 
 val call = for {
   pair <- prepared
-  client <- pair._1.client.get(constructor)
+  client <- pair._1.client.upsert(constructor)
   method <- client.method("add")
 } yield {
   println(pair._2.input.toJsonSchema())
@@ -179,7 +179,7 @@ guard counter_type.find_method("add") is Some(add) else {
 let constructor = Json::object({ "name": Json::string("main") })
 let args = Json::object({ "by": Json::number(5.0) })
 let input_schema = add.input().to_json_schema()
-let client = counter_type.get_json(constructor)
+let client = counter_type.upsert_json(constructor)
 defer client.drop()
 
 let result = client.invoke_json("add", args)
@@ -211,12 +211,12 @@ fmt.Println(len(available), golem.Must(add.Input().ToJSONSchema(true)))
 
 constructor := map[string]any{"name": "main"}
 args := map[string]any{"by": 5}
-client := golem.Must(counterType.Get(constructor))
+client := golem.Must(counterType.Upsert(constructor))
 total, invocation, err := client.Call("add", args)
 if err != nil {
     panic(err)
 }
-fmt.Println(total, invocation.AgentID, invocation.IdempotencyKey)
+fmt.Println(total, invocation.AgentID, invocation.InvocationID)
 ```
 
 Discovery and method lookup return a `found` boolean. Other operations return errors; `golem.Must` panics on failure here for brevity. Inspect `Constructor().Input()`, `Methods()`, `Mode()`, and `Schema()`. `Output()` is optional; check `Get()` before accessing its schema. The reflected Go type does not expose configuration declarations or the implementing component as public accessors.
@@ -225,7 +225,7 @@ Discovery and method lookup return a `found` boolean. Other operations return er
 
 ## Caller-defined static clients
 
-A full client describes the type name, constructor, lifecycle, and methods using caller-owned codecs. A method-only client describes just methods and binds a durable agent ID supplied by the caller. Neither performs discovery. Method-only clients cannot validate constructor or configuration declarations they do not describe.
+A full client describes the type name, constructor, lifecycle, and methods using caller-owned codecs. A method-only client describes just methods and connects to an existing durable agent by an agent ID supplied by the caller. Neither performs discovery. Method-only clients cannot validate constructor or configuration declarations they do not describe.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
@@ -244,9 +244,9 @@ export const Counter = defineAgentClient({
 export const CounterMethods = defineAgentClient({ methods: Counter.methods })
 
 export async function callCounter() {
-  const id = Counter.agentId({ name: "main" })
-  const full = id.client(Counter)
-  const methodOnly = id.client(CounterMethods)
+  const full = Counter.client.upsert({ name: "main" })
+  const agentId = await full.agentId()
+  const methodOnly = await CounterMethods.getById(agentId)
   return [await full.add({ by: 5 }), await methodOnly.add({ by: 5 })]
 }
 ```
@@ -255,7 +255,7 @@ export async function callCounter() {
 
 ```typescript
 import { Effect, Schema } from "effect"
-import { defineAgentClient, method, WitTypes } from "@golemcloud/effect-golem"
+import { Client, defineAgentClient, method, WitTypes } from "@golemcloud/effect-golem"
 
 export const Counter = defineAgentClient({
   name: "CounterAgent",
@@ -267,9 +267,9 @@ export const Counter = defineAgentClient({
 export const CounterMethods = defineAgentClient({ methods: Counter.methods })
 
 export const callCounter = Effect.gen(function* () {
-  const id = yield* Counter.agentId({ name: "main" })
-  const full = yield* id.client(Counter)
-  const methodOnly = yield* id.client(CounterMethods)
+  const full = yield* Counter.client.upsert({ name: "main" })
+  const agentId = yield* full.agentId
+  const methodOnly = yield* Client.bind(agentId, CounterMethods)
   return [yield* full.add({ by: 5 }), yield* methodOnly.add({ by: 5 })]
 }).pipe(Effect.scoped)
 ```
@@ -291,13 +291,13 @@ trait CounterMethods {
 }
 
 // Inside an async function returning Result:
-let full = CounterApiClient::get("main".to_string())?;
+let full = CounterApiClient::upsert("main".to_string())?;
 let total = full.add(5).await?;
-let methods = CounterMethodsClient::bind(&existing_id)?;
+let methods = CounterMethodsClient::get_by_id(&existing_id)?;
 let other = methods.add(5).await?;
 ```
 
-`existing_id` is a `golem_rust::ParsedAgentId`. The macro also generates trigger, pending, and scheduled methods.
+`existing_id` is a `golem_rust::AgentId`, for example from `full.agent_id().await?`. A full client also has `create` and `get_by_id`. The macro also generates trigger, pending, and scheduled methods.
   </Tabs.Tab>
   <Tabs.Tab>
 
@@ -317,11 +317,11 @@ val methods = AgentClientDefinition.methodOnly
 val methodAdd = methods.method(
   "add", InputRecordCodec.single[Int]("by"), OutputCodec.single[Int]
 )
-val fullCall = full.client.get("main").map(_.method(fullAdd).invoke(5))
-val methodCall = methods.bind(existingId).map(_.method(methodAdd).invoke(5))
+val fullCall = full.client.upsert("main").map(_.method(fullAdd).invoke(5))
+val methodClient = methods.getById(existingId)
 ```
 
-`existingId` is a `ParsedAgentId`. Each call is an `Either` containing a `Future`; a successful invocation contains the typed `value`.
+`existingId` is a `golem.AgentId`. `fullCall` is an `Either` containing a `Future`; a successful invocation contains the typed `value`. `getById` returns a `Future` of an `Either` with the method-only client.
   </Tabs.Tab>
   <Tabs.Tab>
 
@@ -342,15 +342,13 @@ struct AddInput {
 Inside an async agent method:
 
 ```moonbit
-let full = @reflection.FullAgentClient::get(
+let full = @reflection.FullAgentClient::upsert(
   "CounterAgent", CounterId::{ name: "main" },
 )
 defer full.drop()
 let total : @reflection.Invocation[Int] = full.invoke("add", AddInput::{ by: 5 })
 
-let id = @reflection.FullAgentClient::agent_id(
-  "CounterAgent", CounterId::{ name: "main" },
-)
+let id = full.agent_id()
 let methods = @reflection.MethodOnlyAgentClient::bind(id)
 defer methods.drop()
 let other : @reflection.Invocation[Int] = methods.invoke("add", AddInput::{ by: 5 })
@@ -375,10 +373,10 @@ var (
 )
 
 // Inside an agent handler:
-full := golem.Must(Counter.Get(CounterID{Name: "main"}))
+full := golem.Must(Counter.Upsert(CounterID{Name: "main"}))
 total := golem.Must(Add.Call(full, AddInput{By: 5}))
-id := golem.Must(Counter.AgentID(CounterID{Name: "main"}, golem.None[golem.UUID]()))
-methodOnly := golem.Must(Methods.Bind(id))
+id := golem.Must(full.AgentID())
+methodOnly := golem.Must(Methods.GetByID(id))
 other := golem.Must(MethodAdd.Call(methodOnly, AddInput{By: 5}))
 ```
 
@@ -386,136 +384,141 @@ Use the SDK's patched Go toolchain, which supports generic methods.
   </Tabs.Tab>
 </Tabs>
 
-## Construct, parse, and bind agent IDs
+## Get, parse, and bind agent IDs
 
-An ID contains the agent type name, constructor values, and optional phantom ID. Constructing or parsing it does not invoke the agent. Binding prepares a client; a later invocation reaches the durable agent and creates it if necessary. Discovery by ID is a separate lookup and does not create an agent.
+An agent ID is a UUID that Golem issues when it creates the agent. It carries a tag of the agent type, but not the constructor values, so the SDK cannot compute it offline: ask a client for the ID of its agent, or parse a saved ID. On a client of `upsert`, asking for the ID creates the keyed agent when it is missing. Looking up the agent type of an ID reads its type tag and does not check that the agent exists. Binding by ID (`getById`) never creates an agent: an unknown ID, or the ID of an agent of another type, fails with a not-found error.
 
-Use a discovered type or full client to construct an ID with schema validation. Raw ID constructors are for infrastructure that already owns packed constructor values. A full or discovered client checks the type name and constructor when binding; a method-only or fully dynamic client has no such local schema authority.
+A full or discovered client checks the type name and constructor of the agents it creates; a method-only or fully dynamic client has no such local schema authority.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 
 ```typescript
-import { ParsedAgentId, getAgentTypeByAgentId } from "@golemcloud/golem-ts-sdk"
+import { AgentId, getAgentTypeByAgentId } from "@golemcloud/golem-ts-sdk"
 
-const id = counterType.agentId({ name: "main" })
-const parsed = new ParsedAgentId(id.value)
-const { typeName, constructorValue, phantomId } = parsed.parts()
+const id = await counterType.client.upsert({ name: "main" }).agentId()
+const parsed = AgentId.parse(id.toString())
 const currentType = getAgentTypeByAgentId(parsed)
-if (!currentType) throw new Error("Agent or type unavailable")
-const rebound = parsed.client(currentType)
+if (!currentType || currentType.mode !== "durable") {
+  throw new Error("Agent type unavailable or not durable")
+}
+const rebound = await currentType.client.getById(parsed)
 ```
 
-Wrapping a string does not parse it; `parts()` performs strict parsing. For packed values, use `ParsedAgentId.create({ typeName, constructorValue, phantomId })`.
+`AgentId.parse` checks only the UUID text form.
   </Tabs.Tab>
   <Tabs.Tab>
 
-Inside `Effect.gen`, with `AgentIdentity` imported from the SDK:
+Inside `Effect.gen` and an open scope, with `AgentId` imported from the SDK:
 
 ```typescript
-const id = yield* counterType.agentId({ name: "main" })
-const parsed = yield* AgentIdentity.parse(id.encoded)
+const client = yield* counterType.client.upsert({ name: "main" })
+const id = yield* client.agentId
+const parsed = yield* AgentId.parse(AgentId.format(id))
 const currentType = yield* Reflection.getAgentTypeByAgentId(parsed)
-if (!currentType) return yield* Effect.fail("Agent or type unavailable")
-const rebound = yield* parsed.client(currentType)
-yield* Effect.log(parsed.typeName, parsed.phantomId)
+if (!currentType || currentType.mode !== "durable") {
+  return yield* Effect.fail("Agent type unavailable or not durable")
+}
+const rebound = yield* currentType.client.getById(parsed)
 ```
 
-Parsing is strict. `parsed.constructorValue` holds the native constructor tree. For packed values, use `AgentIdentity.make({ typeName, constructorValue, phantomId })`.
+`AgentId.parse` checks only the UUID text form.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```rust
-use golem_rust::{get_agent_type_for, ParsedAgentId};
+use golem_rust::get_agent_type_for;
 
-let id = counter_type.agent_id_json(&json!({ "name": "main" }), None)?;
-let parsed = ParsedAgentId::new(id.as_str());
-let parts = parsed.parts()?;
-let current_type = get_agent_type_for(&parsed)?;
-let rebound = current_type.bind(&parsed)?;
+let client = counter_type.client().upsert_json(&json!({ "name": "main" }))?;
+let id = client.agent_id().await?;
+let current_type = get_agent_type_for(&id)?;
+let rebound = current_type.client().get_by_id(&id)?;
 ```
 
-`parts()` performs strict parsing. For packed values, use `ParsedAgentId::from_value(type_name, constructor_value, phantom_id)`.
+`golem_rust::AgentId::new(uuid)` wraps a saved `golem_rust::Uuid`. `counter_type.lookup_agent_id_json(&constructor)` returns the ID of an existing keyed agent, or `None`, and never creates it.
   </Tabs.Tab>
   <Tabs.Tab>
 
+With an implicit `ExecutionContext`:
+
 ```scala
-val rebound = for {
-  pair <- prepared
-  id <- pair._1.agentId(constructor)
-  parsed = ParsedAgentId(id.value)
-  parts <- parsed.parts
-  currentType <- Reflection.getAgentTypeFor(parsed).flatMap(
-    _.toRight(GolemReflectError.Discovery("Agent or type unavailable"))
-  )
-  client <- currentType.bind(parsed)
-} yield (parts, client)
+val rebound = prepared.flatMap { case (counterType, _) =>
+  counterType.client.upsert(constructor)
+}.map { client =>
+  client.agentId().flatMap {
+    case Left(error) => Future.successful(Left(error))
+    case Right(id) =>
+      Reflection.getAgentTypeFor(id) match {
+        case Right(Some(currentType)) => currentType.getById(id)
+        case Right(None) =>
+          Future.successful(Left(GolemReflectError.Discovery("Agent type unavailable")))
+        case Left(error) => Future.successful(Left(error))
+      }
+  }
+}
 ```
 
-`parts` performs strict parsing. For packed values, use `ParsedAgentId.create(typeName, constructorValue, phantomId)`.
+`golem.AgentId.parse(text)` returns an `Either[String, AgentId]` and checks only the UUID text form.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```moonbit
-let id = counter_type.agent_id_json(constructor)
-let parsed : @reflection.ParsedAgentId = { value: id.value }
-let parts = parsed.parts()
+let client = counter_type.upsert_json(constructor)
+defer client.drop()
+let id = client.agent_id()
+let parsed = @schema.AgentId::parse(id.to_string())
 guard @reflection.get_agent_type_by_agent_id(parsed) is Some(target) else {
-  raise @reflection.ReflectError::Discovery("Agent or type unavailable")
+  raise @reflection.ReflectError::Discovery("Agent type unavailable")
 }
-let rebound = match parts.phantom_id {
-  None => target.get_value(parts.constructor_value)
-  Some(uuid) => target.resume_phantom_value(parts.constructor_value, uuid)
-}
+let rebound = target.get_by_id(parsed)
 defer rebound.drop()
 ```
 
-This binds a durable target. `parts()` performs strict parsing. For packed values, use `ParsedAgentId::create(type_name, constructor_value, phantom_id=...)`.
+`@schema.AgentId::parse` checks only the UUID text form.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```go
-id := golem.Must(counterType.AgentID(constructor, golem.None[golem.UUID]()))
-raw := golem.Must(reflection.ParseRawAgentID(id))
-fmt.Println(raw.TypeName, golem.Must(raw.ConstructorJSON()))
-currentType, found := reflection.DiscoverAgentTypeByID(id)
+client := golem.Must(counterType.Upsert(constructor))
+id := golem.Must(client.AgentID())
+parsed := golem.AgentIDFromUUID(golem.Must(golem.ParseUUID(id.String())))
+currentType, found := reflection.DiscoverAgentTypeByID(parsed)
 if !found {
-    panic("Agent or type unavailable")
+    panic("Agent type unavailable")
 }
-rebound := golem.Must(currentType.Bind(id))
+rebound := golem.Must(currentType.GetByID(parsed))
 ```
 
-`golem.ParseAgentID[CounterID](id)` decodes into a caller-owned constructor type. For a packed typed constructor, use `reflection.MakeAgentID(typeName, constructor, phantom)`.
+`counterType.LookupID(constructor)` returns the ID of an existing keyed agent, or `None`, and never creates it.
   </Tabs.Tab>
 </Tabs>
 
-## Phantom and ephemeral agents
+## Agents without a key and ephemeral agents
 
-A durable phantom has its own reusable ID. Allocate a new phantom, save its phantom ID, or address an existing phantom using that ID and the same constructor values.
+`create` makes a new durable agent without a key and with a new agent ID. Save its ID and address it later with `getById`. With the `keyed` option, `create` makes the keyed agent of the constructor values instead, and fails with a conflict error when that agent exists.
 
-An ephemeral client is a logical handle for one-shot invocations, not a reusable final agent identity. Use its fresh or known-phantom factory rather than ordinary durable binding. Invocation metadata records the final agent ID and idempotency key. Do not rebind a completed ephemeral agent ID for another call.
+An ephemeral agent type offers only `upsert` (in MoonBit reflection, `ephemeral_json` and `ephemeral_value`): the client is a logical handle, and each invocation runs on a new one-shot instance. Invocation metadata records the final agent ID and the invocation ID. Do not address a completed ephemeral agent ID for another call.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 
 ```typescript
-const fresh = counterType.client.newPhantom({ name: "main" })
-if (!("client" in fresh)) throw new Error("Expected a durable phantom")
-const known = counterType.client.getPhantom({ name: "main" }, fresh.phantomId)
+const fresh = await counterType.client.create({ name: "main" })
+const id = await fresh.agentId()
+const known = await counterType.client.getById(id)
 const result = await known.method("add").invoke({ by: 5 })
 ```
 
-For an ephemeral discovered type, `newPhantom(input)` returns the client directly instead of a `{ client, agentId, phantomId }` bundle. `getPhantom(input, phantomId)` addresses a known phantom. For example:
+For an ephemeral discovered type, use `upsert`. For example:
 
 ```typescript
 const requestType = getReflectedAgentType("RequestAgent")
 if (!requestType || requestType.mode !== "ephemeral") {
   throw new Error("RequestAgent unavailable or not ephemeral")
 }
-const request = requestType.client.newPhantom({ route: "summarize" })
-if ("client" in request) throw new Error("Expected an ephemeral client")
+const request = requestType.client.upsert({ route: "summarize" })
 const result = await request.method("run").invoke({ text: "hello" })
-console.log(result.metadata.agentId, result.metadata.idempotencyKey)
+console.log(result.metadata.agentId, result.metadata.invocationId)
 ```
 
 This assumes `RequestAgent` has constructor field `route` and a `run(text)` method.
@@ -525,92 +528,87 @@ This assumes `RequestAgent` has constructor field `route` and a `run(text)` meth
 Inside `Effect.gen`, after narrowing `counterType.mode` to `"durable"`:
 
 ```typescript
-const fresh = yield* counterType.client.newPhantom({ name: "main" })
-const known = yield* counterType.client.getPhantom({ name: "main" }, fresh.phantomId)
+const fresh = yield* counterType.client.create({ name: "main" })
+const id = yield* fresh.agentId
+const known = yield* counterType.client.getById(id)
 const result = yield* (yield* known.method("add")).invoke({ by: 5 })
 ```
 
-For an ephemeral type, `newPhantom` returns the client directly. For a `RequestAgent` with constructor field `route` and method `run(text)`:
+For an ephemeral type, the factory has only `upsert`. For a `RequestAgent` with constructor field `route` and method `run(text)`:
 
 ```typescript
 const requestType = yield* Reflection.getAgentType("RequestAgent")
 if (!requestType || requestType.mode !== "ephemeral") {
   return yield* Effect.fail("RequestAgent unavailable or not ephemeral")
 }
-const request = yield* requestType.client.newPhantom({ route: "summarize" })
+const request = yield* requestType.client.upsert({ route: "summarize" })
 const result = yield* (yield* request.method("run")).invoke({ text: "hello" })
-yield* Effect.log(result.metadata.agentId, result.metadata.idempotencyKey)
+yield* Effect.log(result.metadata.agentId, result.metadata.invocationId)
 ```
-
-Use `getPhantom(input, phantomId)` when the phantom ID is already known.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```rust
-use golem_rust::NewPhantomClient;
-
-let fresh = counter_type.client().new_phantom_json(&json!({ "name": "main" }))?;
-if let NewPhantomClient::Durable(fresh) = fresh {
-    let known = counter_type.client().get_phantom_value(
-        counter_type.constructor_input().pack_json(&json!({ "name": "main" }))?,
-        fresh.phantom_id,
-    )?;
-    let result = known.method("add")?.invoke_json(&args).await?;
-}
+let fresh = counter_type
+    .client()
+    .create_json(&json!({ "name": "main" }), Default::default())
+    .await?;
+let id = fresh.agent_id().await?;
+let known = counter_type.client().get_by_id(&id)?;
+let result = known.method("add")?.invoke_json(&args).await?;
 ```
 
-For an ephemeral type, `new_phantom_json` returns `NewPhantomClient::Ephemeral(client)`. Use `get_phantom_value` for a known phantom. Ephemeral types reject ordinary durable `get` and existing-ID binding.
+For an ephemeral type, use `upsert_json`; `create_json` and `get_by_id` fail.
   </Tabs.Tab>
   <Tabs.Tab>
 
+With an implicit `ExecutionContext`:
+
 ```scala
-val phantoms = prepared.flatMap { case (counterType, _) =>
-  counterType.client.newPhantom(constructor).flatMap {
-    case Right(fresh) =>
-      counterType.client.getPhantom(constructor, fresh.phantomId)
-    case Left(_) =>
-      Left(GolemReflectError.Identity("Expected a durable phantom"))
-  }
+val known = prepared match {
+  case Left(error) => Future.successful(Left(error))
+  case Right((counterType, _)) =>
+    counterType.client.create(constructor).flatMap {
+      case Left(error) => Future.successful(Left(error))
+      case Right(fresh) =>
+        fresh.agentId().flatMap {
+          case Left(error) => Future.successful(Left(error))
+          case Right(id)   => counterType.client.getById(id)
+        }
+    }
 }
 ```
 
-The outer `Either` reports errors. Inside a successful `newPhantom`, `Right(bundle)` is a durable phantom and `Left(client)` is an ephemeral logical client. `getPhantom(constructor, phantomId)` supports known phantoms. Ephemeral types reject ordinary `get` and existing-ID binding.
+`create` also takes `keyed`, `config`, and `env`. For an ephemeral type, use `upsert`; `create` and `getById` fail.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```moonbit
-let fresh = counter_type.new_phantom_json(constructor)
+let fresh = counter_type.create_json(constructor)
 defer fresh.drop()
-
-// saved_phantom_id is a previously saved UUID.
-let known = counter_type.resume_phantom_json(constructor, saved_phantom_id)
+let id = fresh.agent_id()
+let known = counter_type.get_by_id(id)
 defer known.drop()
 let result = known.invoke_json("add", args)
 ```
 
-For an ephemeral discovered type, use `ephemeral_json(constructor)` or `ephemeral_phantom_json(constructor, phantom_id)` instead of the durable factories. Both return clients that must be dropped. Durable clients expose `reusable_identity` and `phantom_id` as optional fields; save them when the phantom must be addressed again.
+`create_json` also takes `keyed?`, `config?`, and `env?`. For an ephemeral discovered type, use `ephemeral_json(constructor)` instead of the durable factories. Every client must be dropped.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```go
-fresh := golem.Must(counterType.NewPhantom(constructor))
-raw := golem.Must(reflection.ParseRawAgentID(fresh.AgentID()))
-phantomID, found := raw.PhantomID.Get()
-if !found {
-    panic("Expected a phantom ID")
-}
-known := golem.Must(counterType.Get(
-    constructor, reflection.WithPhantomID(phantomID),
-))
+fresh := golem.Must(counterType.Create(constructor))
+id := golem.Must(fresh.AgentID())
+known := golem.Must(counterType.GetByID(id))
 ```
 
-For ephemeral types, `NewPhantom` creates a fresh logical client. `Get` requires `WithPhantomID` to address a known phantom; ordinary `Get` and existing-ID `Bind` are rejected.
+`Create` also takes `reflection.Keyed()`, `reflection.WithEnv`, and configuration options. For ephemeral types, use `Upsert`; `Create` and `GetByID` are rejected.
   </Tabs.Tab>
 </Tabs>
 
 ## Creation-time configuration
 
-You can override declared local configuration values, not secrets. Unknown paths and invalid values fail before RPC. Overrides apply only when the durable agent is created; calling an existing agent does not replace its persisted configuration.
+You can override declared local configuration values, not secrets, with the `config` option of `create`. Unknown paths and invalid values fail before RPC. `upsert` takes no overrides, and calling an existing agent does not replace its persisted configuration.
 
 These examples assume that `CounterAgent` declares a local signed 32-bit value at `limits.max`.
 
@@ -618,55 +616,59 @@ These examples assume that `CounterAgent` declares a local signed 32-bit value a
   <Tabs.Tab>
 
 ```typescript
-const configured = counterType.client.get(
+const configured = await counterType.client.create(
   { name: "configured" },
-  [{ path: ["limits", "max"], value: 10 }],
+  { config: [{ path: ["limits", "max"], value: 10 }] },
 )
 ```
 
-For native overrides, use `getValue` with typed entries. `packConfigJson` converts JSON entries; `validateConfigValues` checks native entries. Existing IDs bind with `id.client(counterType, entries)`.
+For native overrides, use `createValue` with typed entries. `packConfigJson` converts JSON entries; `validateConfigValues` checks native entries. The options also take `keyed` and `env`.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```typescript
-const configured = yield* counterType.client.get(
+const configured = yield* counterType.client.create(
   { name: "configured" },
-  [{ path: ["limits", "max"], value: 10 }],
+  { config: [{ path: ["limits", "max"], value: 10 }] },
 )
 ```
 
-Use `getValue` for native entries. Existing IDs use `counterType.bindWithJsonConfig(id, entries)` or `bindWithConfig` for native entries; these remain scoped Effects.
+Use `createValue` for native entries. The options also take `keyed` and `env`; the client remains a scoped Effect.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```rust
-let configured = counter_type.client().get_json_with_config(
+let configured = counter_type.client().create_json(
     &json!({ "name": "configured" }),
-    vec![(vec!["limits".to_string(), "max".to_string()], json!(10))],
-)?;
+    golem_rust::CreateOptions {
+        keyed: false,
+        config: vec![(vec!["limits".to_string(), "max".to_string()], json!(10))],
+        env: Vec::new(),
+    },
+).await?;
 ```
 
-Use `get_value_with_config` for native `AgentConfigValue` entries. Existing IDs use `bind_with_json_config` or `bind_with_config`.
+Use `create_value` for native `AgentConfigValue` entries.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```scala
-val configured = prepared.flatMap { case (counterType, _) =>
-  counterType.client.get(
+val configured = prepared.map { case (counterType, _) =>
+  counterType.client.create(
     Json.Object("name" -> Json.String("configured")),
-    List(ReflectedConfigJson(List("limits", "max"), Json.Number(BigDecimal(10))))
+    config = List(ReflectedConfigJson(List("limits", "max"), Json.Number(BigDecimal(10))))
   )
 }
 ```
 
-Use `getValue` for native `golem.config.ConfigOverride` entries. Convert JSON entries with `counterType.packConfigJson(entries)` before passing them to `counterType.bind(id, nativeEntries)`.
+Use `createValue` for native `golem.config.ConfigOverride` entries. Both also take `keyed` and `env`, and return a `Future`.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```moonbit
-let configured = counter_type.get_json_with_config(
+let configured = counter_type.create_json(
   Json::object({ "name": Json::string("configured") }),
-  [@reflection.ReflectedConfigJsonValue::{
+  config=[@reflection.ReflectedConfigJsonValue::{
     path: ["limits", "max"],
     value: Json::number(10.0),
   }],
@@ -674,24 +676,24 @@ let configured = counter_type.get_json_with_config(
 defer configured.drop()
 ```
 
-Use `get_value_with_config` for native `ReflectedConfigValue` entries. Phantom and ephemeral factories also have configuration variants.
+Use `create_value` for native `ReflectedConfigValue` entries. Both also take `keyed?` and `env?`.
   </Tabs.Tab>
   <Tabs.Tab>
 
 ```go
-configured := golem.Must(counterType.Get(
+configured := golem.Must(counterType.Create(
     map[string]any{"name": "configured"},
     reflection.WithConfigJSON([]string{"limits", "max"}, 10),
 ))
 ```
 
-Use `WithConfigValue` for a native value. `Get`, `NewPhantom`, and `Bind` accept configuration options. Caller-defined full clients can declare a typed configuration with `DefineConfiguredFullAgentClient`.
+Use `WithConfigValue` for a native value. `Create` also takes `reflection.Keyed()` and `reflection.WithEnv`. Caller-defined full clients can declare a typed configuration with `DefineConfiguredFullAgentClient`.
   </Tabs.Tab>
 </Tabs>
 
 ## Trigger, schedule, and cancel calls
 
-Awaited calls return results and invocation metadata. Triggered calls return metadata without waiting for a result. Scheduled calls return a cancellation handle as well as metadata. Metadata contains the target agent ID and idempotency key.
+Awaited calls return results and invocation metadata. Triggered calls return metadata without waiting for a result. Scheduled calls return a cancellation handle as well as metadata. Metadata contains the target agent ID and the invocation ID.
 
 These examples use an application-supplied absolute time `at`. Cancelling observation of a running call does not undo remote side effects or prove that the invocation never ran.
 
@@ -747,7 +749,7 @@ let completion = pending.await;
 ```scala
 val method = for {
   pair <- prepared
-  client <- pair._1.client.get(constructor)
+  client <- pair._1.client.upsert(constructor)
   add <- client.method("add")
 } yield add
 
@@ -820,7 +822,7 @@ let result = client.method("add")?
 ```scala
 val lentCall = for {
   pair <- prepared
-  client <- pair._1.client.get(constructor)
+  client <- pair._1.client.upsert(constructor)
   method <- client.method("add")
 } yield method.invokeJson(args, Some(scopeCard))
 ```
@@ -845,17 +847,20 @@ result, invocation, err := client.Call(
 
 ## Fully dynamic calls and native values
 
-Fully dynamic clients bind an ID without discovering a schema or validating inputs and outputs against one. Keep a discovered snapshot alongside the client when you want explicit validation. Packing input with that snapshot does not attach its output-validation policy to the dynamic client.
+Fully dynamic clients connect to an existing agent by its agent ID without discovering a schema or validating inputs and outputs against one. Keep a discovered snapshot alongside the client when you want explicit validation. Packing input with that snapshot does not attach its output-validation policy to the dynamic client.
 
 These examples pack `add`'s JSON input, invoke dynamically, and validate and decode the native result. For streaming methods, use native value APIs, transfer owned inputs only once, and consume or close returned streams before releasing the client or scope. JSON helpers cannot transport streams, futures, or opaque capabilities. Prefer a typed client when the streaming contract is known at build time.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 
+With `DynamicAgentClient` imported from the SDK:
+
 ```typescript
-const id = counterType.agentId({ name: "main" })
+const id = await counterType.client.upsert({ name: "main" }).agentId()
 const input = add.input.packJson({ by: 5 })
-const result = await id.dynamicClient().method("add").invokeValue(input)
+const dynamic = await DynamicAgentClient.getById(id)
+const result = await dynamic.method("add").invokeValue(input)
 if (!add.output || result.value === undefined) {
   throw new Error("add must return a value")
 }
@@ -868,12 +873,12 @@ Dynamic methods also expose `triggerValue` and `scheduleValue`.
   </Tabs.Tab>
   <Tabs.Tab>
 
-Inside `Effect.gen` and an open scope:
+Inside `Effect.gen` and an open scope, with `DynamicClient` imported from the SDK:
 
 ```typescript
-const id = yield* counterType.agentId({ name: "main" })
+const id = yield* (yield* counterType.client.upsert({ name: "main" })).agentId
 const input = add.input.packJson({ by: 5 })
-const dynamic = yield* id.dynamicClient()
+const dynamic = yield* DynamicClient.bind(id)
 const result = yield* dynamic.method("add").invoke(input)
 if (!add.output || result.value === undefined) {
   return yield* Effect.fail("add must return a value")
@@ -888,9 +893,10 @@ Dynamic methods also expose `trigger` and `schedule`, both taking native values.
   <Tabs.Tab>
 
 ```rust
-let id = counter_type.agent_id_json(&json!({ "name": "main" }), None)?;
+let id = counter_type.client().upsert_json(&json!({ "name": "main" }))?.agent_id().await?;
 let input = add.input().pack_json(&args)?;
-let result = id.dynamic_client()?.method("add").invoke_value(input).await?;
+let dynamic = golem_rust::DynamicAgentClient::from_agent_id(&id)?;
+let result = dynamic.method("add").invoke_value(input).await?;
 let output = add.output().ok_or_else(|| {
     GolemReflectError::MalformedRemoteOutput("add declares unit output".into())
 })?;
@@ -905,24 +911,26 @@ Dynamic methods also expose native trigger, pending, and schedule operations.
   </Tabs.Tab>
   <Tabs.Tab>
 
-With an implicit `ExecutionContext`, the outer `Either` prepares a `Future`:
+With an implicit `ExecutionContext` and an agent ID `id`, for example from a client's `agentId()`, the outer `Either` prepares a `Future`:
 
 ```scala
 val dynamicCall = for {
   pair <- prepared.left.map(_.message)
   input <- pair._2.input.packJson(args).left.map(_.message)
-  id <- pair._1.agentId(constructor).left.map(_.message)
-  dynamic <- id.dynamicClient.left.map(_.message)
-} yield dynamic.method("add").invokeValue(input).map {
-  _.left.map(_.message).flatMap { result =>
-    for {
-      output <- pair._2.output.toRight("add declares unit output")
-      value <- result.value.toRight("add returned no value")
-      _ <- output.validateValue(value)
-        .left.map(_.map(_.message).mkString("; "))
-      total <- output.unpackJson(value).left.map(_.message)
-    } yield total
-  }
+} yield DynamicAgentClient.getById(id).flatMap {
+  case Left(error) => Future.successful(Left(error.message))
+  case Right(dynamic) =>
+    dynamic.method("add").invokeValue(input).map {
+      _.left.map(_.message).flatMap { result =>
+        for {
+          output <- pair._2.output.toRight("add declares unit output")
+          value <- result.value.toRight("add returned no value")
+          _ <- output.validateValue(value)
+            .left.map(_.map(_.message).mkString("; "))
+          total <- output.unpackJson(value).left.map(_.message)
+        } yield total
+      }
+    }
 }
 ```
 
@@ -931,9 +939,11 @@ Dynamic methods also expose `triggerValue` and `scheduleValue`. Handle errors in
   <Tabs.Tab>
 
 ```moonbit
-let id = counter_type.agent_id_json(constructor)
+let target = counter_type.upsert_json(constructor)
+defer target.drop()
+let id = target.agent_id()
 let input = add.input().pack_json(args)
-let dynamic = @reflection.DynamicAgentClient::from_agent_id(id)
+let dynamic = @reflection.DynamicAgentClient::get_by_id("CounterAgent", id)
 defer dynamic.drop()
 
 let result = dynamic.invoke_value("add", input)
@@ -953,9 +963,9 @@ let total = output.unpack_json(value)
   <Tabs.Tab>
 
 ```go
-id := golem.Must(counterType.AgentID(constructor, golem.None[golem.UUID]()))
+id := golem.Must(golem.Must(counterType.Upsert(constructor)).AgentID())
 input := golem.Must(add.Input().PackJSON(args))
-dynamic := golem.Must(reflection.BindAgentID(id))
+dynamic := golem.Must(reflection.GetByID(id))
 result, _, err := dynamic.Call("add", input)
 if err != nil {
     panic(err)
@@ -1094,9 +1104,9 @@ returned value matches the declared schema. Remote agent failures, tool
 failures, and custom error payloads remain structured so callers can handle
 them without parsing messages.
 
-Configuration overrides apply when an agent is created. Rebinding an existing
-durable identity does not reconfigure that agent; it keeps its persisted
-initial configuration.
+Configuration overrides apply when `create` creates an agent. Connecting to an
+existing durable agent with `upsert` or `getById` does not reconfigure that
+agent; it keeps its persisted initial configuration.
 
 ## Further examples
 

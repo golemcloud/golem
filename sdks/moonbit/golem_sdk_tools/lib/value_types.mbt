@@ -146,6 +146,7 @@ pub fn parse_value_types(
               )
             }
             validate_no_multimodal_in_value_kind(name, kind)
+            validate_no_live_value_in_value_kind(name, kind)
             results.push({ name, kind, inline: inline.val, })
           }
         }
@@ -304,6 +305,40 @@ fn validate_no_multimodal_in_value_kind(
     if param_type_contains_multimodal(pt) {
       raise AgentParseError(
         "Multimodal type is not allowed in field '\{field}' of #derive.golem_schema type '\{name}'; multimodal is only supported as a direct agent method parameter or return type",
+      )
+    }
+  }
+  match kind {
+    Record(fields) =>
+      for f in fields {
+        check(f.0, f.1)
+      }
+    SimpleEnum(_) => ()
+    VariantEnum(cases) =>
+      for c in cases {
+        match c.1 {
+          None => ()
+          Single(pt) => check(c.0.name, pt)
+          Multi(items, _) =>
+            for it in items {
+              check("\{c.0.name}.\{it.0}", it.1)
+            }
+        }
+      }
+  }
+}
+
+///|
+/// Rejects a `Principal`, `Caller` or `TokenProvenance` inside a
+/// `#derive.golem_schema` payload: these are live values, never data.
+fn validate_no_live_value_in_value_kind(
+  name : String,
+  kind : ValueTypeKind,
+) -> Unit raise AgentParseError {
+  let check = fn(field : String, pt : ParamType) -> Unit raise AgentParseError {
+    if contains_live_value_type(pt) {
+      raise AgentParseError(
+        "Field '\{field}' of #derive.golem_schema type '\{name}': \{live_value_message}",
       )
     }
   }

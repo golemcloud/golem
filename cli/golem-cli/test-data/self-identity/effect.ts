@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
-import { uuidToString } from "golem:core/types@2.0.0"
+import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
 import {
-  AgentIdentity,
+  AgentId,
   Agents,
   Durability,
   SelfAgentId,
@@ -20,10 +20,7 @@ for (const snapshots of [false, true]) {
     methods: {
       observe: method({ input: {}, success: Schema.String }),
       status: method({ input: {}, success: Schema.String }),
-      forkNamed: method({
-        input: { name: Schema.String, cutoff: Schema.String },
-        success: Schema.Void,
-      }),
+      forkAt: method({ input: { cutoff: Schema.String }, success: Schema.String }),
       forkSelf: method({ input: {}, success: Schema.String }),
     },
   })
@@ -32,7 +29,7 @@ for (const snapshots of [false, true]) {
       SelfAgentId.SelfAgentId.pipe(
         Effect.map((id) => ({
           configured: name,
-          saved: id.agentId,
+          saved: AgentId.format(id),
           trace: [] as string[],
           snapshotIdentity: "",
           lastFork: "",
@@ -41,51 +38,44 @@ for (const snapshots of [false, true]) {
     methods: (state) => ({
       observe: () =>
         Effect.gen(function* () {
-          const self = yield* SelfAgentId.SelfAgentId
+          const self = AgentId.format(yield* SelfAgentId.SelfAgentId)
           // Different durable calls make an incorrect historical identity diverge.
-          if (self.agentId.includes('"parent"')) yield* Agents.getSelfMetadata
+          if (self === state.saved) yield* Agents.getSelfMetadata
           else yield* Durability.generateIdempotencyKey
-          state.trace.push(self.agentId)
-          return self.agentId
+          state.trace.push(self)
+          return self
         }),
       status: () =>
         Effect.gen(function* () {
           const self = yield* SelfAgentId.SelfAgentId
           const metadata = yield* Agents.getSelfMetadata
-          const addressed = yield* Agents.getAgentMetadata(self)
+          const addressed = yield* Agents.getAgentMetadata({ uuid: parseUuid(AgentId.format(self)) })
           return JSON.stringify({
             ...state,
-            current: self.agentId,
-            metadata: metadata.agentId.agentId,
-            addressed: addressed?.agentId.agentId,
+            current: AgentId.format(self),
+            metadata: uuidToString(metadata.agentId.uuid),
+            addressed: addressed ? uuidToString(addressed.agentId.uuid) : undefined,
           })
         }),
-      forkNamed: ({ name, cutoff }) =>
+      forkAt: ({ cutoff }) =>
         Effect.gen(function* () {
-          const source = yield* SelfAgentId.SelfAgentId
-          const target = yield* spec.agentId({ name })
-          yield* Agents.forkAgent({
-            source,
-            target: { ...source, agentId: target.encoded },
+          const metadata = yield* Agents.getSelfMetadata
+          const forked = yield* Agents.forkAgent({
+            source: metadata.agentId,
             oplogIdxCutOff: BigInt(cutoff),
           })
+          return uuidToString(forked.uuid)
         }),
       forkSelf: () =>
         Effect.gen(function* () {
           const before = yield* SelfAgentId.SelfAgentId
           const result = yield* Agents.fork
           const after = yield* SelfAgentId.SelfAgentId
-          const identity = yield* AgentIdentity.parse(before.agentId)
-          const target = yield* AgentIdentity.make({
-            typeName: identity.typeName,
-            constructorValue: identity.constructorValue,
-            phantomId: uuidToString(result.val.forkedPhantomId),
-          })
           state.lastFork = JSON.stringify({
-            before: before.agentId,
-            after: after.agentId,
+            before: AgentId.format(before),
+            after: AgentId.format(after),
             tag: result.tag,
-            target: target.encoded,
+            target: uuidToString(result.val.forkedAgentId.uuid),
           })
           return state.lastFork
         }),
@@ -94,7 +84,7 @@ for (const snapshots of [false, true]) {
       save: (state) =>
         SelfAgentId.SelfAgentId.pipe(
           Effect.map((id) =>
-            new TextEncoder().encode(JSON.stringify({ ...state, snapshotIdentity: id.agentId })),
+            new TextEncoder().encode(JSON.stringify({ ...state, snapshotIdentity: AgentId.format(id) })),
           ),
         ),
       restore: (bytes) =>

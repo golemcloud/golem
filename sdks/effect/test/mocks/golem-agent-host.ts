@@ -1,5 +1,5 @@
 /**
- * In-memory mock for the `golem:agent/host@1.5.0` host module.
+ * In-memory mock for the `golem:agent/host@2.0.0` host module.
  *
  * Tests can call `__setRegisteredAgentTypes` (re-exported from this module)
  * to control what `getAllAgentTypes` returns.
@@ -11,31 +11,15 @@ export const getAllAgentTypes = (): Array<any> => registered
 export const getAgentType = (name: string): any =>
   registered.find((r) => r.agentType.typeName === name)
 
-export const getAgentTypeByAgentId = (_agentId: string): any => registered[0]
+export const getAgentTypeByAgentId = (_agentId: any): any => registered[0]
 
-export const makeAgentId = (): string => {
-  throw new Error("makeAgentId not mocked")
-}
+let lookupAgentIdImpl: (agentTypeName: string, input: any) => any = () => undefined
 
-/**
- * Settable mock for the host's `parseAgentId`. Tests register a
- * responder via {@link __setParseAgentIdImpl}; the default throws so
- * forgetting to set it surfaces clearly.
- */
-let parseAgentIdImpl: (agentId: string) => [string, any, any] = () => {
-  throw new Error("parseAgentId not mocked")
-}
+export const lookupAgentId = (agentTypeName: string, input: any): any =>
+  lookupAgentIdImpl(agentTypeName, input)
 
-export const parseAgentId = (agentId: string): [string, any, any] => parseAgentIdImpl(agentId)
-
-export const __setParseAgentIdImpl = (fn: (agentId: string) => [string, any, any]): void => {
-  parseAgentIdImpl = fn
-}
-
-export const __resetParseAgentIdImpl = (): void => {
-  parseAgentIdImpl = () => {
-    throw new Error("parseAgentId not mocked")
-  }
+export const __setLookupAgentIdImpl = (fn: (agentTypeName: string, input: any) => any): void => {
+  lookupAgentIdImpl = fn
 }
 
 /**
@@ -91,12 +75,22 @@ export const __setRegisteredAgentTypes = (types: Array<any>): void => {
 // RPC mock
 // ---------------------------------------------------------------------------
 
+/** How a `WasmRpc` client was opened. */
+export type RpcTarget =
+  | { readonly kind: "upsert"; readonly constructorValue: any }
+  | { readonly kind: "getById"; readonly agentId: any }
+  | { readonly kind: "create"; readonly constructorValue: any; readonly options: any }
+
+/** A recorded static `WasmRpc` call that opens a client. */
+export interface RecordedRpcOpen {
+  readonly agentTypeName: string
+  readonly target: RpcTarget
+}
+
 /** A single recorded call against any `WasmRpc` instance. */
 export interface RecordedRpcCall {
   readonly agentTypeName: string
-  readonly constructorValue: any
-  readonly phantomId: any
-  readonly agentConfig: ReadonlyArray<any>
+  readonly target: RpcTarget
   readonly kind: "invokeAndAwait" | "invoke" | "asyncInvokeAndAwait" | "schedule"
   readonly methodName: string
   readonly input: any
@@ -127,11 +121,13 @@ export type RpcResponder = (
 export type ResolvedRpcResponse = Exclude<RpcResponse, { tag: "pending" }>
 
 const recordedCalls: Array<RecordedRpcCall> = []
+const recordedOpens: Array<RecordedRpcOpen> = []
 let responder: RpcResponder = () => ({
   tag: "throw",
   error: { tag: "remote-internal-error", val: "no responder configured" },
 })
 let constructorThrow: ((agentTypeName: string) => unknown | undefined) | null = null
+let nextAgentId: any = { uuid: { highBits: 0x1n, lowBits: 0x8000000000000001n } }
 
 const pendingFutures: Array<{
   methodName: string
@@ -173,6 +169,9 @@ export const __failSubscribeOnce = (
 
 export const __resetRpc = (): void => {
   recordedCalls.length = 0
+  recordedOpens.length = 0
+  nextAgentId = { uuid: { highBits: 0x1n, lowBits: 0x8000000000000001n } }
+  lookupAgentIdImpl = () => undefined
   responder = () => ({
     tag: "throw",
     error: { tag: "remote-internal-error", val: "no responder configured" },
@@ -185,11 +184,21 @@ export const __resetRpc = (): void => {
 }
 
 export const __getRecordedRpcCalls = (): ReadonlyArray<RecordedRpcCall> => recordedCalls
+export const __getRecordedRpcOpens = (): ReadonlyArray<RecordedRpcOpen> => recordedOpens
+
+/** The agent ID that `create` returns and that `agentId()` reports for clients without one. */
+export const __setNextAgentId = (id: any): void => {
+  nextAgentId = id
+}
 
 export const __setRpcResponder = (r: RpcResponder): void => {
   responder = r
 }
 
+/**
+ * One-shot hook that makes the next static `WasmRpc` call fail. The predicate receives the
+ * agent type name and returns the `rpc-error` to throw, or `undefined` to succeed.
+ */
 export const __failConstructorOnce = (
   predicate: (agentTypeName: string) => unknown | undefined,
 ): void => {
@@ -346,21 +355,36 @@ class MockPollable {
 }
 
 export class WasmRpc {
-  static create(agentTypeName: string, input: any, phantomId: any, config: ReadonlyArray<any>) {
-    return new WasmRpc(agentTypeName, input, phantomId, config)
-  }
-
-  constructor(
-    private readonly agentTypeName: string,
-    private readonly constructorValue: any,
-    private readonly phantomId: any,
-    private readonly agentConfig: ReadonlyArray<any>,
-  ) {
+  private static open(agentTypeName: string, target: RpcTarget): WasmRpc {
+    recordedOpens.push({ agentTypeName, target })
     if (constructorThrow !== null) {
       const e = constructorThrow(agentTypeName)
       constructorThrow = null
       if (e !== undefined) throw e
     }
+    return new WasmRpc(agentTypeName, target)
+  }
+
+  static upsert(agentTypeName: string, constructorValue: any): WasmRpc {
+    return WasmRpc.open(agentTypeName, { kind: "upsert", constructorValue })
+  }
+
+  static getById(agentTypeName: string, agentId: any): WasmRpc {
+    return WasmRpc.open(agentTypeName, { kind: "getById", agentId })
+  }
+
+  static async create(agentTypeName: string, constructorValue: any, options: any) {
+    const client = WasmRpc.open(agentTypeName, { kind: "create", constructorValue, options })
+    return { client, agentId: nextAgentId }
+  }
+
+  private constructor(
+    private readonly agentTypeName: string,
+    private readonly target: RpcTarget,
+  ) {}
+
+  async agentId(): Promise<any> {
+    return this.target.kind === "getById" ? this.target.agentId : nextAgentId
   }
 
   private record(
@@ -371,9 +395,7 @@ export class WasmRpc {
   ): RecordedRpcCall {
     const call: RecordedRpcCall = {
       agentTypeName: this.agentTypeName,
-      constructorValue: this.constructorValue,
-      phantomId: this.phantomId,
-      agentConfig: this.agentConfig,
+      target: this.target,
       kind,
       methodName,
       input,
@@ -415,15 +437,9 @@ export class WasmRpc {
     const call = this.record("asyncInvokeAndAwait", methodName, input)
     return {
       metadata: {
-        agentId: this.agentTypeName + "()",
+        agentId: nextAgentId,
         invocationId: {
-          owner: {
-            tag: "agent",
-            val: {
-              componentId: { uuid: { highBits: 0n, lowBits: 0n } },
-              agentId: this.agentTypeName + "()",
-            },
-          },
+          owner: { tag: "agent", val: nextAgentId },
           id: { highBits: 0n, lowBits: BigInt(recordedCalls.length) },
         },
       },

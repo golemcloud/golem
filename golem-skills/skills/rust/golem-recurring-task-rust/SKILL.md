@@ -51,7 +51,7 @@ impl PollerAgent for PollerAgentImpl {
 
         do_work(&endpoint).await;
 
-        let me = PollerAgentClient::get(self.name.clone());
+        let me = PollerAgentClient::upsert(self.name.clone());
         me.schedule_poll(endpoint, after(Duration::from_secs(60)))
             .expect("failed to schedule next poll");
     }
@@ -77,7 +77,7 @@ let delay = if succeeded {
     (60 * 2u64.pow(self.consecutive_failures.min(6))).min(3600)
 };
 
-PollerAgentClient::get(self.name.clone())
+PollerAgentClient::upsert(self.name.clone())
     .schedule_poll(endpoint, after(Duration::from_secs(delay)))
     .expect("failed to schedule retry");
 ```
@@ -89,7 +89,7 @@ PollerAgentClient::get(self.name.clone())
 and call `cancel()` to prevent that scheduled invocation from starting:
 
 ```rust
-let token = PollerAgentClient::get(self.name.clone())
+let token = PollerAgentClient::upsert(self.name.clone())
     .schedule_cancelable_poll(endpoint, after(Duration::from_secs(60)))
     .expect("failed to schedule next poll");
 self.pending = Some(token);

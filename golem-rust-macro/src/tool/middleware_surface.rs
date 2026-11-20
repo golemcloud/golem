@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::tool::client::{
-    canonical_value_name, inherited_root_params, is_principal_type, is_stream_type,
+    canonical_value_name, inherited_root_params, is_injected_context_type, is_stream_type,
     omitted_marker_ident, param_omission_surfaces, split_result, stream_idents,
 };
 use crate::tool::descriptor::descriptor_fn_ident;
@@ -71,7 +71,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                 [],
                 [],
                 [#(#direct_leaf_names)*],
-                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_stdout unused_stderr unused_principal unused_underlying]
+                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_stdout unused_stderr unused_context unused_underlying]
             );
         }
 
@@ -90,7 +90,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                 [],
                 [],
                 [#(#direct_leaf_names_for_trait)*],
-                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_stdout unused_stderr unused_principal unused_underlying]
+                [unused_instance unused_tool unused_command_index unused_input unused_stdin unused_stdout unused_stderr unused_context unused_underlying]
             );
 
             #[doc(hidden)]
@@ -124,7 +124,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                 __golem_middleware_stdin: ::std::option::Option<golem_rust::tool::InputStream>,
                 __golem_middleware_stdout: ::std::option::Option<golem_rust::tool::OutputStream>,
                 __golem_middleware_stderr: ::std::option::Option<golem_rust::tool::OutputStream>,
-                __golem_middleware_principal: golem_rust::tool::Principal,
+                __golem_middleware_context: golem_rust::tool::InvocationContext,
                 __golem_middleware_underlying: golem_rust::tool::UnderlyingTool,
             ) -> golem_rust::tool::ToolMiddlewareInvokeFutureFor<'a>
             where
@@ -164,7 +164,7 @@ pub fn synthesize_middleware_surface(ir: &ToolDefinitionIr) -> TokenStream {
                             __golem_middleware_stdin
                             __golem_middleware_stdout
                             __golem_middleware_stderr
-                            __golem_middleware_principal
+                            __golem_middleware_context
                             __golem_middleware_underlying
                         ]
                     );
@@ -209,7 +209,7 @@ fn synthesize_projection_macro(ir: &ToolDefinitionIr) -> TokenStream {
                 [$($ancestor)*],
                 [$($omitted)*],
                 [$($direct)*],
-                [$instance $tool $command_index $input $stdin $stdout $stderr $principal $underlying],
+                [$instance $tool $command_index $input $stdin $stdout $stderr $context $underlying],
                 [],
                 [];
                 $($omitted)*
@@ -245,7 +245,7 @@ fn synthesize_projection_macro(ir: &ToolDefinitionIr) -> TokenStream {
                     $stdin:ident
                     $stdout:ident
                     $stderr:ident
-                    $principal:ident
+                    $context:ident
                     $underlying:ident
                 ]
             ) => {
@@ -355,7 +355,7 @@ fn projection_param_arms(
             [$($ancestor)*],
             [$($omitted)*],
             [$($direct)*],
-            [$instance $tool $command_index $input $stdin $stdout $stderr $principal $underlying],
+            [$instance $tool $command_index $input $stdin $stdout $stderr $context $underlying],
             [$($args)* (#ident: #ty => #canonical_name)],
             [$($new_omitted)* #(#markers_for_keep)*];
             $($omitted)*
@@ -373,7 +373,7 @@ fn projection_param_arms(
             [$($ancestor)*],
             [$($omitted)*],
             [$($direct)*],
-            [$instance $tool $command_index $input $stdin $stdout $stderr $principal $underlying],
+            [$instance $tool $command_index $input $stdin $stdout $stderr $context $underlying],
             [$($args)*],
             [$($new_omitted)*];
             $($omitted)*
@@ -398,7 +398,7 @@ fn projection_param_arms(
             $stdin:ident
             $stdout:ident
             $stderr:ident
-            $principal:ident
+            $context:ident
             $underlying:ident
         ],
         [$($args:tt)*],
@@ -433,7 +433,7 @@ fn projection_param_arms(
                 [$($ancestor)*],
                 [$($omitted)*],
                 [$($direct)*],
-                [$instance $tool $command_index $input $stdin $stdout $stderr $principal $underlying],
+                [$instance $tool $command_index $input $stdin $stdout $stderr $context $underlying],
                 [$($args)*],
                 [$($new_omitted)*];
                 $($all)*
@@ -483,7 +483,7 @@ fn projection_done_arm(
             $stdin:ident
             $stdout:ident
             $stderr:ident
-            $principal:ident
+            $context:ident
             $underlying:ident
         ],
         [$($args:tt)*],
@@ -504,7 +504,7 @@ fn projection_done_arm(
                     [$($ancestor)* $($args)*],
                     [$($omitted)* $($new_omitted)*],
                     [$($direct)*],
-                    [$instance $tool $command_index $input $stdin $stdout $stderr $principal $underlying]
+                    [$instance $tool $command_index $input $stdin $stdout $stderr $context $underlying]
                 );
             };
         }
@@ -560,7 +560,7 @@ fn projection_done_arm(
                     stdin: $stdin,
                     stdout_writer: $stdout,
                     stderr_writer: $stderr,
-                    principal: $principal,
+                    context: $context,
                     underlying: $underlying
                 }
             };
@@ -616,7 +616,7 @@ struct LeafInput {
     stdin: Ident,
     stdout_writer: Ident,
     stderr_writer: Ident,
-    principal: Ident,
+    context: Ident,
     underlying: Ident,
 }
 
@@ -684,8 +684,8 @@ impl Parse for LeafInput {
         parse_key(input, "stderr_writer")?;
         let stderr_writer = input.parse()?;
         input.parse::<Token![,]>()?;
-        parse_key(input, "principal")?;
-        let principal = input.parse()?;
+        parse_key(input, "context")?;
+        let context = input.parse()?;
         input.parse::<Token![,]>()?;
         parse_key(input, "underlying")?;
         let underlying = input.parse()?;
@@ -711,7 +711,7 @@ impl Parse for LeafInput {
             stdin,
             stdout_writer,
             stderr_writer,
-            principal,
+            context,
             underlying,
         })
     }
@@ -817,7 +817,7 @@ fn emit_underlying_method(
         .params
         .iter()
         .filter(|param| {
-            !is_principal_type_for_sdk(&param.ty, sdk)
+            !is_injected_context_type_for_sdk(&param.ty, sdk)
                 && !matches!(
                     crate::tool::helpers::stream_type(&param.ty),
                     Some((crate::tool::helpers::StreamKind::Output, _))
@@ -832,7 +832,9 @@ fn emit_underlying_method(
     let values = input
         .params
         .iter()
-        .filter(|param| !is_stream_type(&param.ty) && !is_principal_type_for_sdk(&param.ty, sdk))
+        .filter(|param| {
+            !is_stream_type(&param.ty) && !is_injected_context_type_for_sdk(&param.ty, sdk)
+        })
         .map(|param| {
             let ident = &param.ident;
             let canonical_name = &param.canonical_name;
@@ -947,7 +949,7 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
     let invocation_stdin = &input.stdin;
     let invocation_stdout = &input.stdout_writer;
     let invocation_stderr = &input.stderr_writer;
-    let invocation_principal = &input.principal;
+    let invocation_context = &input.context;
     let invocation_underlying = &input.underlying;
     let command_path = input.command_path;
     let path_ident = fresh_projected_ident(&input.params, "__golem_dispatch_path");
@@ -956,27 +958,27 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
     let stdin_ident = fresh_projected_ident(&input.params, "__golem_dispatch_stdin");
     let stdout_ident = fresh_projected_ident(&input.params, "__golem_dispatch_stdout");
     let stderr_ident = fresh_projected_ident(&input.params, "__golem_dispatch_stderr");
-    let principal_ident = fresh_projected_ident(&input.params, "__golem_dispatch_principal");
+    let context_ident = fresh_projected_ident(&input.params, "__golem_dispatch_context");
     let underlying_ident = fresh_projected_ident(&input.params, "__golem_dispatch_underlying");
     let field_index_ident = fresh_projected_ident(&input.params, "__golem_dispatch_field_index");
     let field_ident = fresh_projected_ident(&input.params, "__golem_dispatch_field");
     let result_ident = fresh_projected_ident(&input.params, "__golem_dispatch_result");
-    let has_principal = input
+    let has_context = input
         .params
         .iter()
-        .any(|param| is_principal_type_for_sdk(&param.ty, sdk));
-    let principal_setup = has_principal.then(|| {
+        .any(|param| is_injected_context_type_for_sdk(&param.ty, sdk));
+    let context_setup = has_context.then(|| {
         quote! {
-            let #principal_ident = #invocation_principal;
+            let #context_ident = #invocation_context;
         }
     });
     let bindings = input.params.iter().map(|param| {
         let ident = &param.ident;
         let ty = &param.ty;
         let canonical_name = &param.canonical_name;
-        if is_principal_type_for_sdk(ty, sdk) {
+        if is_injected_context_type_for_sdk(ty, sdk) {
             quote! {
-                let #ident = #principal_ident.clone();
+                let #ident = #context_ident.clone();
             }
         } else {
             match crate::tool::helpers::stream_type(ty) {
@@ -1106,7 +1108,7 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
                     )
                 );
             }
-            #principal_setup
+            #context_setup
             let #underlying_ident =
                 <#target as #sdk::tool::ToolUnderlying>::__golem_from_underlying(
                     #invocation_underlying
@@ -1326,8 +1328,8 @@ fn decode_underlying_result(
     }
 }
 
-fn is_principal_type_for_sdk(ty: &Type, sdk: &Path) -> bool {
-    if is_principal_type(ty) {
+fn is_injected_context_type_for_sdk(ty: &Type, sdk: &Path) -> bool {
+    if is_injected_context_type(ty) {
         return true;
     }
     let Type::Path(path) = ty else {
@@ -1346,10 +1348,7 @@ fn is_principal_type_for_sdk(ty: &Type, sdk: &Path) -> bool {
     let sdk_root = sdk_root.ident.to_string();
     matches!(
         segments.as_slice(),
-        [root, "agentic" | "tool", "Principal"] if *root == sdk_root
-    ) || matches!(
-        segments.as_slice(),
-        [root, "golem_agentic", "golem", "agent", "common", "Principal"] if *root == sdk_root
+        [root, "agentic" | "tool", "InvocationContext"] if *root == sdk_root
     )
 }
 
@@ -1387,7 +1386,7 @@ mod tests {
     }
 
     #[test]
-    fn late_leaf_emission_uses_resolved_sdk_and_recognizes_aliased_principal() {
+    fn late_leaf_emission_uses_resolved_sdk_and_recognizes_aliased_context() {
         let tokens = emit_tool_middleware_leaf(quote! {
             mode: underlying,
             sdk: sdk_alias,
@@ -1396,7 +1395,7 @@ mod tests {
             method: [run],
             command_path: ["run"],
             params: [
-                (principal: sdk_alias::tool::Principal => "principal"),
+                (context: sdk_alias::tool::InvocationContext => "context"),
                 (value: String => "value")
             ],
             output: (-> Result<String, ExampleError>),
@@ -1412,7 +1411,7 @@ mod tests {
             stdin: stdin,
             stdout_writer: stdout,
             stderr_writer: stderr,
-            principal: invocation_principal,
+            context: invocation_context,
             underlying: underlying
         })
         .unwrap()
@@ -1422,7 +1421,7 @@ mod tests {
         assert!(tokens.contains("sdk_alias :: tool :: ToolInvokeError"));
         assert!(tokens.contains("& self"));
         assert!(!tokens.contains("& mut self"));
-        assert!(!tokens.contains("principal :"));
+        assert!(!tokens.contains("context :"));
         assert!(!tokens.contains("golem_rust"));
     }
 
@@ -1449,7 +1448,7 @@ mod tests {
             stdin: stdin,
             stdout_writer: stdout,
             stderr_writer: stderr,
-            principal: principal,
+            context: context,
             underlying: underlying
         })
         .expect_err("a descendant method must not shadow a directly authored command");
@@ -1482,7 +1481,7 @@ mod tests {
             stdin: stdin,
             stdout_writer: stdout,
             stderr_writer: stderr,
-            principal: principal,
+            context: context,
             underlying: underlying
         })
         .expect_err("a raw direct method must not shadow a flattened descendant method");

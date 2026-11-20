@@ -54,9 +54,10 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
 
 ## Identity on the replay path
 
-Any value replay must reproduce (idempotency keys, phantom ids, scope discriminators, span ids
+Any value replay must reproduce (idempotency keys, agent IDs, scope discriminators, span ids
 that reach the guest) derives from oplog indices or recorded data — `derive_idempotency_key`,
-`ephemeral_invocation_phantom_id` (UUIDv5 of the key). Fresh randomness or clock reads are
+`AgentId::allocated` (from the `Start` index), `AgentId::keyed` (from a recorded agent type),
+`AgentId::ephemeral_invocation` (from the owner key). Fresh randomness or clock reads are
 allowed only when appended and committed before the guest can observe them and read back on
 replay (as `caller_attempt_id` does); unrecorded guest-observable randomness is a bug.
 

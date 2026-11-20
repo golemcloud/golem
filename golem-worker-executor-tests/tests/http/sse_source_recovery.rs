@@ -127,7 +127,7 @@ async fn sse_source_without_ids_fails_explicitly_after_a_crash_mid_read(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;

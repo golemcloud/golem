@@ -45,7 +45,7 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
 
     val echo = public.flattenedLeaves.find(_.name == "echo").get
     assertEquals(echo.commandPath, List("echo"))
-    assertEquals(echo.params.map(_.param.ident), List("config", "value", "principal"))
+    assertEquals(echo.params.map(_.param.ident), List("config", "value", "context"))
     assertEquals(echo.underlyingParams.map(_.param.ident), List("config", "value"))
     assertEquals(echo.codec.okType, Some("String"))
     assertEquals(echo.codec.errType, Some("PublicError"))
@@ -80,7 +80,7 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
     assert(
       content.contains(
         "def echo(underlying: U, @_root_.golem.runtime.annotations.internalToolMiddlewareField(\"config\", false) config: _root_.java.lang.String, " +
-          "@_root_.golem.runtime.annotations.internalToolMiddlewareField(\"value\", false) value: _root_.java.lang.String, principal: _root_.golem.Principal): " +
+          "@_root_.golem.runtime.annotations.internalToolMiddlewareField(\"value\", false) value: _root_.java.lang.String, context: _root_.golem.InvocationContext): " +
           "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolInvokeError[_root_.example.middleware.PublicError], _root_.java.lang.String]]"
       ),
       content
@@ -143,7 +143,7 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
         "Api.scala" ->
           """|package api
              |import domain.{Child => Nested}
-             |import golem.{Principal => Caller}
+             |import golem.{InvocationContext => Caller}
              |import golem.runtime.annotations._
              |@toolDefinition(name = "root")
              |trait Root {
@@ -162,7 +162,7 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
     assertEquals(call.codec.projectedErrType, Some("_root_.domain.ChildError"))
   }
 
-  test("projection resolves wildcard subtree imports and does not treat a local Principal as injected") {
+  test("projection resolves wildcard subtree imports and does not treat a local InvocationContext as injected") {
     val result = projection(
       Seq(
         "Domain.scala" ->
@@ -175,10 +175,10 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
           """|package api
              |import domain._
              |import golem.runtime.annotations._
-             |final case class Principal(value: String)
+             |final case class InvocationContext(value: String)
              |@toolDefinition(name = "root")
              |trait Root {
-             |  def nested(principal: Principal): Child
+             |  def nested(context: InvocationContext): Child
              |}
              |""".stripMargin
       )
@@ -186,8 +186,8 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
 
     assertEquals(result.errors, Nil)
     val call = result.tools.find(_.fqn == "api.Root").get.flattenedLeaves.find(_.name == "call").get
-    assertEquals(call.params.map(_.param.ident), List("principal"))
-    assertEquals(call.params.head.param.projectedTypeExpr, "_root_.api.Principal")
+    assertEquals(call.params.map(_.param.ident), List("context"))
+    assertEquals(call.params.head.param.projectedTypeExpr, "_root_.api.InvocationContext")
   }
 
   test("projection resolves relative imports through enclosing packages") {

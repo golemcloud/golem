@@ -35,7 +35,7 @@ import (
 // The vcs tool below exercises every surface: globals on two levels, a group,
 // positionals with defaults, a tail, scalar, optional, list and map options,
 // bool and count flags, constraints, standard input and output, declared
-// errors and the principal.
+// errors and the caller.
 
 type VcsGlobals struct {
 	Dir     string
@@ -56,7 +56,6 @@ type CommitArgs struct {
 	Branch  string
 	Include []string
 	Signoff bool
-	Caller  golem.Principal
 }
 
 type CommitResult struct {
@@ -84,6 +83,7 @@ type vcsTool struct {
 	errNothing *ErrorCase[golem.Unit, Vcs]
 	errReject  *ErrorCase[Rejected, Vcs]
 	seen       *CommitArgs
+	seenCaller golem.Caller
 }
 
 func declareVcs(r *toolRegistry, d *definitions) *vcsTool {
@@ -119,6 +119,7 @@ func declareVcs(r *toolRegistry, d *definitions) *vcsTool {
 	})
 	_ = v.commit.Handle(func(ctx *Context, a CommitArgs) (CommitResult, error) {
 		v.seen = &a
+		v.seenCaller = ctx.Caller()
 		if len(a.Paths) == 0 && !a.Amend {
 			return CommitResult{}, v.errNothing.New(golem.Unit{})
 		}
@@ -196,7 +197,7 @@ func (s *readerSource) WriterDropped() bool { return s.done }
 // loopback routes typed calls to r's dispatcher instead of the host, so a
 // native test runs the whole path: defaults, encoding, the host's canonical
 // record, decoding and the result. It records the calls it sees.
-func loopback(t *testing.T, r *toolRegistry, d *definitions, principal golem.Principal) *[]types.TypedSchemaValue {
+func loopback(t *testing.T, r *toolRegistry, d *definitions, caller golem.Caller) *[]types.TypedSchemaValue {
 	t.Helper()
 	var calls []types.TypedSchemaValue
 	prev := startToolCall
@@ -207,7 +208,7 @@ func loopback(t *testing.T, r *toolRegistry, d *definitions, principal golem.Pri
 		if !ok {
 			return toolCall{}, toolCallErrorFromWit(tool, path, types.MakeToolRpcErrorNotFound(tool))
 		}
-		return localCall(d, e, path, input, stdin, streams, principal), nil
+		return localCall(d, e, path, input, stdin, streams, caller), nil
 	}
 	return &calls
 }
@@ -216,7 +217,7 @@ func loopback(t *testing.T, r *toolRegistry, d *definitions, principal golem.Pri
 // caller, and hands back what the caller sees.
 func localCall(
 	d *definitions, e *toolEntry, path []string, input types.TypedSchemaValue,
-	stdin io.Reader, streams Streams, principal golem.Principal,
+	stdin io.Reader, streams Streams, caller golem.Caller,
 ) toolCall {
 	in := &byteReader{absent: absentStdin}
 	if stdin != nil {
@@ -230,7 +231,7 @@ func localCall(
 	if streams.Stderr {
 		outs.stderr = stderr
 	}
-	res := d.invokeCommand(e, path, input, in, outs, principal)
+	res := d.invokeCommand(e, path, input, in, outs, func() golem.Caller { return caller })
 
 	replay := func(requested bool, sink *fakeSink) *byteReader {
 		if !requested {
@@ -523,7 +524,8 @@ func refNames(refs []toolCommon.Ref) string {
 // travel for what fill leaves alone.
 func TestToolCallRoundTripsInCanonicalOrder(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, golem.AgentPrincipal{AgentID: golem.AgentID{AgentID: "caller()"}})
+	agent := golem.AgentPrincipal{AgentID: golem.AgentIDFromUUID(golem.UUID{15: 3})}
+	loopback(t, r, d, golem.Caller{Original: agent, Immediate: agent})
 
 	res, err := v.commit.Call(func(a *CommitArgs) {
 		a.Message = "fix the build"
@@ -546,8 +548,8 @@ func TestToolCallRoundTripsInCanonicalOrder(t *testing.T) {
 		!slices.Equal(seen.Include, []string{"x"}) || seen.Author.IsSome() {
 		t.Errorf("arguments did not arrive: %+v", seen)
 	}
-	if p, ok := seen.Caller.(golem.AgentPrincipal); !ok || p.AgentID.AgentID != "caller()" {
-		t.Errorf("principal %+v", seen.Caller)
+	if p, ok := v.seenCaller.Immediate.(golem.AgentPrincipal); !ok || p.AgentID != golem.AgentIDFromUUID(golem.UUID{15: 3}) {
+		t.Errorf("caller %+v", v.seenCaller)
 	}
 }
 
@@ -557,7 +559,7 @@ func TestToolCallRoundTripsInCanonicalOrder(t *testing.T) {
 // decodes the same way.
 func TestToolCallInputIsTheCanonicalRecord(t *testing.T) {
 	v, r, d := newVcs(t)
-	calls := loopback(t, r, d, golem.AnonymousPrincipal{})
+	calls := loopback(t, r, d, golem.AnonymousCaller())
 	if _, err := v.commit.Call(func(a *CommitArgs) { a.Message = "m"; a.Amend = true }); err != nil {
 		t.Fatal(err)
 	}
@@ -575,7 +577,7 @@ func TestToolCallInputIsTheCanonicalRecord(t *testing.T) {
 
 func TestToolCallReportsDeclaredErrors(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, golem.AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousCaller())
 
 	_, err := v.commit.Call(func(a *CommitArgs) { a.Message = "nothing" })
 	var ce *CallError
@@ -604,7 +606,7 @@ func TestToolCallReportsDeclaredErrors(t *testing.T) {
 
 func TestToolHandlerUndeclaredErrorsAreInvalidResultsAndUnexpectedFailuresTrap(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, golem.AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousCaller())
 	for name, want := range map[string]string{
 		"undeclared": `undeclared error "nothing-to-commit"`,
 	} {
@@ -632,7 +634,7 @@ func TestToolHandlerUndeclaredErrorsAreInvalidResultsAndUnexpectedFailuresTrap(t
 
 func TestOutputCommandStreamsItsOutputs(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, golem.AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousCaller())
 
 	inv, err := v.push.Call(func(a *PushArgs) {
 		a.Name = "origin"
@@ -655,7 +657,7 @@ func TestOutputCommandStreamsItsOutputs(t *testing.T) {
 // other output, and a failed result does not hide what the outputs carried.
 func TestCollectKeepsEachOutcome(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, golem.AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousCaller())
 
 	inv, err := v.push.Call(func(a *PushArgs) { a.Name = "half" })
 	if err != nil {
@@ -677,7 +679,7 @@ func TestCollectKeepsEachOutcome(t *testing.T) {
 
 func TestWaitDrainsTheOutputsNotTaken(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, golem.AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousCaller())
 
 	inv, err := v.push.Call(func(a *PushArgs) { a.Name = "origin"; a.In = strings.NewReader("abc") })
 	if err != nil {
@@ -703,7 +705,7 @@ func TestWaitDrainsTheOutputsNotTaken(t *testing.T) {
 // stops reading it, without cancelling the call or its other output.
 func TestClosingAnOutputKeepsTheCallAndTheOtherOutput(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, golem.AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousCaller())
 
 	inv, err := v.push.Call(func(a *PushArgs) { a.Name = "origin"; a.In = strings.NewReader("abc") })
 	if err != nil {
@@ -791,7 +793,7 @@ func TestRequiredStdinIsRefusedBeforeSending(t *testing.T) {
 		data, err := io.ReadAll(a.In)
 		return string(data), err
 	})
-	calls := loopback(t, r, d, golem.AnonymousPrincipal{})
+	calls := loopback(t, r, d, golem.AnonymousCaller())
 
 	_, err := cat.Call(nil)
 	var ce *CallError
@@ -849,10 +851,24 @@ type BadArgs struct {
 
 type SingleArgs struct{ Name string }
 
+type LiveFieldArgs struct{ Who golem.Principal }
+
+type LiveBoundArgs struct{ Who golem.Caller }
+
+type LiveListArgs struct{ Who []golem.Principal }
+
+type LiveOptionArgs struct {
+	Who golem.Option[golem.TokenProvenance]
+}
+
 type EmbedArgs struct {
 	VcsGlobals
 	Name string
 }
+
+// liveValueRefusal is the start of the shared message that refuses a principal or a caller in a
+// tool signature.
+const liveValueRefusal = "Principal and Caller cannot appear in a method, constructor or tool signature"
 
 func TestToolDeclarationErrors(t *testing.T) {
 	cases := map[string]struct {
@@ -863,6 +879,34 @@ func TestToolDeclarationErrors(t *testing.T) {
 			c := tool.Command[SingleArgs, string]("x", nil)
 			_ = c.Handle(func(*Context, SingleArgs) (string, error) { return "", nil })
 		}, "field Name is not bound"},
+		"live value in an unbound parameter": {func(tool *Definition[Tst]) {
+			c := tool.Command[LiveFieldArgs, string]("x", nil)
+			_ = c.Handle(func(*Context, LiveFieldArgs) (string, error) { return "", nil })
+		}, liveValueRefusal},
+		"live value in a bound parameter": {func(tool *Definition[Tst]) {
+			c := tool.Command[LiveBoundArgs, string]("x", func(a *LiveBoundArgs, s *CommandSpec) {
+				s.Positional(&a.Who)
+			})
+			_ = c.Handle(func(*Context, LiveBoundArgs) (string, error) { return "", nil })
+		}, liveValueRefusal},
+		"live value in a list parameter": {func(tool *Definition[Tst]) {
+			c := tool.Command[LiveListArgs, string]("x", func(a *LiveListArgs, s *CommandSpec) {
+				s.Tail(&a.Who)
+			})
+			_ = c.Handle(func(*Context, LiveListArgs) (string, error) { return "", nil })
+		}, liveValueRefusal},
+		"live value in an optional parameter": {func(tool *Definition[Tst]) {
+			c := tool.Command[LiveOptionArgs, string]("x", func(a *LiveOptionArgs, s *CommandSpec) {
+				s.Option(&a.Who)
+			})
+			_ = c.Handle(func(*Context, LiveOptionArgs) (string, error) { return "", nil })
+		}, liveValueRefusal},
+		"live value as the result": {func(tool *Definition[Tst]) {
+			c := tool.Command[SingleArgs, golem.Caller]("x", func(a *SingleArgs, s *CommandSpec) {
+				s.Option(&a.Name)
+			})
+			_ = c.Handle(func(*Context, SingleArgs) (golem.Caller, error) { return golem.AnonymousCaller(), nil })
+		}, liveValueRefusal},
 		"bound twice": {func(tool *Definition[Tst]) {
 			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *CommandSpec) {
 				s.Option(&a.Name)
@@ -1032,7 +1076,7 @@ func TestAHandlerRejectsItsInput(t *testing.T) {
 		}
 		return a.Text, nil
 	})
-	loopback(t, r, d, golem.AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousCaller())
 
 	_, err := say.Call(func(a *EchoArgs) { a.Text = " " })
 	var ce *CallError
@@ -1067,7 +1111,7 @@ func TestToolCallDefaultsAreCopiedPerCall(t *testing.T) {
 	if _, ok := r.discover(d); !ok {
 		t.Fatalf("tool discovery failed: %s", engine.AllErrors(d.Errs))
 	}
-	loopback(t, r, d, golem.AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousCaller())
 
 	if _, err := cmd.Call(func(a *DefaultsArgs) {
 		a.Include[0] = "changed"

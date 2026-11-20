@@ -34,7 +34,6 @@ pub struct AgentType {
   description : String
   source_language : String
   mode : AgentMode
-  implemented_by : @types.ComponentId
   constructor_input : SchemaRef
   methods : Array[AgentMethod]
   config : Array[ReflectedConfigDeclaration]
@@ -107,11 +106,6 @@ pub fn AgentType::mode(self : AgentType) -> AgentMode {
 }
 
 ///|
-pub fn AgentType::implemented_by(self : AgentType) -> @types.ComponentId {
-  self.implemented_by
-}
-
-///|
 pub fn AgentType::constructor_input(self : AgentType) -> SchemaRef {
   self.constructor_input
 }
@@ -127,14 +121,11 @@ pub fn AgentType::config(self : AgentType) -> Array[ReflectedConfigDeclaration] 
 }
 
 ///|
-/// A reflected client and any reusable identity created before invocation.
-/// Ephemeral clients have no reusable identity until invocation metadata is
-/// returned by the runtime.
+/// A client of an agent of a reflected agent type. It validates method inputs
+/// and outputs against the reflected schemas.
 pub(all) struct ReflectedAgentClient {
   priv agent_type : AgentType
   priv transport : Transport
-  reusable_identity : ParsedAgentId?
-  phantom_id : @schema.Uuid?
 }
 
 ///|
@@ -165,7 +156,6 @@ fn decode_input(
           body: decode_root_type(decoded, field.schema),
           metadata: field.metadata,
         })
-      AutoInjected(_) => ()
     }
   }
   SchemaRef::new({
@@ -228,7 +218,6 @@ fn decode_agent_type(
       DURABLE => Durable
       EPHEMERAL => Ephemeral
     },
-    implemented_by: registered.implemented_by,
     constructor_input: decode_input(decoded, raw.constructor_.input_schema),
     methods,
     config,
@@ -249,10 +238,12 @@ pub fn get_agent_type(name : String) -> AgentType? raise ReflectError {
 }
 
 ///|
+/// Gets the deployed agent type that the type tag of an agent ID names.
+/// Returns `None` when no deployed agent type has that tag.
 pub fn get_agent_type_by_agent_id(
-  agent_id : ParsedAgentId,
+  agent_id : @schema.AgentId,
 ) -> AgentType? raise ReflectError {
-  match @agentHost.get_agent_type_by_agent_id(agent_id.value) {
+  match @agentHost.get_agent_type_by_agent_id(agent_id.to_wit()) {
     Some(agent_type) => Some(decode_agent_type(agent_type))
     None => None
   }
@@ -264,304 +255,95 @@ pub fn AgentType::find_method(self : AgentType, name : String) -> AgentMethod? {
 }
 
 ///|
-pub fn AgentType::agent_id_value(
+fn AgentType::require_durable(
+  self : AgentType,
+  operation : String,
+) -> Unit raise ReflectError {
+  guard self.mode == Durable else {
+    raise Identity("\{operation} is unavailable for ephemeral agents")
+  }
+}
+
+///|
+fn AgentType::client(
+  self : AgentType,
+  transport : Transport,
+) -> ReflectedAgentClient {
+  { agent_type: self, transport, }
+}
+
+///|
+/// Connects to the keyed agent of the constructor value, which the host
+/// creates when it is missing.
+pub fn AgentType::upsert_value(
   self : AgentType,
   constructor_value : @model.SchemaValue,
-  phantom_id~ : @schema.Uuid? = None,
-) -> ParsedAgentId raise ReflectError {
+) -> ReflectedAgentClient raise ReflectError {
+  self.require_durable("upsert")
   self.constructor_input.validate_value(constructor_value)
-  ParsedAgentId::create(self.name, constructor_value, phantom_id~)
+  self.client(Transport::upsert(self.name, constructor_value))
 }
 
 ///|
-pub fn AgentType::agent_id_json(
+pub fn AgentType::upsert_json(
   self : AgentType,
   constructor_json : Json,
-  phantom_id~ : @schema.Uuid? = None,
-) -> ParsedAgentId raise ReflectError {
-  self.agent_id_value(
-    self.constructor_input.pack_json(constructor_json),
-    phantom_id~,
-  )
+) -> ReflectedAgentClient raise ReflectError {
+  self.upsert_value(self.constructor_input.pack_json(constructor_json))
 }
 
 ///|
-fn AgentType::client_value(
+/// Connects to the existing agent of this type with the given ID. An unknown
+/// ID, or the ID of an agent of another type, raises `Remote(NotFound(_))`.
+pub fn AgentType::get_by_id(
   self : AgentType,
-  constructor_value : @model.SchemaValue,
-  phantom_id : @schema.Uuid?,
-  reusable_identity : ParsedAgentId?,
+  agent_id : @schema.AgentId,
 ) -> ReflectedAgentClient raise ReflectError {
-  self.client_value_with_config(
-    constructor_value,
-    phantom_id,
-    reusable_identity,
-    [],
-  )
+  self.require_durable("get by ID")
+  self.client(Transport::get_by_id(self.name, agent_id))
 }
 
 ///|
-fn AgentType::client_value_with_config(
+/// Creates a new agent of this type. With `keyed`, the new agent is the keyed
+/// agent of the constructor value, and the creation raises
+/// `Remote(Conflict(_))` when that agent already exists; otherwise it has no
+/// key and a new ID. `config` values are validated against the reflected
+/// configuration declarations, and `env` adds environment variables to the
+/// ones the manifest defines.
+pub async fn AgentType::create_value(
   self : AgentType,
   constructor_value : @model.SchemaValue,
-  phantom_id : @schema.Uuid?,
-  reusable_identity : ParsedAgentId?,
-  config : Array[@common.TypedAgentConfigValue],
-) -> ReflectedAgentClient raise ReflectError {
+  keyed~ : Bool = false,
+  config~ : Array[ReflectedConfigValue] = [],
+  env~ : Array[(String, String)] = [],
+) -> ReflectedAgentClient {
+  self.require_durable("create")
   self.constructor_input.validate_value(constructor_value)
-  {
-    agent_type: self,
-    transport: Transport::create_with_config(
-      self.name,
-      constructor_value,
-      phantom_id,
-      config,
-    ),
-    reusable_identity,
-    phantom_id,
-  }
-}
-
-///|
-pub fn AgentType::get_value_with_config(
-  self : AgentType,
-  constructor_value : @model.SchemaValue,
-  config : Array[ReflectedConfigValue],
-) -> ReflectedAgentClient raise ReflectError {
-  guard self.mode == Durable else {
-    raise Identity(
-      "existing identity lookup is unavailable for ephemeral agents",
-    )
-  }
   let overrides = self.validate_config_values(config)
-  let identity = self.agent_id_value(constructor_value)
-  self.client_value_with_config(
-    constructor_value,
-    None,
-    Some(identity),
-    overrides,
+  self.client(
+    Transport::create(self.name, constructor_value, keyed, overrides, env),
   )
 }
 
 ///|
-pub fn AgentType::get_json_with_config(
+pub async fn AgentType::create_json(
   self : AgentType,
   constructor_json : Json,
-  config : Array[ReflectedConfigJsonValue],
-) -> ReflectedAgentClient raise ReflectError {
-  let packed_constructor = self.constructor_input.pack_json(constructor_json)
-  guard self.mode == Durable else {
-    raise Identity(
-      "existing identity lookup is unavailable for ephemeral agents",
-    )
-  }
+  keyed~ : Bool = false,
+  config~ : Array[ReflectedConfigJsonValue] = [],
+  env~ : Array[(String, String)] = [],
+) -> ReflectedAgentClient {
+  self.require_durable("create")
+  let constructor_value = self.constructor_input.pack_json(constructor_json)
   let overrides = self.pack_config_json(config)
-  let identity = self.agent_id_value(packed_constructor)
-  self.client_value_with_config(
-    packed_constructor,
-    None,
-    Some(identity),
-    overrides,
+  self.client(
+    Transport::create(self.name, constructor_value, keyed, overrides, env),
   )
 }
 
 ///|
-pub fn AgentType::get_phantom_value_with_config(
-  self : AgentType,
-  constructor_value : @model.SchemaValue,
-  phantom_id : @schema.Uuid,
-  config : Array[ReflectedConfigValue],
-) -> ReflectedAgentClient raise ReflectError {
-  let overrides = self.validate_config_values(config)
-  let identity = if self.mode == Durable {
-    Some(self.agent_id_value(constructor_value, phantom_id=Some(phantom_id)))
-  } else {
-    None
-  }
-  self.client_value_with_config(
-    constructor_value,
-    Some(phantom_id),
-    identity,
-    overrides,
-  )
-}
-
-///|
-pub fn AgentType::get_phantom_json_with_config(
-  self : AgentType,
-  constructor_json : Json,
-  phantom_id : @schema.Uuid,
-  config : Array[ReflectedConfigJsonValue],
-) -> ReflectedAgentClient raise ReflectError {
-  let overrides = self.pack_config_json(config)
-  let packed_constructor = self.constructor_input.pack_json(constructor_json)
-  let identity = if self.mode == Durable {
-    Some(self.agent_id_value(packed_constructor, phantom_id=Some(phantom_id)))
-  } else {
-    None
-  }
-  self.client_value_with_config(
-    packed_constructor,
-    Some(phantom_id),
-    identity,
-    overrides,
-  )
-}
-
-///|
-pub fn AgentType::new_phantom_value_with_config(
-  self : AgentType,
-  constructor_value : @model.SchemaValue,
-  config : Array[ReflectedConfigValue],
-) -> ReflectedAgentClient raise ReflectError {
-  let overrides = self.validate_config_values(config)
-  if self.mode == Ephemeral {
-    self.client_value_with_config(constructor_value, None, None, overrides)
-  } else {
-    let phantom_id = @identity.new_phantom_id()
-    let identity = self.agent_id_value(
-      constructor_value,
-      phantom_id=Some(phantom_id),
-    )
-    self.client_value_with_config(
-      constructor_value,
-      Some(phantom_id),
-      Some(identity),
-      overrides,
-    )
-  }
-}
-
-///|
-pub fn AgentType::new_phantom_json_with_config(
-  self : AgentType,
-  constructor_json : Json,
-  config : Array[ReflectedConfigJsonValue],
-) -> ReflectedAgentClient raise ReflectError {
-  let overrides = self.pack_config_json(config)
-  let packed_constructor = self.constructor_input.pack_json(constructor_json)
-  if self.mode == Ephemeral {
-    self.client_value_with_config(packed_constructor, None, None, overrides)
-  } else {
-    let phantom_id = @identity.new_phantom_id()
-    let identity = self.agent_id_value(
-      packed_constructor,
-      phantom_id=Some(phantom_id),
-    )
-    self.client_value_with_config(
-      packed_constructor,
-      Some(phantom_id),
-      Some(identity),
-      overrides,
-    )
-  }
-}
-
-///|
-pub fn AgentType::ephemeral_value_with_config(
-  self : AgentType,
-  constructor_value : @model.SchemaValue,
-  config : Array[ReflectedConfigValue],
-) -> ReflectedAgentClient raise ReflectError {
-  guard self.mode == Ephemeral else {
-    raise Identity("ephemeral invocation is unavailable for durable agents")
-  }
-  self.client_value_with_config(
-    constructor_value,
-    None,
-    None,
-    self.validate_config_values(config),
-  )
-}
-
-///|
-pub fn AgentType::ephemeral_json_with_config(
-  self : AgentType,
-  constructor_json : Json,
-  config : Array[ReflectedConfigJsonValue],
-) -> ReflectedAgentClient raise ReflectError {
-  guard self.mode == Ephemeral else {
-    raise Identity("ephemeral invocation is unavailable for durable agents")
-  }
-  self.client_value_with_config(
-    self.constructor_input.pack_json(constructor_json),
-    None,
-    None,
-    self.pack_config_json(config),
-  )
-}
-
-///|
-pub fn AgentType::get_value(
-  self : AgentType,
-  constructor_value : @model.SchemaValue,
-) -> ReflectedAgentClient raise ReflectError {
-  guard self.mode == Durable else {
-    raise Identity(
-      "existing identity lookup is unavailable for ephemeral agents",
-    )
-  }
-  let identity = self.agent_id_value(constructor_value)
-  self.client_value(constructor_value, None, Some(identity))
-}
-
-///|
-pub fn AgentType::get_json(
-  self : AgentType,
-  constructor_json : Json,
-) -> ReflectedAgentClient raise ReflectError {
-  self.get_value(self.constructor_input.pack_json(constructor_json))
-}
-
-///|
-pub fn AgentType::resume_phantom_value(
-  self : AgentType,
-  constructor_value : @model.SchemaValue,
-  phantom_id : @schema.Uuid,
-) -> ReflectedAgentClient raise ReflectError {
-  guard self.mode == Durable else {
-    raise Identity("phantom identities are unavailable for ephemeral agents")
-  }
-  let identity = self.agent_id_value(
-    constructor_value,
-    phantom_id=Some(phantom_id),
-  )
-  self.client_value(constructor_value, Some(phantom_id), Some(identity))
-}
-
-///|
-pub fn AgentType::resume_phantom_json(
-  self : AgentType,
-  constructor_json : Json,
-  phantom_id : @schema.Uuid,
-) -> ReflectedAgentClient raise ReflectError {
-  self.resume_phantom_value(
-    self.constructor_input.pack_json(constructor_json),
-    phantom_id,
-  )
-}
-
-///|
-pub fn AgentType::new_phantom_value(
-  self : AgentType,
-  constructor_value : @model.SchemaValue,
-) -> ReflectedAgentClient raise ReflectError {
-  guard self.mode == Durable else {
-    raise Identity("phantom identities are unavailable for ephemeral agents")
-  }
-  let phantom_id = @identity.new_phantom_id()
-  self.resume_phantom_value(constructor_value, phantom_id)
-}
-
-///|
-pub fn AgentType::new_phantom_json(
-  self : AgentType,
-  constructor_json : Json,
-) -> ReflectedAgentClient raise ReflectError {
-  self.new_phantom_value(self.constructor_input.pack_json(constructor_json))
-}
-
-///|
+/// Addresses an ephemeral agent type: every invocation runs on a new one-shot
+/// instance, whose ID the invocation metadata returns.
 pub fn AgentType::ephemeral_value(
   self : AgentType,
   constructor_value : @model.SchemaValue,
@@ -569,7 +351,8 @@ pub fn AgentType::ephemeral_value(
   guard self.mode == Ephemeral else {
     raise Identity("ephemeral invocation is unavailable for durable agents")
   }
-  self.client_value(constructor_value, None, None)
+  self.constructor_input.validate_value(constructor_value)
+  self.client(Transport::upsert(self.name, constructor_value))
 }
 
 ///|
@@ -581,71 +364,12 @@ pub fn AgentType::ephemeral_json(
 }
 
 ///|
-/// Address a known ephemeral phantom for one invocation. The final identity
-/// is supplied by invocation metadata and cannot be reused as a stable ID.
-pub fn AgentType::ephemeral_phantom_value(
-  self : AgentType,
-  constructor_value : @model.SchemaValue,
-  phantom_id : @schema.Uuid,
-) -> ReflectedAgentClient raise ReflectError {
-  guard self.mode == Ephemeral else {
-    raise Identity(
-      "ephemeral phantom invocation is unavailable for durable agents",
-    )
-  }
-  self.client_value(constructor_value, Some(phantom_id), None)
-}
-
-///|
-pub fn AgentType::ephemeral_phantom_json(
-  self : AgentType,
-  constructor_json : Json,
-  phantom_id : @schema.Uuid,
-) -> ReflectedAgentClient raise ReflectError {
-  self.ephemeral_phantom_value(
-    self.constructor_input.pack_json(constructor_json),
-    phantom_id,
-  )
-}
-
-///|
-pub fn AgentType::ephemeral_phantom_value_with_config(
-  self : AgentType,
-  constructor_value : @model.SchemaValue,
-  phantom_id : @schema.Uuid,
-  config : Array[ReflectedConfigValue],
-) -> ReflectedAgentClient raise ReflectError {
-  guard self.mode == Ephemeral else {
-    raise Identity(
-      "ephemeral phantom invocation is unavailable for durable agents",
-    )
-  }
-  self.client_value_with_config(
-    constructor_value,
-    Some(phantom_id),
-    None,
-    self.validate_config_values(config),
-  )
-}
-
-///|
-pub fn AgentType::ephemeral_phantom_json_with_config(
-  self : AgentType,
-  constructor_json : Json,
-  phantom_id : @schema.Uuid,
-  config : Array[ReflectedConfigJsonValue],
-) -> ReflectedAgentClient raise ReflectError {
-  guard self.mode == Ephemeral else {
-    raise Identity(
-      "ephemeral phantom invocation is unavailable for durable agents",
-    )
-  }
-  self.client_value_with_config(
-    self.constructor_input.pack_json(constructor_json),
-    Some(phantom_id),
-    None,
-    self.pack_config_json(config),
-  )
+/// The ID of the agent this client connects to. On an upsert client the host
+/// creates the agent when it is missing, without invoking a method.
+pub async fn ReflectedAgentClient::agent_id(
+  self : ReflectedAgentClient,
+) -> @schema.AgentId {
+  self.transport.agent_id()
 }
 
 ///|

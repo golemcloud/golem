@@ -134,7 +134,7 @@ pub fn durable_stream_mapping_to_proto(
             format_version: u32::from(mapping.handle.format_version),
             stream_id: Some(mapping.handle.stream_id.0.into()),
             producer_environment_id: Some(mapping.handle.producer_environment_id.into()),
-            producer: Some(mapping.handle.producer.clone().into()),
+            producer: Some(mapping.handle.producer.into()),
             expected_producer_fingerprint: Some(
                 mapping.handle.expected_producer_fingerprint.0.into(),
             ),
@@ -147,7 +147,7 @@ pub fn durable_stream_mapping_to_proto(
                         .callee_environment_id
                         .into(),
                 ),
-                callee: Some(mapping.handle.source_invocation.callee.clone().into()),
+                callee: Some(mapping.handle.source_invocation.callee.into()),
                 callee_fingerprint: Some(
                     mapping.handle.source_invocation.callee_fingerprint.0.into(),
                 ),

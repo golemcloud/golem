@@ -125,7 +125,7 @@ impl FaultMatrixFixture for FaultMatrixFixtureImpl {
             }
             let _ = writer.close().await;
         });
-        let target = FaultMatrixFixtureClient::get(target);
+        let target = FaultMatrixFixtureClient::upsert(target);
         if keep >= count {
             target.consume(input).await
         } else {
@@ -141,7 +141,7 @@ impl FaultMatrixFixture for FaultMatrixFixtureImpl {
         pause_after: u32,
         gate: PromiseId,
     ) -> Vec<u32> {
-        FaultMatrixFixtureClient::get(target)
+        FaultMatrixFixtureClient::upsert(target)
             .produce(run, count, pause_after, gate)
             .await
             .collect()

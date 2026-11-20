@@ -63,21 +63,8 @@ async fn archive_failure_backoff_is_per_agent_and_resets_on_success() {
     ));
     let service = MultiLayerOplogService::new(primary, nev![archive], 100, 100);
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let failed = OwnedAgentId::new(
-        environment_id,
-        &AgentId {
-            component_id,
-            agent_id: "failed".to_string(),
-        },
-    );
-    let healthy = OwnedAgentId::new(
-        environment_id,
-        &AgentId {
-            component_id,
-            agent_id: "healthy".to_string(),
-        },
-    );
+    let failed = OwnedAgentId::new(environment_id, &AgentId::from_parts(7, 1));
+    let healthy = OwnedAgentId::new(environment_id, &AgentId::from_parts(7, 2));
 
     service.record_archive_failure(&failed, ArchiveSource::Lower(0));
     assert!(!service.begin_archive_attempt(&failed, ArchiveSource::Lower(0)));
@@ -119,10 +106,7 @@ async fn open_idle_multilayer(
     ));
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: agent_name.to_string(),
-    };
+    let agent_id = crate::test_agent_id(agent_name);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let primary = primary_service
         .open(
@@ -130,7 +114,7 @@ async fn open_idle_multilayer(
             &owned_agent_id,
             AgentMode::Durable,
             None,
-            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
             None,
@@ -187,7 +171,7 @@ async fn old_shutdown_fence_does_not_unregister_newer_transfer() {
     let (old, service, agent_id) = open_idle_multilayer("replacement-transfer").await;
     let shutdown = old.executor_shutdown_handle();
     let newer = new_transfer_fiber();
-    service.register_transfer(agent_id.clone(), &newer);
+    service.register_transfer(agent_id, &newer);
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
     let transfer = tokio::spawn(async move {
@@ -265,12 +249,9 @@ async fn observer_open_after_primary_growth(archived: u64) {
     ));
     let account = AccountId::new();
     let environment = EnvironmentId::new();
-    let agent = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "observer".into(),
-    };
+    let agent = AgentId::from_parts(7, 1);
     let owned = OwnedAgentId::new(environment, &agent);
-    let metadata = make_agent_metadata(agent.clone(), account, environment);
+    let metadata = make_agent_metadata(agent, account, environment);
     let writer = writer_service
         .open(
             &mut writer_service.lock_lifecycle(&agent).await,

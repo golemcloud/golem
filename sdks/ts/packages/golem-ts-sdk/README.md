@@ -25,10 +25,29 @@ export const Counter = counter.implement({
 ```
 
 The state returned by `init()` or a snapshot `load()` must not contain top-level fields named
-`config`, `getId`, `getPhantomId`, or `getPrincipal`. These names are reserved for the SDK's
+`config`, `getId`, or `getPrincipal`. These names are reserved for the SDK's
 configuration accessor and identity/principal helpers. The SDK rejects these fields during
 initialization or restoration, even if their value is `undefined`. Rename them or nest them
 inside another state field; nested fields may use these names.
+
+## Who called
+
+Every method handler receives an `InvocationContext` as its second argument (a method with no
+input gets `{}` first), and `init` receives the same `caller` on its context:
+
+```ts
+methods: {
+  whoami(_input, ctx) {
+    return ctx.caller.original.toString(); // `user ("https://login.example","u-1")`
+  },
+}
+```
+
+`ctx.caller` has the `original` and `immediate` principals (`user`, `account`, `agent`, `tool` or
+`anonymous`) and the provenance of its `tokens`. A principal prints as `<kind> <ref text>` and never
+prints its claims. A `Principal` or `Caller` is a live value and cannot be a method input, a result
+or part of a value type; to store who called, keep `ctx.caller.original.ref`, a `PrincipalRef`, and
+declare it with `s.principalRef()`.
 
 ## Agent endpoint query inputs
 
@@ -416,9 +435,9 @@ in the item type, for example `stream<result<T, E>>`, when needed.
 Choose the narrowest caller surface that owns the information you have:
 
 1. Normal RPC uses a shared source definition through the SDK's ordinary typed client and owns all lifecycle factories allowed by its mode.
-2. Caller-defined static clients use local schemas without discovery. `defineAgentClient({ methods })` binds an existing durable canonical or phantom `ParsedAgentId`; `defineAgentClient({ name, id, methods, mode?, config? })` adds identity construction, lifecycle factories, and declaration-aware config validation.
+2. Caller-defined static clients use local schemas without discovery. `defineAgentClient({ methods })` connects to an existing durable agent with `getById(agentId)`, which takes the agent type from the type tag of the `AgentId`; `defineAgentClient({ name, id, methods, mode?, config? })` adds the lifecycle factories `upsert`, `create`, and `getById`, and declaration-aware config validation.
 3. Discovered clients use `reflection.getReflectedAgentType` and retain an immutable deployed metadata snapshot for runtime-selected types and methods.
-4. Fully dynamic clients use `ParsedAgentId.dynamicClient()` to transport schema-native values on an existing durable identity. They do not retain schemas or create a target.
+4. Fully dynamic clients use `await DynamicAgentClient.getById(agentId)` to transport schema-native values to an existing durable agent. They do not retain schemas or create a target.
 
 Normal RPC and caller-defined static clients encode through their local schemas before opening RPC. Full-client binding also checks the declared type name and constructor shape. Discovered clients apply the complete snapshot input restrictions and validate output cardinality and shape. The host remains authoritative for visibility, authorization, effective configuration, identity resolution, and deployed-schema validation.
 
@@ -429,7 +448,7 @@ import { getReflectedAgentType, isRemoteCallError } from '@golemcloud/golem-ts-s
 
 const type = getReflectedAgentType('Counter');
 if (!type || type.mode !== 'durable') throw new Error('Counter is unavailable');
-const client = type.client.get({ name: 'main' });
+const client = type.client.upsert({ name: 'main' });
 const add = client.method('add');
 
 try {
@@ -652,7 +671,7 @@ discovery/error implementations; no role or alternate world is selected.
 
 The application bundles the SDK's preserved runtime modules, rather than importing a complete
 SDK embedded in the wrapper. Rollup can therefore remove absent registries and agent snapshot,
-principal serialization, and lifecycle code when they are unreachable. Builder methods are not
+legacy envelope reading, and lifecycle code when they are unreachable. Builder methods are not
 rewritten or removed by the build. Opaque registration helpers and computed SDK access conservatively
 retain capabilities. Host modules remain external.
 

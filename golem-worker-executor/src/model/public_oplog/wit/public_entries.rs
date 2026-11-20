@@ -59,6 +59,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
     Create { record CreateParams => CreateParameters {
         timestamp: timestamp.into(),
         agent_id: agent_id.into(),
+        agent_type_name: agent_type_name.map(|name| name.0),
         owner_kind: match owner_kind {
             golem_common::model::agent::OwnerKind::ComponentAgent => {
                 oplog::OwnerKind::ComponentAgent
@@ -94,8 +95,8 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
             })
         })
         .collect::<Result<Vec<_>, String>>()?,
-        original_phantom_id: original_phantom_id.map(|id| id.into()),
         instance_id: instance_id.into(),
+        never_live: never_live,
     } }
     Start { record StartParams => StartParameters {
         timestamp: timestamp.into(),
@@ -210,6 +211,10 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
                 snapshot_index: details.snapshot_index.into(),
             }
         }),
+        failure_class: update_failure_class_to_wit(failure_class),
+        divergence: divergence
+            .map(|divergence| replay_divergence_to_wit(*divergence))
+            .transpose()?,
     } }
     GrowMemory { record GrowMemoryParams => GrowMemoryParameters {
         timestamp: timestamp.into(),

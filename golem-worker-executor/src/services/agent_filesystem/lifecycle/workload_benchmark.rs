@@ -6,11 +6,10 @@ use crate::services::golem_config::ResourceUsageMeteringConfig;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::close_window;
+use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, RetryConfig};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, Instant};
@@ -105,11 +104,7 @@ impl WorkloadPayloads {
 fn benchmark_agent_id(index: usize) -> OwnedAgentId {
     OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId::from_agent_name_string(
-            ComponentId::new(),
-            format!("filesystem-workload-benchmark-{index}"),
-        )
-        .unwrap(),
+        &crate::test_agent_id(&format!("filesystem-workload-benchmark-{index}")),
     )
 }
 
@@ -138,7 +133,7 @@ async fn benchmark_permit(
     let scheduler = Arc::new(ConcurrentAgentsScheduler::new());
     let account_id = AccountId(Uuid::new_v4());
     scheduler.register_account(account_id, entry.clone()).await;
-    scheduler.acquire(account_id, agent.agent_id.clone()).await
+    scheduler.acquire(account_id, agent.agent_id).await
 }
 
 async fn create_benchmark_filesystem(

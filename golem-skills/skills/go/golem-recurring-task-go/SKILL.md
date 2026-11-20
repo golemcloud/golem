@@ -9,11 +9,11 @@ description: "Recurring / scheduled work in a Go agent. Use when the user wants 
 
 A recurring task is a method that **reschedules itself**: it does its work, then schedules the next run. Scheduling uses `Method.Schedule(client, at, in)`, which arranges an invocation at a future time and returns a cancelable `*golem.ScheduledInvocation` (and an error if the host refuses it; `MustSchedule` panics instead).
 
-To message itself an agent needs a client for its **own** instance. `Agent.Bind(ctx.AgentID())` returns one: `ctx.AgentID()` is the running instance's id, read from the host on each call, so it is also right after a snapshot restore or a fork.
+To message itself an agent needs a client for its **own** instance. `Agent.MustGetByID(ctx.AgentID())` returns one: `ctx.AgentID()` is the running instance's agent ID, read from the host on each call, so it is also right after a snapshot restore or a fork.
 
 ## Steps
 
-1. **Build the self client** from `ctx.AgentID()` inside each handler with `Agent.Bind`.
+1. **Build the self client** from `ctx.AgentID()` inside each handler with `Agent.MustGetByID` (or `GetByID`, which returns the error).
 2. **Add a tick method** that does the work and then `Schedule`s itself for the next run.
 3. **Start the loop** — a `Start` method (or an external trigger) schedules the first tick.
 
@@ -57,7 +57,7 @@ var agent = poller.Agent.Implement(func(poller.ID) *state { return &state{} })
 
 func init() {
 	agent.Handle(poller.Start, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
-		self := golem.Must(poller.Agent.Bind(ctx.AgentID()))
+		self := poller.Agent.MustGetByID(ctx.AgentID())
 		poller.Tick.MustSchedule(self, time.Now().Add(interval), golem.Unit{})
 		return golem.Unit{}
 	})
@@ -66,7 +66,7 @@ func init() {
 		// ... do the periodic work ...
 
 		// schedule the next iteration
-		self := golem.Must(poller.Agent.Bind(ctx.AgentID()))
+		self := poller.Agent.MustGetByID(ctx.AgentID())
 		poller.Tick.MustSchedule(self, time.Now().Add(interval), golem.Unit{})
 		return golem.Unit{}
 	})

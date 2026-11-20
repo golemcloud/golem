@@ -735,6 +735,8 @@ pub enum SerializableP3TcpChunk {
 )]
 pub struct AgentMetadataForGuests {
     pub agent_id: AgentId,
+    pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
+    pub fingerprint: crate::model::AgentFingerprint,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub config: BTreeMap<String, String>,
@@ -809,6 +811,25 @@ pub struct SerializableP3IpSocketAddress {
 pub struct SerializableP3UdpDatagram {
     pub data: Vec<u8>,
     pub remote_address: SerializableP3IpSocketAddress,
+}
+
+/// How a P3 UDP call changed the local endpoint of its socket.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3UdpEndpoint {
+    /// The local address of the socket changed to this address: an implicit bind, or the
+    /// interface address that a connect selected for a wildcard bind.
+    Bound(SerializableP3IpSocketAddress),
+    /// The socket could not get its recorded local address back after recovery.
+    Lost,
 }
 
 #[derive(
@@ -1029,6 +1050,9 @@ pub enum SerializableRpcError {
     },
     RemoteAgentError {
         error: Box<crate::model::agent::AgentError>,
+    },
+    Conflict {
+        details: String,
     },
 }
 

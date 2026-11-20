@@ -12,18 +12,18 @@ package golem.reflection
 
 import golem.host.PermissionsApi.ScopeCard
 import golem.host.SchemaWireInterop
-import golem.host.js.{JsComponentId, JsUuid}
-import golem.host.js.schema.{JsInputSchema, JsNamedField, JsOutputSchema, JsSchemaValueTree, JsTypedSchemaValue}
+import golem.host.js.{JsAgentId, JsComponentId, JsUuid}
+import golem.host.js.schema.{JsInputSchema, JsNamedField, JsOutputSchema, JsSchemaValueTree}
 import golem.runtime.rpc.host.{AgentHostApi, WasmRpcApi}
-import golem.runtime.rpc.{AgentIdentity, CancellationToken, InvocationReceipt}
+import golem.runtime.rpc.{AgentRpcError, CancellationToken, CreateOptions}
 import golem.runtime.tool.host.ToolHostApi
 import golem.schema._
 import golem.schema.SchemaTypeBody.RecordType
 import golem.schema.validation.ValueValidation
 import golem.schema.wire.{SchemaWire, WitSchemaValueTree}
-import golem.config.ConfigOverride
+import golem.config.{ConfigOverride, ConfigOverrideEncoder}
 import golem.tool.{ToolGraphs, ToolRpcFailure}
-import golem.{Datetime, FutureInterop, InvocationId}
+import golem.{AgentId, Datetime, FutureInterop, InvocationId}
 import zio.blocks.schema.json.Json
 
 import java.util.UUID
@@ -52,64 +52,6 @@ object ComponentId {
     ComponentId(JsUuid.toUuid(value.uuid))
 }
 
-final case class ParsedAgentId(value: String) {
-  def parts: Either[GolemReflectError, ParsedAgentIdParts]         = ParsedAgentId.parse(this)
-  def dynamicClient: Either[GolemReflectError, DynamicAgentClient] = DynamicAgentClient.fromAgentId(this)
-  def client[Capability <: AgentClientCapability, Constructor, Config](
-    definition: AgentClientDefinition[Capability, Constructor, Config]
-  )(implicit canBind: CanBindAgentClient[Capability]): Either[GolemReflectError, CallerCodecAgentClient] =
-    definition.bind(this)
-
-  def clientWithOverrides[Capability <: AgentClientCapability, Constructor, Config](
-    definition: AgentClientDefinition[Capability, Constructor, Config],
-    overrides: List[ConfigOverride]
-  )(implicit canBind: CanBindAgentClient[Capability]): Either[GolemReflectError, CallerCodecAgentClient] =
-    definition.bindWithOverrides(this, overrides)
-
-  def clientWithConfig[Capability <: AgentClientCapability, Constructor, Config](
-    definition: AgentClientDefinition[Capability, Constructor, Config],
-    config: Config
-  )(implicit
-    full: Capability <:< Full,
-    canBind: CanBindAgentClient[Capability]
-  ): Either[GolemReflectError, CallerCodecAgentClient] =
-    definition.bindWithConfig(this, config)
-}
-
-final case class ParsedAgentIdParts(typeName: String, constructorValue: SchemaValue, phantomId: Option[UUID])
-
-object ParsedAgentId {
-  def create(
-    typeName: String,
-    constructorValue: SchemaValue,
-    phantomId: Option[UUID] = None
-  ): Either[GolemReflectError, ParsedAgentId] =
-    encode(constructorValue).flatMap(payload =>
-      AgentIdentity
-        .make(typeName, payload, phantomId)
-        .left
-        .map(GolemReflectError.Identity.apply)
-        .map(ParsedAgentId(_))
-    )
-
-  def parse(agentId: ParsedAgentId): Either[GolemReflectError, ParsedAgentIdParts] =
-    AgentIdentity
-      .parse(agentId.value)
-      .left
-      .map(GolemReflectError.Identity.apply)
-      .flatMap { parts =>
-        try
-          Right(
-            ParsedAgentIdParts(
-              parts.agentTypeName,
-              SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(parts.payload.value)),
-              parts.phantom
-            )
-          )
-        catch { case NonFatal(error) => Left(GolemReflectError.SchemaDecode(error.getMessage)) }
-      }
-}
-
 sealed trait GolemReflectError extends Product with Serializable {
   def message: String
   override def toString: String = message
@@ -129,24 +71,6 @@ object GolemReflectError {
   }
 }
 
-sealed trait AgentRpcError extends Product with Serializable { def message: String }
-object AgentRpcError {
-  final case class Protocol(detail: String)       extends AgentRpcError { val message = s"protocol-error: $detail" }
-  final case class Denied(detail: String)         extends AgentRpcError { val message = s"denied: $detail"         }
-  final case class NotFound(detail: String)       extends AgentRpcError { val message = s"not-found: $detail"      }
-  final case class RemoteInternal(detail: String) extends AgentRpcError {
-    val message = s"remote-internal-error: $detail"
-  }
-  final case class InvalidInput(detail: String)                  extends AgentRpcError { val message = s"invalid-input: $detail"    }
-  final case class InvalidMethod(detail: String)                 extends AgentRpcError { val message = s"invalid-method: $detail"   }
-  final case class InvalidType(detail: String)                   extends AgentRpcError { val message = s"invalid-type: $detail"     }
-  final case class InvalidAgentId(detail: String)                extends AgentRpcError { val message = s"invalid-agent-id: $detail" }
-  final case class Custom(payload: TypedSchemaValue)             extends AgentRpcError { val message = "custom-error"               }
-  final case class Unknown(kind: String, detail: Option[String]) extends AgentRpcError {
-    val message: String = detail.fold(kind)(value => s"$kind: $value")
-  }
-}
-
 final case class AgentMethod(
   name: String,
   description: String,
@@ -160,7 +84,6 @@ final class AgentType private[reflection] (
   val description: String,
   val sourceLanguage: String,
   val mode: AgentMode,
-  val implementedBy: ComponentId,
   val constructorInput: SchemaRef,
   val methods: List[AgentMethod],
   val config: List[ReflectedConfigDeclaration]
@@ -169,34 +92,13 @@ final class AgentType private[reflection] (
 
   def method(name: String): Option[AgentMethod] = methods.find(_.name == name)
 
-  def agentId(input: Json, phantomId: Option[UUID] = None): Either[GolemReflectError, ParsedAgentId] =
-    constructorInput
-      .packJson(input)
-      .left
-      .map(error => GolemReflectError.Validation(error.message))
-      .flatMap(agentIdValue(_, phantomId))
-
-  def agentIdValue(input: SchemaValue, phantomId: Option[UUID] = None): Either[GolemReflectError, ParsedAgentId] =
-    validate(constructorInput, input).flatMap(_ => ParsedAgentId.create(name, input, phantomId))
-
-  def bind(
-    agentId: ParsedAgentId,
-    overrides: List[ConfigOverride] = Nil
-  ): Either[GolemReflectError, ReflectedAgentClient] =
-    for {
-      parts <- agentId.parts
-      _     <- Either.cond(
-             parts.typeName == name,
-             (),
-             GolemReflectError.Identity(s"Agent type '$name' cannot bind '${parts.typeName}'")
-           )
-      _ <- Either.cond(
-             mode == AgentMode.Durable,
-             (),
-             GolemReflectError.Identity(s"Cannot bind an existing identity to ephemeral agent type '$name'")
-           )
-      client <- client.createValue(parts.constructorValue, parts.phantomId, overrides)
-    } yield client
+  /**
+   * A client of the existing agent of this type with the given ID. An unknown
+   * ID, or the ID of an agent of another type, gives
+   * [[golem.runtime.rpc.AgentRpcError.NotFound]].
+   */
+  def getById(agentId: AgentId): Future[Either[GolemReflectError, ReflectedAgentClient]] =
+    client.getById(agentId)
 
   def packConfigJson(entries: List[ReflectedConfigJson]): Either[GolemReflectError, List[ConfigOverride]] =
     ReflectionInternals.sequence(entries.map { entry =>
@@ -258,10 +160,11 @@ object Reflection {
         .fold[Either[GolemReflectError, Option[AgentType]]](Right(None))(_.map(Some(_)))
     catch { case NonFatal(error) => Left(GolemReflectError.Discovery(error.getMessage)) }
 
-  def getAgentTypeFor(agentId: ParsedAgentId): Either[GolemReflectError, Option[AgentType]] =
+  /** The deployed agent type that the type tag of `agentId` names. */
+  def getAgentTypeFor(agentId: AgentId): Either[GolemReflectError, Option[AgentType]] =
     try
       AgentHostApi
-        .registeredAgentTypeFor(agentId.value)
+        .registeredAgentTypeFor(JsAgentId.fromAgentId(agentId))
         .map(decodeAgentType)
         .fold[Either[GolemReflectError, Option[AgentType]]](Right(None))(_.map(Some(_)))
     catch { case NonFatal(error) => Left(GolemReflectError.Discovery(error.getMessage)) }
@@ -291,7 +194,6 @@ object Reflection {
           raw.description,
           raw.sourceLanguage,
           mode,
-          ComponentId.fromJs(registered.implementedBy),
           inputRef(decoded, raw.constructor.inputSchema),
           methods,
           raw.config.toList.map { declaration =>
@@ -326,73 +228,65 @@ object Reflection {
     }
 }
 
-final case class ReflectedPhantomClient(agentId: ParsedAgentId, phantomId: UUID, client: ReflectedAgentClient)
-
 final class ReflectedAgentClientFactory private[reflection] (agentType: AgentType) {
-  def get(input: Json, config: List[ReflectedConfigJson] = Nil): Either[GolemReflectError, ReflectedAgentClient] =
-    for {
-      _           <- requireDurable("get")
-      constructor <- pack(input)
-      overrides   <- agentType.packConfigJson(config)
-      client      <- createValue(constructor, None, overrides)
-    } yield client
 
-  def getValue(
-    input: SchemaValue,
-    config: List[ConfigOverride] = Nil
-  ): Either[GolemReflectError, ReflectedAgentClient] =
-    requireDurable("getValue").flatMap(_ => createValue(input, None, config))
+  /**
+   * A client of the keyed agent of the constructor parameters. A durable agent
+   * is created when it is missing; every invocation of an ephemeral agent runs
+   * on a new one-shot instance.
+   */
+  def upsert(input: Json): Either[GolemReflectError, ReflectedAgentClient] =
+    pack(input).flatMap(upsertValue)
 
-  def getPhantom(
+  def upsertValue(input: SchemaValue): Either[GolemReflectError, ReflectedAgentClient] =
+    validate(agentType.constructorInput, input)
+      .flatMap(_ => Transport.upsert(agentType.name, input))
+      .map(new ReflectedAgentClient(agentType, _))
+
+  /**
+   * Creates a durable agent. With `keyed`, it is the keyed agent of the
+   * constructor parameters, and an existing one gives
+   * [[golem.runtime.rpc.AgentRpcError.Conflict]]; otherwise the new agent has
+   * no key and a new ID.
+   */
+  def create(
     input: Json,
-    phantomId: UUID,
-    config: List[ReflectedConfigJson] = Nil
-  ): Either[GolemReflectError, ReflectedAgentClient] =
-    for {
+    keyed: Boolean = false,
+    config: List[ReflectedConfigJson] = Nil,
+    env: Map[String, String] = Map.empty
+  ): Future[Either[GolemReflectError, ReflectedAgentClient]] =
+    (for {
       constructor <- pack(input)
       overrides   <- agentType.packConfigJson(config)
-      client      <- createValue(constructor, Some(phantomId), overrides)
-    } yield client
-
-  def getPhantomValue(
-    input: SchemaValue,
-    phantomId: UUID,
-    config: List[ConfigOverride] = Nil
-  ): Either[GolemReflectError, ReflectedAgentClient] =
-    createValue(input, Some(phantomId), config)
-
-  def newPhantom(
-    input: Json,
-    config: List[ReflectedConfigJson] = Nil
-  ): Either[GolemReflectError, Either[ReflectedAgentClient, ReflectedPhantomClient]] =
-    for {
-      constructor <- pack(input)
-      overrides   <- agentType.packConfigJson(config)
-      result      <- newPhantomValue(constructor, overrides)
-    } yield result
-
-  def newPhantomValue(
-    input: SchemaValue,
-    config: List[ConfigOverride] = Nil
-  ): Either[GolemReflectError, Either[ReflectedAgentClient, ReflectedPhantomClient]] =
-    if (agentType.mode == AgentMode.Ephemeral) createValue(input, None, config).map(Left(_))
-    else {
-      val phantom = UUID.randomUUID()
-      for {
-        id     <- agentType.agentIdValue(input, Some(phantom))
-        client <- createValue(input, Some(phantom), config)
-      } yield Right(ReflectedPhantomClient(id, phantom, client))
+    } yield (constructor, overrides)) match {
+      case Left(error)                     => Future.successful(Left(error))
+      case Right((constructor, overrides)) => createValue(constructor, keyed, overrides, env)
     }
 
-  private[reflection] def createValue(
+  def createValue(
     input: SchemaValue,
-    phantomId: Option[UUID],
-    config: List[ConfigOverride] = Nil
-  ): Either[GolemReflectError, ReflectedAgentClient] =
-    validate(agentType.constructorInput, input)
-      .flatMap(_ => agentType.validateConfig(config))
-      .flatMap(overrides => Transport.create(agentType.name, input, phantomId, overrides))
-      .map(new ReflectedAgentClient(agentType, _))
+    keyed: Boolean = false,
+    config: List[ConfigOverride] = Nil,
+    env: Map[String, String] = Map.empty
+  ): Future[Either[GolemReflectError, ReflectedAgentClient]] =
+    (for {
+      _         <- requireDurable("create")
+      _         <- validate(agentType.constructorInput, input)
+      overrides <- agentType.validateConfig(config)
+    } yield overrides) match {
+      case Left(error)      => Future.successful(Left(error))
+      case Right(overrides) =>
+        Transport
+          .create(agentType.name, input, CreateOptions(keyed, overrides, env))
+          .map(_.map(new ReflectedAgentClient(agentType, _)))
+    }
+
+  /** See [[AgentType.getById]]. */
+  def getById(agentId: AgentId): Future[Either[GolemReflectError, ReflectedAgentClient]] =
+    requireDurable("getById") match {
+      case Left(error) => Future.successful(Left(error))
+      case Right(_)    => Transport.getById(agentType.name, agentId).map(_.map(new ReflectedAgentClient(agentType, _)))
+    }
 
   private def pack(input: Json): Either[GolemReflectError, SchemaValue] =
     agentType.constructorInput.packJson(input).left.map(error => GolemReflectError.Validation(error.message))
@@ -406,6 +300,13 @@ final class ReflectedAgentClientFactory private[reflection] (agentType: AgentTyp
 }
 
 final class ReflectedAgentClient private[reflection] (agentType: AgentType, transport: Transport) {
+
+  /**
+   * The ID of the target agent. On a client of `upsert` the host creates a
+   * missing durable agent.
+   */
+  def agentId(): Future[Either[GolemReflectError, AgentId]] = transport.agentId()
+
   def method(name: String): Either[GolemReflectError, ReflectedAgentMethod] =
     agentType
       .method(name)
@@ -485,28 +386,35 @@ final class ReflectedAgentMethod private[reflection] (val definition: AgentMetho
     )
 }
 
-final case class InvocationMetadata(agentId: ParsedAgentId, invocationId: InvocationId)
+final case class InvocationMetadata(agentId: AgentId, invocationId: InvocationId)
 final case class Invocation[+A](metadata: InvocationMetadata, value: Option[A])
 final case class ScheduledInvocation(metadata: InvocationMetadata, cancellationToken: CancellationToken)
 
-final class DynamicAgentClient private (transport: Transport, val agentId: Option[ParsedAgentId]) {
+final class DynamicAgentClient private (transport: Transport) {
   def method(name: String): DynamicAgentMethod = new DynamicAgentMethod(name, transport)
+
+  /** The ID of the target agent; see [[ReflectedAgentClient.agentId]]. */
+  def agentId(): Future[Either[GolemReflectError, AgentId]] = transport.agentId()
 }
 
 object DynamicAgentClient {
-  def fromAgentId(agentId: ParsedAgentId): Either[GolemReflectError, DynamicAgentClient] =
-    agentId.parts
-      .flatMap(parts => Transport.create(parts.typeName, parts.constructorValue, parts.phantomId))
-      .map(new DynamicAgentClient(_, Some(agentId)))
 
   /**
-   * A raw one-shot address. Final identity is supplied by invocation metadata.
+   * A client of the keyed agent of the constructor parameters. For an ephemeral
+   * type, invocation metadata reports the one-shot instance that ran each call.
    */
-  def ephemeral(
-    typeName: String,
-    constructor: SchemaValue
-  ): Either[GolemReflectError, DynamicAgentClient] =
-    Transport.create(typeName, constructor, None).map(new DynamicAgentClient(_, None))
+  def upsert(typeName: String, constructor: SchemaValue): Either[GolemReflectError, DynamicAgentClient] =
+    Transport.upsert(typeName, constructor).map(new DynamicAgentClient(_))
+
+  /**
+   * A client of the existing agent with the given ID. The host registry
+   * resolves the agent type from the type tag of the ID.
+   */
+  def getById(agentId: AgentId): Future[Either[GolemReflectError, DynamicAgentClient]] =
+    Transport.typeNameOf(agentId) match {
+      case Left(error)     => Future.successful(Left(error))
+      case Right(typeName) => Transport.getById(typeName, agentId).map(_.map(new DynamicAgentClient(_)))
+    }
 }
 
 final class DynamicAgentMethod private[reflection] (val name: String, transport: Transport) {
@@ -525,7 +433,22 @@ final class DynamicAgentMethod private[reflection] (val name: String, transport:
     transport.schedule(at, name, input)
 }
 
-private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient) {
+private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient, knownAgentId: Option[AgentId]) {
+  private var cachedAgentId = knownAgentId
+
+  def agentId(): Future[Either[GolemReflectError, AgentId]] =
+    cachedAgentId match {
+      case Some(id) => Future.successful(Right(id))
+      case None     =>
+        raw
+          .agentId()
+          .map(_.left.map(remoteError).map { id =>
+            val agentId = JsAgentId.toAgentId(id)
+            cachedAgentId = Some(agentId)
+            agentId
+          })
+    }
+
   def invokeAndAwait(
     method: String,
     input: SchemaValue,
@@ -601,63 +524,76 @@ private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient
     )
 
   private def toMetadata(value: golem.runtime.rpc.InvocationMetadata): InvocationMetadata =
-    InvocationMetadata(ParsedAgentId(value.agentId), value.invocationId)
+    InvocationMetadata(value.agentId, value.invocationId)
 
   private def remoteError(error: WasmRpcApi.RpcError): GolemReflectError =
-    GolemReflectError.Remote(Transport.decodeRpcError(error))
+    GolemReflectError.Remote(AgentRpcError.fromRpcError(error))
 }
 
 private[reflection] object Transport {
-  def create(
-    typeName: String,
-    constructor: SchemaValue,
-    phantom: Option[UUID]
-  ): Either[GolemReflectError, Transport] =
-    create(typeName, constructor, phantom, Nil)
-
-  def create(
-    typeName: String,
-    constructor: SchemaValue,
-    phantom: Option[UUID],
-    config: List[golem.config.ConfigOverride]
-  ): Either[GolemReflectError, Transport] =
+  def upsert(typeName: String, constructor: SchemaValue): Either[GolemReflectError, Transport] =
     encode(constructor).flatMap { payload =>
-      try {
-        AgentIdentity
-          .createConnection(typeName, payload, phantom, config)
+      guarded(
+        WasmRpcApi
+          .upsert(typeName, payload)
           .left
-          .map(error => GolemReflectError.Remote(decodeRpcError(error)))
-          .map(new Transport(_))
-      } catch {
-        case NonFatal(error) =>
-          Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
-      }
+          .map(error => GolemReflectError.Remote(AgentRpcError.fromRpcError(error)))
+          .map(new Transport(_, None))
+      )
     }
 
-  private def decodeRpcError(error: WasmRpcApi.RpcError): AgentRpcError =
-    error.agentError match {
-      case Some(agentError) =>
-        val value = agentError.asInstanceOf[js.Dynamic].selectDynamic("val")
-        agentError.tag match {
-          case "invalid-input"    => AgentRpcError.InvalidInput(String.valueOf(value))
-          case "invalid-method"   => AgentRpcError.InvalidMethod(String.valueOf(value))
-          case "invalid-type"     => AgentRpcError.InvalidType(String.valueOf(value))
-          case "invalid-agent-id" => AgentRpcError.InvalidAgentId(String.valueOf(value))
-          case "custom-error"     =>
-            AgentRpcError.Custom(
-              SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(value.asInstanceOf[JsTypedSchemaValue]))
+  def create(
+    typeName: String,
+    constructor: SchemaValue,
+    options: CreateOptions
+  ): Future[Either[GolemReflectError, Transport]] =
+    encode(constructor) match {
+      case Left(error)    => Future.successful(Left(error))
+      case Right(payload) =>
+        guardedFuture(
+          WasmRpcApi
+            .create(typeName, payload, options.keyed, ConfigOverrideEncoder.encode(options.config), options.env)
+            .map(
+              _.left
+                .map(error => GolemReflectError.Remote(AgentRpcError.fromRpcError(error)))
+                .map { case (id, rpc) => new Transport(rpc, Some(JsAgentId.toAgentId(id))) }
             )
-          case other => AgentRpcError.Unknown(other, None)
-        }
-      case None =>
-        val detail = error.message.getOrElse(error.kind)
-        error.kind match {
-          case "protocol-error"        => AgentRpcError.Protocol(detail)
-          case "denied"                => AgentRpcError.Denied(detail)
-          case "not-found"             => AgentRpcError.NotFound(detail)
-          case "remote-internal-error" => AgentRpcError.RemoteInternal(detail)
-          case other                   => AgentRpcError.Unknown(other, error.message)
-        }
+        )
+    }
+
+  def getById(typeName: String, agentId: AgentId): Future[Either[GolemReflectError, Transport]] =
+    guardedFuture(
+      Future.successful(
+        WasmRpcApi
+          .getById(typeName, JsAgentId.fromAgentId(agentId))
+          .left
+          .map(error => GolemReflectError.Remote(AgentRpcError.fromRpcError(error)))
+          .map(new Transport(_, Some(agentId)))
+      )
+    )
+
+  /**
+   * The name of the deployed agent type that the type tag of `agentId` names.
+   */
+  def typeNameOf(agentId: AgentId): Either[GolemReflectError, String] =
+    guarded(
+      AgentHostApi
+        .registeredAgentTypeFor(JsAgentId.fromAgentId(agentId))
+        .map(_.agentType.typeName)
+        .toRight(GolemReflectError.Remote(AgentRpcError.NotFound(s"No deployed agent type has the ID $agentId")))
+    )
+
+  private def guarded[A](thunk: => Either[GolemReflectError, A]): Either[GolemReflectError, A] =
+    try thunk
+    catch {
+      case NonFatal(error) =>
+        Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
+    }
+
+  private def guardedFuture[A](thunk: => Future[Either[GolemReflectError, A]]): Future[Either[GolemReflectError, A]] =
+    (try thunk
+    catch { case NonFatal(error) => Future.failed(error) }).recover { case NonFatal(error) =>
+      Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
     }
 }
 

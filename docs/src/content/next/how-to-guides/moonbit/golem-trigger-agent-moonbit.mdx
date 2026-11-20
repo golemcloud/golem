@@ -5,7 +5,7 @@ Both `golem` and `golem-cli` can be used — all commands below work with either
 ## Usage
 
 ```shell
-golem agent invoke --trigger <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
+golem agent invoke --trigger <AGENT_ADDRESS> <FUNCTION_NAME> [ARGUMENTS...]
 ```
 
 The `--trigger` (or `-t`) flag sends the invocation request to the agent and **returns immediately** without waiting for the result. The invocation is enqueued and executed asynchronously by the Golem runtime.
@@ -72,7 +72,7 @@ If the agent's component has not been deployed yet and the CLI is run from an ap
 
 Pass one native argument per user-supplied method parameter in signature order, excluding `self` and config parameters. Skip host-injected `Principal` fields; do not supply a principal value or placeholder. Do not wrap all parameters in a JSON object. No-parameter methods take no arguments, not `'{}'`. `--format json` controls output only. Load [`golem-invoke-agent-moonbit`](/next/how-to-guides/moonbit/golem-invoke-agent-moonbit) for the string fallback and the different HTTP body rules. Awaited, triggered, and scheduled invocations share the same CLI argument parser.
 
-The agent ID parameters and method arguments use **MoonBit syntax**:
+The key parameters and method arguments use **MoonBit syntax**:
 
 - Field names use `snake_case`
 - Options: `Some(value)` / `None`

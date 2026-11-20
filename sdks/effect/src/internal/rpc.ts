@@ -5,32 +5,35 @@ import { uuidToString } from "golem:core/types@2.0.0"
 import type { InvocationMetadata, RemoteCallError } from "../Client.js"
 import type { RpcCancellationToken, RpcConnection } from "../host/RpcClient.js"
 import type { Uuid } from "../Ids.js"
+import { agentIdFromWit } from "./agentId.js"
 import { makeInvocationId } from "./invocationId.js"
 import { type GuestScopeCard, isScopeCard, peekScopeCard } from "./scopeCard.js"
 import { restoreEncodedCapabilities } from "./schema-model/wit.js"
 
 /**
- * Convert host invocation metadata to the SDK form. The invocation ID combines the agent ID text
+ * Convert host invocation metadata to the SDK form. The invocation ID combines the agent ID
  * with the UUID of the invocation; the owner case of the host ID is not used.
  */
 export const invocationMetadataFromHost = (
   metadata: AgentHost.InvocationMetadata,
-): InvocationMetadata =>
-  Object.freeze({
-    agentId: metadata.agentId,
-    invocationId: makeInvocationId(
-      metadata.agentId,
-      uuidToString(metadata.invocationId.id) as Uuid,
-    ),
+): InvocationMetadata => {
+  const agentId = agentIdFromWit(metadata.agentId)
+  return Object.freeze({
+    agentId,
+    invocationId: makeInvocationId(agentId, uuidToString(metadata.invocationId.id) as Uuid),
   })
+}
 
-const RPC_TAGS = new Set<AgentHost.RpcError["tag"]>([
-  "protocol-error",
-  "denied",
-  "not-found",
-  "remote-internal-error",
-  "remote-agent-error",
-])
+const RPC_TAGS: ReadonlySet<string> = new Set(
+  Object.keys({
+    "protocol-error": true,
+    denied: true,
+    "not-found": true,
+    "remote-internal-error": true,
+    "remote-agent-error": true,
+    conflict: true,
+  } satisfies Record<AgentHost.RpcError["tag"], true>),
+)
 
 const extractRpcError = (error: unknown): AgentHost.RpcError | undefined => {
   const candidates = [error]
@@ -38,7 +41,7 @@ const extractRpcError = (error: unknown): AgentHost.RpcError | undefined => {
   return candidates.find((value): value is AgentHost.RpcError => {
     if (value === null || typeof value !== "object") return false
     const tag = (value as { tag?: unknown }).tag
-    return typeof tag === "string" && RPC_TAGS.has(tag as AgentHost.RpcError["tag"])
+    return typeof tag === "string" && RPC_TAGS.has(tag)
   })
 }
 

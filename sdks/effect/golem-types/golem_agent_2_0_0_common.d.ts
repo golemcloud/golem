@@ -8,7 +8,9 @@ declare module 'golem:agent/common@2.0.0' {
   export type MetadataEnvelope = golemCore200Types.MetadataEnvelope;
   export type AgentId = golemCore200Types.AgentId;
   export type AccountId = golemCore200Types.AccountId;
-  export type ComponentId = golemCore200Types.ComponentId;
+  export type EnvironmentId = golemCore200Types.EnvironmentId;
+  export type Uuid = golemCore200Types.Uuid;
+  export type Datetime = golemCore200Types.Datetime;
   export type HttpRouteMode = golemCore200Http.HttpRouteMode;
   export type DurableStreamRouteOptions = golemCore200Http.DurableStreamRouteOptions;
   export type ConcreteHttpMethod = golemCore200Http.HttpMethod;
@@ -20,14 +22,9 @@ declare module 'golem:agent/common@2.0.0' {
   export type Duration = wasiClocks030Types.Duration;
   export type AgentMode = "durable" | "ephemeral";
   export type AgentTypeKind = "regular" | "http-router";
-  export type AutoInjectedKind = "principal";
   export type FieldSource =
   {
     tag: 'user-supplied'
-  } |
-  {
-    tag: 'auto-injected'
-    val: AutoInjectedKind
   };
   export type NamedField = {
     name: string;
@@ -69,7 +66,6 @@ declare module 'golem:agent/common@2.0.0' {
   };
   export type ReadOnlyConfig = {
     cachePolicy: CachePolicy;
-    usesPrincipal: boolean;
   };
   export type PhantomIdBindingDetails = {
     name: string;
@@ -141,48 +137,90 @@ declare module 'golem:agent/common@2.0.0' {
     outputSchema: OutputSchema;
     readOnly?: ReadOnlyConfig;
   };
-  export type OidcPrincipal = {
-    sub: string;
+  /**
+   * The (issuer, subject) pair of one principal. A reference is data: holding one grants
+   * nothing. Two references name the same principal exactly when both strings are equal,
+   * byte for byte.
+   */
+  export type PrincipalRef = {
     issuer: string;
-    email?: string;
-    name?: string;
-    emailVerified?: boolean;
-    givenName?: string;
-    familyName?: string;
-    picture?: string;
-    preferredUsername?: string;
+    subject: string;
+  };
+  /**
+   * A user, authenticated by a sign-in provider: the provider's pair.
+   */
+  export type UserPrincipal = {
+    pair: PrincipalRef;
+    /** The verified claims, as the JSON object that Golem received. */
     claims: string;
+    authenticatedAt: Datetime;
   };
-  export type AgentPrincipal = {
-    agentId: AgentId;
-  };
-  export type GolemUserPrincipal = {
+  export type AccountAuthentication = "api-token" | "bootstrap-token" | "sign-in";
+  /**
+   * An account: (Golem issuer, "account:<account-id>").
+   */
+  export type AccountPrincipal = {
+    pair: PrincipalRef;
     accountId: AccountId;
+    authentication: AccountAuthentication;
   };
+  /**
+   * An agent: (Golem issuer, "agent:<agent-id>/<fingerprint>").
+   */
+  export type AgentPrincipal = {
+    pair: PrincipalRef;
+    agentId: AgentId;
+    agentType: string;
+    environmentId: EnvironmentId;
+  };
+  /**
+   * A tool: (Golem issuer, "tool:<environment-id>/<tool-name>").
+   */
+  export type ToolPrincipal = {
+    pair: PrincipalRef;
+    environmentId: EnvironmentId;
+    toolName: string;
+  };
+  /**
+   * One identity, as Golem verified it. Every kind except anonymous has a pair.
+   */
   export type Principal =
   {
-    tag: 'oidc'
-    val: OidcPrincipal
+    tag: 'user'
+    val: UserPrincipal
+  } |
+  {
+    tag: 'account'
+    val: AccountPrincipal
   } |
   {
     tag: 'agent'
     val: AgentPrincipal
   } |
   {
-    tag: 'golem-user'
-    val: GolemUserPrincipal
+    tag: 'tool'
+    val: ToolPrincipal
   } |
   {
     tag: 'anonymous'
   };
   /**
-   * The principals that caused an invocation.
+   * A token that the request presented, and the reference of its maker. It never holds the
+   * token's value.
+   */
+  export type TokenProvenance = {
+    id: Uuid;
+    maker?: PrincipalRef;
+  };
+  /**
+   * The principals that caused an invocation, and the tokens presented at the entry point.
    */
   export type Caller = {
     /** The principal at the root of the call tree. */
     original: Principal;
     /** The principal that made this call. */
     immediate: Principal;
+    tokens: TokenProvenance[];
   };
   export type AgentConstructor = {
     name?: string;
@@ -251,11 +289,10 @@ declare module 'golem:agent/common@2.0.0' {
     config: AgentConfigDeclaration[];
   };
   /**
-   * Associates an agent type with a component that implements it
+   * An agent type deployed in the current environment
    */
   export type RegisteredAgentType = {
     agentType: AgentType;
-    implementedBy: ComponentId;
   };
   export type TypedAgentConfigValue = {
     path: string[];

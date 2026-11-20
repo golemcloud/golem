@@ -75,7 +75,15 @@ pub(super) async fn finish_input_test<T>(
 ) -> anyhow::Result<()> {
     let mut errors = Vec::new();
     if result.is_err() {
-        match tokio::time::timeout(Duration::from_secs(10), executor.interrupt(id)).await {
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            executor.interrupt(&OwnedAgentId::new(
+                executor.context.default_environment_id,
+                id,
+            )),
+        )
+        .await
+        {
             Ok(Ok(())) => {}
             other => errors.push(anyhow!("cleanup interrupt: {other:?}")),
         }
