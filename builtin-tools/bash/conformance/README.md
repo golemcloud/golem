@@ -16,7 +16,7 @@ Install Bun, Wasmtime with WASI 0.3/component-model async support (CI uses 50.0.
 
 ```sh
 bun install --cwd builtin-tools/bash/conformance --frozen-lockfile
-bun run --cwd builtin-tools/bash/conformance typecheck
+bun run --cwd builtin-tools/bash/conformance check
 bun run --cwd builtin-tools/bash/conformance test
 cargo build --manifest-path builtin-tools/bash/Cargo.toml --locked \
   -p bash-shell --example cooperative --features test-support --release --target wasm32-wasip2
@@ -26,6 +26,8 @@ bun builtin-tools/bash/conformance/conformance.ts coverage --wasm "$W"
 # After adding or changing cases (needs Docker):
 bun builtin-tools/bash/conformance/conformance.ts record --prefix '<text>'
 ```
+
+The package's `check` script runs strict TypeScript checks, oxlint and dprint. The cargo-make preparation task runs the same checks. `bun run --cwd builtin-tools/bash/conformance format` formats the TypeScript and package configuration, not the corpora or goldens. The pinned native oxlint rules follow Effect's conventions and reject explicit `any`; they do not require the unpublished `@effect/oxc` plugin. Formatting uses two spaces, double quotes, no semicolons or trailing commas, and a 120-column target.
 
 The CLI supports `check` (the default), `coverage`, `record`, `live` and `stale`. `live` compares with the oracle directly. `stale` re-runs it to find answers that no longer match the goldens. Only `record` writes goldens. `check` and `coverage` need no Docker.
 
@@ -57,7 +59,7 @@ Goldens were recorded on arm64. Bash/GNU answers can differ on x86-64 because of
 
 There are 2,254 `pr` cases and 15,755 additional `sweep` cases. `check` defaults to `pr`; `--tier all` checks both. Other commands select from both tiers. The sweep has no deliberate fixtures. `sweep-known-failures.json` lists its existing differences. `--known-failures FILE` rejects both new failures and selected listed cases that now pass. `--update-known-failures` rewrites that file from the selected run; use a full run to replace the full baseline.
 
-- `cargo make test-builtin-bash-pipelines` builds the example, typechecks and tests the harness, checks PR cases, and runs coverage.
+- `cargo make test-builtin-bash-pipelines` builds the example, checks types, lint and formatting, tests the harness, checks PR cases, and runs coverage.
 - `cargo make test-builtin-bash-sweep` runs Brush compatibility against its baseline and the full matrix against its known failures.
 - `cargo make test-builtin-bash-oracle-drift` runs `stale` against the live oracle. It needs Docker, not a built Wasm shell.
 

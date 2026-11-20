@@ -2457,11 +2457,11 @@ cd ../..
 '''
 
 [tasks.prepare-builtin-bash-conformance]
-description = "Installs and typechecks the Bash conformance harness"
+description = "Installs and checks types, lint and formatting for the Bash conformance harness"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error bun install --cwd builtin-tools/bash/conformance --frozen-lockfile
-exec --fail-on-error bun run --cwd builtin-tools/bash/conformance typecheck
+exec --fail-on-error bun run --cwd builtin-tools/bash/conformance check
 '''
 
 [tasks.test-builtin-bash-pipelines]
