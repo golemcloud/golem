@@ -166,5 +166,68 @@ mod tests {
         assert!(check_address(&narrow, "10.3.3.0:80".parse().unwrap(), &[]).is_err());
         assert!(check_address(&narrow, "[::ffff:10.3.2.1]:80".parse().unwrap(), &[]).is_ok());
         assert!(check_address(&narrow, "127.0.0.1:80".parse().unwrap(), &[]).is_err());
+        [
+            ("169.254.169.254:80", ConnectionRefusal::Metadata),
+            ("[fd00:ec2::254]:80", ConnectionRefusal::Metadata),
+            ("[64:ff9b::169.254.169.254]:80", ConnectionRefusal::Metadata),
+            ("169.254.2.3:443", ConnectionRefusal::LinkLocal),
+            ("[fe80::1]:443", ConnectionRefusal::LinkLocal),
+            ("100.64.0.0:80", ConnectionRefusal::Other),
+            ("[::]:80", ConnectionRefusal::Other),
+            ("10.3.2.1:9000", ConnectionRefusal::GolemEndpoint),
+        ]
+        .into_iter()
+        .for_each(|(address, refusal)| {
+            [&default, &permitted].into_iter().for_each(|policy| {
+                assert_eq!(
+                    check_address(policy, address.parse().unwrap(), &own),
+                    Err(refusal),
+                    "{address}"
+                );
+            });
+        });
+        [
+            ("127.0.0.1:80", ConnectionRefusal::Loopback),
+            ("[::1]:80", ConnectionRefusal::Loopback),
+            ("10.3.2.1:9001", ConnectionRefusal::Private),
+            ("[fc00::1]:443", ConnectionRefusal::Private),
+        ]
+        .into_iter()
+        .for_each(|(address, refusal)| {
+            assert_eq!(
+                check_address(&default, address.parse().unwrap(), &own),
+                Err(refusal),
+                "{address}"
+            );
+            assert_eq!(
+                check_address(&permitted, address.parse().unwrap(), &own),
+                Ok(()),
+                "{address}"
+            );
+        });
+        assert_eq!(
+            check_address(&narrow, "10.3.3.0:80".parse().unwrap(), &[]),
+            Err(ConnectionRefusal::Private)
+        );
+        assert_eq!(
+            check_address(&narrow, "127.0.0.1:80".parse().unwrap(), &[]),
+            Err(ConnectionRefusal::Loopback)
+        );
+        [
+            "[::ffff:10.3.2.1]:9000",
+            "[64:ff9b::a03:201]:9000",
+            "[2002:a03:201::]:9000",
+        ]
+        .into_iter()
+        .for_each(|embedded| {
+            assert_eq!(
+                check_address(&permitted, embedded.parse().unwrap(), &own),
+                Err(ConnectionRefusal::GolemEndpoint)
+            );
+            assert_eq!(
+                check_address(&permitted, own[0], &[embedded.parse().unwrap()]),
+                Err(ConnectionRefusal::GolemEndpoint)
+            );
+        });
     }
 }

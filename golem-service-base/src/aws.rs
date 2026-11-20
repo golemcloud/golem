@@ -152,6 +152,36 @@ mod tests {
 
     #[test]
     fn published_s3_signature() {
+        {
+            let credentials = AwsCredentials::from_record(&serde_json::json!({
+                "accessKeyId": "volume-access", "secretAccessKey": "volume-secret"
+            }))
+            .unwrap();
+            let (mut head, _) = http::Request::builder()
+                .uri("https://examplebucket.s3.amazonaws.com/a//b/../c%2Fd?z=two%20words&a=%2B&a=1")
+                .header("range", "bytes=0-9")
+                .body(())
+                .unwrap()
+                .into_parts();
+            let time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1369353600);
+            let signed =
+                sign_request(&head, EMPTY_HASH, &credentials, "us-east-1", "s3", time).unwrap();
+            assert_eq!(signed["x-amz-date"], "20130524T000000Z");
+            assert_eq!(signed["x-amz-content-sha256"], EMPTY_HASH);
+            assert_eq!(
+                signed["authorization"],
+                "AWS4-HMAC-SHA256 Credential=volume-access/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, Signature=f983e6563a5be82265be8f1136d2864f149054a9c6a7319c1f3c39c463f3da85"
+            );
+            head.headers
+                .insert("traceparent", "00-trace-parent-01".parse().unwrap());
+            head.headers
+                .insert("tracestate", "vendor=state".parse().unwrap());
+            let traced =
+                sign_request(&head, EMPTY_HASH, &credentials, "us-east-1", "s3", time).unwrap();
+            assert_eq!(traced["authorization"], signed["authorization"]);
+            assert_eq!(traced["traceparent"], head.headers["traceparent"]);
+            assert_eq!(traced["tracestate"], head.headers["tracestate"]);
+        }
         // https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sig-v4-header-based-auth.html
         let credentials = AwsCredentials::from_record(&serde_json::json!({
             "accessKeyId": "AKIAIOSFODNN7EXAMPLE",
@@ -177,12 +207,31 @@ mod tests {
 
     #[test]
     fn credentials_and_signing_headers_redact_secrets() {
-        let record = serde_json::json!({"accessKeyId":"access", "secretAccessKey":"hidden-secret", "sessionToken":"hidden-token"});
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let record = serde_json::json!({"accessKeyId":"hidden-access", "secretAccessKey":"hidden-secret", "sessionToken":"hidden-token"});
         let credentials = AwsCredentials::from_record(&record).unwrap();
         let (head, _) = http::Request::builder()
             .uri("https://s3.example.com/a")
             .header("x-amz-security-token", "old-token")
             .header("authorization", "old-signature")
+            .header("x-amz-date", "old-date")
+            .header("x-amz-content-sha256", "old-hash")
+            .header("x-unrelated", "kept")
             .body(())
             .unwrap()
             .into_parts();
@@ -196,13 +245,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(signed["x-amz-security-token"], "hidden-token");
-        [format!("{credentials:?}"), format!("{signed:?}")]
-            .map(String::into_boxed_str)
-            .iter()
-            .for_each(|debug| {
-                assert!(!debug.contains("hidden-secret"));
-                assert!(!debug.contains("hidden-token"));
-            });
+        assert!(signed["authorization"].is_sensitive());
+        assert!(signed["x-amz-security-token"].is_sensitive());
+        assert_eq!(signed["x-amz-date"], "19700101T000000Z");
+        assert_eq!(signed["x-amz-content-sha256"], EMPTY_HASH);
+        assert_eq!(signed["x-unrelated"], "kept");
+        assert_ne!(signed["authorization"], "old-signature");
+        [
+            format!("{credentials:?}"),
+            format!("{signed:?}"),
+            format!("{credentials:#?}"),
+            format!("{signed:#?}"),
+        ]
+        .map(String::into_boxed_str)
+        .iter()
+        .for_each(|debug| {
+            assert!(!debug.contains("hidden-secret"));
+            assert!(!debug.contains("hidden-token"));
+            assert!(!debug.contains("hidden-access"));
+        });
         ["accessKeyId", "secretAccessKey", "sessionToken"]
             .into_iter()
             .for_each(|field| {
@@ -212,5 +273,80 @@ mod tests {
                 assert_eq!(error, SigningFailure::InvalidField(field));
                 assert!(!format!("{error:?} {error}").contains("hidden-secret"));
             });
+        ["accessKeyId", "secretAccessKey", "sessionToken"]
+            .into_iter()
+            .for_each(|field| {
+                [
+                    serde_json::Value::Null,
+                    serde_json::json!(17),
+                    serde_json::json!(false),
+                    serde_json::json!(""),
+                    serde_json::json!("hidden-secret\0hidden-token"),
+                    serde_json::json!("hidden-secret\u{7f}hidden-token"),
+                ]
+                .into_iter()
+                .for_each(|value| {
+                    let mut invalid = record.clone();
+                    invalid[field] = value;
+                    let error = AwsCredentials::from_record(&invalid).unwrap_err();
+                    assert_eq!(error, SigningFailure::InvalidField(field));
+                    let diagnostic = format!("{error:?} {error}").into_boxed_str();
+                    assert!(!diagnostic.contains("hidden-secret"));
+                    assert!(!diagnostic.contains("hidden-token"));
+                });
+            });
+        ["accessKeyId", "secretAccessKey"]
+            .into_iter()
+            .for_each(|field| {
+                let mut invalid = record.clone();
+                invalid.as_object_mut().unwrap().remove(field);
+                assert_eq!(
+                    AwsCredentials::from_record(&invalid).unwrap_err(),
+                    SigningFailure::InvalidField(field)
+                );
+            });
+        let mut without_token = record.clone();
+        without_token
+            .as_object_mut()
+            .unwrap()
+            .remove("sessionToken");
+        let without_token = AwsCredentials::from_record(&without_token).unwrap();
+        let capture = Capture(Arc::new(Mutex::new(Vec::new())));
+        let writer = capture.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .without_time()
+            .with_writer(move || writer.clone())
+            .finish();
+        let signed = tracing::subscriber::with_default(subscriber, || {
+            let signed = sign_request(
+                &head,
+                EMPTY_HASH,
+                &without_token,
+                "us-east-1",
+                "s3",
+                SystemTime::UNIX_EPOCH,
+            )
+            .unwrap();
+            tracing::info!("after direct public signing");
+            signed
+        });
+        assert!(!signed.contains_key("x-amz-security-token"));
+        assert!(signed["authorization"].is_sensitive());
+        assert_eq!(signed["x-amz-date"], "19700101T000000Z");
+        assert_eq!(signed["x-amz-content-sha256"], EMPTY_HASH);
+        assert_eq!(signed["x-unrelated"], "kept");
+        let bytes = capture.0.lock().unwrap();
+        let log = std::str::from_utf8(&bytes).unwrap();
+        assert!(log.contains("after direct public signing"));
+        [
+            "hidden-access",
+            "hidden-secret",
+            "hidden-token",
+            "aws_sigv4",
+        ]
+        .iter()
+        .for_each(|value| assert!(!log.contains(value)));
     }
 }
