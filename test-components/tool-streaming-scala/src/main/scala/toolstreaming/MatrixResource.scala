@@ -126,12 +126,7 @@ final class MatrixTypedToolImpl extends MatrixTypedTool {
 private def matrixResourceEvidence(context: InvocationContext): (String, String, String) =
   (
     "scala",
-    principal match {
-      case Principal.Anonymous                             => "anonymous"
-      case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => s"oidc:$sub"
-      case Principal.Agent(_)                              => "agent"
-      case Principal.GolemUser(_)                          => "golem-user"
-    },
+    context.caller.immediate.toString,
     HostApi.getSelfMetadata().agentId.toString
   )
 

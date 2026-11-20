@@ -276,7 +276,10 @@ async fn moonbit_reflected_and_generated_runtime_match_success_error_principal_a
         .into_typed()?;
 
     assert_eq!(observation.generated_provider, "moonbit");
-    assert_eq!(observation.generated_principal, "oidc:reflection-principal");
+    assert_eq!(
+        observation.generated_principal,
+        callers::user_text("https://moonbit-sdk-acceptance.test", "reflection-caller")
+    );
     assert_eq!(
         observation.generated_owner_agent_id,
         worker_id.agent_id.to_string()
