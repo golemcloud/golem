@@ -21,59 +21,9 @@ import {
 }
 
 // Values
-pub fn cabi_realloc(Int32, Int32, Int32, Int32) -> Int32
-
 pub fn collect_app_config_overrides(AppConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
 
 pub fn collect_database_config_overrides(DatabaseConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
-
-pub fn wasmExportAsyncInitialize(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncInvokeGolemAgentGuest(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncInvokeGolemToolGuest(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncInvokeToolMiddleware(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncLoad(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncSave(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportDiscoverAgentTypes() -> Int32
-
-pub fn wasmExportDiscoverAgentTypesPostReturn(Int32) -> Unit
-
-pub fn wasmExportDiscoverToolMiddlewares() -> Int32
-
-pub fn wasmExportDiscoverToolMiddlewaresPostReturn(Int32) -> Unit
-
-pub fn wasmExportDiscoverTools() -> Int32
-
-pub fn wasmExportDiscoverToolsPostReturn(Int32) -> Unit
-
-pub fn wasmExportGetDefinition() -> Int32
-
-pub fn wasmExportGetDefinitionPostReturn(Int32) -> Unit
-
-pub fn wasmExportGetTool(Int32, Int32) -> Int32
-
-pub fn wasmExportGetToolMiddleware(Int32, Int32) -> Int32
-
-pub fn wasmExportGetToolMiddlewarePostReturn(Int32) -> Unit
-
-pub fn wasmExportGetToolPostReturn(Int32) -> Unit
-
-pub fn wasmExportInitialize(Int32, Int32, Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportInvokeGolemAgentGuest(Int32, Int32, Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportInvokeGolemToolGuest(Int32) -> Int32
-
-pub fn wasmExportInvokeToolMiddleware(Int32) -> Int32
-
-pub fn wasmExportLoad(Int32, Int32, Int32, Int32, Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportSave() -> Int32
 
 // Errors
 
@@ -280,6 +230,7 @@ pub impl @tool-core.ToolErrorSchema for CanonicalStashError
 type ConfiguredAgent
 pub fn ConfiguredAgent::get_request_count(Self) -> UInt64
 pub fn ConfiguredAgent::handle_request(Self) -> Unit
+pub fn ConfiguredAgent::settings(Self) -> String
 
 pub(all) struct ConfiguredAgentClient {
   client : @rpc.AgentClient
@@ -293,14 +244,18 @@ pub async fn ConfiguredAgentClient::get_request_count(Self, scope_card? : @permi
 pub async fn ConfiguredAgentClient::handle_request(Self, scope_card? : @permissions.ScopeCard) -> Unit
 pub fn ConfiguredAgentClient::schedule_cancelable_get_request_count(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn ConfiguredAgentClient::schedule_cancelable_handle_request(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn ConfiguredAgentClient::schedule_cancelable_settings(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn ConfiguredAgentClient::schedule_get_request_count(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn ConfiguredAgentClient::schedule_handle_request(Self, @system-clock.Instant) -> Unit raise @common.AgentError
+pub fn ConfiguredAgentClient::schedule_settings(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub async fn[T] ConfiguredAgentClient::scoped_create(keyed? : Bool, config? : AppConfigOverride, env? : Array[(String, String)], async (Self) -> T) -> T
 pub async fn[T] ConfiguredAgentClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
 pub async fn[T] ConfiguredAgentClient::scoped_upsert(async (Self) -> T) -> T
 pub fn ConfiguredAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
+pub async fn ConfiguredAgentClient::settings(Self, scope_card? : @permissions.ScopeCard) -> String
 pub fn ConfiguredAgentClient::trigger_get_request_count(Self) -> Unit raise @common.AgentError
 pub fn ConfiguredAgentClient::trigger_handle_request(Self) -> Unit raise @common.AgentError
+pub fn ConfiguredAgentClient::trigger_settings(Self) -> Unit raise @common.AgentError
 pub fn ConfiguredAgentClient::upsert() -> Self raise
 
 type Counter derive(ToJson, @json.FromJson)

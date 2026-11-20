@@ -460,6 +460,12 @@ test_component!(
     "golem-it:agent-sdk-rust"
 );
 test_component!(
+    agent_config_moonbit,
+    "agent_config_moonbit",
+    "agent_config_moonbit",
+    "golemcloud:agent-config-moonbit"
+);
+test_component!(
     http_tests,
     "http_tests",
     "golem_it_http_tests_release",

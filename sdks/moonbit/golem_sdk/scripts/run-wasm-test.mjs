@@ -483,7 +483,15 @@ const importObject = {
       return BigInt.asIntN(64, value)
     },
   },
+  "golem:agent/invocation-context@2.0.0": {
+    caller() {
+      throw new Error("unexpected caller read in SDK unit-test host")
+    },
+  },
   "golem:agent/host@2.0.0": {
+    "get-config-value"() {
+      throw new Error("unexpected config read in SDK unit-test host")
+    },
     "[static]wasm-rpc.upsert"(namePtr, nameLen, _nodesPtr, nodesLen, root, retPtr) {
       rpcHost.calls.push(
         `upsert ${permissionHostReadString(namePtr, nameLen)} nodes=${nodesLen} root=${root}`,

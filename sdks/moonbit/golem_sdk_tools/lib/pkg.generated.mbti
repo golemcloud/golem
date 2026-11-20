@@ -198,6 +198,7 @@ pub(all) struct ConfigTypeInfo {
   name : String
   package_path : String
   fields : Array[(String, ParamType)]
+  field_metadata : Map[String, (String, String?)]
 } derive(Eq, @debug.Debug)
 
 pub(all) struct DurableStreamRouteInfo {

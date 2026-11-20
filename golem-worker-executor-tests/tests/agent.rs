@@ -66,6 +66,10 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("agent_config_moonbit")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("host_api_tests")]
     PrecompiledComponent
 );
@@ -1152,6 +1156,17 @@ async fn static_config_defaults_and_creation_overrides_survive_reconstruction(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     check_static_config_reconstruction(last_unique_id, deps, agent_sdk_rust).await
+}
+
+#[test]
+#[timeout("120s")]
+async fn moonbit_static_config_defaults_and_creation_overrides_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_config_moonbit")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    check_static_config_reconstruction(last_unique_id, deps, component).await
 }
 
 async fn check_static_config_reconstruction(

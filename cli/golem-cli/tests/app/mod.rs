@@ -39,6 +39,7 @@ mod initial_cards;
 mod mcp_import;
 mod mcp_oauth;
 mod mcp_serve;
+mod moonbit_config;
 mod moonbit_guest_streams;
 mod moonbit_http_router;
 mod moonbit_mcp_import;

@@ -50,6 +50,8 @@ fn escape_string_lit(s : String) -> String {
       '\\' => buf.write_string("\\\\")
       '"' => buf.write_string("\\\"")
       '\n' => buf.write_string("\\n")
+      '\r' => buf.write_string("\\r")
+      '\t' => buf.write_string("\\t")
       _ => buf.write_char(ch)
     }
   }

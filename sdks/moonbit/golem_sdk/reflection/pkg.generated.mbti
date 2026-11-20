@@ -220,6 +220,7 @@ pub struct SchemaRef {
 } derive(Eq, @debug.Debug)
 pub fn SchemaRef::contains_stream(Self) -> Bool
 pub fn SchemaRef::graph(Self) -> @schema_model.SchemaGraph
+pub fn SchemaRef::new(@schema_model.SchemaGraph, root_defaults? : Map[String, @schema_model.SchemaValue]) -> Self
 pub fn SchemaRef::pack_json(Self, Json) -> @schema_model.SchemaValue raise ReflectError
 pub fn SchemaRef::root(Self) -> @schema_model.SchemaType
 pub fn SchemaRef::to_json_schema(Self, include_draft_marker? : Bool) -> Json
