@@ -808,10 +808,7 @@ mod tests {
 
     async fn encode_with_schema(
         values: &[golem_rust::agentic::DirectInputValue],
-        schema: fn() -> Result<
-            golem_rust::agentic::WireCanonicalInputModel,
-            golem_rust::agentic::ToolBuildError,
-        >,
+        schema: fn() -> Result<std::rc::Rc<golem_rust::agentic::ToolInputModel>, String>,
     ) -> Result<golem_rust::TypedSchemaValue, String> {
         let wire =
             golem_rust::agentic::encode_direct_tool_input_with_schema(values, schema).await?;
@@ -897,6 +894,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_matches_published(&input, &published);
+            assert_eq!(text_value(&record_fields(&input)[0]), Some(invalid));
             assert!(
                 !input_is_valid(&input),
                 "`{invalid}` must break the published text refinement"

@@ -178,16 +178,22 @@ fn synthesize_input_schema(ir: &ToolDefinitionIr, cmd: &CommandIr, tool_name: &s
     quote! {
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        pub fn #ident() -> ::std::result::Result<golem_rust::agentic::WireCanonicalInputModel, golem_rust::agentic::ToolBuildError> {
-            let __golem_wire_schema = golem_rust::agentic::WireToolSchema::default();
-            let __fields = ::std::vec![#(#fields),*];
-            let __root = __golem_wire_schema.with_builder(|__builder| {
-                __builder.push(golem_rust::schema::wit::wire::SchemaTypeBody::RecordType(__fields))
-            });
-            ::std::result::Result::Ok(golem_rust::agentic::WireCanonicalInputModel {
-                graph: __golem_wire_schema.finish_at(__root),
-                aliases: ::std::vec![#(#aliases),*],
-            })
+        pub fn #ident() -> ::std::result::Result<::std::rc::Rc<golem_rust::agentic::ToolInputModel>, ::std::string::String> {
+            ::std::thread_local! {
+                static MODEL: ::std::cell::OnceCell<::std::rc::Rc<golem_rust::agentic::ToolInputModel>> = const { ::std::cell::OnceCell::new() };
+            }
+            fn build() -> ::std::result::Result<golem_rust::agentic::WireCanonicalInputModel, golem_rust::agentic::ToolBuildError> {
+                let __golem_wire_schema = golem_rust::agentic::WireToolSchema::default();
+                let __fields = ::std::vec![#(#fields),*];
+                let __root = __golem_wire_schema.with_builder(|__builder| {
+                    __builder.push(golem_rust::schema::wit::wire::SchemaTypeBody::RecordType(__fields))
+                });
+                ::std::result::Result::Ok(golem_rust::agentic::WireCanonicalInputModel {
+                    graph: __golem_wire_schema.finish_at(__root),
+                    aliases: ::std::vec![#(#aliases),*],
+                })
+            }
+            MODEL.with(|cache| golem_rust::agentic::ToolInputModel::cached(cache, build))
         }
     }
 }
