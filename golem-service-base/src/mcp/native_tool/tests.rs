@@ -197,6 +197,23 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
             .iter()
             .all(|export| export.command_path == ["do-work", "deep"])
     );
+    let description = |mcp_name: &str| {
+        exports
+            .iter()
+            .find(|export| export.mcp_name == mcp_name)
+            .map(|export| export.description.as_str())
+            .unwrap()
+    };
+    assert!(
+        !description("root_do_work_deep").contains("(alias for"),
+        "{}",
+        description("root_do_work_deep")
+    );
+    assert!(
+        description("r_do_work_deep").ends_with(" (alias for root do-work deep)"),
+        "{}",
+        description("r_do_work_deep")
+    );
     let excluded = compile_native_tool_exports(
         ComponentId::new(),
         "test:owner".try_into().unwrap(),
@@ -213,6 +230,13 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
             .map(|e| e.mcp_name.as_str())
             .collect::<Vec<_>>(),
         ["root", "r"]
+    );
+    assert_eq!(
+        excluded
+            .iter()
+            .map(CompiledMcpToolExport::command_label)
+            .collect::<Vec<_>>(),
+        ["tool command `root`", "tool command `r` of tool `root`"]
     );
 
     let mut collision_root = node("root", None);
@@ -438,6 +462,17 @@ fn mcp_name_replaces_the_tool_name_and_its_aliases_in_every_command() {
             .collect::<Vec<_>>(),
         ["file_search", "file_search_do_work", "file_search_run"]
     );
+    assert_eq!(
+        exports[2].command_label(),
+        "tool command `fileSearch run` of tool `root`"
+    );
+    assert_eq!(
+        exports
+            .iter()
+            .map(|export| export.description.as_str())
+            .collect::<Vec<_>>(),
+        ["", "", " (alias for do-work)"]
+    );
     assert!(
         exports
             .iter()
@@ -475,8 +510,16 @@ fn the_constraint_text_uses_the_projected_argument_names() {
             OptionShape::OptionalScalar(SchemaType::string()),
             false,
         ),
+        OptionSpec {
+            aliases: vec!["all".to_string()],
+            ..option(
+                "force-all",
+                OptionShape::OptionalScalar(SchemaType::string()),
+                false,
+            )
+        },
         option(
-            "force-all",
+            "keep-going",
             OptionShape::OptionalScalar(SchemaType::string()),
             false,
         ),
@@ -492,6 +535,11 @@ fn the_constraint_text_uses_the_projected_argument_names() {
             rhs_quant: Quantifier::Any,
             rhs: vec![Ref::Present("force-all".to_string())],
         }),
+        Constraint::Forbids(ForbidsC {
+            lhs_quant: Quantifier::All,
+            lhs: vec![Ref::Present("all".to_string())],
+            rhs: vec![Ref::Present("keep-going".to_string())],
+        }),
     ];
     let export = compile(&tool(node("root", Some(command))))
         .unwrap()
@@ -501,6 +549,26 @@ fn the_constraint_text_uses_the_projected_argument_names() {
     assert!(description.contains("\"force_all\""), "{description}");
     assert!(!description.contains("dry-run"), "{description}");
     assert!(!description.contains("force-all"), "{description}");
+    let present = |name: &str| Ref::Present(name.to_string());
+    let expected = serde_json::to_string(&[
+        Constraint::AllOrNone(vec![present("dry_run"), present("force_all")]),
+        Constraint::Implies(ImpliesC {
+            lhs_quant: Quantifier::All,
+            lhs: vec![present("dry_run")],
+            rhs_quant: Quantifier::Any,
+            rhs: vec![present("force_all")],
+        }),
+        Constraint::Forbids(ForbidsC {
+            lhs_quant: Quantifier::All,
+            lhs: vec![present("force_all")],
+            rhs: vec![present("keep_going")],
+        }),
+    ])
+    .unwrap();
+    assert!(
+        description.contains(&format!(" Constraints: {expected}.")),
+        "{description}"
+    );
 }
 
 #[test]
