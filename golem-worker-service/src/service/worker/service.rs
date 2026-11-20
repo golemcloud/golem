@@ -5535,7 +5535,7 @@ mod tests {
                 system_card: false,
             },
             env: BTreeMap::new(),
-            config: Vec::new(),
+            config: Default::default(),
             plugins: vec![InstalledPlugin {
                 environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
                 priority: PluginPriority(7),

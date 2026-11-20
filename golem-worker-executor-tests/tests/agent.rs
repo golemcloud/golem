@@ -58,10 +58,6 @@ inherit_test_dep!(
     #[tagged_as("agent_update_v1")]
     PrecompiledComponent
 );
-inherit_test_dep!(
-    #[tagged_as("agent_sdk_rust")]
-    PrecompiledComponent
-);
 inherit_test_dep!(Tracing);
 
 inherit_test_dep!(
@@ -1156,6 +1152,14 @@ async fn static_config_defaults_and_creation_overrides_survive_reconstruction(
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    check_static_config_reconstruction(last_unique_id, deps, agent_sdk_rust).await
+}
+
+async fn check_static_config_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    guest: &PrecompiledComponent,
+) -> anyhow::Result<()> {
     let corpus: serde_json::Value =
         serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;
     let reference = &corpus["reference"];
@@ -1174,7 +1178,7 @@ async fn static_config_defaults_and_creation_overrides_survive_reconstruction(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .component_dep(&context.default_environment_id, guest)
         .with_agent_config(agent_type, entries("deployment"))
         .store()
         .await?;
@@ -1317,7 +1321,7 @@ async fn rust_static_corpus_captures_survive_reconstruction(
         }
         let mut fills = Vec::new();
         for (field, plan) in schema.fields.iter().zip(plan?) {
-            // Leave unsupplied defaults for the executor to capture.
+            // Component preparation captures defaults before the guest is created.
             if !layers
                 .iter()
                 .any(|layer| layer.value.get(&field.path[0]).is_some())

@@ -54,11 +54,20 @@
 
 mod catalog;
 mod descriptor;
-pub use catalog::{ConfigCatalog, ConfigCatalogKind};
+pub use catalog::{
+    ConfigCatalog, ConfigCatalogEntry, ConfigCatalogKind, ConfigDeclaration, OAuthDefinition,
+    ResourceInitializer, SecretDeclaration, SecretDefinition, SecretSelector,
+};
 pub use descriptor::ConfigDescriptorKind;
 
 use crate::base_model::agent::AgentConfigSource;
-use crate::schema::agent::{AgentConfigDeclarationSchema, agent_secret_value_schema};
+use crate::base_model::worker::TypedAgentConfigEntry;
+use crate::cascade::error::StoreGetValueError;
+use crate::cascade::layer::Layer;
+use crate::cascade::store::Store;
+use crate::schema::agent::{
+    AgentConfigDeclarationSchema, agent_secret_value_schema, typed_schema_value_with_projected_defs,
+};
 use crate::schema::render::{from_json_value, to_json_value};
 use crate::schema::validation::{is_equivalent_cross_graph, validate_root_type, validate_value};
 use crate::schema::{NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypeId};
@@ -170,10 +179,173 @@ pub struct ConfigLayer {
     pub value: Value,
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+struct ConfigFill {
+    effective: Option<Value>,
+    origins: BTreeMap<Vec<String>, ConfigOrigin>,
+    catalog_origin: Option<ConfigOrigin>,
+}
+
+struct ConfigCascadeContext<'a> {
+    schema: &'a ConfigSchema,
+    field: &'a ConfigFieldSchema,
+    catalogs: &'a ConfigCatalogSources,
+    code_origin: &'a ConfigOrigin,
+    evaluate: &'a dyn Fn(&Value, &ConfigOrigin) -> Result<Value, ConfigError>,
+}
+
+#[derive(Debug)]
+struct ConfigCascadeLayer<'a> {
+    id: usize,
+    parents: Vec<usize>,
+    input: Option<&'a ConfigLayer>,
+}
+
+impl<'a> Layer for ConfigCascadeLayer<'a> {
+    type Id = usize;
+    type Value = ConfigFill;
+    type Selector = ();
+    type AppliedSelection = ();
+    type ApplyContext = ConfigCascadeContext<'a>;
+    type ApplyError = ConfigError;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+
+    fn parent_layers(&self) -> &[Self::Id] {
+        &self.parents
+    }
+
+    fn apply_onto_parent(
+        &self,
+        ctx: &Self::ApplyContext,
+        _selector: &Self::Selector,
+        fill: &mut Self::Value,
+    ) -> Result<(), Self::ApplyError> {
+        let ConfigCascadeContext {
+            schema,
+            field,
+            catalogs,
+            code_origin,
+            evaluate,
+        } = ctx;
+        let Some(layer) = self.input else {
+            if let Some(default) = &field.default {
+                let value =
+                    to_json_value(&schema.graph, &field.value_type, default).map_err(|error| {
+                        code_origin.error(format!("cannot export static code default: {error}"))
+                    })?;
+                let origin_value = schema.descriptor_json(
+                    &field.value_type,
+                    value.clone(),
+                    false,
+                    code_origin,
+                    Some(catalogs),
+                )?;
+                record_origins(
+                    &origin_value,
+                    &field.path,
+                    &field
+                        .path
+                        .iter()
+                        .fold((*code_origin).clone(), |origin, name| origin.child(name)),
+                    &mut fill.origins,
+                );
+                fill.effective = Some(value);
+            }
+            return Ok(());
+        };
+        for length in 0..field.path.len() {
+            if let Some((value, origin)) = field_fill(
+                &layer.value,
+                &field.path[..length],
+                &layer.origin,
+                catalogs,
+                None,
+            )? && selector(&value, "$config", &origin)?.is_some()
+            {
+                fill.effective = None;
+                fill.origins.clear();
+                fill.catalog_origin = None;
+                break;
+            }
+        }
+        let Some((value, origin)) =
+            field_fill(&layer.value, &field.path, &layer.origin, catalogs, None)?
+        else {
+            return Ok(());
+        };
+        if field.kind == ConfigFieldKind::Secret && selector(&value, "$config", &origin)?.is_some()
+        {
+            return Err(origin.error("Secret fields require '$secret', not '$config'"));
+        }
+        let binding_path = selector(&value, "$config", &origin)?.map(str::to_owned);
+        let (value, selected_origin) = match selector(&value, "$config", &origin)? {
+            Some(path) => {
+                let (selected, source) = catalogs.select(path, &origin)?;
+                fill.catalog_origin = Some(source.clone());
+                (selected, Some(source))
+            }
+            None => (value, None),
+        };
+        if field.kind == ConfigFieldKind::Static {
+            if catalog_kind(&value) != ConfigCatalogKind::Static {
+                return Err(origin.error("a static field cannot snapshot a managed catalog entry"));
+            }
+            let previous = if selected_origin.is_some() {
+                fill.origins.clear();
+                None
+            } else {
+                fill.catalog_origin = None;
+                fill.effective.take()
+            };
+            fill.effective = Some(merge_config(
+                schema,
+                &field.value_type,
+                previous,
+                value,
+                &field.path,
+                selected_origin.as_ref().unwrap_or(&origin),
+                &mut fill.origins,
+                catalogs,
+                evaluate,
+            )?);
+        } else {
+            fill.origins.clear();
+            fill.origins.insert(field.path.clone(), origin.clone());
+            fill.effective = Some(match field.kind {
+                ConfigFieldKind::Shared => {
+                    if selected_origin.is_none()
+                        || catalog_kind(&value) != ConfigCatalogKind::Shared
+                    {
+                        return Err(origin.error("Shared fields require a named '$config' binding to a Shared declaration"));
+                    }
+                    // Keep the selector, not initializer bytes, in an owner capture.
+                    Value::String(binding_path.unwrap())
+                }
+                ConfigFieldKind::Secret => {
+                    let path = selector(&value, "$secret", &origin)?.ok_or_else(|| {
+                        origin.error("Secret fields require an explicit '$secret' binding")
+                    })?;
+                    let (entry, source) = catalogs.select(path, &origin)?;
+                    if catalog_kind(&entry) != ConfigCatalogKind::Secret {
+                        return Err(origin.error(format!("'{path}' is not a Secret declaration")));
+                    }
+                    fill.catalog_origin = Some(source);
+                    Value::String(path.to_owned())
+                }
+                ConfigFieldKind::Static => unreachable!(),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Disjoint catalog roots from manifest files. Combining sources does not imply layering.
 #[derive(Clone, Debug, Default)]
 pub struct ConfigCatalogSources {
-    roots: BTreeMap<String, (Value, ConfigOrigin)>,
+    roots: BTreeMap<String, (ConfigCatalogEntry, ConfigOrigin)>,
 }
 
 impl ConfigCatalogSources {
@@ -202,7 +374,7 @@ impl ConfigCatalogSources {
         &self,
         path: &str,
         origin: &ConfigOrigin,
-    ) -> Result<(&Value, ConfigOrigin), ConfigError> {
+    ) -> Result<(Value, ConfigOrigin), ConfigError> {
         let segments = parse_catalog_path(path).map_err(|message| origin.error(message))?;
         let (mut value, mut source) = self
             .roots
@@ -210,24 +382,26 @@ impl ConfigCatalogSources {
             .map(|(value, origin)| (value, origin.clone()))
             .ok_or_else(|| origin.error(format!("unknown catalog path '{path}'")))?;
         for segment in &segments[1..] {
-            if catalog_kind(value) != ConfigCatalogKind::Static {
+            let ConfigCatalogEntry::Group(entries) = value else {
                 return Err(origin.error(format!(
-                    "catalog path '{path}' traverses a managed declaration at {}",
+                    "catalog path '{path}' traverses a non-group declaration at {}",
                     source.path.join(".")
                 )));
-            }
-            value = value
-                .as_object()
-                .and_then(|object| object.get(segment))
+            };
+            value = entries
+                .get(segment)
                 .ok_or_else(|| origin.error(format!("unknown catalog path '{path}'")))?;
             source = source.child(segment);
         }
+        let value = serde_json::to_value(value).map_err(|error| origin.error(error.to_string()))?;
         Ok((value, source))
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         for (name, (value, origin)) in &self.roots {
-            self.validate_dependencies(value, origin, &mut vec![name.clone()])?;
+            let value =
+                serde_json::to_value(value).map_err(|error| origin.error(error.to_string()))?;
+            self.validate_dependencies(&value, origin, &mut vec![name.clone()])?;
         }
         Ok(())
     }
@@ -240,14 +414,14 @@ impl ConfigCatalogSources {
     ) -> Result<(), ConfigError> {
         if let Some(path) = selector(value, "$secret", origin)? {
             let (target, target_origin) = self.select(path, origin)?;
-            if catalog_kind(target) != ConfigCatalogKind::Secret {
+            if catalog_kind(&target) != ConfigCatalogKind::Secret {
                 return Err(origin.error(format!("'{path}' is not a Secret declaration")));
             }
             if active.iter().any(|ancestor| ancestor == path) {
                 return Err(origin.error(format!("Secret definition cycle through '{path}'")));
             }
             active.push(path.to_owned());
-            self.validate_dependencies(target, &target_origin, active)?;
+            self.validate_dependencies(&target, &target_origin, active)?;
             active.pop();
         } else if let Some(object) = value.as_object() {
             for (key, child) in object {
@@ -263,14 +437,16 @@ impl ConfigCatalogSources {
 }
 
 pub fn parse_catalog_path(path: &str) -> Result<Vec<String>, String> {
-    let segments = path.split('.').map(str::to_owned).collect::<Vec<_>>();
-    if segments.iter().all(|segment| valid_catalog_name(segment)) {
-        Ok(segments)
-    } else {
-        Err(format!(
+    let invalid_path = || {
+        format!(
             "invalid catalog path '{path}'; use exact root-based segments matching [A-Za-z_-][A-Za-z0-9_-]*"
-        ))
+        )
+    };
+    let segments = crate::base_model::split_config_path(path).map_err(|_| invalid_path())?;
+    if !segments.iter().all(|segment| valid_catalog_name(segment)) {
+        return Err(invalid_path());
     }
+    Ok(segments)
 }
 
 pub fn valid_catalog_name(name: &str) -> bool {
@@ -375,6 +551,36 @@ impl ConfigSchema {
         };
         schema.validate(origin)?;
         Ok(schema)
+    }
+
+    /// Capture code defaults below explicitly supplied values. A child default
+    /// does not make an omitted required group present.
+    pub fn capture_missing_defaults(&self, captures: &mut Vec<TypedAgentConfigEntry>) {
+        let defaults = self
+            .fields
+            .iter()
+            .filter_map(|field| {
+                let value = field.default.as_ref()?;
+                if captures.iter().any(|entry| entry.path == field.path)
+                    || (1..field.path.len()).any(|length| {
+                        !captures
+                            .iter()
+                            .any(|entry| entry.path.starts_with(&field.path[..length]))
+                    })
+                {
+                    return None;
+                }
+                Some(TypedAgentConfigEntry {
+                    path: field.path.clone(),
+                    value: typed_schema_value_with_projected_defs(
+                        &self.graph,
+                        field.value_type.clone(),
+                        value.clone(),
+                    ),
+                })
+            })
+            .collect::<Vec<_>>();
+        captures.extend(defaults);
     }
 
     pub fn validate(&self, origin: &ConfigOrigin) -> Result<(), ConfigError> {
@@ -513,123 +719,39 @@ impl ConfigSchema {
             }
         }
         for field in &self.fields {
-            let mut effective = None;
-            let mut origins = BTreeMap::new();
-            if let Some(default) = &field.default {
-                effective = Some(
-                    to_json_value(&self.graph, &field.value_type, default).map_err(|error| {
-                        code_origin.error(format!("cannot export static code default: {error}"))
-                    })?,
-                );
-                let origin_value = self.descriptor_json(
-                    &field.value_type,
-                    effective.as_ref().unwrap().clone(),
-                    false,
-                    code_origin,
-                    Some(catalogs),
-                )?;
-                record_origins(
-                    &origin_value,
-                    &field.path,
-                    &field
-                        .path
-                        .iter()
-                        .fold(code_origin.clone(), |origin, name| origin.child(name)),
-                    &mut origins,
-                );
+            let mut store = Store::new();
+            for (id, input) in std::iter::once(None)
+                .chain(layers.iter().map(Some))
+                .enumerate()
+            {
+                store
+                    .add_layer(ConfigCascadeLayer {
+                        id,
+                        parents: id.checked_sub(1).into_iter().collect(),
+                        input,
+                    })
+                    .expect("config cascade layer indices are unique");
             }
-            let mut catalog_origin = None;
-            for layer in layers {
-                for length in 0..field.path.len() {
-                    if let Some((value, origin)) = field_fill(
-                        &layer.value,
-                        &field.path[..length],
-                        &layer.origin,
+            let ConfigFill {
+                effective,
+                origins,
+                catalog_origin,
+            } = store
+                .value(
+                    &layers.len(),
+                    &(),
+                    &ConfigCascadeContext {
+                        schema: self,
+                        field,
                         catalogs,
-                        None,
-                    )? && selector(&value, "$config", &origin)?.is_some()
-                    {
-                        effective = None;
-                        origins.clear();
-                        catalog_origin = None;
-                        break;
-                    }
-                }
-                if let Some((value, origin)) =
-                    field_fill(&layer.value, &field.path, &layer.origin, catalogs, None)?
-                {
-                    if field.kind == ConfigFieldKind::Secret
-                        && selector(&value, "$config", &origin)?.is_some()
-                    {
-                        return Err(origin.error("Secret fields require '$secret', not '$config'"));
-                    }
-                    let binding_path = selector(&value, "$config", &origin)?.map(str::to_owned);
-                    let (value, selected_origin) = match selector(&value, "$config", &origin)? {
-                        Some(path) => {
-                            let (selected, source) = catalogs.select(path, &origin)?;
-                            catalog_origin = Some(source.clone());
-                            (selected.clone(), Some(source))
-                        }
-                        None => (value, None),
-                    };
-                    if field.kind == ConfigFieldKind::Static {
-                        if catalog_kind(&value) != ConfigCatalogKind::Static {
-                            return Err(origin
-                                .error("a static field cannot snapshot a managed catalog entry"));
-                        }
-                        if selected_origin.is_some() {
-                            origins.clear();
-                        } else {
-                            catalog_origin = None;
-                        }
-                        effective = Some(merge_config(
-                            self,
-                            &field.value_type,
-                            if selected_origin.is_some() {
-                                None
-                            } else {
-                                effective
-                            },
-                            value,
-                            &field.path,
-                            selected_origin.as_ref().unwrap_or(&origin),
-                            &mut origins,
-                            catalogs,
-                            evaluate,
-                        )?);
-                    } else {
-                        origins.clear();
-                        origins.insert(field.path.clone(), origin.clone());
-                        effective = Some(match field.kind {
-                            ConfigFieldKind::Shared => {
-                                if selected_origin.is_none()
-                                    || catalog_kind(&value) != ConfigCatalogKind::Shared
-                                {
-                                    return Err(origin.error("Shared fields require a named '$config' binding to a Shared declaration"));
-                                }
-                                // Keep the selector, not initializer bytes, in an owner capture.
-                                Value::String(binding_path.unwrap())
-                            }
-                            ConfigFieldKind::Secret => {
-                                let path =
-                                    selector(&value, "$secret", &origin)?.ok_or_else(|| {
-                                        origin.error(
-                                            "Secret fields require an explicit '$secret' binding",
-                                        )
-                                    })?;
-                                let (entry, source) = catalogs.select(path, &origin)?;
-                                if catalog_kind(entry) != ConfigCatalogKind::Secret {
-                                    return Err(origin
-                                        .error(format!("'{path}' is not a Secret declaration")));
-                                }
-                                catalog_origin = Some(source);
-                                Value::String(path.to_owned())
-                            }
-                            ConfigFieldKind::Static => unreachable!(),
-                        });
-                    }
-                }
-            }
+                        code_origin,
+                        evaluate,
+                    },
+                )
+                .map_err(|error| match error {
+                    StoreGetValueError::LayerApplyError(_, error) => error,
+                    error => code_origin.error(error.to_string()),
+                })?;
             let value_origin = origins.get(&field.path).unwrap_or(code_origin);
             let source = match (field.kind, effective) {
                 (ConfigFieldKind::Shared, None)
@@ -780,10 +902,10 @@ fn field_fill(
     }
     if let Some(selected) = selector(value, "$config", origin)? {
         let (group, source) = catalogs.select(selected, origin)?;
-        if catalog_kind(group) != ConfigCatalogKind::Static {
+        if catalog_kind(&group) != ConfigCatalogKind::Static {
             return Err(origin.error("a whole-group selection must refer to an ordinary group"));
         }
-        return field_fill(group, path, &source, catalogs, Some(selected.to_owned()));
+        return field_fill(&group, path, &source, catalogs, Some(selected.to_owned()));
     }
     let object = value
         .as_object()
@@ -812,10 +934,10 @@ fn validate_fills(
     }
     if let Some(selected) = selector(value, "$config", origin)? {
         let (value, source) = catalogs.select(selected, origin)?;
-        if catalog_kind(value) != ConfigCatalogKind::Static {
+        if catalog_kind(&value) != ConfigCatalogKind::Static {
             return Err(origin.error("a whole-group selection must refer to an ordinary group"));
         }
-        return validate_fills(value, path, fields, &source, catalogs);
+        return validate_fills(&value, path, fields, &source, catalogs);
     }
     let object = value
         .as_object()
@@ -1051,7 +1173,7 @@ fn merge_config(
             return Err(origin.error("Secret fields require '$secret', not '$config'"));
         }
         let (value, source) = catalogs.select(selected, origin)?;
-        if catalog_kind(value) != ConfigCatalogKind::Static {
+        if catalog_kind(&value) != ConfigCatalogKind::Static {
             return Err(origin.error("a static field cannot snapshot a managed entry"));
         }
         origins.retain(|key, _| !key.starts_with(path));
@@ -1071,7 +1193,7 @@ fn merge_config(
         let selected = selector(&layer, "$secret", origin)?
             .ok_or_else(|| origin.error("Secret fields require an explicit '$secret' binding"))?;
         let (entry, _) = catalogs.select(selected, origin)?;
-        if catalog_kind(entry) != ConfigCatalogKind::Secret {
+        if catalog_kind(&entry) != ConfigCatalogKind::Secret {
             return Err(origin.error(format!("'{selected}' is not a Secret declaration")));
         }
         origins.retain(|key, _| !key.starts_with(path));
@@ -1113,9 +1235,9 @@ fn merge_config(
                             let (value, source) = catalogs.select(selected, &origin)?;
                             (value, source)
                         }
-                        None => (value, origin),
+                        None => (value.clone(), origin),
                     };
-                    object.insert(rule.field_name.clone(), evaluate(value, &source)?);
+                    object.insert(rule.field_name.clone(), evaluate(&value, &source)?);
                 }
             }
         } else {

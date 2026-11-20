@@ -1616,6 +1616,10 @@ pub mod component {
         ManifestTrace {
             #[command(flatten)]
             component_name: OptionalComponentNames,
+            /// Also resolve static config using the local built component's schemas and code defaults.
+            /// Requires built component Wasm; does not build or inspect deployed state.
+            #[arg(long)]
+            resolved: bool,
         },
     }
 }

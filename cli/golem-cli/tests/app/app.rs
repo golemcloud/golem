@@ -229,6 +229,69 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
     let wrong_case = ctx.cli(["config", "get", "BarAgent.Settings"]).await;
     assert!(!wrong_case.success());
     assert!(wrong_case.stderr_contains("No static config declaration"));
+
+    let inputs = ctx
+        .cli([
+            "component",
+            "manifest-trace",
+            "--show-secrets",
+            "-F",
+            "json",
+        ])
+        .await;
+    assert!(inputs.success_or_dump());
+    let input_documents: Vec<JsonValue> = inputs.stdout_json();
+    assert!(input_documents[0]["resolvedConfig"].is_null());
+    assert!(input_documents[0]["properties"].get("config").is_none());
+    assert_eq!(
+        input_documents[0]["properties"]["configInputs"],
+        serde_json::json!([])
+    );
+
+    let invalid = ctx.cli(["component", "manifest-trace", "--resolved"]).await;
+    assert!(!invalid.success());
+    assert!(invalid.stderr_contains("Incomplete"));
+
+    agents.retain(|agent| agent.type_name.0 == "BarAgent");
+    seed_extracted_metadata(
+        &ctx,
+        "app:main",
+        &wasm,
+        &serde_json::to_string(&agents).unwrap(),
+    );
+    let resolved = ctx
+        .cli([
+            "component",
+            "manifest-trace",
+            "--resolved",
+            "--show-secrets",
+            "-F",
+            "json",
+        ])
+        .await;
+    assert!(resolved.success_or_dump());
+    let documents: Vec<JsonValue> = resolved.stdout_json();
+    assert_eq!(documents[0]["properties"], input_documents[0]["properties"]);
+    let fields = documents[0]["resolvedConfig"].as_array().unwrap();
+    assert_eq!(fields.len(), 2);
+    assert_eq!(
+        fields
+            .iter()
+            .find(|f| f["agentType"] == "BarAgent")
+            .unwrap(),
+        field
+    );
+    assert_eq!(
+        fields.iter().find(|f| f["agentType"].is_null()).unwrap()["fill"],
+        true
+    );
+
+    std::fs::remove_file(wasm).unwrap();
+    let inputs = ctx.cli(["component", "manifest-trace"]).await;
+    assert!(inputs.success_or_dump());
+    let missing = ctx.cli(["component", "manifest-trace", "--resolved"]).await;
+    assert!(!missing.success());
+    assert!(missing.stderr_contains("require built component Wasm"));
 }
 
 #[test]

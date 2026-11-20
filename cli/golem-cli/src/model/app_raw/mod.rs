@@ -569,7 +569,7 @@ where
                         "'*' must be used as the whole {kind} scope, not as a list entry"
                     )));
                 }
-                crate::args::parse_agent_config_path(path).map_err(|error| {
+                golem_common::model::split_config_path(path).map_err(|error| {
                     serde::de::Error::custom(format!("invalid {kind} path '{path}': {error}"))
                 })?;
             }
@@ -715,7 +715,7 @@ impl ToolMiddlewareInstallation {
                 ManifestSecretKeyScope::Keys(paths) => paths
                     .into_iter()
                     .map(|path| {
-                        crate::args::parse_agent_config_path(&path)
+                        golem_common::model::split_config_path(&path)
                             .map(|segments| {
                                 CanonicalAgentSecretPath::from_path_in_unknown_casing(&segments)
                             })

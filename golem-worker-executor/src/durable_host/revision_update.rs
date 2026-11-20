@@ -214,12 +214,10 @@ pub(crate) async fn prepare_revision_update(
                 initial_agent_config,
                 provision_config
                     .as_ref()
-                    .map(|config| config.config.clone())
+                    .map(|config| config.config.captures())
                     .unwrap_or_default(),
-                &agent_type.schema,
                 &agent_type.config,
-            )
-            .map_err(UpdateStateError::Config)?;
+            );
             validate_agent_config(&updated_agent_config, agent_type)
                 .map_err(UpdateStateError::Config)?;
             let initial_card = agent_initial_card_from_component_metadata(&metadata, agent_id)

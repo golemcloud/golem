@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::base_model::component_metadata::{
-    AgentTypeProvisionConfig, ComponentProvisionConfig, KnownExports,
+    AgentTypeProvisionConfig, ComponentProvisionConfig, ConfigSourceMetadata, KnownExports,
+    OwnerConfig, OwnerConfigEntry, OwnerConfigSource,
 };
 use crate::base_model::json::NormalizedJsonValue;
 use crate::model::account::{AccountEmail, AccountId};
@@ -681,6 +682,84 @@ impl From<SecretKeyScope> for golem_api_grpc::proto::golem::component::SecretKey
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::component::OwnerConfig> for OwnerConfig {
+    type Error = String;
+
+    fn try_from(
+        proto: golem_api_grpc::proto::golem::component::OwnerConfig,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::owner_config_entry::Source;
+        Ok(Self {
+            entries: proto
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    let source = match entry.source.ok_or("Missing owner config source")? {
+                        Source::Captured(value) => OwnerConfigSource::Captured(value.try_into()?),
+                    };
+                    Ok(OwnerConfigEntry {
+                        path: entry.path,
+                        source,
+                    })
+                })
+                .collect::<Result<_, String>>()?,
+            source_meta: proto
+                .source_meta
+                .into_iter()
+                .map(|(path, meta)| {
+                    (
+                        path,
+                        ConfigSourceMetadata {
+                            source: meta.source,
+                            path: meta.path,
+                            layer: meta.layer,
+                        },
+                    )
+                })
+                .collect(),
+        })
+    }
+}
+
+impl TryFrom<OwnerConfig> for golem_api_grpc::proto::golem::component::OwnerConfig {
+    type Error = String;
+
+    fn try_from(config: OwnerConfig) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::{
+            ConfigSourceMetadata, OwnerConfigEntry, owner_config_entry::Source,
+        };
+        Ok(Self {
+            entries: config
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    let source = match entry.source {
+                        OwnerConfigSource::Captured(value) => Source::Captured(value.try_into()?),
+                    };
+                    Ok(OwnerConfigEntry {
+                        path: entry.path,
+                        source: Some(source),
+                    })
+                })
+                .collect::<Result<_, String>>()?,
+            source_meta: config
+                .source_meta
+                .into_iter()
+                .map(|(path, meta)| {
+                    (
+                        path,
+                        ConfigSourceMetadata {
+                            source: meta.source,
+                            path: meta.path,
+                            layer: meta.layer,
+                        },
+                    )
+                })
+                .collect(),
+        })
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig>
     for AgentTypeProvisionConfig
 {
@@ -690,13 +769,10 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig>
         proto: golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig,
     ) -> Result<Self, Self::Error> {
         use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
-        use crate::base_model::worker::TypedAgentConfigEntry;
-
         let config = proto
             .config
-            .into_iter()
-            .map(TypedAgentConfigEntry::try_from)
-            .collect::<Result<Vec<_>, _>>()?;
+            .ok_or("Missing agent owner config")?
+            .try_into()?;
 
         let plugins = proto
             .plugins
@@ -733,9 +809,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentProvisionConfig>
             env: proto.env.into_iter().collect(),
             config: proto
                 .config
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
+                .ok_or("Missing component owner config")?
+                .try_into()?,
             plugins: proto
                 .plugins
                 .into_iter()
@@ -759,11 +834,7 @@ impl TryFrom<ComponentProvisionConfig>
             initial_permissions: crate::serialization::serialize(&config.initial_permissions)
                 .expect("failed to serialize component initial permission card"),
             env: config.env.into_iter().collect(),
-            config: config
-                .config
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
+            config: Some(config.config.try_into()?),
             plugins: config.plugins.into_iter().map(Into::into).collect(),
             files: config.files.into_iter().map(Into::into).collect(),
         })
@@ -782,11 +853,7 @@ impl TryFrom<AgentTypeProvisionConfig>
             initial_permissions: crate::serialization::serialize(&config.initial_permissions)
                 .expect("failed to serialize agent initial permission card"),
             env: config.env.into_iter().collect(),
-            config: config
-                .config
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
+            config: Some(config.config.try_into()?),
             plugins: config
                 .plugins
                 .into_iter()
