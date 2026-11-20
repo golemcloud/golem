@@ -36,6 +36,7 @@ impl ReplayState {
     ) -> Result<(), WorkerExecutorError> {
         if status.oplog_idx < horizon {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                horizon,
                 "entity replay metadata covering the committed replay horizon",
                 format!("status {} precedes horizon {horizon}", status.oplog_idx),
             ));
@@ -166,7 +167,6 @@ impl ReplayState {
                 entity_route_members: HashMap::new(),
                 skip_hints_after_delivery: false,
                 replay_buffer: VecDeque::new(),
-                pending_fork_starts: HashSet::new(),
                 starts,
                 custom_subtrees: HashMap::new(),
             }),
@@ -517,7 +517,7 @@ impl ReplayState {
                         }
                         crate::durable_host::durable_stream::DurableStreamStore::validate_consumer_reobservation(
                             oplog.as_ref(), marker_idx, &record,
-                        ).await.map_err(|error| WorkerExecutorError::unexpected_oplog_entry(
+                        ).await.map_err(|error| WorkerExecutorError::unexpected_oplog_entry(marker_idx,
                             "unchanged logical consumer input", error.to_string(),
                         ))?;
                         let observation = match record {
@@ -590,14 +590,19 @@ impl ReplayState {
             .map(|(index, _)| *index)
     }
 
-    pub(crate) fn invocation_has_recorded_local_failure(&self, start: OplogIndex) -> bool {
+    /// The index of the invocation-local failure that terminates the invocation started at
+    /// `start`, when its recorded terminal is one.
+    pub(crate) fn recorded_local_failure_of_invocation(
+        &self,
+        start: OplogIndex,
+    ) -> Option<OplogIndex> {
         self.cursor
             .invocation_finishes
             .lock()
             .unwrap()
             .range(start.next()..)
             .next()
-            .is_some_and(|(_, anchor)| anchor.is_some())
+            .and_then(|(index, anchor)| anchor.map(|_| *index))
     }
 
     pub(crate) fn transaction_marker(

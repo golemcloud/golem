@@ -131,8 +131,9 @@ impl<'a> ObfuscationContext<'a> {
     }
 }
 
-/// The reference to an agent: one `agent` token over the `Display` text of its ID. The ID is
-/// never parsed, so the reference shows no agent type, constructor parameter or component ID.
+/// The reference to an agent: one `agent` token over the `Display` text of its ID, the UUID.
+/// The reference shows neither the UUID nor the agent type tag that the UUID carries, and the
+/// key of the agent is not part of the ID.
 pub fn agent_reference(ctx: &ObfuscationContext, agent_id: &AgentId) -> ReportAgentRef {
     let text = agent_id.to_string();
     let mut bytes = Vec::with_capacity(text.len() + 4);

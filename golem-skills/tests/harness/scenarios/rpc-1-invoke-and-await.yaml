@@ -58,7 +58,7 @@ steps:
         and update the matching `httpApi` agent key in `golem.yaml`. Preserve its constructor
         parameter and snapshot-backed count state. Change `increment` to
         `success: Schema.Boolean`. After incrementing, obtain the singleton through
-        `GlobalRegistry.client.get({})`, invoke `register({ name, count })`, yield both client
+        `GlobalRegistry.client.upsert({})`, invoke `register({ name, count })`, yield both client
         Effects, and return the awaited boolean result. Handle or convert typed RPC client errors
         so the no-error `increment` contract type-checks; do not use Promise-based TypeScript SDK
         APIs or invent an SDK helper.

@@ -85,7 +85,7 @@ fn metadata(
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
-        component_id: agent_id.component_id,
+        component_id: ComponentId::new(),
         agent_type_name: None,
         canonical_key: None,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
@@ -98,13 +98,13 @@ fn metadata(
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: AgentStatusRecord::default(),
-        original_phantom_id: None,
+        constructor_parameters: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -132,6 +132,8 @@ fn entry(value: u64) -> OplogEntry {
         error: AgentError::Unknown(value.to_string()),
         retry_from: OplogIndex::NONE,
         retry_policy_state: None,
+        retry_at: None,
+        retrying_start_index: None,
     }
 }
 
@@ -177,10 +179,7 @@ async fn open_fixture(initial_entries: u64) -> Fixture {
     let service = build_service(indexed_storage.clone(), blob_storage.clone()).await;
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "oplog-read-benchmark".to_string(),
-    };
+    let agent_id = AgentId::from_parts(1, 1);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let initial_metadata = metadata(agent_id, account_id, environment_id);
     let oplog = service

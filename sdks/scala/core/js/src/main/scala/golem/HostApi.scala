@@ -16,9 +16,7 @@
 
 package golem
 
-import golem.host.js.{JsAgentMetadataRuntime, JsComponentId, JsEnvironmentId, JsUuid}
-import golem.host.js.schema.JsSchemaValueTree
-import golem.runtime.rpc.AgentIdentity
+import golem.host.js.{JsAgentId, JsEnvironmentId, JsUuid}
 import golem.runtime.rpc.host.AgentHostApi
 import zio.blocks.schema.Schema
 import zio.blocks.schema.json.{JsonCodec, JsonCodecDeriver}
@@ -61,38 +59,44 @@ object HostApi {
 
   type ComponentVersion   = AgentHostApi.ComponentVersion
   type ComponentIdLiteral = AgentHostApi.ComponentIdLiteral
-  type AgentIdLiteral     = AgentHostApi.AgentIdLiteral
   type AgentStatus        = AgentHostApi.AgentStatus
 
+  /**
+   * Metadata about an agent.
+   *
+   * @param agentTypeName
+   *   The name of the agent's type. Owners without an agent type have none.
+   * @param fingerprint
+   *   The incarnation of the agent: a deleted and re-created agent keeps its ID
+   *   but gets a new fingerprint
+   */
   final case class AgentMetadata(
-    agentId: AgentIdLiteral,
+    agentId: AgentId,
+    agentTypeName: Option[String],
+    fingerprint: UUID,
     args: List[String],
     env: Map[String, String],
     config: Map[String, String],
     status: AgentStatus,
     componentRevision: BigInt,
     retryCount: BigInt,
-    agentType: String,
-    agentName: String,
-    componentId: ComponentIdLiteral,
     environmentId: JsEnvironmentId
   )
   type UpdateMode        = AgentHostApi.UpdateMode
   type RevertAgentTarget = AgentHostApi.RevertAgentTarget
 
   /**
-   * A registered agent type as reported by the Golem host registry.
+   * An agent type deployed in the current environment, as reported by the Golem
+   * host registry.
    *
    * @param typeName
    *   The type name (from `@agentDefinition`)
-   * @param implementedBy
-   *   The component that implements this agent type
    */
-  final case class RegisteredAgentType(typeName: String, implementedBy: ComponentIdLiteral)
+  final case class RegisteredAgentType(typeName: String)
   type FilterComparator       = AgentHostApi.FilterComparator
   type StringFilterComparator = AgentHostApi.StringFilterComparator
   type AgentPropertyFilter    = AgentHostApi.AgentPropertyFilter
-  type AgentNameFilter        = AgentHostApi.AgentNameFilter
+  type AgentKeyFilter         = AgentHostApi.AgentKeyFilter
   type AgentStatusFilter      = AgentHostApi.AgentStatusFilter
   type AgentVersionFilter     = AgentHostApi.AgentVersionFilter
   type AgentCreatedAtFilter   = AgentHostApi.AgentCreatedAtFilter
@@ -100,13 +104,18 @@ object HostApi {
   type AgentConfigFilter      = AgentHostApi.AgentConfigFilter
   type AgentAllFilter         = AgentHostApi.AgentAllFilter
   type AgentAnyFilter         = AgentHostApi.AgentAnyFilter
+
+  /**
+   * Which agent the code runs on after [[fork]]. Both sides get the ID of the
+   * forked agent, which has the same type, a new ID and no key.
+   */
   sealed trait ForkResult {
-    def forkedPhantomId: UUID
+    def forkedAgentId: AgentId
   }
 
   object ForkResult {
-    final case class Original(forkedPhantomId: UUID) extends ForkResult
-    final case class Forked(forkedPhantomId: UUID)   extends ForkResult
+    final case class Original(forkedAgentId: AgentId) extends ForkResult
+    final case class Forked(forkedAgentId: AgentId)   extends ForkResult
   }
   type GetAgentsHandle        = AgentHostApi.GetAgentsHandle
   type GetPromiseResultHandle = AgentHostApi.GetPromiseResultHandle
@@ -114,16 +123,6 @@ object HostApi {
   val UuidLiteral: AgentHostApi.UuidLiteral.type               = AgentHostApi.UuidLiteral
   val ComponentIdLiteral: AgentHostApi.ComponentIdLiteral.type = AgentHostApi.ComponentIdLiteral
 
-  /**
-   * The parsed components of a Golem agent ID string.
-   *
-   * @param agentTypeName
-   *   The agent type name
-   * @param phantom
-   *   Optional phantom UUID (for pre-provisioned instances)
-   */
-  final case class AgentIdParts(agentTypeName: String, phantom: Option[UUID])
-  val AgentIdLiteral: AgentHostApi.AgentIdLiteral.type     = AgentHostApi.AgentIdLiteral
   val PromiseIdLiteral: AgentHostApi.PromiseIdLiteral.type = AgentHostApi.PromiseIdLiteral
 
   def registeredAgentType(typeName: String): Option[RegisteredAgentType] =
@@ -132,44 +131,25 @@ object HostApi {
   def getAllAgentTypes(): List[RegisteredAgentType] =
     AgentHostApi.getAllAgentTypes().map(fromHostRegisteredAgentType)
 
-  private[golem] def makeAgentId(
-    agentTypeName: String,
-    payload: JsSchemaValueTree,
-    phantom: Option[UUID]
-  ): Either[String, String] =
-    AgentIdentity.make(agentTypeName, payload, phantom)
-
-  private[golem] def parseAgentIdRaw(agentId: String): Either[String, AgentHostApi.AgentIdParts] =
-    AgentIdentity.parse(agentId)
-
   /**
-   * Parses a Golem agent ID string into its components.
-   *
-   * @return
-   *   Either an error or the parsed parts (type name, phantom UUID)
+   * The deployed agent type that the type tag of an agent ID names, or `None`
+   * when no deployed agent type has that tag.
    */
-  def parseAgentId(agentId: String): Either[String, AgentIdParts] =
-    AgentIdentity.parse(agentId).map { raw =>
-      AgentIdParts(agentTypeName = raw.agentTypeName, phantom = raw.phantom)
-    }
+  def registeredAgentTypeFor(agentId: AgentId): Option[RegisteredAgentType] =
+    AgentHostApi.registeredAgentTypeFor(JsAgentId.fromAgentId(agentId)).map(fromHostRegisteredAgentType)
 
   def resolveComponentId(componentReference: String): Option[ComponentIdLiteral] =
     AgentHostApi.resolveComponentId(componentReference)
 
-  def resolveAgentId(componentReference: String, agentName: String): Option[AgentIdLiteral] =
-    AgentHostApi.resolveAgentId(componentReference, agentName)
-
-  def resolveAgentIdStrict(componentReference: String, agentName: String): Option[AgentIdLiteral] =
-    AgentHostApi.resolveAgentIdStrict(componentReference, agentName)
-
   def getSelfMetadata(): AgentMetadata =
     fromHostMetadata(AgentHostApi.getSelfMetadata())
 
-  def getAgentMetadata(agentId: AgentIdLiteral): Option[AgentMetadata] =
-    AgentHostApi.getAgentMetadata(agentId).map(fromHostMetadata)
+  def getAgentMetadata(agentId: AgentId): Option[AgentMetadata] =
+    AgentHostApi.getAgentMetadata(JsAgentId.fromAgentId(agentId)).map(fromHostMetadata)
 
-  def getAgents(componentId: ComponentIdLiteral, filter: Option[AgentAnyFilter], precise: Boolean): GetAgentsHandle =
-    AgentHostApi.getAgents(componentId, filter, precise)
+  /** Enumerates the agents of `agentTypeName` in the current environment. */
+  def getAgents(agentTypeName: String, filter: Option[AgentAnyFilter], precise: Boolean): GetAgentsHandle =
+    AgentHostApi.getAgents(agentTypeName, filter, precise)
 
   def nextAgentBatch(handle: GetAgentsHandle): Option[List[AgentMetadata]] =
     AgentHostApi.nextAgentBatch(handle).map(_.map(fromHostMetadata))
@@ -177,24 +157,29 @@ object HostApi {
   def generateIdempotencyKey(): UUID =
     JsUuid.toUuid(AgentHostApi.generateIdempotencyKey())
 
-  def updateAgent(agentId: AgentIdLiteral, targetVersion: BigInt, mode: UpdateMode): Unit =
-    AgentHostApi.updateAgent(agentId, toJsBigInt(targetVersion), mode)
+  def updateAgent(agentId: AgentId, targetVersion: BigInt, mode: UpdateMode): Unit =
+    AgentHostApi.updateAgent(JsAgentId.fromAgentId(agentId), toJsBigInt(targetVersion), mode)
 
-  def updateAgentRaw(agentId: AgentIdLiteral, targetVersion: ComponentVersion, mode: UpdateMode): Unit =
-    AgentHostApi.updateAgent(agentId, targetVersion, mode)
+  def updateAgentRaw(agentId: AgentId, targetVersion: ComponentVersion, mode: UpdateMode): Unit =
+    AgentHostApi.updateAgent(JsAgentId.fromAgentId(agentId), targetVersion, mode)
 
-  def forkAgent(sourceAgentId: AgentIdLiteral, targetAgentId: AgentIdLiteral, cutOff: OplogIndex): Unit =
-    AgentHostApi.forkAgent(sourceAgentId, targetAgentId, toJsBigInt(cutOff))
+  /**
+   * Forks an agent at a given oplog index into a new agent of the same type,
+   * and returns the ID that Golem issued for the new agent. The new agent has
+   * no key.
+   */
+  def forkAgent(sourceAgentId: AgentId, cutOff: OplogIndex): AgentId =
+    JsAgentId.toAgentId(AgentHostApi.forkAgent(JsAgentId.fromAgentId(sourceAgentId), toJsBigInt(cutOff)))
 
-  def revertAgent(agentId: AgentIdLiteral, target: RevertAgentTarget): Unit =
-    AgentHostApi.revertAgent(agentId, target)
+  def revertAgent(agentId: AgentId, target: RevertAgentTarget): Unit =
+    AgentHostApi.revertAgent(JsAgentId.fromAgentId(agentId), target)
 
   def fork(): ForkResult = {
-    val (tag, phantomIdLit) = AgentHostApi.fork()
-    val phantomId           = JsUuid.toUuid(phantomIdLit)
+    val (tag, forkedAgentId) = AgentHostApi.fork()
+    val agentId              = JsAgentId.toAgentId(forkedAgentId)
     tag match {
-      case "original" => ForkResult.Original(phantomId)
-      case "forked"   => ForkResult.Forked(phantomId)
+      case "original" => ForkResult.Original(agentId)
+      case "forked"   => ForkResult.Forked(agentId)
       case other      => throw new IllegalStateException(s"Unknown fork result tag: $other")
     }
   }
@@ -207,6 +192,7 @@ object HostApi {
     val Retrying: AgentStatus    = AgentHostApi.AgentStatus.Retrying
     val Failed: AgentStatus      = AgentHostApi.AgentStatus.Failed
     val Exited: AgentStatus      = AgentHostApi.AgentStatus.Exited
+    val Sandboxed: AgentStatus   = AgentHostApi.AgentStatus.Sandboxed
   }
 
   object UpdateMode {
@@ -231,9 +217,13 @@ object HostApi {
     val StartsWith: StringFilterComparator = AgentHostApi.StringFilterComparator.StartsWith
   }
 
-  object AgentNameFilter {
-    def apply(comparator: StringFilterComparator, value: String): AgentNameFilter =
-      AgentHostApi.AgentNameFilter(comparator, value)
+  /**
+   * A filter on the canonical key of keyed agents. An agent without a key never
+   * matches it.
+   */
+  object AgentKeyFilter {
+    def apply(comparator: StringFilterComparator, value: String): AgentKeyFilter =
+      AgentHostApi.AgentKeyFilter(comparator, value)
   }
 
   object AgentStatusFilter {
@@ -262,8 +252,8 @@ object HostApi {
   }
 
   object AgentPropertyFilter {
-    def name(filter: AgentNameFilter): AgentPropertyFilter =
-      AgentHostApi.AgentPropertyFilter.name(filter)
+    def key(filter: AgentKeyFilter): AgentPropertyFilter =
+      AgentHostApi.AgentPropertyFilter.key(filter)
     def status(filter: AgentStatusFilter): AgentPropertyFilter =
       AgentHostApi.AgentPropertyFilter.status(filter)
     def version(filter: AgentVersionFilter): AgentPropertyFilter =
@@ -449,35 +439,26 @@ object HostApi {
   }
 
   private def fromHostRegisteredAgentType(raw: AgentHostApi.RegisteredAgentType): RegisteredAgentType =
-    RegisteredAgentType(
-      typeName = raw.agentType.typeName,
-      implementedBy = raw.implementedBy
-    )
+    RegisteredAgentType(typeName = raw.agentType.typeName)
 
   private def fromHostMetadata(m: AgentHostApi.AgentMetadata): AgentMetadata = {
-    val rt      = m.asInstanceOf[JsAgentMetadataRuntime]
     val args    = if (m.args == null || js.isUndefined(m.args)) Nil else m.args.toList
     val env     = tuplesToMap(m.env)
     val config  = tuplesToMap(m.config)
     val compRev =
       if (js.isUndefined(m.componentRevision.asInstanceOf[js.Any])) BigInt(0) else fromJsBigInt(m.componentRevision)
-    val retry                      = if (js.isUndefined(m.retryCount.asInstanceOf[js.Any])) BigInt(0) else fromJsBigInt(m.retryCount)
-    val agentType                  = rt.agentType.getOrElse("")
-    val agentName                  = rt.agentName.getOrElse("")
-    val componentId: JsComponentId = rt.componentId.getOrElse(m.agentId.componentId)
-    val envId                      = m.environmentId
+    val retry = if (js.isUndefined(m.retryCount.asInstanceOf[js.Any])) BigInt(0) else fromJsBigInt(m.retryCount)
     AgentMetadata(
-      agentId = m.agentId,
+      agentId = JsAgentId.toAgentId(m.agentId),
+      agentTypeName = m.agentTypeName.toOption,
+      fingerprint = JsUuid.toUuid(m.fingerprint),
       args = args,
       env = env,
       config = config,
       status = m.status,
       componentRevision = compRev,
       retryCount = retry,
-      agentType = agentType,
-      agentName = agentName,
-      componentId = componentId,
-      environmentId = envId
+      environmentId = m.environmentId
     )
   }
 

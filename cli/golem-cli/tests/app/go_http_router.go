@@ -61,7 +61,7 @@ func init() {
 		_, _ = io.WriteString(w, "early")
 	})
 	mux.HandleFunc("GET /web/principal", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprintf(w, "%T", WebRouter.Principal(r.Context()))
+		_, _ = fmt.Fprintf(w, "%T", WebRouter.Caller(r.Context()).Original)
 	})
 	mux.HandleFunc("GET /web/head", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "not sent for HEAD")

@@ -15,7 +15,7 @@
 use crate::Tracing;
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_common::model::RetryConfig;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::{TestDsl, drain_connection};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
@@ -70,7 +70,7 @@ async fn ts_with_retry_policy_retries_on_user_land_error(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RetryTest", "retry-test");
+    let agent_id = agent_key!("RetryTest", "retry-test");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -112,7 +112,7 @@ async fn ts_http_status_retry_policy_retries_matching_status(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RetryTest", "status-retry-test");
+    let agent_id = agent_key!("RetryTest", "status-retry-test");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -153,7 +153,7 @@ async fn ts_invocation_events_use_method_display_name(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RetryTest", "invocation-events-test");
+    let agent_id = agent_key!("RetryTest", "invocation-events-test");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

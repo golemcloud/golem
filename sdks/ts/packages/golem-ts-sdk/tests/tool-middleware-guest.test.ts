@@ -178,7 +178,7 @@ describe('tool middleware registry and guest boundary', () => {
     universalToolMiddleware({
       name: 'universal-boundary',
       invoke: async (request, { underlying }) => {
-        observed(request.toolName, request.toolMetadata, request.principal);
+        observed(request.toolName, request.toolMetadata, request.caller.immediate.kind);
         return underlying.invokeAndAwait(request.commandPath, request.input, undefined);
       },
     });
@@ -198,7 +198,7 @@ describe('tool middleware registry and guest boundary', () => {
     );
 
     expect(universalResult.result).toBe(input);
-    expect(observed).toHaveBeenCalledWith('runtime-tool', expect.anything(), { tag: 'anonymous' });
+    expect(observed).toHaveBeenCalledWith('runtime-tool', expect.anything(), 'anonymous');
 
     const monomorphic = toolDefinition('presented').body((body) => body.returns(z.string()));
     monomorphic.middleware({
@@ -266,7 +266,7 @@ describe('tool middleware registry and guest boundary', () => {
     ).rejects.toEqual({ tag: 'constraint-violation', val: 'denied' });
   });
 
-  it('rejects an unknown name before converting principal or touching wrapped', async () => {
+  it('rejects an unknown name before converting the caller or touching wrapped', async () => {
     const wrapped = {} as RawUnderlyingTool;
     Object.defineProperty(wrapped, 'invoke', {
       get() {

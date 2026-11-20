@@ -12,6 +12,7 @@ description: "Add a new library dependency to a Scala Golem project. Use when th
 - Libraries that depend on JVM-specific APIs (reflection, `java.io.File`, `java.net.Socket`, threads, etc.) **will not work**.
 - Pure Scala libraries and libraries published for Scala.js generally work.
 - If unsure whether a library supports Scala.js, add it and run `golem build` to find out.
+- A component holds one JavaScript module. Code that uses `js.dynamicImport` makes the Scala.js linker split its output into several modules, and `golem build` then fails with an error that names them. Keep the default `ModuleSplitStyle.FewestModules` and do not use `js.dynamicImport`.
 
 ## Steps
 

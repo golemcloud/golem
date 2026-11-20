@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type {
+  ToolHttpMount,
   CommandAnnotations,
   Doc,
   DuplicateKeyPolicy,
@@ -26,6 +27,13 @@ import type {
   TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/common@0.1.0';
 import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
+import {
+  compileToolHttp,
+  compileToolMount,
+  type HttpEndpointSpec,
+  type HttpMountSpec,
+  type HttpPrefixSpec,
+} from './http';
 import type { SchemaValueStream } from 'golem:core/types@2.0.0';
 import { unwrapSchemaValueStream } from './internal/schema-model/schemaValueStreamHandle';
 import {
@@ -37,7 +45,8 @@ import {
   type StartedToolInvocation,
   type ToolInputStream,
 } from './internal/tool/startedToolInvocation';
-import type { Principal } from './principal';
+import type { Caller } from './caller';
+import { assertNotLiveValue, type RejectLiveValues } from './liveValues';
 import {
   type ExtendedCommandBody,
   type ExtendedCommandNode,
@@ -369,11 +378,7 @@ export type ToolInvocationContext<
   Stdout extends StreamPresence = StreamPresence,
   Stderr extends StreamPresence = StreamPresence,
 > = Simplify<
-  { readonly principal: Principal } & StreamContextField<
-    'stdin',
-    Stdin,
-    ReadableStream<Uint8Array>
-  > &
+  { readonly caller: Caller } & StreamContextField<'stdin', Stdin, ReadableStream<Uint8Array>> &
     StreamContextField<'stdout', Stdout, WritableStream<Uint8Array>> &
     StreamContextField<'stderr', Stderr, WritableStream<Uint8Array>>
 >;
@@ -672,7 +677,7 @@ export type ToolMiddlewareInvocationContext<
   Parameters = {},
 > = Simplify<
   {
-    readonly principal: Principal;
+    readonly caller: Caller;
     readonly underlying: ToolUnderlying<UnderlyingDefinition>;
     readonly parameters: Parameters;
   } & StreamContextField<'stdin', Stdin, AsyncIterable<number>>
@@ -872,7 +877,7 @@ export interface UniversalToolMiddlewareInvocation {
   readonly stdin?: AsyncIterable<number>;
   readonly stdout?: ToolOutputWriter;
   readonly stderr?: ToolOutputWriter;
-  readonly principal: Principal;
+  readonly caller: Caller;
 }
 
 export interface UniversalToolMiddlewareContext<Parameters = {}> {
@@ -1175,7 +1180,7 @@ export class BodyBuilder<
     const Options extends PositionalOptions<SchemaOutput<Schema>> = {},
   >(
     name: Name,
-    schema: Schema,
+    schema: Schema & RejectLiveValues<[SchemaOutput<Schema>]>,
     options?: Options,
   ): BodyBuilder<
     AddBodyArgument<Args, Name, SchemaOutput<Schema>, PositionalIsRequired<Options>>,
@@ -1186,6 +1191,7 @@ export class BodyBuilder<
     Stderr
   > {
     const codec = compileSchema(schema);
+    if (hasOwn(options, 'default')) assertNotLiveValue(options?.default);
     const defaultValue = hasOwn(options, 'default')
       ? codecValue(codec, options?.default)
       : undefined;
@@ -1211,7 +1217,7 @@ export class BodyBuilder<
 
   tail<const Name extends string, Schema extends StandardSchemaV1>(
     name: Name,
-    schema: Schema,
+    schema: Schema & RejectLiveValues<[SchemaOutput<Schema>]>,
     options: TailOptions = {},
   ): BodyBuilder<
     ReplaceTailArgument<Args, Name, SchemaOutput<Schema>[]>,
@@ -1246,7 +1252,7 @@ export class BodyBuilder<
     const Options extends OptionOptions<SchemaOutput<Schema>, SchemaProducesMap<Schema>> = {},
   >(
     name: Name,
-    schema: Schema,
+    schema: Schema & RejectLiveValues<[SchemaOutput<Schema>]>,
     options?: Options,
   ): BodyBuilder<
     AddBodyArgument<
@@ -1313,7 +1319,7 @@ export class BodyBuilder<
   }
 
   returns<Schema extends StandardSchemaV1>(
-    schema: Schema,
+    schema: Schema & RejectLiveValues<[SchemaOutput<Schema>]>,
     options: ReturnsOptions = {},
   ): BodyBuilder<Args, SuccessOutput<Schema>, Errors, Stdin, Stdout, Stderr> {
     const codec = compileSchema(schema);
@@ -1340,7 +1346,9 @@ export class BodyBuilder<
   ): BodyBuilder<Args, Success, Errors | ToolErr<Name>, Stdin, Stdout, Stderr>;
   error<const Name extends string, Payload extends StandardSchemaV1>(
     name: Name,
-    options: ErrorOptions<Payload> & { readonly payload: Payload },
+    options: ErrorOptions<Payload> & {
+      readonly payload: Payload & RejectLiveValues<[SchemaOutput<Payload>]>;
+    },
   ): BodyBuilder<
     Args,
     Success,
@@ -1412,6 +1420,7 @@ export class CommandBuilder<
     private readonly commandAnnotations?: CommandAnnotations,
     private readonly subtreeForwards: readonly SubtreeForward[] = [],
     private readonly requiresFilesystem = false,
+    private readonly httpMount?: ToolHttpMount,
   ) {}
 
   static root<const Name extends string>(
@@ -1445,6 +1454,25 @@ export class CommandBuilder<
       this.commandAnnotations,
       this.subtreeForwards,
       this.requiresFilesystem,
+      this.httpMount,
+    );
+  }
+
+  /** Declare the tool mount or this command's endpoint/prefix. */
+  http(
+    spec: HttpEndpointSpec | HttpPrefixSpec | (Root extends true ? HttpMountSpec : never),
+  ): CommandBuilder<Name, Globals, Body, Children, Root> {
+    if ('method' in spec || 'prefix' in spec) {
+      return this.next({ ...this.node, http: compileToolHttp(spec) });
+    }
+    return new CommandBuilder(
+      this.name,
+      this.node,
+      this.toolVersion,
+      this.commandAnnotations,
+      this.subtreeForwards,
+      this.requiresFilesystem,
+      compileToolMount(spec),
     );
   }
 
@@ -1466,6 +1494,7 @@ export class CommandBuilder<
       normalizeAnnotations(annotations),
       this.subtreeForwards,
       this.requiresFilesystem,
+      this.httpMount,
     );
   }
 
@@ -1736,6 +1765,7 @@ export class CommandBuilder<
       this.commandAnnotations,
       subtreeForwards,
       this.requiresFilesystem,
+      this.httpMount,
     );
   }
 
@@ -1754,7 +1784,12 @@ export class CommandBuilder<
   [BUILD_TOOL](this: CommandBuilder<Name, Globals, Body, Children, true>): ExtendedToolType {
     if (this.compiled) return this.compiled;
     const tool = normalizeExtendedTool(
-      new ExtendedToolType(this.toolVersion, this.finalizeNode(), this.requiresFilesystem),
+      new ExtendedToolType(
+        this.toolVersion,
+        this.finalizeNode(),
+        this.requiresFilesystem,
+        this.httpMount,
+      ),
     );
     validateTypeScriptProjection(tool);
     this.compiled = tool;
@@ -2989,6 +3024,7 @@ function buildOption<Schema extends StandardSchemaV1>(
   } = {},
 ): ExtendedOptionSpec {
   const codec = compileSchema(schema);
+  if (hasOwn(options, 'default')) assertNotLiveValue(options.default);
   const shape = buildOptionShape(codec, options);
   const collectedCodec = shape.tag === 'repeatable-list' ? listCodec(codec) : codec;
   return {

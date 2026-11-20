@@ -1,6 +1,6 @@
 import { Duration, Effect, Ref, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
-import type * as CoreTypes from "golem:core/types@2.0.0"
+import type { AgentId } from "./AgentId.js"
 import type { DatabaseSync } from "node:sqlite"
 import { normalizeSnapshotContentType, SnapshotEnvelopeError } from "./internal/snapshotEnvelope.js"
 import {
@@ -352,11 +352,8 @@ export interface SnapshotRestorationContext<
   Config = unknown,
 > {
   readonly id: Id
-  readonly principal: AgentCommon.Principal
-  readonly phantomId: CoreTypes.Uuid | undefined
-  readonly agentId: CoreTypes.AgentId
-  /** Complete host-parsed agent id string, including any phantom identity. */
-  readonly parsedAgentId: string
+  /** The ID of the restored agent. */
+  readonly agentId: AgentId
   readonly config: Config
 }
 

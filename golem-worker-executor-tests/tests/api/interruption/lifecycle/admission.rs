@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 
 mod initialization {
     use super::*;
@@ -78,14 +79,14 @@ mod initialization {
             .store()
             .await?;
         let seed_id = executor
-            .start_agent(&component.id, agent_id!("Counter", "preparation-seed"))
+            .start_agent(&component.id, agent_key!("Counter", "preparation-seed"))
             .await?;
         let seed = executor
-            .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+            .production_active_agent(&seed_id.clone())
             .await
             .unwrap()
             .primary();
-        wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+        wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
         tokio::time::timeout(Duration::from_secs(10), async {
             while seed.eviction_class().await.is_none() {
                 tokio::task::yield_now().await;
@@ -94,20 +95,21 @@ mod initialization {
         .await
         .context("seed idle")?;
         let name = if durable {
-            agent_id!("Counter", "monthly-preparation")
+            agent_key!("Counter", "monthly-preparation")
         } else {
-            agent_id!("EphemeralCounter", "monthly-preparation")
+            agent_key!("EphemeralCounter", "monthly-preparation")
         };
-        let physical_name = if durable {
-            name.clone()
-        } else {
-            name.clone()
-                .with_ephemeral_invocation_phantom(&IdempotencyKey::fresh())
-                .unwrap()
-        };
-        let id = AgentId::from_agent_id(component.id, &physical_name).unwrap();
+        let key = IdempotencyKey::fresh();
+        let id = invocation_agent_id(
+            &executor,
+            component.environment_id,
+            &name,
+            durable,
+            &key,
+            "increment",
+        );
         let owned = OwnedAgentId::new(context.default_environment_id, &id);
-        let worker = Worker::get_or_create_suspended(
+        let worker = Worker::get_or_create_suspended_with_freshness(
             seed.all(),
             &owned,
             None,
@@ -115,7 +117,9 @@ mod initialization {
             None,
             None,
             &InvocationContextStack::fresh(),
-            Principal::anonymous(),
+            callers::anonymous(),
+            golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+            invocation_create_intent(&executor, component.id, &name, durable, &key, "increment"),
         )
         .await?;
         let mut initializer = worker
@@ -125,7 +129,7 @@ mod initialization {
         tokio::time::timeout(Duration::from_secs(10), initializer.entered())
             .await
             .context("core initializer gate")?;
-        let before = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let before = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         assert!(before.iter().any(|e| matches!(&e.entry, PublicOplogEntry::Start(start) if start.function_name == "monotonic_clock::now")));
         assert!(
             !before
@@ -219,7 +223,7 @@ mod initialization {
             assert_eq!(suspends, 1);
             registry.set_policy(policy);
             limits.run_batch_for_test().await;
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             assert_eq!(
                 executor
                     .invoke_and_await_agent(&component, &name, "increment", data_value!())
@@ -227,7 +231,7 @@ mod initialization {
                     .into_typed::<u32>()?,
                 1
             );
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             assert_eq!(
                 recovered
                     .iter()
@@ -312,12 +316,12 @@ mod loaded_compute_admission {
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let name = agent_id!("Counter", "loaded-compute-admission");
+        let name = agent_key!("Counter", "loaded-compute-admission");
         let id = executor.start_agent(&component.id, name.clone()).await?;
-        let owned = OwnedAgentId::new(context.default_environment_id, &id);
+        let owned = id.clone();
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
-        wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL)
+        wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL)
             .await
             .context("constructor Finished must commit before installing the setup append gate")?;
         tokio::time::timeout(
@@ -327,7 +331,9 @@ mod loaded_compute_admission {
         .await
         .context("constructor did not finish before the setup invocation")??;
         let setup_key = IdempotencyKey::fresh();
-        let mut finished = executor.gate_next_invocation_finished_append(&id).await;
+        let mut finished = executor
+            .gate_next_invocation_finished_append(&id.agent_id)
+            .await;
         let setup = tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
             let executor = executor.clone();
             let component = component.clone();
@@ -403,7 +409,7 @@ mod loaded_compute_admission {
         assert_eq!(worker.selected_owner_failure_for_test().await, None);
         let key = IdempotencyKey::fresh();
         let stored_key = executor
-            .external_invocation_key(&id, &key, "increment")
+            .external_invocation_key(&id.agent_id, &key, "increment")
             .await?;
         let before = executor.oplog_max_index(&id).await?;
         executor
@@ -421,7 +427,7 @@ mod loaded_compute_admission {
         .await
         .context("compute admission must physically stop without entering the queued invocation")?;
         worker.retained_cleanup_for_test().await?;
-        let stopped_prefix = executor.stored_oplog(&id).await;
+        let stopped_prefix = executor.stored_oplog(&id.agent_id).await;
         let entries = worker
             .oplog()
             .read_exact(
@@ -467,7 +473,7 @@ mod loaded_compute_admission {
         registry.set_policy(policy);
         limits.run_batch_for_test().await;
         executor.resume(&id, false).await?;
-        wait_for_invocation_pair(&executor, &id, before).await?;
+        wait_for_invocation_pair(&executor, &id.agent_id, before).await?;
         let oplog = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         assert_eq!(count_agent_invocation_pair_since(&oplog, before), (1, 1));
         assert_eq!(
@@ -482,7 +488,7 @@ mod loaded_compute_admission {
             )
             .await?;
         assert_eq!(recovered.values().filter(|entry| matches!(entry, OplogEntry::AgentInvocationStarted { invocation_id: idempotency_key, .. } if idempotency_key == &stored_key)).count(), 1);
-        let recovered_raw = executor.stored_oplog(&id).await;
+        let recovered_raw = executor.stored_oplog(&id.agent_id).await;
         assert!(recovered_raw.len() >= stopped_prefix.len());
         assert_eq!(
             &recovered_raw[..stopped_prefix.len()],

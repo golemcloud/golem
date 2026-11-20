@@ -35,6 +35,12 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
     import golem.runtime.macros.ToolDefinitionMacro
     """
 
+  /**
+   * The start of the shared message that refuses a principal or a caller in a
+   * tool signature.
+   */
+  private val liveValueRefusal = "Principal and Caller cannot appear in a method, constructor or tool signature"
+
   override def spec: Spec[TestEnvironment, Any] =
     suite("ToolMacroCompileErrorsSpec")(
       test("@arg referring to an unknown parameter") {
@@ -164,13 +170,13 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
         )
         assertTrue(errors.exists(_.contains("duplicate @arg(...) for parameter `input`")))
       },
-      test("@arg on an auto-injected Principal parameter") {
+      test("@arg on an auto-injected InvocationContext parameter") {
         val errors = errorsOf(
           prelude + """
           @toolDefinition(version = "1.0.0")
           trait Run {
-            @arg("principal", doc = "who")
-            def run(input: String, principal: golem.Principal): Unit
+            @arg("context", doc = "who")
+            def run(input: String, context: golem.InvocationContext): Unit
           }
           ToolDefinitionMacro.metadata[Run]
           """
@@ -178,11 +184,83 @@ object ToolMacroCompileErrorsSpec extends ZIOSpecDefault {
         assertTrue(
           errors.exists(
             _.contains(
-              "auto-injected Principal parameters cannot have @arg annotations because they are " +
+              "auto-injected InvocationContext parameters cannot have @arg annotations because they are " +
                 "not part of the tool input schema"
             )
           )
         )
+      },
+      test("a live value in a tool signature is refused: a Principal parameter") {
+        val errors = errorsOf(
+          prelude + """
+          @toolDefinition(version = "1.0.0")
+          trait Run {
+            def run(who: golem.Principal): Unit
+          }
+          ToolDefinitionMacro.metadata[Run]
+          """
+        )
+        assertTrue(errors.exists(_.contains(liveValueRefusal)))
+      },
+      test("a live value in a tool signature is refused: a Caller parameter") {
+        val errors = errorsOf(
+          prelude + """
+          @toolDefinition(version = "1.0.0")
+          trait Run {
+            def run(name: String, who: golem.Caller): Unit
+          }
+          ToolDefinitionMacro.metadata[Run]
+          """
+        )
+        assertTrue(errors.exists(_.contains(liveValueRefusal)))
+      },
+      test("a live value in a tool signature is refused: a list of Principal parameters") {
+        val errors = errorsOf(
+          prelude + """
+          @toolDefinition(version = "1.0.0")
+          trait Run {
+            def run(who: List[golem.Principal]): Unit
+          }
+          ToolDefinitionMacro.metadata[Run]
+          """
+        )
+        assertTrue(errors.exists(_.contains(liveValueRefusal)))
+      },
+      test("a live value in a tool signature is refused: an optional Caller parameter") {
+        val errors = errorsOf(
+          prelude + """
+          @toolDefinition(version = "1.0.0")
+          trait Run {
+            def run(who: Option[golem.Caller]): Unit
+          }
+          ToolDefinitionMacro.metadata[Run]
+          """
+        )
+        assertTrue(errors.exists(_.contains(liveValueRefusal)))
+      },
+      test("a live value in a tool signature is refused: a Principal result") {
+        val errors = errorsOf(
+          prelude + """
+          @toolDefinition(version = "1.0.0")
+          trait Run {
+            def run(name: String): golem.Principal
+          }
+          ToolDefinitionMacro.metadata[Run]
+          """
+        )
+        assertTrue(errors.exists(_.contains(liveValueRefusal)))
+      },
+      test("a live value in a tool signature is refused: a Caller result") {
+        val errors = errorsOf(
+          prelude + """
+          @toolDefinition(version = "1.0.0")
+          trait Run {
+            def run(name: String): golem.Caller
+          }
+          ToolDefinitionMacro.metadata[Run]
+          """
+        )
+        assertTrue(errors.exists(_.contains(liveValueRefusal)))
       },
       test("multiple implicit-body methods") {
         val errors = errorsOf(

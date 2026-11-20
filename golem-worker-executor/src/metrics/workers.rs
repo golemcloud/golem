@@ -332,6 +332,7 @@ pub fn initialize_worker_count_by_status() {
         AgentStatus::Retrying,
         AgentStatus::Failed,
         AgentStatus::Exited,
+        AgentStatus::Sandboxed,
     ] {
         set_worker_count_by_status(worker_status_label(status), 0.0);
     }
@@ -524,6 +525,7 @@ fn worker_status_label(status: AgentStatus) -> &'static str {
         AgentStatus::Retrying => "Retrying",
         AgentStatus::Failed => "Failed",
         AgentStatus::Exited => "Exited",
+        AgentStatus::Sandboxed => "Sandboxed",
     }
 }
 

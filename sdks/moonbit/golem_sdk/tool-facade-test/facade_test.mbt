@@ -33,10 +33,12 @@ test "ambient tool facade preserves nominal source syntax after core split" {
     globals: { options: [], flags: [], },
     subcommands: [],
     body: None,
+    http: None,
   }
   let def : @tool.ToolDef = {
     version: "1.0.0",
     requires_filesystem: false,
+    http_mount: None,
     commands: [root],
   }
   assert_true(def.tool_name() is Ok("facade"))
@@ -44,7 +46,7 @@ test "ambient tool facade preserves nominal source syntax after core split" {
   assert_true(cases is Ok([]))
   let literal : @tool.ToolLiteral = @tool.ToolLiteral::Scalar("value")
   assert_true(literal is @tool.ToolLiteral::Scalar("value"))
-  let _principal : @tool.Principal? = None
+  let _context : @tool.InvocationContext? = None
   let _wire_error : @types.ToolError? = None
   let _model_value : @model.TypedSchemaValue? = None
 }

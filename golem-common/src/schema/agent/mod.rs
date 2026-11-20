@@ -19,7 +19,7 @@
 //! in terms of the recursive [`SchemaType`] model. They are intentionally
 //! ordered and named on the input side, so that each input position can carry
 //! both its declared schema and a [`FieldSource`] annotation that tells the
-//! runtime whether the value is user-supplied or auto-injected by the host.
+//! runtime where the value comes from.
 //!
 //! Outputs are either [`OutputSchema::Unit`] (no return value) or a single
 //! [`SchemaType`]. A "multimodal" output is just `Single(list<union<…>>)`
@@ -43,7 +43,6 @@ use crate::schema::validation::placement::validate_agent_type_placement;
 use crate::schema::validation::value::{validate_record_fields, validate_value};
 use golem_schema_derive::{FromSchema, IntoSchema};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// Name of the synthetic single user-supplied field that carries the parts of
 /// a multimodal agent input (`list<variant<… Role::Multimodal>>`).
@@ -57,10 +56,8 @@ pub const FALLBACK_OUTPUT_FIELD_NAME: &str = "value";
 /// [`InputSchema`] and its owning [`SchemaGraph`] into a validated
 /// [`TypedSchemaValue`].
 ///
-/// The caller only provides the [`FieldSource::UserSupplied`] fields;
-/// auto-injected fields (e.g. the principal) are filled by the host out of
-/// band and are excluded from the synthesized record schema, so the incoming
-/// value must contain exactly the user-supplied fields.
+/// The caller provides every field of the input schema, so the incoming value
+/// must contain exactly the declared fields.
 ///
 /// The synthesized input record is the single root of the returned value, so
 /// its `defs` are projected to exactly the named-type definitions reachable
@@ -80,14 +77,9 @@ pub fn json_input_schema_value_to_typed_schema_value(
 }
 
 fn projected_input_graph(graph: &SchemaGraph, input_schema: &InputSchema) -> SchemaGraph {
-    // Only user-supplied fields are part of the caller's input; auto-injected
-    // fields (e.g. the principal) are filled by the host out of band and are
-    // not present in the incoming value, so they are excluded from the record
-    // schema the value is validated against.
     let fields = input_schema
         .fields()
         .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
         .map(|field| NamedFieldType {
             name: field.name.clone(),
             body: field.schema.clone(),
@@ -301,20 +293,6 @@ impl NamedField {
             metadata: MetadataEnvelope::default(),
         }
     }
-
-    /// Convenience: construct an auto-injected field with no metadata.
-    pub fn auto_injected(
-        name: impl Into<String>,
-        kind: AutoInjectedKind,
-        schema: SchemaType,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            source: FieldSource::AutoInjected(kind),
-            schema,
-            metadata: MetadataEnvelope::default(),
-        }
-    }
 }
 
 /// Where the value for a field comes from at invocation time.
@@ -329,26 +307,9 @@ pub enum FieldSource {
     /// The caller provides the value when invoking the constructor or method.
     #[default]
     UserSupplied,
-    /// The host injects the value automatically; the caller does not provide
-    /// it. The kind tells the host which value to inject.
-    AutoInjected(AutoInjectedKind),
 }
 
-/// Closed enumeration of host-provided auto-injected value kinds.
-///
-/// Today this is limited to [`Principal`](AutoInjectedKind::Principal). New
-/// kinds are added here as the auto-injection surface grows.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
-pub enum AutoInjectedKind {
-    /// The authenticated principal of the calling identity.
-    Principal,
-}
-
-/// Identifies a deployed, instantiated agent.
+/// An agent type and its constructor parameters.
 ///
 /// Carries the constructor parameters as a self-contained
 /// [`TypedSchemaValue`] pair so receivers can interpret the parameter values
@@ -361,22 +322,13 @@ pub struct ParsedAgentKey {
     pub agent_type: AgentTypeName,
     /// Constructor parameters, paired with their self-contained schema graph.
     pub parameters: TypedSchemaValue,
-    /// Optional phantom identifier used to disambiguate otherwise-identical
-    /// agent ids; `None` when the agent type does not use phantom ids.
-    #[serde(default)]
-    pub phantom_id: Option<Uuid>,
 }
 
 impl ParsedAgentKey {
-    pub fn new(
-        agent_type: AgentTypeName,
-        parameters: TypedSchemaValue,
-        phantom_id: Option<Uuid>,
-    ) -> Self {
+    pub fn new(agent_type: AgentTypeName, parameters: TypedSchemaValue) -> Self {
         Self {
             agent_type,
             parameters,
-            phantom_id,
         }
     }
 }

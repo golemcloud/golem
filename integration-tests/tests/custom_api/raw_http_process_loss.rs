@@ -1,15 +1,12 @@
 use crate::http_test_context::{HttpTestContext, make_test_context};
-use golem_client::api::RegistryServiceClient;
 use golem_common::base_model::ScanCursor;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName};
-use golem_common::base_model::component::ComponentId;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::{AgentFilter, FilterComparator};
 use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::components::worker_service::restartable::RestartableWorkerService;
 use golem_test_framework::config::{
-    EnvBasedTestDependencies, TestDependencies, WorkerExecutorClusterControl,
-    WorkerExecutorClusterControlStub,
+    EnvBasedTestDependencies, WorkerExecutorClusterControl, WorkerExecutorClusterControlStub,
 };
 use golem_test_framework::dsl::TestDsl;
 use reqwest::{Body, Method, Response, StatusCode};
@@ -23,7 +20,6 @@ inherit_test_dep!(WorkerExecutorClusterControlStub);
 
 struct RawHttpProcessLossContext {
     http: HttpTestContext,
-    component_id: ComponentId,
 }
 
 #[test_dep(scope = PerWorker)]
@@ -41,19 +37,8 @@ async fn raw_http_process_loss_context(
     )
     .await
     .unwrap();
-    let registry = deps.registry_service().client(&http.user.token).await;
-    let components = registry
-        .list_environment_components(&http.env_id.0)
-        .await
-        .unwrap();
-    let component_id = components
-        .values
-        .into_iter()
-        .find(|component| component.component_name.0 == "golem-it:agent-rpc-rust")
-        .expect("raw HTTP router component was not found")
-        .id;
 
-    RawHttpProcessLossContext { http, component_id }
+    RawHttpProcessLossContext { http }
 }
 
 async fn open_streaming_echo(
@@ -83,7 +68,8 @@ async fn agent_count(context: &RawHttpProcessLossContext) -> anyhow::Result<usiz
         .http
         .user
         .get_workers_metadata(
-            &context.component_id,
+            &context.http.env_id,
+            &AgentTypeName("RawHttpRouter".to_string()),
             Some(AgentFilter::new_mode(
                 FilterComparator::Equal,
                 AgentMode::Ephemeral,
@@ -137,8 +123,8 @@ async fn lifecycle_executor_loss_after_head(
 async fn request_body_idle_timeout_is_catchable_without_interrupting_the_owner(
     context: &RawHttpProcessLossContext,
 ) -> anyhow::Result<()> {
-    use golem_common::model::AgentId;
     use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+    use golem_common::model::{AgentId, OwnedAgentId};
 
     let service = RestartableWorkerService::start_with_env_vars(
         &context.http.user.deps,
@@ -165,10 +151,12 @@ async fn request_body_idle_timeout_is_catchable_without_interrupting_the_owner(
     )
     .await??;
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    let owner = AgentId {
-        component_id: context.component_id,
-        agent_id: response.headers()["x-echo-agent"].to_str()?.to_string(),
-    };
+    let owner = OwnedAgentId::new(
+        context.http.env_id,
+        &AgentId(uuid::Uuid::parse_str(
+            response.headers()["x-echo-agent"].to_str()?,
+        )?),
+    );
     assert_eq!(
         response.bytes().await?,
         b"before-timeout|HTTP request body idle timeout|handled".as_slice()

@@ -86,7 +86,7 @@ If there are multiple agent constructor parameters, they all have to be mapped i
 
 ## Endpoints
 
-Once the mount is defined, individual agent methods can be exposed as HTTP **endpoints**. Each endpoint specifies an HTTP method and a path suffix relative to the mount point. Path placeholders are mapped to method parameters. Parameters not mapped through the path or headers are taken from the request body.
+Once the mount is defined, individual agent methods can be exposed as HTTP **endpoints**. Each endpoint specifies an HTTP method and a path suffix relative to the mount point. Path placeholders are mapped to method parameters. On declared `GET`, `HEAD`, and `DELETE` endpoints, remaining user inputs bind from query parameters by name. Other methods take remaining inputs from the request body. Explicit path, query, and header bindings take precedence; auto-injected inputs and stream resource slots are excluded.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
@@ -188,7 +188,9 @@ Supported HTTP methods: `get`, `post`, `put`, `delete`, `patch`, `head`, `option
 
 ### Query Parameters
 
-Query parameters can be bound to method parameters using standard HTTP query syntax in the endpoint path:
+Declared `GET`, `HEAD`, and `DELETE` endpoints infer query bindings for user inputs not already bound to a path, query template, or header. For example, a `GET /search` endpoint with inputs `query` and `limit` accepts `/search?query=rust&limit=10` without a query template. Other verbs, including custom methods and `Any`, do not infer query bindings.
+
+Use a query template to choose a different wire name or bind a query input on a body method such as `POST`:
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
@@ -244,6 +246,33 @@ var Search = Agent.Method[SearchIn, []Item]("search",
 When the query parameter name differs from the field name, bind it with `golem.Query(wire, field)` instead, e.g. `golem.GET("/search", golem.Query("q", "query"))`.
 </Tabs.Tab>
 </Tabs>
+
+#### Query value forms
+
+Both inferred bindings and explicit query templates support these forms:
+
+| Input schema | Query form |
+| --- | --- |
+| Scalar or enum | `?limit=10`; a repeated scalar is an error. |
+| List of scalars | `?tag=rust&tag=wasm`; values retain their order. |
+| Map with scalar keys and values | `?label[env]=prod&label[tier]=web`; brackets and keys may be URL-encoded. |
+| Outer options around any supported form | Absence means none. Repeated outer options are supported. |
+
+Repeated outer options express one presence decision, not separate nullable states. For `option<option<u32>>`, omitting `limit` produces `None`, while `?limit=3` produces `Some(Some(3))`. No query value represents `Some(None)`. The same presence rule applies to header bindings. This permits schema wrappers such as Zod `.nullish()` without adding a null token to the HTTP wire format.
+
+A required list or map must have at least one entry. An absent optional collection is none, not an empty collection. A present empty string is still a value and must satisfy the scalar schema. Collection elements, map keys, and map values cannot be optional or themselves collections. Records, tuples, general variants, JSON values, and rich payloads require a body binding rather than a query binding. Maps are query-only and cannot bind from headers.
+
+Map syntax is flat: `?label=x`, `?label[env][region]=west`, malformed brackets, and duplicate keys are errors. Keys are compared after scalar parsing, so numeric keys `1` and `01` also conflict. Schema constraints apply to scalars, list elements, and map keys and values. Invalid requests return `400` with the input name. Conflicting query names, including explicit aliases, map bracket namespaces, and phantom selectors, fail route compilation.
+
+The TypeScript and Effect SDKs check concrete schema constructors at compile time, including child schemas retained by SDK options and maps. A scalar-like JavaScript output type does not establish query eligibility. Widened or dynamic schemas can erase the constructor information: examples include `StandardSchemaV1`, lazy schemas, ArkType public types, Effect 3's Standard Schema conversion, and widened or suspended Effect 4 schemas. These cases still undergo schema-graph validation at registration and route compilation; they do not have the same compile-time guarantee. See the SDK READMEs for the adapter-specific limits.
+
+#### Unknown query parameters in 2.0
+
+Typed agent endpoints now reject unknown query parameters with `400`, naming the offending parameter. Earlier versions ignored them. Remove unused query keys from typed-endpoint requests, including cache-busting keys such as `?v=3`. Validation happens after authentication and route/resource classification, but before conditional-cache responses, body reads, or invocation and session effects.
+
+Declared phantom selectors and applicable Durable Streams protocol controls remain recognized. Durable Streams infers invocation arguments from the **declared endpoint method**, not the verbs of its expanded resource routes. Invocation arguments belong to session creation; resource reads do not require them. Controls such as `offset`, `live`, and `cursor` belong only to stream `GET` reads, not arbitrary session operations.
+
+File routes still ignore the query string, so `/assets/app.js?v=3` continues to work. Raw handlers still receive the query unchanged. Constructor inputs remain bound through the mount path, not inferred as method query inputs.
 
 ### Header Mapping
 
@@ -361,7 +390,7 @@ var ServeFile = Agent.Method[ServeFileIn, FileData]("serveFile", golem.HTTP(gole
 
 ### JSON Request Bodies
 
-For ordinary structured body parameters, the request body is a JSON object with one field per user-supplied method parameter not bound to a path, query parameter, or header. Auto-injected parameters are excluded. This rule applies to all SDKs, even when there is only one body parameter.
+On body methods such as `POST`, ordinary structured body parameters use a JSON object with one field per user-supplied method parameter not bound to a path, query parameter, or header. Auto-injected parameters are excluded. This rule applies to all SDKs, even when there is only one body parameter. Declared `GET`, `HEAD`, and `DELETE` endpoints instead infer query bindings for remaining user inputs.
 
 For example, a string body parameter named `text` requires:
 
@@ -703,9 +732,9 @@ The host fills a `golem.Principal` input field; it is never bound from the path,
 
 When authentication is enabled, agent constructors and methods can optionally receive a `Principal` parameter containing information about the authenticated caller.
 
-## Phantom Agents
+## Agents without a key
 
-Endpoints can be served by **phantom agents** — separate instances with the same constructor parameters and an additional UUID. Without an explicit selector, `phantomAgent: true` creates a fresh phantom for each ordinary HTTP request. This is useful for gateway-like agents that dispatch to internal agents, allowing requests to be processed completely in parallel. Phantom identity is distinct from the agent's durable or ephemeral execution mode; a durable phantom can retain state and be addressed again by its UUID.
+By default, an endpoint is served by the **keyed agent** of the constructor parameters that the mount path captures. Without an explicit selector, `phantomAgent: true` instead creates a new agent **without a key** for each ordinary HTTP request: an agent with the same constructor parameters and a new agent ID. This is useful for gateway-like agents that dispatch to internal agents, allowing requests to be processed completely in parallel. A durable agent without a key can retain state and be addressed again by its agent ID.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
@@ -770,11 +799,11 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 </Tabs.Tab>
 </Tabs>
 
-### Selecting a known phantom UUID
+### Selecting an agent by its ID
 
-A mount can declare a path or query selector to address an exact phantom instead of choosing a fresh one. For example, `/decisions/d7/state?instance=dc7f9909-2975-42b3-9635-2f5ba7c73782` addresses that phantom of `DecisionAgent("d7")`. The UUID is scoped to the component and constructor parameters: using the same UUID with `d8` selects a different agent.
+A mount can declare a path or query selector to address an existing agent by its agent ID instead of the keyed agent. For example, `/decisions/d7/state?instance=dc7f9909-2975-82b3-9635-2f5ba7c73782` addresses the agent with that agent ID. The agent ID names one agent of the environment; it must be an agent of the mount's agent type.
 
-Selection is **not cloning**. If the selected UUID has not been used, Golem follows normal agent creation. To copy existing state, fork through the SDK or [Durable Streams fork operation](/next/invoke/making-custom-apis/durable-streams/forks), then select the resulting phantom UUID. Subsequent requests with the same constructor parameters and UUID reconnect to that instance.
+Selection **never creates** an agent. An unknown agent ID, or the ID of an agent of another type, is not found. To create an agent to select, create it with `create` from agent code or `golem agent create`, or copy existing state by forking through the SDK or the [Durable Streams fork operation](/next/invoke/making-custom-apis/durable-streams/forks), then select the resulting agent ID. Subsequent requests with the same agent ID reconnect to that agent.
 
 The following mount fragments declare an optional query selector. Omit the optional flag to make it required:
 
@@ -826,19 +855,19 @@ HTTP: &golem.Mount{
 </Tabs.Tab>
 </Tabs>
 
-For path selection, use `/decisions/{decision}/{instance}` and change `query` to `path` in TypeScript, Effect, Rust and MoonBit; in Scala, use `phantomIdPath` instead of `phantomIdQuery`; in Go, use `golem.PhantomIDPath` instead of `golem.PhantomIDQuery`. Only `decision` is a constructor parameter. The declared `instance` capture belongs to phantom selection, not to the constructor or endpoint inputs. An optional path selector generates both `/decisions/{decision}/{instance}` and `/decisions/{decision}` before endpoint suffixes are appended; the whole selector segment disappears when omitted.
+For path selection, use `/decisions/{decision}/{instance}` and change `query` to `path` in TypeScript, Effect, Rust and MoonBit; in Scala, use `phantomIdPath` instead of `phantomIdQuery`; in Go, use `golem.PhantomIDPath` instead of `golem.PhantomIDQuery`. Only `decision` is a constructor parameter. The declared `instance` capture belongs to agent selection, not to the constructor or endpoint inputs. An optional path selector generates both `/decisions/{decision}/{instance}` and `/decisions/{decision}` before endpoint suffixes are appended; the whole selector segment disappears when omitted.
 
 | Request | Result |
 | --- | --- |
-| Valid UUID supplied | Select that exact phantom. |
-| Optional selector omitted | Select the original agent, **even with `phantomAgent: true`**. |
+| Valid UUID supplied | Select the existing agent with that agent ID. |
+| Optional selector omitted | Select the keyed agent, **even with `phantomAgent: true`**. |
 | Required query selector omitted | `400 Bad Request`. |
 | Required path selector omitted | No matching route (`404`). |
 | Empty, malformed, or repeated query selector (even repeated identical UUIDs) | `400 Bad Request`. |
 
 Uppercase UUIDs are accepted and returned links use canonical lowercase spelling. A selector must belong to the mount; it cannot collide with endpoint inputs or protocol controls. Optional path expansion must not introduce ambiguous routes. Explicit selectors are supported only on durable, non-router mounts without filesystem exposure (including static bindings).
 
-Authentication and authorization run before selection; a UUID is an address, not a credential. Requests, conditional-response caches, streams and callbacks remain scoped to the selected identity. Without a declared selector, all existing original, fresh-phantom, ephemeral and Durable Streams session-selection policies remain unchanged.
+Authentication and authorization run before selection; a UUID is an address, not a credential. Requests, conditional-response caches, streams and callbacks remain scoped to the selected identity. Without a declared selector, the keyed-agent, new-agent-per-request, ephemeral and Durable Streams session-selection policies apply.
 
 ## Customizing Durable Stream Routes
 
@@ -1037,6 +1066,8 @@ Methods with stream parameters or results appear as Durable Streams URL families
 The document includes the schema and direction of every slot, with `x-golem-route-mode: durableStreams` and `x-golem-stream-slot` metadata. Without a public name override, the direct result slot is spelled `%24result` in the OpenAPI path. JSON reads return arrays of the element type; byte streams use their configured media type. Reads also support long-poll and SSE through the `live` query parameter. SSE returns `text/event-stream`, so clients need an SSE parser rather than a JSON response parser; byte-stream SSE data is base64 encoded and declares `Stream-SSE-Data-Encoding: base64`.
 
 Non-stream arguments belong to session creation and retain their path, query, header, or body bindings. Create the session before appending when the method requires body or header arguments. Append operations document producer retry headers and `Stream-Closed` for atomic closure. JSON array bodies are batches; an array-valued message needs an outer batch array. Empty append bodies are valid only when closing the stream.
+
+The document includes inferred query parameters and their original schema constraints. Scalar and list queries use `style: form` with `explode: true`; maps use `style: deepObject` with `explode: true`. A present collection has at least one entry, while an outer option makes the parameter optional. Query maps are object schemas with `additionalProperties` for their values. `propertyNames` carries string-compatible key constraints; `x-golem-key-schema` preserves the typed key schema, including numeric constraints. This query representation does not change JSON body or response map encoding.
 
 ## Troubleshooting
 See the [troubleshooting page](/next/invoke/making-custom-apis/troubleshooting) for some common issues and their solutions.

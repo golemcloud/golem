@@ -31,7 +31,7 @@ import golem.host.PermissionsApi._
 - `Lifespan(duration: FiniteDuration)` or `Lifespan.iso8601("P30D")`: the duration must be
   positive. The host accepts only the `PnDTnHnMnS` form: days and time units, such as `"P2DT3H"`
   or `"PT90.5S"`.
-- `Holder.Agent(agentId)`, `Holder.agent(componentId, agentIdString)`, `Holder.Account(uuid)`,
+- `Holder.Agent(agentId)` (a `golem.AgentId`, such as the one a client's `agentId()` returns), `Holder.Account(uuid)`,
   `Holder.App(uuid)`: the target of `install`. The host accepts only agent targets now and returns
   `PermissionError.NotPermitted` for account and app targets.
 - `CardId`: opaque. It supports only equality and hashing, to compare `card.id` with
@@ -60,7 +60,7 @@ card.inspect()                                  // Either[PermissionError, CardV
 // PermissionCard and PolymorphicPermissionCard
 card.derive(Bounds(...), Some(Lifespan(10.minutes)))  // Either[PermissionError, PersistentCard]
 card.revoke()                                   // moves the card; Either[PermissionError, Long]: revoked card count
-card.install(Holder.agent(componentId, "Target(\"b\")"))  // moves the card
+card.install(Holder.Agent(targetAgentId))     // moves the card; targetAgentId: golem.AgentId
 
 card.release()                                  // any Card: drop a handle that you do not keep
 ```
@@ -115,7 +115,7 @@ an awaited call of a generated client; only a `ScopeCard` can be attached. Attac
 card; it stays usable after the call.
 
 ```scala
-val target = TargetClient.get("b")
+val target = TargetClient.upsert("b")
 
 target.work.withScopeCard(scope)(input)           // one call
 target.work.withScopeCard(scope).cancelable(input)

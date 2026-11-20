@@ -265,6 +265,7 @@ mod tests {
             is_live: true,
             snapshotting_mode: false,
             max_in_function_retry_delay: std::time::Duration::from_secs(1),
+            durable_wait: false,
         }
     }
 

@@ -6,6 +6,7 @@ use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use pretty_assertions::assert_eq;
 use test_r::test;
 use tokio::io::AsyncReadExt;
@@ -82,27 +83,26 @@ async fn pending_compute(
         .await?;
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("Networking", "pending-compute")
+        agent_key!("Networking", "pending-compute")
     } else {
-        agent_id!("EphemeralNetworking", "pending-compute")
+        agent_key!("EphemeralNetworking", "pending-compute")
     };
     let key = IdempotencyKey::fresh();
     let (id, boundary) = if durable {
         let id = executor.start_agent(&component.id, name.clone()).await?;
-        wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+        wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
         let boundary = executor.oplog_max_index(&id).await?;
-        (id, boundary)
+        (id.agent_id, boundary)
     } else {
-        let finalized = name
-            .clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
+        (
+            invocation_agent_id(
                 &executor,
+                component.environment_id,
+                &name,
+                false,
                 &key,
                 "tcp_collect_p3",
-            ))
-            .map_err(|e| anyhow!(e))?;
-        (
-            AgentId::from_agent_id(component.id, &finalized).map_err(|e| anyhow!(e))?,
+            ),
             OplogIndex::INITIAL,
         )
     };
@@ -122,21 +122,21 @@ async fn pending_compute(
         worker
     } else {
         let seed_id = executor
-            .start_agent(&component.id, agent_id!("Networking", "compute-seed"))
+            .start_agent(&component.id, agent_key!("Networking", "compute-seed"))
             .await?;
         let seed = executor
-            .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+            .production_active_agent(&seed_id.clone())
             .await
             .unwrap()
             .primary();
-        wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+        wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
         tokio::time::timeout(Duration::from_secs(10), async {
             while seed.eviction_class().await.is_none() {
                 tokio::task::yield_now().await;
             }
         })
         .await?;
-        Worker::get_or_create_suspended(
+        Worker::get_or_create_suspended_with_freshness(
             seed.all(),
             &owned,
             None,
@@ -144,7 +144,16 @@ async fn pending_compute(
             None,
             None,
             &InvocationContextStack::fresh(),
-            Principal::anonymous(),
+            callers::anonymous(),
+            golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+            invocation_create_intent(
+                &executor,
+                component.id,
+                &name,
+                false,
+                &key,
+                "tcp_collect_p3",
+            ),
         )
         .await?
     };
@@ -185,7 +194,7 @@ async fn pending_compute(
     let starts = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             executor.commit_oplog(&id).await?;
-            let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             let starts: Vec<_> = entries
                 .iter()
                 .filter_map(|entry| match &entry.entry {
@@ -298,7 +307,7 @@ async fn pending_compute(
                 .values()
                 .any(|e| matches!(e, OplogEntry::Suspend { .. }))
         );
-        let suspended = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let suspended = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         assert_open(&suspended, &starts);
         assert_eq!(
             count_agent_invocation_pair_since(&suspended, boundary),
@@ -309,12 +318,12 @@ async fn pending_compute(
         applied_refresh(&limits, &registry, context.account_id)
             .await?
             .await?;
-        executor.resume(&id, false).await?;
+        executor.resume(&owned, false).await?;
         let result = tokio::time::timeout(Duration::from_secs(30), invocation)
             .await???
             .into_typed::<Result<String, String>>()?;
         assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
-        let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let recovered_raw = read_stored().await?;
         let stopped_last = *stopped_raw.last_key_value().unwrap().0;
         assert_eq!(

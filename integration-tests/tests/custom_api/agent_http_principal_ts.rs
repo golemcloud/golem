@@ -74,6 +74,15 @@ async fn test_context_sqlite(
     build_test_context(deps).await
 }
 
+/// An anonymous caller has no reference.
+fn assert_anonymous(value: &serde_json::Value) {
+    assert_eq!(value["kind"], "anonymous");
+    assert!(
+        value.get("ref").is_none_or(serde_json::Value::is_null),
+        "{value}"
+    );
+}
+
 define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
 
 #[test]
@@ -93,7 +102,7 @@ async fn principal_auto_injection(#[dimension(db)] agent: &HttpTestContext) -> a
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!({ "value": "anonymous" }));
+    assert_anonymous(&body["value"]);
 
     Ok(())
 }
@@ -116,10 +125,9 @@ async fn principal_auto_injection_middle_segment(
     assert_json_content_type(&response);
     let body: serde_json::Value = response.json().await?;
 
-    assert_eq!(
-        body,
-        json!({ "value": "anonymous", "foo": "foo-value", "bar": 1.0 })
-    );
+    assert_anonymous(&body["value"]);
+    assert_eq!(body["foo"], "foo-value");
+    assert_eq!(body["bar"], 1.0);
 
     Ok(())
 }
@@ -142,10 +150,9 @@ async fn principal_auto_injection_last_segment(
     assert_json_content_type(&response);
     let body: serde_json::Value = response.json().await?;
 
-    assert_eq!(
-        body,
-        json!({ "value": "anonymous", "foo": "foo-value", "bar": 2.0 })
-    );
+    assert_anonymous(&body["value"]);
+    assert_eq!(body["foo"], "foo-value");
+    assert_eq!(body["bar"], 2.0);
 
     Ok(())
 }
@@ -167,31 +174,14 @@ async fn default_test_header_oidc_principal(
         .await?;
 
     assert_json_content_type(&response);
-    let mut body: serde_json::Value = response.json().await?;
-    // claims include exp, which is not deterministic in tests
-    if let Some(oidc) = body
-        .get_mut("value")
-        .and_then(|v| v.get_mut("oidc"))
-        .and_then(|v| v.as_object_mut())
-    {
-        oidc.remove("claims");
-    }
-
+    let body: serde_json::Value = response.json().await?;
+    // The pair is the session's issuer and subject, never the email or the name.
     assert_eq!(
         body,
         json!({
             "value": {
-                "oidc": {
-                    "email": null,
-                    "emailVerified": null,
-                    "familyName": null,
-                    "givenName": null,
-                    "issuer": "http://test-idp.com",
-                    "name": null,
-                    "picture": null,
-                    "preferredUsername": null,
-                    "sub": "test-user",
-                }
+                "kind": "user",
+                "ref": { "issuer": "http://test-idp.com", "subject": "test-user" }
             }
         })
     );
@@ -219,31 +209,14 @@ async fn test_header_oidc_principal_with_overrides(
         .await?;
 
     assert_json_content_type(&response);
-    let mut body: serde_json::Value = response.json().await?;
-    // claims include exp, which is not deterministic in tests
-    if let Some(oidc) = body
-        .get_mut("value")
-        .and_then(|v| v.get_mut("oidc"))
-        .and_then(|v| v.as_object_mut())
-    {
-        oidc.remove("claims");
-    }
-
+    let body: serde_json::Value = response.json().await?;
+    // The email of the session never takes part in the pair.
     assert_eq!(
         body,
         json!({
             "value": {
-                "oidc": {
-                    "email": "bob@golem.cloud",
-                    "emailVerified": null,
-                    "familyName": null,
-                    "givenName": null,
-                    "issuer": "http://test-idp.com",
-                    "name": null,
-                    "picture": null,
-                    "preferredUsername": null,
-                    "sub": "bob",
-                }
+                "kind": "user",
+                "ref": { "issuer": "http://test-idp.com", "subject": "bob" }
             }
         })
     );

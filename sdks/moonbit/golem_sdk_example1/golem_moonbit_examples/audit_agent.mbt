@@ -1,5 +1,5 @@
 ///|
-/// An agent that tracks actions with principal-based access control
+/// An agent that tracks actions with caller-based access control
 #derive.agent
 #warnings("-unused_field")
 struct AuditLog {
@@ -10,8 +10,8 @@ struct AuditLog {
 
 ///|
 /// Creates a new audit log, recording who created it
-fn AuditLog::new(name : String, principal : @common.Principal) -> AuditLog {
-  let creator = principal_to_string(principal)
+fn AuditLog::new(name : String, ctx : @agents.InvocationContext) -> AuditLog {
+  let creator = ctx.caller().original.to_string()
   { name, created_by: creator, entries: [], }
 }
 
@@ -20,9 +20,9 @@ fn AuditLog::new(name : String, principal : @common.Principal) -> AuditLog {
 pub fn AuditLog::add_entry(
   self : Self,
   message : String,
-  principal : @common.Principal,
+  ctx : @agents.InvocationContext,
 ) -> Unit {
-  let who = principal_to_string(principal)
+  let who = ctx.caller().original.to_string()
   self.entries.push("[\{who}] \{message}")
 }
 
@@ -36,19 +36,4 @@ pub fn AuditLog::get_creator(self : Self) -> String {
 /// Returns all audit log entries
 pub fn AuditLog::get_entries(self : Self) -> Array[String] {
   self.entries
-}
-
-///|
-/// Converts a Principal to a human-readable string
-fn principal_to_string(p : @common.Principal) -> String {
-  match p {
-    Oidc(oidc) =>
-      match oidc.preferred_username {
-        Some(name) => name
-        None => oidc.sub
-      }
-    Agent(_) => "agent"
-    GolemUser(_) => "golem-user"
-    Anonymous => "anonymous"
-  }
 }

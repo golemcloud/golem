@@ -6,18 +6,79 @@ use golem_rust::bindings::golem::api::context::start_span;
 use golem_rust::quota::QuotaToken;
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
+#[derive(golem_rust::ConfigSchema)]
+#[allow(dead_code)] // The CLI exercises these declarations without invoking the agent.
+struct PackageFileConfig {
+    file: golem_rust::schema::File,
+    text: String,
+}
+
+#[agent_definition]
+trait PackageFileAgent {
+    fn new(#[agent_config] config: golem_rust::agentic::Config<PackageFileConfig>) -> Self;
+    fn ping(&self);
+}
+
+struct PackageFileAgentImpl;
+
+#[agent_implementation]
+impl PackageFileAgent for PackageFileAgentImpl {
+    fn new(#[agent_config] _config: golem_rust::agentic::Config<PackageFileConfig>) -> Self {
+        Self
+    }
+
+    fn ping(&self) {}
+}
+
 /// Resource name the chaos suite's quota stream reserves against. Must match the
 /// resource the chaos prep creates on the environment — see
 /// `integration_tests::chaos::prep`.
 const CHAOS_QUOTA_RESOURCE: &str = "chaos-quota";
 
+/// Page size used when touching retained memory so the OS backs it with real
+/// resident pages rather than leaving it as untouched (non-resident) reservation.
+const PAGE_SIZE: usize = 4096;
+
+/// Spins doing cheap arithmetic for approximately `millis` milliseconds, polling
+/// the monotonic clock between batches of work rather than on every iteration so
+/// the workload is CPU-bound, not clock-syscall-bound. Returns an accumulated
+/// value so the work cannot be optimised away.
+fn busy_loop(millis: u32) -> u32 {
+    let deadline = std::time::Duration::from_millis(millis as u64);
+    let start = std::time::Instant::now();
+    let mut acc: u32 = 0;
+    loop {
+        for i in 0..10_000u32 {
+            acc = acc.wrapping_add(i).wrapping_mul(31).wrapping_add(7);
+        }
+        if start.elapsed() >= deadline {
+            break;
+        }
+    }
+    acc
+}
+
+/// Grows `buffer` to hold `bytes` and touches one byte per page so the memory
+/// becomes resident (real RSS), not just reserved address space.
+fn retain_memory(buffer: &mut Vec<u8>, bytes: u32) {
+    let bytes = bytes as usize;
+    buffer.clear();
+    buffer.shrink_to_fit();
+    buffer.resize(bytes, 0);
+    let mut page = 0;
+    while page < bytes {
+        buffer[page] = buffer[page].wrapping_add(1);
+        page += PAGE_SIZE;
+    }
+}
+
 #[ctor::ctor]
 fn reserve_instantiation_memory_for_growth_counter() {
-    // This constructor runs for every agent exported by the component. Agent IDs
-    // embed the exported type name, so this predicate keeps the extra allocation
-    // from changing the memory footprint of the other agent types.
-    if std::env::var("GOLEM_AGENT_ID")
-        .is_ok_and(|agent_id| agent_id.contains("InstantiationGrowthCounter"))
+    // This constructor runs for every agent exported by the component. The agent
+    // type check keeps the extra allocation from changing the memory footprint of
+    // the other agent types.
+    if std::env::var("GOLEM_AGENT_TYPE")
+        .is_ok_and(|agent_type| agent_type == "InstantiationGrowthCounter")
     {
         let previous_pages = core::arch::wasm32::memory_grow::<0>(16);
         assert_ne!(previous_pages, usize::MAX, "test memory growth failed");
@@ -60,6 +121,20 @@ trait Counter {
     async fn increment_through_rpc(&mut self) -> u32;
     async fn increment_through_rpc_to_ephemeral(&mut self) -> u32;
     async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32;
+    /// Spins for `millis` milliseconds of cheap CPU work, then increments and
+    /// returns the counter. Used to define an "active" agent without making the
+    /// workload oplog-bound on a tight loop.
+    fn busy_for(&mut self, millis: u32) -> u32;
+
+    /// Retains `bytes` of resident linear memory in the agent's state and
+    /// increments the counter. The memory stays resident across invocations so
+    /// the agent contributes a controllable footprint to the executor's pool.
+    fn allocate_memory(&mut self, bytes: u32) -> u32;
+
+    /// Performs `entries` cheap host calls under smart persistence. Used by
+    /// oplog recovery benchmarks to grow replay history without CPU burn.
+    fn oplog_heavy(&mut self, entries: u32) -> u32;
+
     async fn ephemeral_ids_through_rpc(&mut self) -> (String, String);
 
     /// Reads the counter without touching it. Chaos scenarios compare this
@@ -67,7 +142,7 @@ trait Counter {
     /// not move the number it is measuring.
     ///
     /// Named `count` rather than `get` because the generated RPC client already
-    /// exposes `CounterClient::get(name)` as its constructor — an agent method
+    /// exposes `CounterClient::upsert(name)` as its constructor — an agent method
     /// called `get` shadows it and breaks every client call site.
     fn count(&self) -> u32;
 
@@ -97,12 +172,17 @@ trait Counter {
 struct CounterImpl {
     count: u32,
     id: String,
+    retained: Vec<u8>,
 }
 
 #[agent_implementation]
 impl Counter for CounterImpl {
     fn new(id: String) -> Self {
-        Self { id, count: 0 }
+        Self {
+            id,
+            count: 0,
+            retained: Vec::new(),
+        }
     }
 
     fn increment(&mut self) -> u32 {
@@ -111,22 +191,43 @@ impl Counter for CounterImpl {
     }
 
     async fn increment_through_rpc(&mut self) -> u32 {
-        let mut client = CounterClient::get(format!("{}-inner", self.id));
+        let mut client = CounterClient::upsert(format!("{}-inner", self.id));
         client.increment().await
     }
 
     async fn increment_through_rpc_to_ephemeral(&mut self) -> u32 {
-        let mut client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral", self.id));
+        let mut client = EphemeralCounterClient::upsert(format!("{}-ephemeral", self.id));
         client.increment().await.value
     }
 
     async fn increment_through_rpc_to_ephemeral_phantom(&mut self) -> u32 {
-        let mut client = EphemeralSingletonCounterClient::new_phantom();
+        let mut client = EphemeralSingletonCounterClient::upsert();
         client.increment().await.value
     }
 
+    fn busy_for(&mut self, millis: u32) -> u32 {
+        let _ = busy_loop(millis);
+        self.count += 1;
+        self.count
+    }
+
+    fn allocate_memory(&mut self, bytes: u32) -> u32 {
+        retain_memory(&mut self.retained, bytes);
+        self.count += 1;
+        self.count
+    }
+
+    fn oplog_heavy(&mut self, entries: u32) -> u32 {
+        for _ in 0..entries {
+            let mut buf = [0u8; 4];
+            wstd::rand::get_random_bytes(&mut buf);
+            self.count = self.count.wrapping_add(u32::from_le_bytes(buf));
+        }
+        self.count
+    }
+
     async fn ephemeral_ids_through_rpc(&mut self) -> (String, String) {
-        let client = EphemeralCounterClient::new_phantom(format!("{}-ephemeral-ids", self.id));
+        let client = EphemeralCounterClient::upsert(format!("{}-ephemeral-ids", self.id));
         let id1 = client.get_id().await.value;
         let id2 = client.get_id().await.value;
         (id1, id2)
@@ -137,7 +238,7 @@ impl Counter for CounterImpl {
     }
 
     fn component_version(&self) -> u32 {
-        2
+        1
     }
 
     fn sleep_and_increment(&mut self, millis: u32) -> u32 {
@@ -226,6 +327,14 @@ impl QuotaCounter for QuotaCounterImpl {
 trait EphemeralCounter {
     fn new(id: String) -> Self;
     fn increment(&mut self) -> u32;
+    /// See [`Counter::busy_for`].
+    fn busy_for(&mut self, millis: u32) -> u32;
+
+    /// See [`Counter::allocate_memory`].
+    fn allocate_memory(&mut self, bytes: u32) -> u32;
+
+    fn allocate_memory_and_busy_for(&mut self, bytes: u32, millis: u32) -> u32;
+
     fn get_id(&self) -> String;
     async fn increment_via_self_rpc(&mut self) -> u32;
     async fn increment_remote_then_fail(&mut self, target: String) -> u32;
@@ -234,12 +343,17 @@ trait EphemeralCounter {
 struct EphemeralCounterImpl {
     count: u32,
     id: String,
+    retained: Vec<u8>,
 }
 
 #[agent_implementation]
 impl EphemeralCounter for EphemeralCounterImpl {
     fn new(id: String) -> Self {
-        Self { id, count: 0 }
+        Self {
+            id,
+            count: 0,
+            retained: Vec::new(),
+        }
     }
 
     fn increment(&mut self) -> u32 {
@@ -247,18 +361,35 @@ impl EphemeralCounter for EphemeralCounterImpl {
         self.count
     }
 
+    fn busy_for(&mut self, millis: u32) -> u32 {
+        let _ = busy_loop(millis);
+        self.count += 1;
+        self.count
+    }
+
+    fn allocate_memory(&mut self, bytes: u32) -> u32 {
+        retain_memory(&mut self.retained, bytes);
+        self.count += 1;
+        self.count
+    }
+
+    fn allocate_memory_and_busy_for(&mut self, bytes: u32, millis: u32) -> u32 {
+        retain_memory(&mut self.retained, bytes);
+        self.busy_for(millis)
+    }
+
     fn get_id(&self) -> String {
-        golem_rust::agentic::get_agent_id().agent_id
+        golem_rust::agentic::get_agent_id().uuid.to_string()
     }
 
     async fn increment_via_self_rpc(&mut self) -> u32 {
         self.count += 1;
-        let mut client = EphemeralCounterClient::new_phantom(self.id.clone());
+        let mut client = EphemeralCounterClient::upsert(self.id.clone());
         self.count + client.increment().await.value
     }
 
     async fn increment_remote_then_fail(&mut self, target: String) -> u32 {
-        let mut client = CounterClient::get(target);
+        let mut client = CounterClient::upsert(target);
         let count = client.increment().await;
         panic!("failing after remote increment to {count}")
     }
@@ -375,7 +506,7 @@ impl ScheduleCounter for ScheduleCounterImpl {
 }
 
 /// Schedules no-op polls on durable targets. Keeping scheduling separate from
-/// the target lets the caller prepare the target before registration.
+/// the target lets the benchmark prepare target residency before registration.
 #[agent_definition]
 trait ScheduleEmitter {
     fn new(id: String) -> Self;
@@ -417,26 +548,26 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
         context_spans: u32,
     ) {
         let _spans: Vec<_> = (0..context_spans)
-            .map(|_| start_span("schedule-poll"))
+            .map(|_| start_span("schedule-density"))
             .collect();
-        let mut target = ScheduleCounterClient::get(target_name);
+        let mut target = ScheduleCounterClient::upsert(target_name);
         target
             .schedule_poll(Datetime {
-                seconds: seconds as i64,
+                seconds: i64::try_from(seconds).expect("schedule timestamp exceeds i64 range"),
                 nanoseconds,
             })
             .expect("failed to schedule poll");
     }
 
     fn schedule_fire_at(&self, target_name: String, seconds: u64, nanoseconds: u32, token: String) {
-        let mut target = ScheduleCounterClient::get(target_name);
+        let mut target = ScheduleCounterClient::upsert(target_name);
         let scheduled_millis = seconds * 1000 + (nanoseconds / 1_000_000) as u64;
         target
             .schedule_fire(
                 token,
                 scheduled_millis,
                 Datetime {
-                    seconds: seconds as i64,
+                    seconds: i64::try_from(seconds).expect("schedule timestamp exceeds i64 range"),
                     nanoseconds,
                 },
             )
@@ -495,5 +626,251 @@ impl FailingCounter for FailingCounterImpl {
 
     fn get(&self) -> u64 {
         self.total
+    }
+}
+
+mod constructor_probe {
+    use golem_rust::agentic::{
+        AgentInitiator, AgentInvocationResult, AgentParameterProbe, AgentParameterSchema,
+        BaseAgent, DirectAgentInput, ResolvedAgent, SnapshotData,
+        SnapshotRestoreContext, custom_error, invalid_input_error, invalid_method_error,
+    };
+    use golem_rust::caller::InvocationContext;
+    use golem_rust::golem_agentic::golem::agent::common::{
+        AgentConstructor, AgentError, AgentMethod, AgentMode, AgentType, AgentTypeKind,
+        InputSchema, OutputSchema, Snapshotting,
+    };
+    use golem_rust::schema::wit::{direct, wire};
+    use golem_rust::{PromiseId, agent_client, agent_definition, agent_implementation};
+    use std::marker::PhantomData;
+
+    #[allow(dead_code)]
+    #[agent_client(type_name = "ConstructorProbe")]
+    trait ConstructorProbe {
+        fn new(name: String, fail: bool, block: bool) -> Self;
+        fn increment(&mut self) -> u32;
+    }
+
+    struct ConstructorProbeImpl {
+        count: u32,
+    }
+
+    fn definition() -> AgentType {
+        let mut schema = direct::WireSchemaBuilder::default();
+        let parameters = vec![
+            (&AgentParameterProbe::<String>(PhantomData)).parameter_schema("name", &mut schema),
+            (&AgentParameterProbe::<bool>(PhantomData)).parameter_schema("fail", &mut schema),
+            (&AgentParameterProbe::<bool>(PhantomData)).parameter_schema("block", &mut schema),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let output = <u32 as direct::WireSchema>::append_schema(&mut schema);
+        let root = schema.push(wire::SchemaTypeBody::RecordType(vec![]));
+        AgentType {
+            type_name: "ConstructorProbe".to_string(),
+            kind: AgentTypeKind::Regular,
+            description: String::new(),
+            source_language: "rust".to_string(),
+            schema: schema.finish(root),
+            constructor: AgentConstructor {
+                name: Some("new".to_string()),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(parameters),
+            },
+            methods: vec![AgentMethod {
+                name: "increment".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Single(output),
+                http_endpoint: vec![],
+                read_only: None,
+            }],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled,
+            config: vec![],
+        }
+    }
+
+    // Macro-generated constructors return Self, so a public SDK initiator is
+    // required to return an AgentError from initialization without trapping.
+    struct ConstructorProbeInitiator;
+
+    #[async_trait::async_trait(?Send)]
+    impl AgentInitiator for ConstructorProbeInitiator {
+        async fn initiate(
+            &self,
+            params: wire::SchemaValueTree,
+            _context: InvocationContext,
+        ) -> Result<ResolvedAgent, AgentError> {
+            let (name, fail, block) = (|| {
+                let mut input = DirectAgentInput::new(params)?;
+                let name = input.take::<String>()?;
+                let fail = input.take::<bool>()?;
+                let block = input.take::<bool>()?;
+                input.finish()?;
+                Ok::<_, direct::WireError>((name, fail, block))
+            })()
+            .map_err(invalid_input_error)?;
+
+            println!("constructor-probe:entered:{name}");
+            if block {
+                let promise = golem_rust::create_promise();
+                println!("constructor-probe:promise:{}", promise.oplog_idx);
+                golem_rust::await_promise(&promise).await;
+            }
+            if fail {
+                println!("constructor-probe:failed:{name}");
+                return Err(custom_error(format!("constructor-probe:rejected:{name}")));
+            }
+            println!("constructor-probe:initialized:{name}");
+            Ok(ResolvedAgent::new(Box::new(ConstructorProbeImpl {
+                count: 0,
+            })))
+        }
+
+        async fn restore(
+            &self,
+            _snapshot: SnapshotData,
+            _context: SnapshotRestoreContext,
+        ) -> Result<ResolvedAgent, String> {
+            Err("ConstructorProbe snapshots are disabled".to_string())
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl BaseAgent for ConstructorProbeImpl {
+        fn get_agent_id(&self) -> golem_rust::AgentId {
+            golem_rust::agentic::get_agent_id()
+        }
+
+        async fn invoke(
+            &mut self,
+            method_name: String,
+            input: wire::SchemaValueTree,
+            _context: InvocationContext,
+        ) -> Result<AgentInvocationResult, AgentError> {
+            if method_name != "increment" {
+                return Err(invalid_method_error(method_name));
+            }
+            DirectAgentInput::new(input)
+                .and_then(DirectAgentInput::finish)
+                .map_err(invalid_input_error)?;
+            self.count += 1;
+            Ok(AgentInvocationResult {
+                value: Some(direct::encode(&self.count).map_err(invalid_input_error)?),
+            })
+        }
+
+        fn get_definition(&self) -> AgentType {
+            definition()
+        }
+
+        async fn save_snapshot_base(&self) -> Result<SnapshotData, String> {
+            Err("ConstructorProbe snapshots are disabled".to_string())
+        }
+    }
+
+    #[ctor::ctor]
+    fn register_constructor_probe() {
+        golem_rust::agentic::install_agent_exports();
+        golem_rust::agentic::register_wire_agent_type(
+            golem_rust::agentic::AgentTypeName("ConstructorProbe".to_string()),
+            definition,
+        );
+        golem_rust::agentic::register_agent_initiator(
+            "ConstructorProbe",
+            std::sync::Arc::new(ConstructorProbeInitiator),
+        );
+    }
+
+    #[agent_definition]
+    trait ConstructorExitProbe {
+        fn new(name: String) -> Self;
+    }
+
+    struct ConstructorExitProbeImpl;
+
+    #[agent_implementation]
+    impl ConstructorExitProbe for ConstructorExitProbeImpl {
+        fn new(_name: String) -> Self {
+            std::process::exit(0)
+        }
+    }
+
+    #[agent_definition]
+    trait ConstructorProbeParent {
+        fn new(name: String) -> Self;
+        async fn create_child(&self, name: String, fail: bool, block: bool) -> String;
+        async fn create_child_result_then_wait(
+            &self,
+            name: String,
+            fail: bool,
+        ) -> Result<String, String>;
+        async fn create_child_then_wait(
+            &self,
+            name: String,
+            fail: bool,
+            block: bool,
+            promise_id: PromiseId,
+        ) -> String;
+    }
+
+    struct ConstructorProbeParentImpl;
+
+    #[agent_implementation]
+    impl ConstructorProbeParent for ConstructorProbeParentImpl {
+        fn new(_name: String) -> Self {
+            Self
+        }
+
+        async fn create_child(&self, name: String, fail: bool, block: bool) -> String {
+            let child = ConstructorProbeClient::upsert(name, fail, block)
+                .expect("failed to create ConstructorProbe client");
+            child
+                .agent_id()
+                .await
+                .expect("failed to get the ConstructorProbe agent ID")
+                .uuid
+                .to_string()
+        }
+
+        async fn create_child_result_then_wait(
+            &self,
+            name: String,
+            fail: bool,
+        ) -> Result<String, String> {
+            let result = match ConstructorProbeClient::upsert(name, fail, false) {
+                Ok(child) => child.agent_id().await.map(|id| id.uuid.to_string()),
+                Err(error) => Err(error),
+            }
+            .map_err(|error| format!("{error:?}"));
+            let promise = golem_rust::create_promise();
+            println!("constructor-parent:promise:{}", promise.oplog_idx);
+            golem_rust::blocking_await_promise(&promise);
+            result
+        }
+
+        async fn create_child_then_wait(
+            &self,
+            name: String,
+            fail: bool,
+            block: bool,
+            promise_id: PromiseId,
+        ) -> String {
+            let child = ConstructorProbeClient::upsert(name, fail, block)
+                .expect("failed to create ConstructorProbe client");
+            golem_rust::blocking_await_promise(&promise_id);
+            child
+                .agent_id()
+                .await
+                .expect("failed to get the ConstructorProbe agent ID")
+                .uuid
+                .to_string()
+        }
     }
 }

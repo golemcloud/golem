@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use crate::durable_host::durability::find_durable_call_trap_context;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::{
-    HostRequestNoInput, HostResponseMonotonicClockTimestamp, LogLevel,
+    HostRequestNoInput, HostResponseMonotonicClockTimestamp, LogLevel, ReplayDivergence, ReplayStep,
 };
 use golem_common::model::{NamedRetryPolicy, Predicate, RetryPolicy, RetryPolicyState};
 use std::time::Duration;
@@ -38,6 +38,7 @@ fn durable_execution_state() -> DurableExecutionState {
         is_live: true,
         snapshotting_mode: false,
         max_in_function_retry_delay: Duration::from_secs(20),
+        durable_wait: false,
     }
 }
 
@@ -317,10 +318,7 @@ async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "completion-delivery-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
         },
         seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -451,12 +449,9 @@ async fn completion_delivery_delivered_records_marker_via_drain() {
 /// agent resident on it - over one agent that another executor now owns.
 #[test]
 async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
-    let agent_id = golem_common::model::AgentId {
-        component_id: golem_common::model::component::ComponentId::new(),
-        agent_id: "fenced-completion-marker-test".to_string(),
-    };
+    let agent_id = golem_common::model::AgentId::from_parts(7, 2);
     let oplog = Arc::new(InMemoryOplog::fenced(crate::services::oplog::OplogFence {
-        agent_id: agent_id.clone(),
+        agent_id,
         expected_epoch: golem_common::model::ShardEpoch(3),
         actual_epoch: Some(golem_common::model::ShardEpoch(4)),
     }));
@@ -514,10 +509,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "completion-marker-order-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 3),
         },
         seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -817,26 +809,29 @@ async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
 async fn the_delivered_hook_runs_only_when_the_guest_receives_the_terminal() {
     // A host call has returned its result and armed the observer. The guest then either
     // receives the terminal or cancels it unread (`subtask.cancel` on a returned terminal).
+    // A live delivery records its marker now, so the hook sees it as recorded.
     for (consumption, expected_hook, expected_marker) in [
-        (TerminalConsumption::Delivered, true, "delivered"),
-        (TerminalConsumption::NotDelivered, false, "discarded"),
+        (
+            TerminalConsumption::Delivered,
+            Some(Delivery { recorded: true }),
+            "delivered",
+        ),
+        (TerminalConsumption::NotDelivered, None, "discarded"),
     ] {
         let oplog = Arc::new(InMemoryOplog::new());
         let counter = Arc::new(AtomicUsize::new(0));
         let (tx, mut rx) = mpsc::unbounded_channel();
         let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
-        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran = Arc::new(std::sync::Mutex::new(None::<Delivery>));
         let hook_ran = ran.clone();
         let guard = AccessorDeliveryGuard {
             delivery: Some(token),
-            on_delivered: Some(Box::new(move || hook_ran.store(true, Ordering::Release))),
+            on_delivered: Some(Box::new(move |delivery| {
+                *hook_ran.lock().unwrap() = Some(delivery)
+            })),
         };
         guard.consume(consumption);
-        assert_eq!(
-            ran.load(Ordering::Acquire),
-            expected_hook,
-            "{expected_marker}"
-        );
+        assert_eq!(*ran.lock().unwrap(), expected_hook, "{expected_marker}");
         if let Ok(DropEvent::AwaitCompletionMarker {
             receipt: Some(mut receipt),
             ..
@@ -854,6 +849,115 @@ async fn the_delivered_hook_runs_only_when_the_guest_receives_the_terminal() {
         };
         assert_eq!(marker, expected_marker);
     }
+}
+
+#[test]
+async fn the_delivered_hook_runs_at_the_recorded_marker_on_replay() {
+    // Replay reaches the recorded `CompletionDelivered` marker and arms the token. The hook runs
+    // only when the replayed guest receives the terminal again, and sees the delivery as
+    // replayed rather than recorded.
+    for (consumption, expected_hook) in [
+        (
+            TerminalConsumption::Delivered,
+            Some(Delivery { recorded: false }),
+        ),
+        (TerminalConsumption::NotDelivered, None),
+    ] {
+        let (_oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
+            vec![OplogEntry::CompletionDelivered {
+                timestamp: Timestamp::now_utc(),
+                start_index: idx(2),
+            }],
+            None,
+        )
+        .await;
+        token.state = CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker {
+            replay_state: replay_state.clone(),
+            start_index: idx(2),
+            marker_index: idx(4),
+            runtime: None,
+        });
+        token.prepare_delivery(None).await.unwrap();
+        assert!(matches!(
+            token.state,
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(_))
+        ));
+        let ran = Arc::new(std::sync::Mutex::new(None::<Delivery>));
+        let hook_ran = ran.clone();
+        AccessorDeliveryGuard {
+            delivery: Some(token),
+            on_delivered: Some(Box::new(move |delivery| {
+                *hook_ran.lock().unwrap() = Some(delivery)
+            })),
+        }
+        .consume(consumption);
+        assert_eq!(*ran.lock().unwrap(), expected_hook, "{consumption:?}");
+        assert_eq!(replay_state.last_replayed_index(), idx(4));
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn the_delivered_hook_runs_without_an_observer_only_for_a_settled_delivery() {
+    let mut config = wasmtime::Config::new();
+    config.concurrency_support(true);
+    let engine = wasmtime::Engine::new(&config).unwrap();
+    let mut store = wasmtime::Store::new(&engine, None::<u32>);
+    let (_tail_oplog, _replay_state, at_tail) =
+        tail_gated_token_over_crash_tail(vec![], None).await;
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let live = live_delivery_token(
+        Arc::new(InMemoryOplog::new()),
+        Arc::new(AtomicUsize::new(0)),
+        tx,
+    )
+    .await;
+
+    store
+        .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+            // No guest-visible subtask exists here, so no observer can watch these tokens.
+            for (name, token, expected_hook) in [
+                // An unpersisted live call settles as delivered, and recorded, at the host
+                // return.
+                (
+                    "unarmed",
+                    CompletionDelivery::unarmed(),
+                    Some(Delivery { recorded: true }),
+                ),
+                // A replayed markerless End has no guest that could receive it.
+                ("at replay tail", at_tail, None),
+                // A persisted live call whose observer cannot register reaches no guest.
+                ("live armed", live, None),
+            ] {
+                let ran = Arc::new(std::sync::Mutex::new(None::<Delivery>));
+                let hook_ran = ran.clone();
+                token
+                    .deliver_at_accessor_terminal_with_delivered(
+                        accessor,
+                        Box::new(move |delivery| *hook_ran.lock().unwrap() = Some(delivery)),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(*ran.lock().unwrap(), expected_hook, "{name}");
+            }
+
+            // A replayed discarded completion parks and never runs the hook.
+            let ran = Arc::new(std::sync::Mutex::new(None::<Delivery>));
+            let hook_ran = ran.clone();
+            let mut delivery = Box::pin(
+                CompletionDelivery::replay_discarded().deliver_at_accessor_terminal_with_delivered(
+                    accessor,
+                    Box::new(move |delivery| *hook_ran.lock().unwrap() = Some(delivery)),
+                ),
+            );
+            assert!(futures::poll!(&mut delivery).is_pending());
+            drop(delivery);
+            assert_eq!(*ran.lock().unwrap(), None);
+            Ok(())
+        })
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[test]
@@ -1016,10 +1120,7 @@ async fn tail_gated_token_over_crash_tail(
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "tail-gated-token-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 4),
         },
         oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -1659,10 +1760,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     let persist_replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "concurrent-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 5),
         },
         persist_oplog.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -2030,6 +2128,7 @@ impl InFunctionRetryHost for RetryHostProbe {
         &mut self,
         retry_from: OplogIndex,
         _retry_policy_state: Option<golem_common::model::RetryPolicyState>,
+        _retry_at: golem_common::model::Timestamp,
     ) -> Result<(), crate::services::oplog::OplogError> {
         self.appended_retry_from.push(retry_from);
         Ok(())
@@ -2372,6 +2471,7 @@ fn can_reexecute_matches_internal_retry_eligibility() {
                 is_live: true,
                 snapshotting_mode: false,
                 max_in_function_retry_delay: Duration::ZERO,
+                durable_wait: false,
             },
             "test:fn",
         )
@@ -2510,9 +2610,15 @@ fn undelivered_cancellation_direct_divergence_error() {
         cancelled_idx: idx(5),
     };
     match terminal.direct_divergence_error() {
-        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => {
-            assert_eq!(expected, "End or Cancelled { partial: Some(..) }");
-            assert!(got.contains("Cancelled without partial at 5"), "{got}");
+        WorkerExecutorError::UnexpectedOplogEntry { divergence } => {
+            assert_eq!(
+                *divergence,
+                ReplayDivergence::described(
+                    idx(5),
+                    "End or Cancelled { partial: Some(..) }",
+                    "Cancelled without partial at 5",
+                )
+            );
         }
         other => panic!("expected UnexpectedOplogEntry, got {other:?}"),
     }
@@ -2752,11 +2858,19 @@ fn undelivered_discarded_completion_direct_divergence_error() {
         response: None,
     };
     match terminal.direct_divergence_error() {
-        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => {
-            assert_eq!(expected, "End delivered to the guest");
+        WorkerExecutorError::UnexpectedOplogEntry { divergence } => {
+            assert_eq!(divergence.oplog_index, idx(8));
+            assert_eq!(
+                divergence.expected,
+                ReplayStep::described("End delivered to the guest")
+            );
             assert!(
-                got.contains("End at 7 marked CompletionDiscarded at 8"),
-                "{got}"
+                divergence
+                    .actual
+                    .to_string()
+                    .contains("End at 7 marked CompletionDiscarded at 8"),
+                "{}",
+                divergence.actual
             );
         }
         other => panic!("expected UnexpectedOplogEntry, got {other:?}"),

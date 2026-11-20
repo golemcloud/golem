@@ -24,7 +24,6 @@ use crate::storage::blob::{
     BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob, NormalizedBlobPath, PutIfAbsent,
     normalized_blob_path,
 };
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId};
 use pretty_assertions::assert_eq;
@@ -172,10 +171,7 @@ async fn copy_makes_the_directory_of_the_target() {
 fn snapshots() -> BlobStorageNamespace {
     BlobStorageNamespace::FilesystemSnapshots {
         environment_id: EnvironmentId(Uuid::nil()),
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::nil()),
-            agent_id: "agent".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 1),
         fingerprint: AgentFingerprint(Uuid::nil()),
     }
 }

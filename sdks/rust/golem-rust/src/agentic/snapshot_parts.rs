@@ -255,21 +255,14 @@ pub(super) fn parse_parts<'a>(boundary: &str, data: &'a [u8]) -> Option<Vec<Wire
 pub(super) fn encode(
     state: &[u8],
     user_parts: &BTreeMap<String, SnapshotPart>,
-    principal: &super::Principal,
 ) -> Result<(Vec<u8>, String), String> {
     #[derive(serde::Serialize)]
     struct Envelope<'a> {
         version: u8,
-        principal: &'a super::Principal,
         state: &'a serde_json::value::RawValue,
     }
     let state = serde_json::from_slice(state).map_err(|e| e.to_string())?;
-    let state = serde_json::to_vec(&Envelope {
-        version: 1,
-        principal,
-        state,
-    })
-    .map_err(|e| e.to_string())?;
+    let state = serde_json::to_vec(&Envelope { version: 2, state }).map_err(|e| e.to_string())?;
     let mut parts = vec![(
         "state".to_string(),
         "application/json".to_string(),
@@ -313,10 +306,7 @@ pub(super) fn encode(
     Ok((data, format!("multipart/mixed; boundary={boundary}")))
 }
 
-pub(super) fn decode(
-    data: &[u8],
-    mime: &str,
-) -> Result<(super::Principal, super::SnapshotData), String> {
+pub(super) fn decode(data: &[u8], mime: &str) -> Result<super::SnapshotData, String> {
     let invalid = || "invalid multipart snapshot".to_string();
     let boundary = extract_boundary(mime).ok_or_else(invalid)?;
     let parts = parse_parts(boundary, data).ok_or_else(invalid)?;
@@ -331,8 +321,8 @@ pub(super) fn decode(
     struct Envelope<'a> {
         #[serde(borrow)]
         version: &'a serde_json::value::RawValue,
-        #[serde(borrow)]
-        principal: &'a serde_json::value::RawValue,
+        #[serde(borrow, default)]
+        principal: Option<&'a serde_json::value::RawValue>,
         #[serde(borrow)]
         state: &'a serde_json::value::RawValue,
     }
@@ -346,25 +336,34 @@ pub(super) fn decode(
         return Err("multipart envelope must be an object".to_string());
     }
     let envelope: Envelope<'_> = serde_json::from_slice(state.body).map_err(|e| e.to_string())?;
-    if envelope.version.get() != "1" {
-        return Err("multipart version must be integer 1".to_string());
+    match envelope.version.get() {
+        // A 1.6 envelope: its principal is checked as strictly as before and then dropped.
+        "1" => {
+            let principal = envelope
+                .principal
+                .ok_or_else(|| "multipart principal must be an object".to_string())?;
+            if !principal.get().starts_with('{') {
+                return Err("multipart principal must be an object".to_string());
+            }
+            #[derive(serde::Deserialize)]
+            struct PrincipalRecord<'a> {
+                tag: String,
+                #[serde(borrow)]
+                val: Option<&'a serde_json::value::RawValue>,
+            }
+            let record: PrincipalRecord<'_> =
+                serde_json::from_str(principal.get()).map_err(|e| e.to_string())?;
+            if record.tag != "anonymous"
+                && !record.val.is_some_and(|value| value.get().starts_with('{'))
+            {
+                return Err("multipart principal payload must be an object".to_string());
+            }
+            super::principal_serde::validate_json_bytes(principal.get().as_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+        "2" => {}
+        _ => return Err("multipart version must be integer 1 or 2".to_string()),
     }
-    if !envelope.principal.get().starts_with('{') {
-        return Err("multipart principal must be an object".to_string());
-    }
-    #[derive(serde::Deserialize)]
-    struct PrincipalRecord<'a> {
-        tag: String,
-        #[serde(borrow)]
-        val: Option<&'a serde_json::value::RawValue>,
-    }
-    let record: PrincipalRecord<'_> =
-        serde_json::from_str(envelope.principal.get()).map_err(|e| e.to_string())?;
-    if record.tag != "anonymous" && !record.val.is_some_and(|value| value.get().starts_with('{')) {
-        return Err("multipart principal payload must be an object".to_string());
-    }
-    let principal = super::principal_serde::from_json_bytes(envelope.principal.get().as_bytes())
-        .map_err(|e| e.to_string())?;
     let state = envelope.state.get().as_bytes().to_vec();
     let mut user_parts = BTreeMap::new();
     for part in parts {
@@ -384,13 +383,10 @@ pub(super) fn decode(
             },
         );
     }
-    Ok((
-        principal,
-        super::SnapshotData::Multipart {
-            state,
-            parts: user_parts,
-        },
-    ))
+    Ok(super::SnapshotData::Multipart {
+        state,
+        parts: user_parts,
+    })
 }
 
 #[cfg(test)]
@@ -398,50 +394,39 @@ mod tests {
     use super::*;
     use test_r::test;
 
-    fn encode(
-        snapshot: &MultipartSnapshot,
-        principal: &super::super::Principal,
-    ) -> Result<(Vec<u8>, String), String> {
+    fn encode(snapshot: &MultipartSnapshot) -> Result<(Vec<u8>, String), String> {
         super::encode(
             &serde_json::to_vec(&snapshot.state).unwrap(),
             &snapshot.parts,
-            principal,
         )
     }
 
-    fn decode(
-        data: &[u8],
-        mime: &str,
-    ) -> Result<(super::super::Principal, MultipartSnapshot), String> {
-        let (principal, transport) = super::decode(data, mime)?;
-        Ok((principal, transport.try_into()?))
+    fn decode(data: &[u8], mime: &str) -> Result<MultipartSnapshot, String> {
+        super::decode(data, mime)?.try_into()
     }
 
     #[test]
     fn multipart_transport_embeds_raw_state_once_and_defers_ast_to_adapter() {
         let state = br#"{ "revision" : 1e0, "label" : "\u0061" }"#;
-        let (data, mime) =
-            super::encode(state, &BTreeMap::new(), &super::super::Principal::Anonymous).unwrap();
+        let (data, mime) = super::encode(state, &BTreeMap::new()).unwrap();
         let parts = parse_parts(extract_boundary(&mime).unwrap(), &data).unwrap();
         assert_eq!(parts.len(), 1);
-        assert_eq!(parts[0].body, br#"{"version":1,"principal":{"tag":"anonymous"},"state":{ "revision" : 1e0, "label" : "\u0061" }}"#);
-        let (
-            _,
-            super::super::SnapshotData::Multipart {
-                state: restored,
-                parts,
-            },
-        ) = super::decode(&data, &mime).unwrap()
+        assert_eq!(
+            parts[0].body,
+            br#"{"version":2,"state":{ "revision" : 1e0, "label" : "\u0061" }}"#
+        );
+        let super::super::SnapshotData::Multipart {
+            state: restored,
+            parts,
+        } = super::decode(&data, &mime).unwrap()
         else {
             panic!("multipart transport expected")
         };
         assert_eq!(restored, state);
         assert!(parts.is_empty());
         for state in [b"1e400".as_slice(), br#""\uD800""#] {
-            let (data, mime) =
-                super::encode(state, &BTreeMap::new(), &super::super::Principal::Anonymous)
-                    .unwrap();
-            let (_, transport) = super::decode(&data, &mime).unwrap();
+            let (data, mime) = super::encode(state, &BTreeMap::new()).unwrap();
+            let transport = super::decode(&data, &mime).unwrap();
             assert!(MultipartSnapshot::try_from(transport).is_err());
         }
     }
@@ -467,9 +452,8 @@ mod tests {
             parts,
         )
         .unwrap();
-        let (encoded, mime) = encode(&snapshot, &super::super::Principal::Anonymous).unwrap();
-        let (principal, decoded) = decode(&encoded, &mime).unwrap();
-        assert!(matches!(principal, super::super::Principal::Anonymous));
+        let (encoded, mime) = encode(&snapshot).unwrap();
+        let decoded = decode(&encoded, &mime).unwrap();
         assert_eq!(decoded.state, snapshot.state);
         assert_eq!(decoded.parts.len(), 3);
         for (name, part) in snapshot.parts {
@@ -488,8 +472,8 @@ mod tests {
                 .is_err()
         );
         let empty = MultipartSnapshot::from_state(&(), BTreeMap::new()).unwrap();
-        let (data, mime) = encode(&empty, &super::super::Principal::Anonymous).unwrap();
-        assert_eq!(decode(&data, &mime).unwrap().1, empty);
+        let (data, mime) = encode(&empty).unwrap();
+        assert_eq!(decode(&data, &mime).unwrap(), empty);
     }
 
     #[test]
@@ -520,12 +504,11 @@ mod tests {
                 },
             )]),
         };
-        let (data, mime) = encode(&snapshot, &super::super::Principal::Anonymous).unwrap();
+        let (data, mime) = encode(&snapshot).unwrap();
         assert_eq!(extract_boundary(&mime), Some("golem-snapshot-2"));
         assert_eq!(
             decode(&data, &mime)
                 .unwrap()
-                .1
                 .require_part("index", "application/octet-stream")
                 .unwrap(),
             bytes
@@ -544,6 +527,13 @@ mod tests {
         assert!(decode(valid.as_bytes(), "multipart/mixed; boundary=b").is_ok());
         assert!(
             decode(
+                wrap(r#"{"version":2,"state":null}"#, "").as_bytes(),
+                "multipart/mixed; boundary=b"
+            )
+            .is_ok()
+        );
+        assert!(
+            decode(
                 wrap(&envelope.replace("null", "[17,null]"), "").as_bytes(),
                 "multipart/mixed; boundary=b"
             )
@@ -555,6 +545,9 @@ mod tests {
             r#"{"version":1,"principal":{"tag":"agent","val":["10203040-5060-7080-9012-3456789abcde","worker(7)"]},"state":null}"#.to_string(),
             r#"{"version":1,"principal":{"tag":"golem-user","val":["fedcba98-7654-3210-9876-543210abcdef"]},"state":null}"#.to_string(),
             r#"{"version":1,"principal":{"tag":"oidc","val":["subject","issuer",null,null,null,null,null,null,null,"{}"]},"state":null}"#.to_string(),
+            r#"{"version":1,"state":null}"#.to_string(),
+            r#"{"version":3,"state":null}"#.to_string(),
+            r#"{"version":2,"state":null,"state":null}"#.to_string(),
             envelope.replace("\"version\":1", "\"version\":1,\"version\":1"),
             envelope.replace("\"version\":1", "\"version\":1.0"),
             envelope.replace("\"version\":1", "\"version\":1e0"),
@@ -606,7 +599,7 @@ mod tests {
                     },
                 )]),
             };
-            assert!(encode(&snapshot, &super::super::Principal::Anonymous).is_err());
+            assert!(encode(&snapshot).is_err());
         }
         let mut data = valid.into_bytes();
         let pos = data.windows(4).position(|w| w == b"null").unwrap();

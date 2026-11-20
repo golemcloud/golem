@@ -15,10 +15,7 @@ import type { PromiseId } from "golem:api/host@1.5.0";
 // explicit Standard Schema so it can be returned / accepted by a method.
 const PromiseIdSchema = z.object({
   agentId: z.object({
-    componentId: z.object({
-      uuid: s.uuid(),
-    }),
-    agentId: z.string(),
+    uuid: s.uuid(),
   }),
   fingerprint: s.uuid(),
   oplogIdx: s.u64(),
@@ -50,10 +47,7 @@ export const PromiseAgentImpl = PromiseAgent.implement({
         ...promiseId,
         agentId: {
           ...promiseId.agentId,
-          componentId: {
-            ...promiseId.agentId.componentId,
-            uuid: Uuid.from(promiseId.agentId.componentId.uuid),
-          },
+          uuid: Uuid.from(promiseId.agentId.uuid),
         },
         fingerprint: Uuid.from(promiseId.fingerprint),
       };

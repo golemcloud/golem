@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shlex
 import shutil
 import stat
 import subprocess
@@ -47,6 +48,48 @@ class FreezeTests(unittest.TestCase):
     def execute(self, *arguments):
         return subprocess.run([sys.executable, str(HELPER), *map(str, arguments)],
                               env=self.env, capture_output=True, text=True, timeout=60)
+
+    def test_general_metadata_keeps_declared_tests_without_forcing_disabled_binary_tests(self):
+        workspace = self.directory / "native"
+        workspace.mkdir()
+        (workspace / "Cargo.toml").write_text('''[package]
+name = "native-selection"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[profile.dev-ci]
+inherits = "dev"
+incremental = false
+[[bin]]
+name = "server"
+path = "server.rs"
+test = false
+[[bin]]
+name = "binary-tests"
+path = "binary.rs"
+''')
+        (workspace / "src").mkdir()
+        (workspace / "tests").mkdir()
+        (workspace / "src/lib.rs").write_text("#[test] fn library_test() {}")
+        (workspace / "tests/declared.rs").write_text("#[test] fn integration_test() {}")
+        (workspace / "server.rs").write_text(
+            '#[cfg(test)] compile_error!("server has test = false");\nfn main() {}')
+        (workspace / "binary.rs").write_text("fn main() {}\n#[test] fn binary_test() {}")
+        script = tomllib.loads((ROOT / "Makefile.main-validation.toml").read_text())["tasks"][
+            "main-validation-general-native"]["script"]
+        commands = [shlex.split(line.split("exec --fail-on-error ", 1)[1])
+                    for line in script.splitlines() if "exec --fail-on-error cargo " in line]
+        environment = {**self.env, "CARGO_TARGET_DIR": str(workspace / "target")}
+        for command in commands:
+            result = subprocess.run(command, cwd=workspace, env=environment,
+                                    capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        metadata = json.loads(result.stdout)
+        binaries = list(metadata["rust-binaries"].values())
+        self.assertEqual({entry["binary-name"] for entry in binaries},
+                         {"native_selection", "declared", "binary-tests"})
+        self.assertTrue((workspace / "target/dev-ci/server").is_file())
+        self.assertTrue(all(Path(entry["binary-path"]).is_file() for entry in binaries))
 
     def freeze(self):
         return self.execute("--metadata", self.input, "--destination", self.destination,
@@ -125,7 +168,7 @@ class FreezeTests(unittest.TestCase):
             temporary = self.directory / f"cycle-{cycle}"
             temporary.mkdir()
             (report / "temporary-root.txt").write_text(str(temporary))
-            for branch in ("worker", "service", "cli", "exclusive", "checks"):
+            for branch in ("worker", "service", "recovery", "cli", "exclusive", "checks"):
                 (report / (branch + ".status")).write_text("0")
             for task in ("main-validation-executor-native", "main-validation-result"):
                 result = subprocess.run([shutil.which("cargo-make"), "make", "--disable-check-for-updates",

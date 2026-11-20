@@ -25,29 +25,21 @@ pub fn InvocationIdParseError::to_repr(Self) -> @debug.Repr
 // Types and methods
 pub(all) struct AgentClient {
   agent_type_name : String
-  constructor_input : @types.SchemaValueTree
-  phantom_id : @schema.Uuid?
   rpc : @host.WasmRpc
   // private fields
 }
+pub async fn AgentClient::agent_id(Self) -> @schema.AgentId
 pub fn AgentClient::bind_self(String) -> Self raise
 pub fn AgentClient::check_scope_card(Self, scope_card? : @permissions.ScopeCard) -> Unit
+pub async fn AgentClient::create(String, @types.SchemaValueTree, keyed? : Bool, config? : Array[@common.TypedAgentConfigValue], env? : Array[(String, String)]) -> Self
 pub fn AgentClient::drop(Self) -> Unit
-pub fn AgentClient::ephemeral(String, @types.SchemaValueTree) -> Self
-pub fn AgentClient::ephemeral_with_config(String, @types.SchemaValueTree, Array[@common.TypedAgentConfigValue]) -> Self
-pub fn AgentClient::get(String, @types.SchemaValueTree) -> Self
-pub fn AgentClient::get_agent_id(Self) -> String raise @common.AgentError
-pub fn AgentClient::get_phantom(String, @types.SchemaValueTree, @schema.Uuid) -> Self
-pub fn AgentClient::get_phantom_with_config(String, @types.SchemaValueTree, @schema.Uuid, Array[@common.TypedAgentConfigValue]) -> Self
-pub fn AgentClient::get_with_config(String, @types.SchemaValueTree, Array[@common.TypedAgentConfigValue]) -> Self
+pub fn AgentClient::get_by_id(String, @schema.AgentId) -> Self raise @host.RpcError
 pub fn AgentClient::invoke(Self, String, @types.SchemaValueTree) -> InvocationMetadata
 pub async fn AgentClient::invoke_and_await(Self, String, @types.SchemaValueTree, scope_card? : @permissions.ScopeCard) -> InvocationResult[@types.SchemaValueTree?]
-pub fn AgentClient::new_phantom(String, @types.SchemaValueTree) -> Self
-pub fn AgentClient::new_phantom_with_config(String, @types.SchemaValueTree, Array[@common.TypedAgentConfigValue]) -> Self
-pub fn AgentClient::phantom_id(Self) -> @schema.Uuid?
 pub fn AgentClient::schedule_cancelable_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree) -> CancelableScheduledInvocationReceipt
 pub fn AgentClient::schedule_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree) -> ScheduledInvocationReceipt
 pub fn AgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
+pub fn AgentClient::upsert(String, @types.SchemaValueTree) -> Self raise @host.RpcError
 
 pub(all) struct CancelableScheduledInvocationReceipt {
   metadata : InvocationMetadata
@@ -55,15 +47,15 @@ pub(all) struct CancelableScheduledInvocationReceipt {
 }
 
 pub struct InvocationId {
-  agent_id : String
+  agent_id : @schema.AgentId
   uuid : @schema.Uuid
 } derive(Eq, Hash, @debug.Debug)
-pub fn InvocationId::agent_id(Self) -> String
+pub fn InvocationId::agent_id(Self) -> @schema.AgentId
 pub fn InvocationId::equal(Self, Self) -> Bool
 pub fn InvocationId::from_host(@host.InvocationMetadata) -> Self
 pub fn InvocationId::hash(Self) -> Int32
 pub fn InvocationId::hash_combine(Self, Hasher) -> Unit
-pub fn InvocationId::new(String, @schema.Uuid) -> Self
+pub fn InvocationId::new(@schema.AgentId, @schema.Uuid) -> Self
 pub fn InvocationId::not_equal(Self, Self) -> Bool
 pub fn InvocationId::output(Self, &Logger) -> Unit
 pub fn InvocationId::parse(String) -> Self raise InvocationIdParseError
@@ -73,7 +65,7 @@ pub fn InvocationId::uuid(Self) -> @schema.Uuid
 pub impl Show for InvocationId
 
 pub(all) struct InvocationMetadata {
-  agent_id : String
+  agent_id : @schema.AgentId
   invocation_id : InvocationId
 }
 

@@ -5,11 +5,10 @@
   "toolName": "artifact",
   "commandPath": ["render"],
   "owner": {
-    "componentId": "component-01",
     "agentId": "Artifact/audit-owner"
   },
   "principal": {
-    "kind": "oidc",
+    "kind": "user",
     "issuer": "https://issuer.audit.test",
     "subject": "subject-01"
   },

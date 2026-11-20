@@ -27,9 +27,9 @@
 
 use super::*;
 use anyhow::Context;
-use golem_common::model::AgentId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{ReplayAdmissionGateHandle, ReplayAdmissionStage};
 use std::time::Instant;
 use test_r::test;
@@ -185,7 +185,7 @@ struct Fixture {
     owner_component: ComponentDto,
     owner_type: &'static str,
     clock_race: Option<golem_common::schema::tool::Tool>,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
 }
 
 async fn fixture(
@@ -265,9 +265,7 @@ async fn fixture(
         owner_component,
         owner_type,
         clock_race,
-        principal: Principal::GolemUser(GolemUserPrincipal {
-            account_id: context.account_id,
-        }),
+        caller: callers::account(context.account_id),
     })
 }
 
@@ -316,8 +314,8 @@ fn external_tool_string(output: AgentInvocationResult) -> anyhow::Result<String>
 }
 
 impl Fixture {
-    async fn start_owner(&self, name: &str) -> anyhow::Result<(ParsedAgentKey, AgentId)> {
-        let agent = agent_id!(self.owner_type, name.to_string());
+    async fn start_owner(&self, name: &str) -> anyhow::Result<(ParsedAgentKey, OwnedAgentId)> {
+        let agent = agent_key!(self.owner_type, name.to_string());
         let worker_id = self
             .executor
             .start_agent(&self.owner_component.id, agent.clone())
@@ -327,7 +325,7 @@ impl Fixture {
 
     async fn invoke_tool(
         &self,
-        worker_id: &AgentId,
+        worker_id: &OwnedAgentId,
         key: IdempotencyKey,
         command: &str,
         input: TypedSchemaValue,
@@ -340,14 +338,14 @@ impl Fixture {
         let output = self
             .executor
             .invoke_external_tool(
-                worker_id,
+                &worker_id.agent_id,
                 fingerprint,
                 key,
                 ToolName::try_from("clock-race").unwrap(),
                 vec![command.to_string()],
                 input,
                 InvocationContextStack::fresh(),
-                self.principal.clone(),
+                self.caller.clone(),
                 None,
             )
             .await?;
@@ -376,7 +374,7 @@ impl Fixture {
         &self,
         form: Form,
         agent: &ParsedAgentKey,
-        worker_id: &AgentId,
+        worker_id: &OwnedAgentId,
         key: &IdempotencyKey,
         nap_ms: u32,
         authority: &str,
@@ -400,19 +398,19 @@ impl Fixture {
                 let executor = self.executor.clone();
                 let worker_id = worker_id.clone();
                 let key = key.clone();
-                let principal = self.principal.clone();
+                let caller = self.caller.clone();
                 Ok(Some(tokio::spawn(async move {
                     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
                     let output = executor
                         .invoke_external_tool(
-                            &worker_id,
+                            &worker_id.agent_id,
                             fingerprint,
                             key,
                             ToolName::try_from("clock-race").unwrap(),
                             vec!["nap-then-fetch".to_string()],
                             input,
                             InvocationContextStack::fresh(),
-                            principal,
+                            caller,
                             None,
                         )
                         .await?;
@@ -427,7 +425,7 @@ impl Fixture {
         &self,
         form: Form,
         agent: &ParsedAgentKey,
-        worker_id: &AgentId,
+        worker_id: &OwnedAgentId,
         key: &IdempotencyKey,
         nap_ms: u32,
         authority: &str,
@@ -457,7 +455,7 @@ impl Fixture {
         &self,
         form: Form,
         agent: &ParsedAgentKey,
-        worker_id: &AgentId,
+        worker_id: &OwnedAgentId,
     ) -> anyhow::Result<String> {
         match form {
             Form::AgentMethod => Ok(self
@@ -479,7 +477,7 @@ impl Fixture {
 
     async fn diagnostics(
         &self,
-        worker_id: &AgentId,
+        worker_id: &OwnedAgentId,
         server: &HeldCheckpointServer,
         pre_crash_oplog: &Option<Vec<PublicOplogEntryWithIndex>>,
     ) -> String {
@@ -524,13 +522,13 @@ impl Fixture {
     /// delivered, and the watchdog wait is still open.
     async fn persist_in_flight_window(
         &self,
-        worker_id: &AgentId,
+        worker_id: &OwnedAgentId,
         nap_ms: u32,
         watchdog_ms: u32,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let deadline = Instant::now() + IN_FLIGHT_START_TIMEOUT;
         loop {
-            self.executor.commit_oplog(worker_id).await?;
+            self.executor.commit_oplog(&worker_id.agent_id).await?;
             let oplog = self
                 .executor
                 .get_oplog(worker_id, OplogIndex::INITIAL)
@@ -591,10 +589,10 @@ impl Fixture {
 
     /// Arms the replay gates of [`ClaimOrder::WatchdogFirst`] before the crash, so that no
     /// replayed wait can pass its claim before the gates are in place.
-    fn arm_watchdog_first_gates(&self, worker_id: &AgentId) -> WatchdogFirstGates {
+    fn arm_watchdog_first_gates(&self, worker_id: &OwnedAgentId) -> WatchdogFirstGates {
         let wait = |stage| {
             self.executor.gate_next_replay_access_admission(
-                worker_id,
+                &worker_id.agent_id,
                 "monotonic-clock::wait-for",
                 stage,
             )

@@ -12,121 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { AgentId as RawAgentId } from 'golem:core/types@2.0.0';
 import { Uuid } from './uuid';
-import { type SchemaValueTree } from 'golem:core/types@2.0.0';
-import { SchemaValue, schemaValueFromWit } from './internal/schema-model';
-import { createAgentIdString, decodeAgentIdWire } from './internal/agentIdentity';
-import { DynamicAgentClient, type DynamicAgentClientSurface } from './dynamicClient';
-import type { ScopeCard } from './host/permissions';
 
-/** @internal Protocol implemented by typed client definitions and reflected agent types. */
-export const bindAgentClient = '__golemBindAgentClient' as const;
-
-/** Options for a client bound to an existing agent identity. */
-export interface AgentClientBindOptions {
-  /** The default scope card for every awaited call of the bound client. */
-  readonly scopeCard?: ScopeCard;
-}
-
-/** @internal A value that can bind itself to an existing agent identity. */
-export interface AgentClientBinding<Client, Config = never> {
-  [bindAgentClient](
-    agentId: ParsedAgentId,
-    config?: Config,
-    options?: AgentClientBindOptions,
-  ): Client;
-}
-
-/** Explicit parts used to construct a {@link ParsedAgentId}. */
-export interface ParsedAgentIdCreateOptions {
-  readonly typeName: string;
-  readonly constructorValue: SchemaValue;
-  readonly phantomId?: Uuid;
-}
-
-/** Semantic parts of a {@link ParsedAgentId}. */
-export interface ParsedAgentIdParts {
-  readonly typeName: string;
-  readonly constructorValue: SchemaValue;
-  readonly phantomId?: Uuid;
-}
+const UUID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /**
- * Parsed environment-scoped agent identity string.
+ * Names an agent within its environment. Golem issues it as an opaque version 8 UUID; it does not
+ * encode the agent type's name or the constructor parameters. Its text form is the UUID.
  *
- * A ParsedAgentId wraps the environment-scoped string representation of an agent ID and can parse it
- * into its constituent parts: agent type name, constructor parameters, and optional phantom ID.
- *
- * Constructor parameters are carried as the schema-native {@link SchemaValue} (the recursive
- * in-memory value); the embedded type graph the host returns is discarded because the SDK
- * re-derives parameter types from the agent's registered runtime metadata.
+ * Structurally compatible with the WIT `agent-id` record, so it can be passed to host functions
+ * directly.
  */
-export class ParsedAgentId {
-  readonly value: string;
+export class AgentId {
+  readonly uuid: Uuid;
 
-  parsedCache: [string, SchemaValue, Uuid | undefined] | undefined = undefined;
-  private wireCache: [string, SchemaValueTree, Uuid | undefined] | undefined;
-
-  constructor(agentId: string) {
-    this.value = agentId;
+  constructor(uuid: Uuid) {
+    this.uuid = Uuid.from(uuid);
   }
 
-  /**
-   * Constructs a ParsedAgentId from an agent type name, constructor value, and optional phantom ID.
-   * Prefer a definition's `agentId(...)` when a typed definition is available.
-   */
-  static create(options: ParsedAgentIdCreateOptions): ParsedAgentId {
-    const normalized = options.phantomId ? Uuid.from(options.phantomId) : undefined;
-    const value = createAgentIdString(options.typeName, options.constructorValue, normalized);
-    const result = new ParsedAgentId(value);
-    result.parsedCache = [options.typeName, options.constructorValue, normalized];
-    return result;
-  }
-
-  /**
-   * Returns the parsed agent ID.
-   * @returns a tuple of the agent type name, parameters and an optional phantom ID
-   */
-  parsed(): [string, SchemaValue, Uuid | undefined] {
-    if (!this.parsedCache) {
-      const [typeName, parameters, phantomId] = this.parsedWire();
-      this.parsedCache = [typeName, schemaValueFromWit(parameters), phantomId];
+  /** Wraps a WIT `agent-id`. An `AgentId` is returned as it is. */
+  static from(value: RawAgentId): AgentId {
+    if (value instanceof AgentId) {
+      return value;
     }
-    return this.parsedCache;
+    return new AgentId(Uuid.from(value.uuid));
   }
 
-  /** @internal Identity decoding for generated invocation and snapshot dispatch. */
-  parsedWire(): [string, SchemaValueTree, Uuid | undefined] {
-    if (!this.wireCache) {
-      this.wireCache = decodeAgentIdWire(this.value);
+  /** Parses the text form, a hyphenated UUID. */
+  static parse(value: string): AgentId {
+    if (!UUID_PATTERN.test(value)) {
+      throw new TypeError(`Invalid agent ID: ${value} is not a UUID`);
     }
-    return this.wireCache;
+    return new AgentId(Uuid.parse(value));
   }
 
-  /** Return the semantic parts of this environment-scoped identity. */
-  parts(): ParsedAgentIdParts {
-    const [typeName, constructorValue, phantomId] = this.parsed();
-    return { typeName, constructorValue, phantomId };
+  /** The text form: the hyphenated UUID. */
+  toString(): string {
+    return this.uuid.toString();
   }
 
-  /**
-   * Bind a method-only, full, or reflected client to this identity. Config overrides apply only
-   * if this creates the worker. `options.scopeCard` is the client's default scope card.
-   */
-  client<Client, Config>(
-    binding: AgentClientBinding<Client, Config>,
-    config?: Config,
-    options?: AgentClientBindOptions,
-  ): Client {
-    const bind = binding[bindAgentClient];
-    if (typeof bind !== 'function') {
-      throw new TypeError('Expected an agent client definition or reflected agent type');
-    }
-    return bind.call(binding, this, config, options);
+  toJSON(): string {
+    return this.toString();
   }
 
-  /** Invoke this identity with schema values and no discovery or typed client definition. */
-  dynamicClient(): DynamicAgentClientSurface {
-    return new DynamicAgentClient(this);
+  equals(other: RawAgentId): boolean {
+    return this.uuid.highBits === other.uuid.highBits && this.uuid.lowBits === other.uuid.lowBits;
   }
 }

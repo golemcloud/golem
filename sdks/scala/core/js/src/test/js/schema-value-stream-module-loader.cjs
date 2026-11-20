@@ -219,18 +219,29 @@ Module._load = function (request) {
     return {
       getConfigValue: missingHostImport("getConfigValue"),
       getAgentType: missingHostImport("getAgentType"),
-      makeAgentId: missingHostImport("makeAgentId"),
-      parseAgentId: missingHostImport("parseAgentId"),
+      getAgentTypeByAgentId: missingHostImport("getAgentTypeByAgentId"),
+      lookupAgentId: missingHostImport("lookupAgentId"),
       WasmRpc: class {
         constructor(...args) {
           this.args = args;
-          globalThis.__golemScalaTestHost?.constructWasmRpc?.(...args);
         }
-        static create(...args) {
-          return new this(...args);
+        static upsert(...args) {
+          globalThis.__golemScalaTestHost?.wasmRpcUpsert?.(...args);
+          return new this("upsert", ...args);
+        }
+        static getById(...args) {
+          globalThis.__golemScalaTestHost?.wasmRpcGetById?.(...args);
+          return new this("get-by-id", ...args);
+        }
+        static async create(...args) {
+          const agentId = await missingHostImport("wasmRpcCreate")(...args);
+          return { client: new this("create", ...args), agentId };
         }
         static bindSelf(...args) {
           return missingHostImport("bindSelf")(...args);
+        }
+        async agentId(...args) {
+          return missingHostImport("wasmRpcAgentId")(this, ...args);
         }
         invokeAndAwait(...args) {
           return missingHostImport("wasmRpcInvokeAndAwait")(...args);

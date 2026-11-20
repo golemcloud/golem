@@ -37,6 +37,76 @@ pub fn render_input_schema(
     merge_bundle(to_external_input_openapi_components(graph, ty), components)
 }
 
+/// Query options denote absence, and deepObject maps use property names rather
+/// than the key/value pair arrays used by JSON request bodies.
+pub fn render_query_schema(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    components: &mut Map<String, Value>,
+) -> Result<Value, String> {
+    let mut schema = match ty {
+        SchemaType::Ref { id, .. } => {
+            let definition = graph
+                .lookup(id)
+                .ok_or_else(|| format!("Missing query type {id}"))?;
+            render_query_schema(graph, &definition.body, components)?
+        }
+        SchemaType::Option { inner, .. } => render_query_schema(graph, inner, components)?,
+        SchemaType::Map { key, value, .. } => {
+            let key_schema = render_query_schema(graph, key, components)?;
+            let mut schema = json!({
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": render_input_schema(graph, value, components)?,
+                // Property names are strings; this records the schema applied
+                // after the HTTP parser converts a name into a typed map key.
+                "x-golem-key-schema": key_schema,
+            });
+            if matches!(
+                graph.resolve_ref(key).map_err(|e| e.to_string())?,
+                SchemaType::String { .. }
+                    | SchemaType::Char { .. }
+                    | SchemaType::Enum { .. }
+                    | SchemaType::Uuid { .. }
+                    | SchemaType::Datetime { .. }
+            ) {
+                schema["propertyNames"] = key_schema;
+            }
+            if schema.get("propertyNames").is_none() {
+                schema["propertyNames"] = json!({"type": "string"});
+            }
+            schema["propertyNames"]["minLength"] = json!(1);
+            schema["propertyNames"]["pattern"] = json!(r"^[^\[\]]+$");
+            schema
+        }
+        _ => {
+            let mut schema = render_input_schema(graph, ty, components)?;
+            if matches!(ty, SchemaType::List { .. }) {
+                schema["minItems"] = json!(1);
+            }
+            schema
+        }
+    };
+    // Reuse the common renderer for annotations, including annotations on refs
+    // and outer options, without exposing their JSON-specific container shape.
+    if !ty.metadata().is_empty() {
+        let mut annotations = render_input_schema(
+            graph,
+            &SchemaType::String {
+                metadata: ty.metadata().clone(),
+            },
+            components,
+        )?;
+        let annotations = annotations.as_object_mut().unwrap();
+        annotations.remove("type");
+        schema
+            .as_object_mut()
+            .unwrap()
+            .extend(std::mem::take(annotations));
+    }
+    Ok(schema)
+}
+
 /// Render a schema for an externally visible response. Host-managed
 /// capability leaves expose only their redacted placeholder.
 pub fn render_output_schema(

@@ -4,275 +4,115 @@
 /// address; no reflected schema is consulted.
 pub(all) struct FullAgentClient {
   priv transport : Transport
-  reusable_identity : ParsedAgentId?
 }
 
 ///|
-/// Typed method codecs bound to an existing durable identity. The ID itself
-/// supplies the target name, constructor value, and phantom identity.
+/// Typed method codecs bound to an existing durable agent. The host resolves
+/// the agent type from the type tag of the ID.
 pub(all) struct MethodOnlyAgentClient {
   priv inner : FullAgentClient
 }
 
 ///|
-fn[C : @schema.IntoSchema] full_client_create(
+/// Connects to the keyed agent of the constructor input, which the host
+/// creates when it is missing.
+pub fn[C : @schema.IntoSchema] FullAgentClient::upsert(
   type_name : String,
   constructor_input : C,
-  phantom_id : @schema.Uuid?,
-  agent_config : Array[@common.TypedAgentConfigValue],
-  reusable : Bool,
 ) -> FullAgentClient raise ReflectError {
-  let constructor_value = @schema.to_value_as(constructor_input)
-  let reusable_identity = if reusable {
-    Some(ParsedAgentId::create(type_name, constructor_value, phantom_id~))
-  } else {
-    None
-  }
   {
-    transport: Transport::create_with_config(
-      type_name, constructor_value, phantom_id, agent_config,
+    transport: Transport::upsert(
+      type_name,
+      @schema.to_value_as(constructor_input),
     ),
-    reusable_identity,
   }
 }
 
 ///|
-/// Constructs an ordinary durable client from caller-owned schemas and codecs.
-pub fn[C : @schema.IntoSchema] FullAgentClient::get(
+/// Connects to the existing agent of the type with the given ID. An unknown
+/// ID, or the ID of an agent of another type, raises `Remote(NotFound(_))`.
+pub fn FullAgentClient::get_by_id(
   type_name : String,
-  constructor_input : C,
+  agent_id : @schema.AgentId,
 ) -> FullAgentClient raise ReflectError {
-  full_client_create(type_name, constructor_input, None, [], true)
+  { transport: Transport::get_by_id(type_name, agent_id), }
 }
 
 ///|
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_with_config(
+/// Creates a new durable agent. With `keyed`, the new agent is the keyed agent
+/// of the constructor input, and the creation raises `Remote(Conflict(_))`
+/// when that agent already exists; otherwise it has no key and a new ID.
+/// `config` overrides values of the agent type's local configuration, and
+/// `env` adds environment variables to the ones the manifest defines.
+pub async fn[C : @schema.IntoSchema] FullAgentClient::create(
   type_name : String,
   constructor_input : C,
-  config : Config,
-) -> FullAgentClient raise ReflectError {
-  let values = config.typed_values() catch {
-    error =>
-      raise Schema(
-        "failed to encode config overrides: " + agent_error_message(error),
-      )
+  keyed~ : Bool = false,
+  config? : &@rpc.AgentConfigOverrides,
+  env~ : Array[(String, String)] = [],
+) -> FullAgentClient {
+  let values = match config {
+    Some(config) =>
+      config.typed_values() catch {
+        error =>
+          raise Schema(
+            "failed to encode config overrides: " + agent_error_message(error),
+          )
+      }
+    None => []
   }
-  full_client_create(type_name, constructor_input, None, values, true)
-}
-
-///|
-/// Constructs a durable phantom client with a known phantom identity.
-pub fn[C : @schema.IntoSchema] FullAgentClient::get_phantom(
-  type_name : String,
-  constructor_input : C,
-  phantom_id : @schema.Uuid,
-) -> FullAgentClient raise ReflectError {
-  full_client_create(type_name, constructor_input, Some(phantom_id), [], true)
-}
-
-///|
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::get_phantom_with_config(
-  type_name : String,
-  constructor_input : C,
-  phantom_id : @schema.Uuid,
-  config : Config,
-) -> FullAgentClient raise ReflectError {
-  let values = config.typed_values() catch {
-    error =>
-      raise Schema(
-        "failed to encode config overrides: " + agent_error_message(error),
-      )
-  }
-  full_client_create(
-    type_name,
-    constructor_input,
-    Some(phantom_id),
-    values,
-    true,
-  )
-}
-
-///|
-/// Constructs a durable phantom client with a fresh phantom identity.
-pub fn[C : @schema.IntoSchema] FullAgentClient::new_phantom(
-  type_name : String,
-  constructor_input : C,
-) -> FullAgentClient raise ReflectError {
-  let phantom_id = @identity.new_phantom_id()
-  FullAgentClient::get_phantom(type_name, constructor_input, phantom_id)
-}
-
-///|
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::new_phantom_with_config(
-  type_name : String,
-  constructor_input : C,
-  config : Config,
-) -> FullAgentClient raise ReflectError {
-  let phantom_id = @identity.new_phantom_id()
-  FullAgentClient::get_phantom_with_config(
-    type_name, constructor_input, phantom_id, config,
-  )
-}
-
-///|
-/// Constructs the reusable identity for a full caller-defined client.
-pub fn[C : @schema.IntoSchema] FullAgentClient::agent_id(
-  type_name : String,
-  constructor_input : C,
-  phantom_id~ : @schema.Uuid? = None,
-) -> ParsedAgentId raise ReflectError {
-  ParsedAgentId::create(
-    type_name,
-    @schema.to_value_as(constructor_input),
-    phantom_id~,
-  )
-}
-
-///|
-/// Binds a full caller-defined client, rejecting an identity whose agent name
-/// or constructor shape differs from the caller-owned definition.
-pub fn[C : @schema.FromSchema] FullAgentClient::bind(
-  type_name : String,
-  agent_id : ParsedAgentId,
-  constructor_type : @schema.TypeTag[C],
-) -> FullAgentClient raise ReflectError {
-  let parts = agent_id.parts()
-  validate_full_id(type_name, parts, constructor_type)
   {
     transport: Transport::create(
-      parts.type_name,
-      parts.constructor_value,
-      parts.phantom_id,
+      type_name,
+      @schema.to_value_as(constructor_input),
+      keyed,
+      values,
+      env,
     ),
-    reusable_identity: Some(agent_id),
   }
 }
 
 ///|
-pub fn[C : @schema.FromSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::bind_with_config(
-  type_name : String,
-  agent_id : ParsedAgentId,
-  constructor_type : @schema.TypeTag[C],
-  config : Config,
-) -> FullAgentClient raise ReflectError {
-  let parts = agent_id.parts()
-  validate_full_id(type_name, parts, constructor_type)
-  let values = config.typed_values() catch {
-    error =>
-      raise Schema(
-        "failed to encode config overrides: " + agent_error_message(error),
-      )
-  }
-  full_from_id_with_config(agent_id, values)
-}
-
-///|
-fn[C : @schema.FromSchema] validate_full_id(
-  type_name : String,
-  parts : ParsedAgentIdParts,
-  _constructor_type : @schema.TypeTag[C],
-) -> Unit raise ReflectError {
-  guard parts.type_name == type_name else {
-    raise Identity(
-      "agent ID names '" + parts.type_name + "', expected '" + type_name + "'",
-    )
-  }
-  let _ : C = @schema.from_value_as(parts.constructor_value) catch {
-    error =>
-      raise Identity(
-        "agent ID constructor does not match the caller-defined schema: \{repr(error)}",
-      )
-  }
-}
-
-///|
-/// Constructs a logical ephemeral client. Its final identity is available only
-/// in invocation metadata.
+/// Addresses an ephemeral agent type: every invocation runs on a new one-shot
+/// instance, whose ID the invocation metadata returns.
 pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral(
   type_name : String,
   constructor_input : C,
 ) -> FullAgentClient raise ReflectError {
-  full_client_create(type_name, constructor_input, None, [], false)
+  FullAgentClient::upsert(type_name, constructor_input)
 }
 
 ///|
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::ephemeral_with_config(
-  type_name : String,
-  constructor_input : C,
-  config : Config,
-) -> FullAgentClient raise ReflectError {
-  let values = config.typed_values() catch {
-    error =>
-      raise Schema(
-        "failed to encode config overrides: " + agent_error_message(error),
-      )
-  }
-  full_client_create(type_name, constructor_input, None, values, false)
+/// The ID of the agent this client connects to. On an upsert client the host
+/// creates the agent when it is missing, without invoking a method.
+pub async fn FullAgentClient::agent_id(
+  self : FullAgentClient,
+) -> @schema.AgentId {
+  self.transport.agent_id()
 }
 
 ///|
-/// Constructs an ephemeral client with a known phantom identity.
-pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral_phantom(
-  type_name : String,
-  constructor_input : C,
-  phantom_id : @schema.Uuid,
-) -> FullAgentClient raise ReflectError {
-  full_client_create(type_name, constructor_input, Some(phantom_id), [], true)
-}
-
-///|
-pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClient::ephemeral_phantom_with_config(
-  type_name : String,
-  constructor_input : C,
-  phantom_id : @schema.Uuid,
-  config : Config,
-) -> FullAgentClient raise ReflectError {
-  let values = config.typed_values() catch {
-    error =>
-      raise Schema(
-        "failed to encode config overrides: " + agent_error_message(error),
-      )
-  }
-  full_client_create(
-    type_name,
-    constructor_input,
-    Some(phantom_id),
-    values,
-    true,
-  )
-}
-
-///|
+/// Binds to the existing agent with the given ID. Raises `Discovery` when no
+/// deployed agent type has the type tag of the ID, and `Remote(NotFound(_))`
+/// when no agent has the ID.
 pub fn MethodOnlyAgentClient::bind(
-  agent_id : ParsedAgentId,
+  agent_id : @schema.AgentId,
 ) -> MethodOnlyAgentClient raise ReflectError {
-  MethodOnlyAgentClient::bind_with_config(agent_id, [])
-}
-
-///|
-/// Raw typed entries are accepted without declaration-aware validation.
-pub fn MethodOnlyAgentClient::bind_with_config(
-  agent_id : ParsedAgentId,
-  config : Array[@common.TypedAgentConfigValue],
-) -> MethodOnlyAgentClient raise ReflectError {
-  { inner: full_from_id_with_config(agent_id, config), }
-}
-
-///|
-fn full_from_id_with_config(
-  agent_id : ParsedAgentId,
-  config : Array[@common.TypedAgentConfigValue],
-) -> FullAgentClient raise ReflectError {
-  let parts = agent_id.parts()
-  {
-    transport: Transport::create_with_config(
-      parts.type_name,
-      parts.constructor_value,
-      parts.phantom_id,
-      config,
-    ),
-    reusable_identity: Some(agent_id),
+  guard @agentHost.get_agent_type_by_agent_id(agent_id.to_wit())
+    is Some(registered) else {
+    raise Discovery("no deployed agent type has the type of agent \{agent_id}")
   }
+  {
+    inner: FullAgentClient::get_by_id(registered.agent_type.type_name, agent_id),
+  }
+}
+
+///|
+/// The ID of the agent this client is bound to.
+pub async fn MethodOnlyAgentClient::agent_id(
+  self : MethodOnlyAgentClient,
+) -> @schema.AgentId {
+  self.inner.agent_id()
 }
 
 ///|

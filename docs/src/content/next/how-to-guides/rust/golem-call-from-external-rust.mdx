@@ -107,8 +107,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure the Golem server connection
     my_agent_client::configure(GolemServer::Local, "my-app", "local");
 
-    // Get or create an agent instance
-    let agent = MyAgent::get("my-instance".to_string()).await?;
+    // Address the keyed agent of the constructor parameters
+    let agent = MyAgent::upsert("my-instance".to_string())?;
 
     // Call methods — fully typed parameters and return values
     let result = agent.do_something("input".to_string()).await?;
@@ -158,28 +158,43 @@ my_agent_client::configure_with_reconnect(
 Past the window the call fails with `ClientError::Unreachable { endpoint, window, last_cause }`.
 Dropping the call's future, for example with `tokio::time::timeout`, stops it earlier.
 
-## Phantom Agents
+## Addressing Agents
 
-To create multiple agent instances with the same constructor parameters, use phantom agents:
+`upsert` does not contact the server: the server creates the keyed agent of the constructor
+parameters on the first invocation when it is missing. The client of a durable agent type also has:
+
+- `create(params..., options)` — `async`: creates an agent and returns after its initialization.
+  Without `keyed`, each call creates a new agent without a key and with a new agent ID, so you can
+  have many agents with the same constructor parameters. With `keyed: true` it creates the keyed
+  agent and fails with `ClientError::Conflict` when it exists.
+- `get_by_id(agent_id)` — `async`: addresses the existing agent with this agent ID. It never
+  creates the agent; an unknown ID fails with `ClientError::NotFound`.
+- `agent_id()` — `async`: the agent ID (a UUID that Golem issues) of the agent the client addresses.
 
 ```rust
-let agent = MyAgent::get_phantom(uuid::Uuid::new_v4(), "shared-name".to_string()).await?;
+use my_agent_client::CreateOptions;
+
+let agent = MyAgent::create("shared-name".to_string(), CreateOptions::default()).await?;
+let id = agent.agent_id().await?;
+let same_agent = MyAgent::get_by_id(id).await?;
 ```
 
-Or generate a random phantom ID automatically:
-
-```rust
-let agent = MyAgent::new_phantom("shared-name".to_string()).await?;
-```
+An ephemeral agent type has only `upsert`; each invocation runs on a new one-shot instance.
 
 ## Agent Configuration
 
-If the agent has local configuration fields, use the `_with_config` variants:
+If the agent has local configuration fields, pass overrides and environment variables to `create`.
+`config` is the `Option` of the value of one configuration declaration (`None` keeps the value),
+or a tuple of these in declaration order; `upsert` takes no overrides:
 
 ```rust
-let agent = MyAgent::get_with_config(
+let agent = MyAgent::create(
     "my-instance".to_string(),
-    Some(my_config_value),    // config parameter (Option)
+    CreateOptions {
+        keyed: true,
+        config: Some(my_config_value),
+        env: std::collections::HashMap::from([("MODE".to_string(), "test".to_string())]),
+    },
 ).await?;
 ```
 

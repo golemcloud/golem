@@ -23,7 +23,7 @@ use golem_common::schema::SchemaType;
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_service_base::model::component::Component;
 use golem_worker_executor::services::component::ComponentService;
-use golem_worker_executor::worker::CreateIntent;
+use golem_worker_executor::worker::{CreateIntent, NewOwner};
 use test_r::{test, timeout};
 
 inherit_test_dep!(Tracing);
@@ -147,10 +147,15 @@ async fn identical_keyed_record_config_retry_is_admitted(
     ] {
         let id = target(&seed, case);
         let key = IdempotencyKey::fresh();
+        let owner = NewOwner::keyed(
+            component.id,
+            golem_common::agent_key!("Counter", case.to_string()),
+        );
         let create = |value: serde_json::Value| {
             let seed = seed.clone();
             let id = id.clone();
             let key = key.clone();
+            let owner = owner.clone();
             async move {
                 Worker::get_or_create_suspended_with_freshness(
                     seed.all(),
@@ -163,9 +168,10 @@ async fn identical_keyed_record_config_retry_is_admitted(
                     None,
                     None,
                     &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
+                    callers::anonymous(),
                     InvocationFreshnessDisposition::MayExist,
                     CreateIntent::Create {
+                        owner,
                         exclusive: true,
                         idempotency_key: Some(key),
                     },

@@ -20,7 +20,7 @@ Starts a TypeScript REPL with all agent client classes preconfigured in the glob
 ### Example: Invoking a Scala counter agent from the TypeScript REPL
 
 ```typescript
-const c1 = await CounterAgent.get("c1")
+const c1 = CounterAgent.upsert("c1")
 await c1.increment()
 await c1.increment()
 const value = await c1.getValue()
@@ -49,7 +49,7 @@ The `--yes` flag auto-confirms any prompts. The script has the same global scope
 ### Example script (`test.ts`)
 
 ```typescript
-const c2 = await CounterAgent.get("c2")
+const c2 = CounterAgent.upsert("c2")
 await c2.increment()
 await c2.increment()
 ```

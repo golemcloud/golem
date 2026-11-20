@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::oplog::fenced_stream::{
-    FencedIndexedStream, StreamLabels, scan_component_streams,
-};
+use crate::services::oplog::fenced_stream::{FencedIndexedStream, StreamLabels, scan_type_streams};
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveError, OplogArchiveResult};
 use crate::services::oplog::reader::{OplogReadError, OplogReadSource, verify_persisted_entries};
 use crate::services::oplog::{CompressedOplogChunk, OplogArchiveService, OplogError, OplogFence};
@@ -25,9 +23,9 @@ use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
@@ -87,7 +85,7 @@ impl BlobOplogArchiveService {
         agent_mode: AgentMode,
     ) -> FencedIndexedStream {
         FencedIndexedStream::new(
-            owned_agent_id.agent_id(),
+            owned_agent_id.clone(),
             BlobOplogArchive::manifest_namespace(owned_agent_id, agent_mode, self.level),
             MANIFEST_LABELS,
             self.indexed_storage.clone(),
@@ -180,21 +178,21 @@ impl OplogArchiveService for BlobOplogArchiveService {
         self.manifest(owned_agent_id, agent_mode).exists().await
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         let level = self.level;
-        scan_component_streams(
+        scan_type_streams(
             &self.indexed_storage,
             &self.retry_config,
             MANIFEST_LABELS,
             environment_id,
-            component_id,
+            type_id,
             modes,
             cursor,
             count,
@@ -262,7 +260,7 @@ impl BlobOplogArchive {
         shard_epoch: Option<ShardEpoch>,
     ) -> OplogArchiveResult<Self> {
         let manifest = FencedIndexedStream::opened(
-            owned_agent_id.agent_id(),
+            owned_agent_id.clone(),
             Self::manifest_namespace(&owned_agent_id, agent_mode, level),
             MANIFEST_LABELS,
             indexed_storage.clone(),
@@ -296,7 +294,7 @@ impl BlobOplogArchive {
         level: usize,
     ) -> IndexedStorageNamespace {
         IndexedStorageNamespace::BlobOplogManifest {
-            agent_id: owned_agent_id.agent_id(),
+            owned_agent_id: owned_agent_id.clone(),
             agent_mode,
             level,
         }
@@ -309,7 +307,7 @@ impl BlobOplogArchive {
     ) -> BlobStorageNamespace {
         BlobStorageNamespace::CompressedOplog {
             environment_id: owned_agent_id.environment_id(),
-            component_id: owned_agent_id.component_id(),
+            type_tag: owned_agent_id.agent_id.type_tag(),
             agent_mode,
             level,
         }
@@ -320,10 +318,7 @@ impl BlobOplogArchive {
     }
 
     /// A name no other write uses, so no writer can overwrite an object the manifest refers to.
-    ///
-    /// The objects of an agent are in the directory of its path segment, not of its name: an
-    /// agent name can hold `/`, `\` and `.` segments and be longer than a file name, while the
-    /// path segment holds none of them and its hash gives each agent its own directory.
+    /// The objects of an agent are in the directory of its agent ID.
     fn new_object(&self, last_idx: OplogIndex) -> String {
         join_blob_key(
             &agent_path_segment(&self.owned_agent_id.agent_id),

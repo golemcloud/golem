@@ -1,0 +1,222 @@
+/*
+ * Copyright 2024-2026 Golem Cloud
+ *
+ * Licensed under the Golem Source License v1.1 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://license.golem.cloud/LICENSE
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package golem.runtime.http
+
+import zio.test._
+
+object HttpValidationInvocationContextSpec extends ZIOSpecDefault {
+
+  private val contextParams = Set("caller")
+
+  def spec = suite("HttpValidationInvocationContextSpec")(
+    test("low-level HTTP model preserves mapping order/provider and distinguishes Any from Custom ANY") {
+      val mount = HttpMountDetails(
+        Nil,
+        false,
+        false,
+        Nil,
+        Nil,
+        List(FileMapping.Subtree(List("assets"), "/srv/assets"), FileMapping.Exact(List("x"), "/srv/x")),
+        List(FileMapping.Exact(List("data"), "/var/data")),
+        Some("provider-text")
+      )
+      assertTrue(
+        mount.staticBindings.map(_.productPrefix) == List("Subtree", "Exact"),
+        mount.filesystemBindings.map(_.productPrefix) == List("Exact"),
+        mount.openapiProviderMethod.contains("provider-text"),
+        HttpMethod.Any != HttpMethod.Custom("ANY"),
+        HttpMethod.fromString("ANY") == Right(HttpMethod.Custom("ANY")),
+        HttpMethod.fromString("any") == Right(HttpMethod.Custom("any"))
+      )
+    },
+    suite("endpoint InvocationContext validation")(
+      test("rejects path variable referencing InvocationContext param") {
+        val endpoint = HttpEndpointDetails(
+          httpMethod = HttpMethod.Get,
+          pathSuffix = List(PathSegment.PathVariable("caller")),
+          headerVars = Nil,
+          queryVars = Nil,
+          authOverride = None,
+          corsOverride = None
+        )
+        val result = HttpValidation.validateEndpointVars(
+          "TestAgent",
+          "myMethod",
+          endpoint,
+          Set("caller", "name"),
+          contextParams,
+          hasMount = true
+        )
+        assertTrue(
+          result.isLeft,
+          result.left.toOption.get.contains("InvocationContext-typed parameter")
+        )
+      },
+      test("rejects header variable referencing InvocationContext param") {
+        val endpoint = HttpEndpointDetails(
+          httpMethod = HttpMethod.Post,
+          pathSuffix = List(PathSegment.Literal("action")),
+          headerVars = List(HeaderVariable("X-Caller", "caller")),
+          queryVars = Nil,
+          authOverride = None,
+          corsOverride = None
+        )
+        val result = HttpValidation.validateEndpointVars(
+          "TestAgent",
+          "myMethod",
+          endpoint,
+          Set("caller", "name"),
+          contextParams,
+          hasMount = true
+        )
+        assertTrue(
+          result.isLeft,
+          result.left.toOption.get.contains("InvocationContext-typed parameter")
+        )
+      },
+      test("rejects query variable referencing InvocationContext param") {
+        val endpoint = HttpEndpointDetails(
+          httpMethod = HttpMethod.Get,
+          pathSuffix = Nil,
+          headerVars = Nil,
+          queryVars = List(QueryVariable("caller_id", "caller")),
+          authOverride = None,
+          corsOverride = None
+        )
+        val result = HttpValidation.validateEndpointVars(
+          "TestAgent",
+          "myMethod",
+          endpoint,
+          Set("caller", "name"),
+          contextParams,
+          hasMount = true
+        )
+        assertTrue(
+          result.isLeft,
+          result.left.toOption.get.contains("InvocationContext-typed parameter")
+        )
+      },
+      test("accepts endpoint with non-InvocationContext params") {
+        val endpoint = HttpEndpointDetails(
+          httpMethod = HttpMethod.Get,
+          pathSuffix = List(PathSegment.PathVariable("name")),
+          headerVars = Nil,
+          queryVars = Nil,
+          authOverride = None,
+          corsOverride = None
+        )
+        val result = HttpValidation.validateEndpointVars(
+          "TestAgent",
+          "myMethod",
+          endpoint,
+          Set("caller", "name"),
+          contextParams,
+          hasMount = true
+        )
+        assertTrue(result.isRight)
+      },
+      test("accepts endpoint when contextParamNames is empty") {
+        val endpoint = HttpEndpointDetails(
+          httpMethod = HttpMethod.Get,
+          pathSuffix = List(PathSegment.PathVariable("caller")),
+          headerVars = Nil,
+          queryVars = Nil,
+          authOverride = None,
+          corsOverride = None
+        )
+        val result = HttpValidation.validateEndpointVars(
+          "TestAgent",
+          "myMethod",
+          endpoint,
+          Set("caller"),
+          Set.empty,
+          hasMount = true
+        )
+        assertTrue(result.isRight)
+      },
+      test("rejects remaining path variable referencing InvocationContext param") {
+        val endpoint = HttpEndpointDetails(
+          httpMethod = HttpMethod.Get,
+          pathSuffix = List(PathSegment.RemainingPathVariable("caller")),
+          headerVars = Nil,
+          queryVars = Nil,
+          authOverride = None,
+          corsOverride = None
+        )
+        val result = HttpValidation.validateEndpointVars(
+          "TestAgent",
+          "myMethod",
+          endpoint,
+          Set("caller"),
+          contextParams,
+          hasMount = true
+        )
+        assertTrue(
+          result.isLeft,
+          result.left.toOption.get.contains("InvocationContext-typed parameter")
+        )
+      }
+    ),
+    suite("mount InvocationContext validation")(
+      test("rejects mount path variable referencing InvocationContext param") {
+        val mount = HttpMountDetails(
+          pathPrefix = List(PathSegment.Literal("api"), PathSegment.PathVariable("caller")),
+          authRequired = false,
+          phantomAgent = false,
+          corsAllowedPatterns = Nil,
+          webhookSuffix = Nil,
+          staticBindings = Nil,
+          filesystemBindings = Nil,
+          openapiProviderMethod = None
+        )
+        val result = HttpValidation.validateMountVarsAreNotInvocationContext("TestAgent", mount, contextParams)
+        assertTrue(
+          result.isLeft,
+          result.left.toOption.get.contains("InvocationContext-typed constructor parameter")
+        )
+      },
+      test("accepts mount with non-InvocationContext path variables") {
+        val mount = HttpMountDetails(
+          pathPrefix = List(PathSegment.Literal("api"), PathSegment.PathVariable("name")),
+          authRequired = false,
+          phantomAgent = false,
+          corsAllowedPatterns = Nil,
+          webhookSuffix = Nil,
+          staticBindings = Nil,
+          filesystemBindings = Nil,
+          openapiProviderMethod = None
+        )
+        val result = HttpValidation.validateMountVarsAreNotInvocationContext("TestAgent", mount, contextParams)
+        assertTrue(result.isRight)
+      },
+      test("accepts mount when contextParamNames is empty") {
+        val mount = HttpMountDetails(
+          pathPrefix = List(PathSegment.Literal("api"), PathSegment.PathVariable("caller")),
+          authRequired = false,
+          phantomAgent = false,
+          corsAllowedPatterns = Nil,
+          webhookSuffix = Nil,
+          staticBindings = Nil,
+          filesystemBindings = Nil,
+          openapiProviderMethod = None
+        )
+        val result = HttpValidation.validateMountVarsAreNotInvocationContext("TestAgent", mount, Set.empty)
+        assertTrue(result.isRight)
+      }
+    )
+  )
+}

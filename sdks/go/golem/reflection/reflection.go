@@ -277,10 +277,19 @@ func packJSONTree(ref core.Ref, value any) (types.SchemaValueTree, error) {
 // never saw the target's types still cannot send it a malformed argument.
 type AgentClient struct {
 	agentType AgentType
-	agentID   string
+	// id is shared by the copies of a client, so the ID that AgentID learns
+	// from the host is learned once.
+	id        *agentIDCell
 	rpc       agentRPC
 	scopeCard any // a golem.ScopeCard, or nil
 }
+
+type agentIDCell struct {
+	id    golem.AgentID
+	known bool
+}
+
+func knownAgentID(id golem.AgentID) *agentIDCell { return &agentIDCell{id: id, known: true} }
 
 // WithScopeCard returns a copy of the client whose awaited calls — Call and
 // CallAsync — carry card as their scope card, unless the call passes its own
@@ -301,6 +310,9 @@ type agentRPC interface {
 	start(method string, input types.SchemaValueTree, scopeCard witTypes.Option[*types.PermissionCard]) (pendingRPC, error)
 	trigger(method string, input types.SchemaValueTree) (golem.InvocationMetadata, error)
 	schedule(at time.Time, method string, input types.SchemaValueTree) (*golem.ScheduledInvocation, error)
+	// agentID asks the host for the ID of the agent, which creates an agent
+	// that an upsert addresses when it is missing.
+	agentID() (golem.AgentID, error)
 }
 
 // pendingRPC is an invocation in flight: its identity, its outcome, and a way
@@ -375,8 +387,30 @@ func (p *PendingCall[T]) Cancel() {
 // AgentType returns the snapshot this client was built from.
 func (c *AgentClient) AgentType() AgentType { return c.agentType }
 
-// AgentID returns the target's agent id, as resolved by the host.
-func (c *AgentClient) AgentID() string { return c.agentID }
+// AgentID returns the ID of the client's agent. A client of Upsert asks the
+// host for it the first time, and the host creates the agent when it is
+// missing; the other clients already know it. A failure is a
+// [golem.RemoteCallError].
+func (c *AgentClient) AgentID() (golem.AgentID, error) {
+	if c.id.known {
+		return c.id.id, nil
+	}
+	id, err := c.rpc.agentID()
+	if err != nil {
+		return golem.AgentID{}, err
+	}
+	c.id.id, c.id.known = id, true
+	return id, nil
+}
+
+// target names the client's agent in errors: its ID when the client knows it,
+// and otherwise its agent type.
+func (c *AgentClient) target() string {
+	if c.id != nil && c.id.known {
+		return c.id.id.String()
+	}
+	return c.agentType.Name()
+}
 
 func (c *AgentClient) pack(method string, args map[string]any) (Method, types.SchemaValueTree, error) {
 	m, known := c.agentType.Method(method)
@@ -416,7 +450,7 @@ func (c *AgentClient) CallAsync(method string, args map[string]any, opts ...Call
 		return nil, err
 	}
 	return &PendingCall[any]{Metadata: p.metadata, cancel: p.cancel, wait: func() (any, error) {
-		res, err := p.await(c.agentID, method)
+		res, err := p.await(c.target(), method)
 		if err != nil {
 			return nil, err
 		}
@@ -452,7 +486,7 @@ func (c *AgentClient) decodeResult(m Method, method string, res witTypes.Option[
 // protocolError is a result the call cannot read, reported as typed calls
 // report it.
 func (c *AgentClient) protocolError(method, message string) error {
-	return &golem.RemoteCallError{Target: c.agentID, Method: method, Kind: golem.RemoteProtocolError, Message: message}
+	return &golem.RemoteCallError{Target: c.target(), Method: method, Kind: golem.RemoteProtocolError, Message: message}
 }
 
 // Trigger invokes a method without waiting for its result.
@@ -488,50 +522,40 @@ func DiscoverAgentTypes() []AgentType { return hostDiscoverAgentTypes() }
 // one the caller cannot see, reports false rather than failing.
 func DiscoverAgentType(name string) (AgentType, bool) { return hostDiscoverAgentType(name) }
 
-// DiscoverAgentTypeByID looks up the agent type behind an existing agent id.
-// Discovery never creates the agent.
-func DiscoverAgentTypeByID(agentID string) (AgentType, bool) {
-	return hostDiscoverAgentTypeByID(agentID)
+// DiscoverAgentTypeByID looks up the deployed agent type that the type tag of
+// an agent ID names. Discovery never creates the agent.
+func DiscoverAgentTypeByID(id golem.AgentID) (AgentType, bool) {
+	return hostDiscoverAgentTypeByID(id)
 }
 
-// Get returns a client for the instance the constructor arguments identify,
-// creating it if it does not exist yet, exactly as a typed client would. Pass
-// [WithPhantomID] to address a phantom instance.
-func (r AgentType) Get(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient, error) {
-	return r.hostGet(ctorArgs, opts...)
+// Upsert returns a client for the keyed agent of the constructor arguments,
+// which the host creates when it is missing, exactly as a typed client would.
+// For an ephemeral type, each invocation runs on a new one-shot instance.
+func (r AgentType) Upsert(ctorArgs map[string]any) (*AgentClient, error) {
+	return r.hostUpsert(ctorArgs)
 }
 
-// NewPhantom allocates a fresh phantom instance and returns a client for it.
-func (r AgentType) NewPhantom(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient, error) {
-	return r.hostNewPhantom(ctorArgs, opts...)
+// Create creates a durable agent with the constructor arguments and returns a
+// client for it once its constructor has finished. Without [Keyed] the new
+// agent has a new ID; its options also set configuration overrides
+// ([WithConfigJSON], [WithConfigValue]) and environment variables ([WithEnv]).
+func (r AgentType) Create(ctorArgs map[string]any, opts ...CreateOpt) (*AgentClient, error) {
+	return r.hostCreate(ctorArgs, opts...)
 }
 
-// Bind addresses an agent by its id, which must name this agent type. Binding
-// does not create it; the first call to a durable id does, with the
-// configuration overrides given here. An agent that already exists keeps the
-// configuration it was created with.
-func (r AgentType) Bind(agentID string, opts ...ClientOpt) (*AgentClient, error) {
-	return r.hostBind(agentID, opts...)
+// GetByID returns a client for the existing agent of this type with the ID. It
+// never creates the agent: an unknown ID, or the ID of an agent of another
+// type, is a [golem.RemoteCallError] of kind [golem.RemoteNotFound].
+func (r AgentType) GetByID(id golem.AgentID) (*AgentClient, error) {
+	return r.hostGetByID(id)
 }
 
-// AgentID renders the identity the constructor arguments (and phantom, if
-// any) name, without creating the agent.
-func (r AgentType) AgentID(ctorArgs map[string]any, phantom golem.Option[golem.UUID]) (string, error) {
-	return r.hostAgentID(ctorArgs, phantom)
+// LookupID returns the ID of the keyed agent of the constructor arguments, or
+// None when no such agent exists. It never creates the agent.
+func (r AgentType) LookupID(ctorArgs map[string]any) (golem.Option[golem.AgentID], error) {
+	return r.hostLookupID(ctorArgs)
 }
 
-// ParseRawAgentID takes an agent identity apart without decoding its
-// constructor into a Go type. Parsing is strict: a malformed identity is
-// reported rather than guessed at.
-func ParseRawAgentID(agentID string) (RawAgentID, error) { return hostParseRawAgentID(agentID) }
-
-// BindAgentID binds an existing agent identity. It makes no claim about the
-// agent's type beyond what the identity says. Binding does not create the
-// agent, but the first call to a durable identity does.
-func BindAgentID(agentID string) (*DynamicAgentClient, error) { return hostBindAgentID(agentID) }
-
-// MakeAgentID renders the identity of an agent of the given type, constructor
-// record and phantom, without creating it.
-func MakeAgentID(typeName string, constructor golem.TypedValue, phantom golem.Option[golem.UUID]) (string, error) {
-	return hostMakeAgentID(typeName, constructor, phantom)
-}
+// GetByID returns a dynamic client for the existing agent with the ID, of the
+// type its ID names. It never creates the agent.
+func GetByID(id golem.AgentID) (*DynamicAgentClient, error) { return hostGetDynamicByID(id) }

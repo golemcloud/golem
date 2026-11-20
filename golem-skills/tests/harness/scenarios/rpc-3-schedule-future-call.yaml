@@ -62,7 +62,7 @@ steps:
         It must increment the counter exactly like the existing `increment` method, obtain
         the typed `DelayedRecorder` client for `{ name }`, and schedule `recordCount` to run
         30 seconds in the future with the new counter value. Use the real Effect SDK API:
-        `DelayedRecorderDefinition.client.get({ name })`, then
+        `DelayedRecorderDefinition.client.upsert({ name })`, then
         `recorder.recordCount.schedule(scheduledAt, { value: newCount })`. Construct
         `scheduledAt` as `{ seconds: bigint, nanoseconds: number }`. Yield the client and
         scheduling Effects so submission completes, then return the new counter value

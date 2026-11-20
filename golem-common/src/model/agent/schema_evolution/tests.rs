@@ -14,9 +14,7 @@
 
 use super::*;
 use crate::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
-use crate::schema::agent::{
-    AgentConstructorSchema, AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField,
-};
+use crate::schema::agent::{AgentConstructorSchema, AgentTypeSchema, InputSchema, NamedField};
 use crate::schema::graph::SchemaGraph;
 use crate::schema::schema_type::{ResultSpec, SchemaType, VariantCaseType};
 use golem_schema::Empty;
@@ -438,21 +436,6 @@ fn root_append_non_option_parameter_changes_keys() {
     assert_eq!(w.len(), 1);
     assert_eq!(w[0].path, "constructor.fields[1]");
     assert!(w[0].description.contains("non-Option"));
-}
-
-#[test]
-fn auto_injected_parameters_are_not_part_of_the_key() {
-    let old = vec![make_agent_type("A", vec![("x", SchemaType::u32())])];
-    let mut new_type = make_agent_type(
-        "A",
-        vec![
-            ("principal", SchemaType::string()),
-            ("x", SchemaType::u32()),
-        ],
-    );
-    let InputSchema::Parameters(fields) = &mut new_type.constructor.input_schema;
-    fields[0].source = FieldSource::AutoInjected(AutoInjectedKind::Principal);
-    assert!(validate_schema_evolution(&old, &[new_type]).is_empty());
 }
 
 fn union_of(bodies: Vec<SchemaType>) -> SchemaType {

@@ -11,7 +11,7 @@ final class WorkflowAgentImpl(private val workflowId: String) extends WorkflowAg
   override def start(approver: String): Future[String] = {
     val promiseId = HostApi.createPromise()
     for {
-      _     <- HumanAgentClient.get(approver).requestApproval(workflowId, ApprovalPromiseId.fromHost(promiseId))
+      _     <- HumanAgentClient.upsert(approver).requestApproval(workflowId, ApprovalPromiseId.fromHost(promiseId))
       bytes <- HostApi.awaitPromise(promiseId)
     } yield {
       val decision = new String(bytes, "UTF-8")

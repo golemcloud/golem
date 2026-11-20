@@ -31,7 +31,7 @@ use golem_common::model::durable_stream::{
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{
-    AgentId, AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp, agent::OwnerKind,
+    AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp, agent::OwnerKind,
 };
 use golem_common::read_only_lock;
 use golem_schema::schema::SchemaFingerprintV1;
@@ -55,8 +55,8 @@ impl ServiceFixture {
         );
         let account = AccountId::new();
         let metadata = AgentMetadata {
-            agent_id: owner.agent_id.clone(),
-            component_id: owner.agent_id.component_id,
+            agent_id: owner.agent_id,
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
             agent_type_name: None,
             canonical_key: None,
             owner_kind: OwnerKind::ComponentAgent,
@@ -68,19 +68,19 @@ impl ServiceFixture {
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: AgentStatusRecord::default(),
-            original_phantom_id: None,
+            constructor_parameters: None,
             fingerprint,
             agent_mode: AgentMode::Durable,
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
         };
         let create = OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
-            agent_id: owner.agent_id.clone(),
-            component_id: owner.agent_id.component_id,
+            agent_id: owner.agent_id,
+            component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
             agent_type_name: None,
             canonical_key: None,
             owner_kind: OwnerKind::ComponentAgent,
@@ -94,14 +94,15 @@ impl ServiceFixture {
             initial_total_linear_memory_size: 100,
             initial_active_plugins: HashSet::new(),
             local_agent_config: vec![],
-            original_phantom_id: None,
+            constructor_parameters: None,
             instance_id: fingerprint.0,
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }));
         let oplog = service
             .create_fresh(
@@ -134,10 +135,7 @@ impl ServiceFixture {
 fn owner(name: &str) -> OwnedAgentId {
     OwnedAgentId::new(
         EnvironmentId(uuid::Uuid::from_u128(11)),
-        &AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::from_u128(23)),
-            agent_id: name.to_string(),
-        },
+        &crate::test_agent_id(name),
     )
 }
 

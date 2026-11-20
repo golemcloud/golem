@@ -36,6 +36,7 @@ use golem_worker_executor::services::blob_store::{
 use golem_worker_executor::services::oplog::{Oplog, OplogOps};
 use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use golem_worker_executor::worker::EvictionClass;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::start_with_resource_limits_and_overrides;
 use std::path::Path;
 use test_r::test;
@@ -98,7 +99,7 @@ async fn invoke_blob_tool(
     fingerprint: AgentFingerprint,
     key: &InvocationId,
     input: &TypedSchemaValue,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
 ) -> Result<AgentInvocationResult, WorkerExecutorError> {
     let active = executor
         .production_active_agent(owner)
@@ -113,7 +114,7 @@ async fn invoke_blob_tool(
             vec!["write-blob".into()],
             input.clone(),
             InvocationContextStack::fresh(),
-            principal,
+            caller,
             None,
         )
         .await
@@ -237,26 +238,24 @@ async fn write_and_reconstruct(
             metadata.tools,
         )),
     );
-    let name = agent_id!("NapFetchOwner", format!("entity-blob-{fence}"));
+    let name = agent_key!("NapFetchOwner", format!("entity-blob-{fence}"));
     let id = executor.start_agent(&component.id, name.clone()).await?;
     let fingerprint = executor.get_worker_metadata(&id).await?.fingerprint;
-    let owner = OwnedAgentId::new(environment_id, &id);
+    let owner = OwnedAgentId::new(environment_id, &id.agent_id);
     let active = executor
         .production_active_agent(&owner)
         .await
         .context("existing durable owner")?;
     let worker = active.primary();
     let key = InvocationId(uuid::Uuid::new_v4());
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: context.account_id,
-    });
+    let caller = callers::account(context.account_id);
     storage.armed.store(true, Ordering::SeqCst);
     let mut invocation = Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn({
         let executor = executor.clone();
         let owner = owner.clone();
         let input = input.clone();
-        let principal = principal.clone();
-        async move { invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, principal).await }
+        let caller = caller.clone();
+        async move { invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, caller).await }
     })));
     storage.pending.notified().await;
     ensure!(!invocation.as_ref().unwrap().is_finished());
@@ -266,8 +265,8 @@ async fn write_and_reconstruct(
     ensure!(storage.dropped.load(Ordering::SeqCst) == 0);
     ensure!(!limits.try_record_blob_storage_delta(3));
     ensure!(service.mutation_failure(environment_id).is_none());
-    executor.commit_oplog(&id).await?;
-    let before = capture_snapshot(&executor, &id, worker.oplog()).await?;
+    executor.commit_oplog(&id.agent_id).await?;
+    let before = capture_snapshot(&executor, &id.agent_id, worker.oplog()).await?;
     let window = read_window(&before.public, &key, &input, 0)?;
     assert_terminals(&before.public, window, false)?;
     let slot = active
@@ -312,7 +311,7 @@ async fn write_and_reconstruct(
             futures::poll!(&mut competing).is_pending(),
             "caller loss released the environment mutex"
         );
-        let stopped = capture_snapshot(&executor, &id, worker.oplog()).await?;
+        let stopped = capture_snapshot(&executor, &id.agent_id, worker.oplog()).await?;
         assert_prefix(&before, &stopped)?;
         ensure!(read_window(&stopped.public, &key, &input, 0)? == window);
         assert_terminals(&stopped.public, window, false)?;
@@ -334,21 +333,13 @@ async fn write_and_reconstruct(
     assert_bytes(&storage, environment_id, b"1357").await?;
     assert_exact_stock_eight(&service, limits.clone(), environment_id).await?;
     if let Some(stopped) = stopped {
-        let settled = capture_snapshot(&executor, &id, worker.oplog()).await?;
+        let settled = capture_snapshot(&executor, &id.agent_id, worker.oplog()).await?;
         assert_snapshots_equal(&stopped, &settled)
             .context("service settlement wrote or changed an owner-oplog record")?;
         assert_terminals(&settled.public, window, false)?;
         executor.resume(&id, false).await?;
         assert_output(
-            invoke_blob_tool(
-                &executor,
-                &owner,
-                fingerprint,
-                &key,
-                &input,
-                principal.clone(),
-            )
-            .await?,
+            invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, caller.clone()).await?,
         )?;
     } else {
         assert_output(invocation.take().unwrap().await??)?;
@@ -358,7 +349,8 @@ async fn write_and_reconstruct(
         .production_active_agent(&owner)
         .await
         .context("completed durable owner")?;
-    let completed = capture_snapshot(&executor, &id, completed_owner.primary().oplog()).await?;
+    let completed =
+        capture_snapshot(&executor, &id.agent_id, completed_owner.primary().oplog()).await?;
     assert_prefix(&before, &completed)?;
     ensure!(read_window(&completed.public, &key, &input, 1)? == window);
     assert_terminals(&completed.public, window, true)?;
@@ -375,9 +367,7 @@ async fn write_and_reconstruct(
     ensure!(storage.entered.load(Ordering::SeqCst) == expected_puts);
     ensure!(storage.effects.load(Ordering::SeqCst) == expected_puts);
     assert_bytes(&storage, environment_id, b"1357").await?;
-    assert_output(
-        invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, principal).await?,
-    )?;
+    assert_output(invoke_blob_tool(&executor, &owner, fingerprint, &key, &input, caller).await?)?;
     ensure!(storage.effects.load(Ordering::SeqCst) == expected_puts);
 
     executor.shutdown_and_wait_for_invocation_loops().await?;
@@ -395,8 +385,12 @@ async fn write_and_reconstruct(
         .production_active_agent(&owner)
         .await
         .context("reconstructed durable owner")?;
-    let reconstructed =
-        capture_snapshot(&executor, &id, reconstructed_owner.primary().oplog()).await?;
+    let reconstructed = capture_snapshot(
+        &executor,
+        &id.agent_id,
+        reconstructed_owner.primary().oplog(),
+    )
+    .await?;
     assert_prefix(&completed, &reconstructed)?;
     ensure!(read_window(&reconstructed.public, &key, &input, 1)? == window);
     assert_terminals(&reconstructed.public, window, true)?;
@@ -673,7 +667,12 @@ async fn capture_snapshot(
     id: &AgentId,
     oplog: Arc<dyn Oplog>,
 ) -> anyhow::Result<OplogSnapshot> {
-    let public = executor.get_oplog(id, OplogIndex::INITIAL).await?;
+    let public = executor
+        .get_oplog(
+            &OwnedAgentId::new(executor.context.default_environment_id, id),
+            OplogIndex::INITIAL,
+        )
+        .await?;
     // This reads the stored service, not the live actor's buffered objects. Keep the full
     // raw snapshot even if an append advanced its tip after the public query.
     let raw = executor.stored_oplog(id).await;
@@ -990,7 +989,7 @@ fn oracle_fixture() -> OplogSnapshot {
     let input = data_value!("first", "second");
     let payload = AgentInvocationPayload::AgentInitialization {
         input: input.value().clone(),
-        principal: Principal::anonymous(),
+        caller: callers::anonymous(),
     };
     let key = InvocationId(uuid::Uuid::from_u128(1));
     let token = WalletVersionToken {

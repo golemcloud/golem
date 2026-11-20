@@ -95,6 +95,8 @@ pub enum StructuralFormatError {
     DuplicateMapKey(String),
     #[error("Payload mismatch: {0}")]
     PayloadMismatch(String),
+    #[error("Agent key is too long: {length} bytes, max length: {max_length}")]
+    KeyTooLong { length: usize, max_length: usize },
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────

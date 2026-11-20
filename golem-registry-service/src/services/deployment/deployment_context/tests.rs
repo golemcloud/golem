@@ -1639,11 +1639,13 @@ fn test_tool(name: &str) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: name.to_string(),
                 aliases: Vec::new(),
                 doc: Doc::default(),
+                http: None,
                 globals: Globals::default(),
                 subcommands: Vec::new(),
                 body: None,
@@ -1658,6 +1660,7 @@ fn executable_test_tool(root: &str, command: &str) -> Tool {
         name: name.to_string(),
         aliases: Vec::new(),
         doc: Doc::default(),
+        http: None,
         globals: Globals::default(),
         subcommands,
         body,
@@ -1677,6 +1680,7 @@ fn executable_test_tool(root: &str, command: &str) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![
                 node(root, vec![CommandIndex(1)], None),
@@ -1749,6 +1753,7 @@ fn test_tool_component(name: &str, tools: BTreeMap<ToolName, ToolDeploymentMetad
         ),
         created_at: chrono::Utc::now(),
         wasm_hash: diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: String::new(),
     }
 }

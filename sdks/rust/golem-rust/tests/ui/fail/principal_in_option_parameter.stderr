@@ -1,0 +1,29 @@
+error[E0080]: evaluation panicked: Principal and Caller cannot appear in a method, constructor or tool signature, or inside a value type. Read the caller with ctx.caller() (golem_rust::agentic::InvocationContext), and store ctx.caller().original().principal_ref() as a PrincipalRef.
+ --> $RUST/core/src/panic.rs
+  |
+  = note: evaluation of `golem_rust::caller::Rule8::<std::option::Option<golem_rust::caller::Caller>>::REJECTED` failed here
+  |
+ ::: src/caller.rs
+  |
+  |     pub const REJECTED: () = panic!(rule_8_message!());
+  |                              ------------------------- in this macro invocation
+
+note: erroneous constant encountered
+ --> src/agentic/agent.rs
+  |
+  |         let () = Rule8::<T>::REJECTED;
+  |                  ^^^^^^^^^^^^^^^^^^^^
+
+note: the above error was encountered while instantiating `fn <&golem_rust::agentic::AgentParameterProbe<std::option::Option<golem_rust::caller::Caller>> as golem_rust::agentic::AgentParameterSchema>::parameter_schema`
+ --> tests/ui/fail/principal_in_option_parameter.rs:4:1
+  |
+4 | #[agent_definition]
+  | ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the attribute macro `agent_definition` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: erroneous constant encountered
+ --> src/agentic/agent.rs
+  |
+  |         let () = Rule8::<T>::REJECTED;
+  |                  ^^^^^^^^^^^^^^^^^^^^

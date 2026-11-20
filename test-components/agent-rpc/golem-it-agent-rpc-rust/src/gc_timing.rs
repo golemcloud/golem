@@ -201,12 +201,8 @@ fn decode_u64(tree: golem_rust::schema::wit::wire::SchemaValueTree) -> u64 {
 }
 
 fn target(name: &str) -> WasmRpc {
-    WasmRpc::new(
-        "GcTimingTarget",
-        encode_single_parameter(name.to_string()),
-        None,
-        Vec::new(),
-    )
+    WasmRpc::upsert("GcTimingTarget", encode_single_parameter(name.to_string()))
+        .expect("failed to create the RPC client")
 }
 
 fn increment(rpc: &WasmRpc) -> u64 {
@@ -383,12 +379,11 @@ impl GcTimingCaller for GcTimingCallerImpl {
         cancel: bool,
         promise_id: PromiseId,
     ) -> u64 {
-        let blocking = WasmRpc::new(
+        let blocking = WasmRpc::upsert(
             "RpcBlockingCounter",
             encode_single_parameter(blocking_counter),
-            None,
-            Vec::new(),
-        );
+        )
+        .expect("failed to create the RPC client");
         let future = blocking
             .async_invoke_and_await("inc_after_promise", encode_single_parameter(gate), None)
             .future;

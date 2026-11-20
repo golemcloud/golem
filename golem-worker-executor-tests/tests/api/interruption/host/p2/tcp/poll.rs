@@ -6,6 +6,7 @@ use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -111,14 +112,14 @@ async fn pending_block(
         .store()
         .await?;
     let seed_id = executor
-        .start_agent(&component.id, agent_id!("Networking", "p2-block-seed"))
+        .start_agent(&component.id, agent_key!("Networking", "p2-block-seed"))
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -132,25 +133,21 @@ async fn pending_block(
     }
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("Networking", "monthly-p2-block")
+        agent_key!("Networking", "monthly-p2-block")
     } else {
-        agent_id!("EphemeralNetworking", "monthly-p2-block")
+        agent_key!("EphemeralNetworking", "monthly-p2-block")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                "tcp_input_block_p2",
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        "tcp_input_block_p2",
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -158,7 +155,16 @@ async fn pending_block(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            "tcp_input_block_p2",
+        ),
     )
     .await?;
     let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
@@ -215,7 +221,7 @@ async fn pending_block(
         let poll_start = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 let polls = poll_starts(&entries);
                 if polls.len() == 2 {
                     ensure!(
@@ -340,7 +346,7 @@ async fn pending_block(
         if let Some(refresh) = refresh {
             refresh.await?;
         }
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let mut retained_raw = read_stored().await?;
         ensure!(retained_raw.range(..=prefix_last).eq(prefix.iter()), "the complete committed input-poll prefix must survive stop");
         ensure!(retained_raw.values().all(|entry| !matches!(entry, OplogEntry::Jump { .. })));
@@ -433,7 +439,7 @@ async fn pending_block(
             applied_refresh(&limits, &registry, context.account_id)
                 .await?
                 .await?;
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             if repeat_stop {
                 let (mut replay_peer, _) =
                     tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
@@ -447,7 +453,7 @@ async fn pending_block(
                     _ => None,
                 }).context("recorded-true connect ready Start")?;
                 ensure!(terminal_count(&stopped, ready_start) == 1);
-                let reconstructed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let reconstructed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 ensure!(terminal_count(&reconstructed, connect_start) == 1);
                 ensure!(terminal_count(&reconstructed, ready_start) == 1);
                 ensure!(terminal_count(&reconstructed, poll_start) == 0);
@@ -469,7 +475,7 @@ async fn pending_block(
                 tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test()).await??;
                 refresh.await?;
                 ensure!(!invocation.is_finished());
-                let replay_stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let replay_stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 let replay_raw = read_stored().await?;
                 let retained_last = *retained_raw.last_key_value().unwrap().0;
                 ensure!(replay_raw.range(..=retained_last).eq(retained_raw.iter()), "the full first stopped prefix must survive the repeated stop");
@@ -493,7 +499,7 @@ async fn pending_block(
                     "Repeated monthly stop retired native input after connect reconstruction; original terminals and retained input Start preserved");
                 registry.set_policy(grant);
                 applied_refresh(&limits, &registry, context.account_id).await?.await?;
-                executor.resume(&id, false).await?;
+                executor.resume(&owned, false).await?;
             }
             let (mut resumed_peer, _) =
                 tokio::time::timeout(Duration::from_secs(10), listener.accept())
@@ -509,7 +515,7 @@ async fn pending_block(
                 resumed == Ok(true),
                 "reconstructed P2 block returned {resumed:?}"
             );
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             let recovered_raw = read_stored().await?;
             let retained_last = *retained_raw.last_key_value().unwrap().0;
             ensure!(recovered_raw.range(..=retained_last).eq(retained_raw.iter()), "the full stopped prefix must survive ordinary P2 reconstruction");
@@ -535,7 +541,7 @@ async fn pending_block(
             ensure!(cached == Ok(true));
             ensure!(
                 count_agent_invocation_pair_since(
-                    &executor.get_oplog(&id, OplogIndex::INITIAL).await?,
+                    &executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
                     OplogIndex::INITIAL,
                 ) == (2, 2)
             );
@@ -574,7 +580,7 @@ async fn pending_block(
     // The deadline is a fixture bound, never evidence that interruption succeeded.
     drop(listener);
     if result.is_err() {
-        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&owned)).await;
         let _ = tokio::time::timeout(
             Duration::from_secs(10),
             worker.join_accepted_stops_for_test(),

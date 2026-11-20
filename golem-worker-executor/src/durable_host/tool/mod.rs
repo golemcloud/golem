@@ -178,8 +178,9 @@ use crate::workerctx::WorkerCtxExecutable;
 use anyhow::{Context, anyhow};
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::{Principal, ResolvedOwnerContext};
+use golem_common::model::agent::ResolvedOwnerContext;
 use golem_common::model::application::ApplicationName;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::card::{ToolArgPattern, ToolIdentifier, ToolInvocationValue};
 use golem_common::model::component::ComponentName;
@@ -516,7 +517,7 @@ struct ToolSidecarInvocation {
     stdin: Option<ToolBodyStdin>,
     stdout: Option<ToolOutputWriterEntry>,
     stderr: Option<ToolOutputWriterEntry>,
-    principal: Principal,
+    caller: Caller,
     output_contract: ToolOutputContract,
     result_streams: crate::durable_host::durable_session::StreamSession,
 }
@@ -552,7 +553,7 @@ struct NativeToolTask {
     stdin: bool,
     stdout: bool,
     stderr: bool,
-    principal: Principal,
+    caller: Caller,
     result: oneshot::Sender<ToolInvokeResponse>,
 }
 

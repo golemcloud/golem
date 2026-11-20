@@ -75,8 +75,7 @@ fn snapshotting_str(s : AgentSnapshotting) -> String {
 }
 
 ///|
-/// Renders a method's `read_only` field. `uses_principal` is derived from the
-/// method signature (presence of a `Principal` parameter), never user input.
+/// Renders a method's `read_only` field.
 fn read_only_str(info : MethodInfo) -> String {
   match info.read_only {
     None => "None"
@@ -86,13 +85,10 @@ fn read_only_str(info : MethodInfo) -> String {
         UntilWrite => "@common.CachePolicy::UntilWrite"
         Ttl(n) => "@common.CachePolicy::Ttl(\{n}UL)"
       }
-      let uses_principal = info.params
-        .iter()
-        .any(fn(p) { is_principal_type(p.1) })
       // Parenthesized type-annotated record (not `@common.ReadOnlyConfig::{...}`):
       // the formatter (0.1.5) crashes when a call's trailing argument is a
       // qualified struct-constructor literal, so we wrap a plain record literal.
-      "Some(({ cache_policy: \{cp}, uses_principal: \{uses_principal} } : @common.ReadOnlyConfig))"
+      "Some(({ cache_policy: \{cp} } : @common.ReadOnlyConfig))"
     }
   }
 }
@@ -100,12 +96,8 @@ fn read_only_str(info : MethodInfo) -> String {
 ///|
 /// Renders the source and wire type index of a single input parameter.
 fn input_param_source_str(pt : ParamType) -> String {
-  if is_principal_type(pt) {
-    "@common.FieldSource::AutoInjected(@common.AutoInjectedKind::PRINCIPAL), schema: schema_encoder.push(@types.RecordType([]))"
-  } else {
-    let ts = param_type_to_type_string(pt)
-    "@common.FieldSource::UserSupplied, schema: @schema.append_wire_type_with(schema_encoder, (@schema.TypeTag::{  } : @schema.TypeTag[\{ts}]))"
-  }
+  let ts = param_type_to_type_string(pt)
+  "@common.FieldSource::UserSupplied, schema: @schema.append_wire_type_with(schema_encoder, (@schema.TypeTag::{  } : @schema.TypeTag[\{ts}]))"
 }
 
 ///|
@@ -118,7 +110,7 @@ fn emit_input_params(
 ) -> Unit {
   for p in params {
     let (name, pt) = p
-    if !is_config_type(pt) {
+    if !is_config_type(pt) && !is_invocation_context_type(pt) {
       buf.write_string(
         "\{indent}{ name: \"\{escape_string_lit(name)}\", source: \{input_param_source_str(pt)}, metadata: @schema.empty_wire_metadata() },\n",
       )
@@ -245,8 +237,8 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
   let user_params = visible_params(agent.constructor_params)
   let arity = user_params.length()
   let ctx = escape_string_lit("\{agent.name}::new")
-  buf.write_string("      construct: async fn(input, principal) {\n")
-  buf.write_string("        let _ = principal\n")
+  buf.write_string("      construct: async fn(input, context) {\n")
+  buf.write_string("        let _ = context\n")
   buf.write_string("        try {\n")
   buf.write_string(
     "          let params = @agents.decode_wire_input(input, \{arity}, \"\{ctx}\")\n          defer params.abort()\n",
@@ -265,7 +257,7 @@ fn emit_construct(buf : StringBuilder, agent : AgentInfo) -> Unit {
     None => ()
   }
   let args = agent.constructor_params
-    .map(fn(p) { if is_principal_type(p.1) { "principal" } else { p.0 } })
+    .map(fn(p) { if is_invocation_context_type(p.1) { "context" } else { p.0 } })
     .join(", ")
   buf.write_string("          params.finish()\n")
   buf.write_string("          let agent = \{agent.name}::new(\{args})\n")
@@ -403,7 +395,7 @@ fn emit_method_arm(
   }
   buf.write_string("        params.finish()\n")
   let args = m.params
-    .map(fn(p) { if is_principal_type(p.1) { "principal" } else { p.0 } })
+    .map(fn(p) { if is_invocation_context_type(p.1) { "context" } else { p.0 } })
     .join(", ")
   match m.return_type {
     None => {
@@ -423,9 +415,9 @@ fn emit_method_arm(
 fn emit_raw_agent(buf : StringBuilder, agent : AgentInfo) -> Unit {
   buf.write_string("///|\n#warnings(\"-partial_match\")\n")
   buf.write_string(
-    "impl @agents.RawAgent for \{agent.name} with invoke(self, method_name, input, principal) {\n",
+    "impl @agents.RawAgent for \{agent.name} with invoke(self, method_name, input, context) {\n",
   )
-  buf.write_string("  let _ = principal\n")
+  buf.write_string("  let _ = context\n")
   buf.write_string("  try {\n")
   buf.write_string("    match method_name {\n")
   for m in agent.methods {

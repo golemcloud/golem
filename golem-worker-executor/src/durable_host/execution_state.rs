@@ -32,7 +32,7 @@ use crate::services::card_interest::CardInterestContribution;
 use crate::worker::owner_lane::OwnerInvocationId;
 use chrono::{DateTime, Utc};
 use golem_common::model::OwnedInvocationId;
-use golem_common::model::agent::Principal;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, EffectiveSurface, ScopeCard, StoredCard};
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::OplogIndex;
@@ -307,8 +307,9 @@ impl InvocationAuthority {
 pub struct InvocationExecutionState {
     /// The `AgentInvocationStarted` index of a primary-Store invocation, once it is recorded.
     pub start_index: Option<OplogIndex>,
-    /// The principal the running export call acts for.
-    pub principal: Option<Principal>,
+    /// The caller of the running export call. The executor reads it through
+    /// `invocation_caller`, which falls back to the agent itself in both roles.
+    pub caller: Option<Caller>,
     /// The ID of the running export call, when it is an invocation with an invocation ID.
     pub invocation_id: Option<OwnedInvocationId>,
     /// The spans of the invocation's invocation context.
@@ -353,7 +354,7 @@ impl Default for InvocationExecutionState {
         let current_span_id = invocation_context.root.span_id().clone();
         Self {
             start_index: None,
-            principal: None,
+            caller: None,
             invocation_id: None,
             invocation_context,
             current_span_id,
@@ -393,7 +394,7 @@ impl Invocations {
 
     /// Begins the entry of the invocation the loop runs next, replacing the previous
     /// invocation's entry. The new entry starts from the state of the invocation that ran
-    /// before, until the loop sets the new invocation's own start index, context and principal.
+    /// before, until the loop sets the new invocation's own start index, context and caller.
     pub fn begin(&mut self, key: InvocationKey) {
         if key == self.loop_key {
             return;

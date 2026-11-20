@@ -99,9 +99,9 @@ fn events(&mut self, input: AgentStream<u8>) -> AgentStream<u8>;
 - Reader and append limits must be positive and no greater than the installation maximums. Omitted values use the registry installation defaults.
 - Limits are maintained per route and worker-service node, not as a cluster-wide quota.
 
-## Phantom Agents
+## A New Agent per Request
 
-Set `phantom_agent = true` to create a new agent instance for each HTTP request, enabling fully parallel processing:
+Set `phantom_agent = true` to create a new agent without a key, with a new agent ID, for each HTTP request, enabling fully parallel processing:
 
 ```rust
 #[agent_definition(mount = "/gateway/{name}", phantom_agent = true)]

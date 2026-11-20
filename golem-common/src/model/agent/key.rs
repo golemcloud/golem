@@ -15,10 +15,8 @@
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 
-use super::structural_format::{
-    StructuralFormatError, format_structural_typed, normalize_structural, parse_structural_typed,
-};
-use super::{AgentTypeName, AgentTypeSchemaResolver, parse_agent_id_parts};
+use super::structural_format::{StructuralFormatError, format_structural_typed};
+use super::{AgentTypeName, AgentTypeSchemaResolver, parse_agent_key_parts};
 use crate::schema::AgentTypeSchema;
 use crate::schema::graph::TypedSchemaValue;
 
@@ -36,13 +34,24 @@ pub struct AgentKey {
 }
 
 impl AgentKey {
+    /// The maximum length in bytes of the canonical `Type(params)` text.
+    pub const MAX_LENGTH: usize = 512;
+
     /// Fails when the parameters have no canonical text, for example a map with
-    /// duplicate keys or a value whose payload does not match its case.
+    /// duplicate keys or a value whose payload does not match its case, and when the
+    /// canonical text is longer than [`Self::MAX_LENGTH`] bytes.
     pub fn new(
         agent_type: AgentTypeName,
         parameters: TypedSchemaValue,
     ) -> Result<Self, StructuralFormatError> {
         let canonical_params = format_structural_typed(&parameters)?;
+        let length = agent_type.0.len() + canonical_params.len() + 2;
+        if length > Self::MAX_LENGTH {
+            return Err(StructuralFormatError::KeyTooLong {
+                length,
+                max_length: Self::MAX_LENGTH,
+            });
+        }
         Ok(Self {
             agent_type,
             parameters,
@@ -57,10 +66,7 @@ impl AgentKey {
         s: &str,
         resolver: impl AgentTypeSchemaResolver,
     ) -> Result<(Self, AgentTypeSchema), String> {
-        let (agent_type_name, param_list, phantom_id) = parse_agent_id_parts(s)?;
-        if phantom_id.is_some() {
-            return Err(format!("An agent key has no phantom ID suffix, got: {s}"));
-        }
+        let (agent_type_name, param_list) = parse_agent_key_parts(s)?;
         Self::parse_parts(agent_type_name, param_list, resolver)
     }
 
@@ -71,12 +77,9 @@ impl AgentKey {
     ) -> Result<(Self, AgentTypeSchema), String> {
         let agent_type_name = AgentTypeName(agent_type_name.to_string());
         let agent_type = resolver.resolve_agent_type_schema_by_name(&agent_type_name)?;
-        let root = super::constructor_parameter_record(&agent_type);
-        let value =
-            parse_structural_typed(&normalize_structural(param_list), &agent_type.schema, &root)
-                .map_err(|e| e.to_string())?;
-        let parameters = super::typed_constructor_parameters(&agent_type, value);
-        let key = Self::new(agent_type_name, parameters).map_err(|e| e.to_string())?;
+        let constructor =
+            super::ParsedAgentKey::parse_parameters(&agent_type_name, param_list, &agent_type)?;
+        let key = Self::new(agent_type_name, constructor.parameters).map_err(|e| e.to_string())?;
         Ok((key, agent_type))
     }
 

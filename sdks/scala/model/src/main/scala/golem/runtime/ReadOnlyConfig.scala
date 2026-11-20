@@ -66,11 +66,7 @@ object CachePolicy {
  *
  * @param cachePolicy
  *   The cache policy the host may apply to invocations of this method.
- * @param usesPrincipal
- *   Whether the method receives the invocation principal (derived from the
- *   method signature; the user does not set this directly).
  */
 final case class ReadOnlyConfig(
-  cachePolicy: CachePolicy,
-  usesPrincipal: Boolean
+  cachePolicy: CachePolicy
 )

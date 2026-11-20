@@ -24,7 +24,7 @@ import scala.quoted.*
 /**
  * Compile-time parsing and classification shared by the tool macros: reads a
  * `@toolDefinition` trait into an IR, classifies every method parameter into
- * its command surface (global/option/flag/positional/tail/stream/principal),
+ * its command surface (global/option/flag/positional/tail/stream/context),
  * infers the tail positional and its re-projection plan, and validates the
  * authoring surface with the same rules as the Rust SDK's `#[tool_definition]`
  * macro.
@@ -47,7 +47,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
   private val ValueIsFQN                 = "golem.runtime.annotations.ValueIs"
   private val ImpliesFQN                 = "golem.runtime.annotations.Implies"
   private val ForbidsFQN                 = "golem.runtime.annotations.Forbids"
-  private val PrincipalFQN               = "golem.Principal"
+  private val InvocationContextFQN       = "golem.InvocationContext"
   private val StdinFQN                   = "golem.tool.ToolInputStream"
   private val StdoutFQN                  = "golem.tool.ToolOutputStream"
 
@@ -669,8 +669,8 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
   // Type helpers
   // -------------------------------------------------------------------------
 
-  def isPrincipal(tpe: TypeRepr): Boolean =
-    tpe.dealias.typeSymbol.fullName == PrincipalFQN
+  def isInvocationContext(tpe: TypeRepr): Boolean =
+    tpe.dealias.typeSymbol.fullName == InvocationContextFQN
 
   def isStdin(tpe: TypeRepr): Boolean =
     tpe.dealias.typeSymbol.fullName == StdinFQN
@@ -784,6 +784,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     toolName: String,
     version: String,
     requiresFilesystem: Boolean,
+    httpMount: Option[ToolHttpMount],
     traitDoc: Doc,
     rootMethod: Option[MethodIR],
     childMethods: List[MethodIR]
@@ -797,7 +798,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     val toolDefAnns = annotationsOf(traitSym, ToolDefinitionFQN)
     if (toolDefAnns.isEmpty)
       report.errorAndAbort(s"missing @toolDefinition(...) on tool trait: ${traitSym.fullName}")
-    val toolDefValues = annotationValues(toolDefAnns.head, List("name", "version", "requiresFilesystem"))
+    val toolDefValues = annotationValues(toolDefAnns.head, List("name", "version", "requiresFilesystem", "mount"))
     val explicitName  =
       toolDefValues.get("name").map(constString(_, "name", toolDefAnns.head.pos)).filter(_.nonEmpty)
     val version =
@@ -854,6 +855,8 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
       toolName = toolName,
       version = version,
       requiresFilesystem = requiresFilesystem,
+      httpMount =
+        toolDefValues.get("mount").map(value => ToolHttpMount(httpPath(constString(value, "mount", value.pos)))),
       traitDoc = docOf(traitSym),
       rootMethod = rootCandidates.headOption,
       childMethods = children
@@ -861,6 +864,47 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
   }
 
   private def quoteStr(s: String): String = "\"" + s + "\""
+
+  private def httpPath(value: String): List[golem.runtime.http.PathSegment] = {
+    import golem.runtime.http.*
+    val parsed = HttpRouteParser.parse(value).fold(report.errorAndAbort(_), identity)
+    if (parsed.queryVars.nonEmpty) report.errorAndAbort("tool mounts and prefixes cannot contain query bindings")
+    if (parsed.pathSegments.exists(_.isInstanceOf[PathSegment.SystemVariable]))
+      report.errorAndAbort("tool HTTP paths cannot contain system variables")
+    parsed.pathSegments
+  }
+
+  def commandHttp(method: Symbol): Option[CommandHttp] = {
+    import golem.runtime.http.*
+    val anns = annotationsOf(method, "golem.runtime.annotations.endpoint")
+    if (anns.size > 1) report.errorAndAbort("a tool command accepts at most one @endpoint")
+    anns.headOption.map { ann =>
+      val values =
+        annotationValues(ann, List("method", "path", "auth", "cors", "mode", "prefix", "routeId", "responseHeaders"))
+      if (values.contains("auth") || values.contains("cors"))
+        report.errorAndAbort("tool endpoints do not accept auth or cors")
+      values.get("prefix") match {
+        case Some(prefix) =>
+          if (values.keySet != Set("prefix")) report.errorAndAbort("a tool prefix cannot contain endpoint options")
+          CommandHttp.Prefix(httpPath(constString(prefix, "prefix", prefix.pos)))
+        case None =>
+          val endpoints = AgentDefinitionMacro.extractEndpoints(method, AgentDefinitionMacro.extractHeaderVars(method))
+          val endpoint  = endpoints.head
+          if (endpoint.pathSuffix.exists(_.isInstanceOf[PathSegment.SystemVariable]))
+            report.errorAndAbort("tool HTTP paths cannot contain system variables")
+          CommandHttp.Endpoint(
+            values.get("routeId").map(v => constString(v, "routeId", v.pos)),
+            endpoint.httpMethod,
+            endpoint.pathSuffix,
+            endpoint.queryVars,
+            endpoint.headerVars,
+            HttpDeclarationMacro.headerValues(method, "endpoint", 7, "responseHeaders"),
+            endpoint.mode,
+            endpoint.durableStreams
+          )
+      }
+    }
+  }
 
   private def parseMethod(sym: Symbol, toolName: String): MethodIR = {
     val pos = sym.pos.getOrElse(Position.ofMacroExpansion)
@@ -946,6 +990,9 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     val paramsWithArgs = params.map(p => p.copy(arg = bound.get(p.name)))
 
     val shape = returnShape(defdef.returnTpt.tpe)
+    // Rule 8: a Principal, a Caller and a TokenProvenance are live values, never data.
+    paramsWithArgs.foreach(p => LiveValueCheck.reject(s"Parameter '${p.name}' of tool method '${sym.name}'", p.tpe))
+    LiveValueCheck.reject(s"Result of tool method '${sym.name}'", defdef.returnTpt.tpe)
 
     val subtreeTrait =
       if (isToolDefinitionTrait(shape.raw)) Some(shape.raw.dealias) else None
@@ -1035,7 +1082,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
   sealed trait ParamBindingIR
   object ParamBindingIR {
     final case class Field(canonicalName: String, tpe: TypeRepr, countFlag: Boolean = false) extends ParamBindingIR
-    case object PrincipalB                                                                   extends ParamBindingIR
+    case object InvocationContextB                                                           extends ParamBindingIR
     case object StdinB                                                                       extends ParamBindingIR
     case object StdoutB                                                                      extends ParamBindingIR
     case object StderrB                                                                      extends ParamBindingIR
@@ -1109,7 +1156,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
 
     // ---- tail inference indices ------------------------------------------
     def positionalEligible(p: ParamIR): Boolean =
-      if (isPrincipal(p.tpe) || isStdin(p.tpe) || isStdout(p.tpe)) false
+      if (isInvocationContext(p.tpe) || isStdin(p.tpe) || isStdout(p.tpe)) false
       else {
         val a     = p.arg
         val scope = a.flatMap(_.scope)
@@ -1225,14 +1272,14 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     m.params.zipWithIndex.foreach { case (p, idx) =>
       val a = p.arg
 
-      if (isPrincipal(p.tpe)) {
+      if (isInvocationContext(p.tpe)) {
         if (a.isDefined)
           perr(
-            "auto-injected Principal parameters cannot have @arg annotations because they are not " +
+            "auto-injected InvocationContext parameters cannot have @arg annotations because they are not " +
               "part of the tool input schema",
             p
           )
-        bindings :+= ParamBindingIR.PrincipalB
+        bindings :+= ParamBindingIR.InvocationContextB
       } else if (isStdin(p.tpe) || isStdout(p.tpe)) {
         a.foreach { arg =>
           if (arg.scope.isDefined)
@@ -1684,7 +1731,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     // Classify as an isolated global-only command; anything that does not
     // project to a global option/flag is rejected.
     val globalized = m.copy(params = m.params.map { p =>
-      if (isPrincipal(p.tpe) || isStdin(p.tpe) || isStdout(p.tpe))
+      if (isInvocationContext(p.tpe) || isStdin(p.tpe) || isStdout(p.tpe))
         report.errorAndAbort(
           "a subtree method parameter must project to a global option or flag",
           p.sym.pos.getOrElse(pos)

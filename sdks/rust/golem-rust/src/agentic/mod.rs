@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use crate::golem_agentic::golem::agent::common::Principal;
+pub use crate::caller::{
+    AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, InvocationContext, Principal,
+    PrincipalKind, PrincipalRef, PrincipalRefParseError, TokenProvenance, ToolPrincipal,
+    UserPrincipal,
+};
 pub type InputStream = wit_bindgen::StreamReader<
     Result<Vec<u8>, crate::golem_agentic::golem::tool::streams::ByteStreamFailure>,
 >;
@@ -34,7 +38,8 @@ pub use golem_tool_metadata::{WireToolSchema, WireTypeRef};
 pub use http::*;
 #[doc(hidden)]
 pub use identity::{
-    __agent_proxy, __agent_proxy_or_panic, __bind_self, __connect_agent, __connect_agent_or_panic,
+    __agent_id, __bind_self, __create_agent, __get_agent_by_id, __upsert_agent,
+    __upsert_agent_or_panic,
 };
 pub use multimodal::*;
 pub use resolved_agent::*;
@@ -56,11 +61,6 @@ pub use unstructured_binary::*;
 pub use unstructured_text::*;
 pub use webhook::*;
 pub use wit_bindgen::spawn_local;
-
-/// Returns the immediate caller of the running invocation, as recorded by the host.
-pub(crate) fn immediate_caller() -> crate::golem_agentic::golem::agent::common::Principal {
-    crate::golem_agentic::golem::agent::invocation_context::caller().immediate
-}
 
 #[derive(Debug)]
 pub struct EphemeralInvocationResult<T> {

@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
     AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
@@ -43,10 +44,14 @@ impl From<EnvironmentOwnerAccountId> for AccountId {
 /// Service that encapsulates agent authorization checks for local RPC calls.
 #[async_trait]
 pub trait DirectInvocationAuthService: Send + Sync {
+    /// `component_id` and `agent_type` are those of the agent's owner: from its Create entry
+    /// when it exists, otherwise from the request that creates it.
     async fn check(
         &self,
         caller_account_id: AccountId,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
+        agent_type: Option<AgentTypeName>,
         verb: AgentVerb,
         resource: AgentResourcePattern,
         auth_ctx: &AuthCtx,
@@ -123,15 +128,21 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
         &self,
         _caller_account_id: AccountId,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
+        agent_type: Option<AgentTypeName>,
         verb: AgentVerb,
         resource: AgentResourcePattern,
         auth_ctx: &AuthCtx,
     ) -> Result<EnvironmentOwnerAccountId, RpcError> {
         let component = self
-            .get_component(owned_agent_id.component_id())
+            .get_component(component_id)
             .await?
+            .filter(|component| component.environment_id == owned_agent_id.environment_id)
             .ok_or_else(|| RpcError::Denied {
-                details: format!("Component {} not found", owned_agent_id.component_id()),
+                details: format!(
+                    "Component {component_id} not found in environment {}",
+                    owned_agent_id.environment_id
+                ),
             })?;
 
         auth_ctx
@@ -141,7 +152,7 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
                     application: component.application_name.clone(),
                     environment: component.environment_name.clone(),
                     component: component.component_name.clone(),
-                    agent: AgentOwnerLeafPattern::Agent(owned_agent_id.agent_name()),
+                    agent: AgentOwnerLeafPattern::agent(owned_agent_id.agent_id(), agent_type),
                 },
                 verb: Some(verb),
                 resource,
@@ -165,6 +176,8 @@ impl DirectInvocationAuthService for NoOpDirectInvocationAuthService {
         &self,
         caller_account_id: AccountId,
         _owned_agent_id: &OwnedAgentId,
+        _component_id: ComponentId,
+        _agent_type: Option<AgentTypeName>,
         _verb: AgentVerb,
         _resource: AgentResourcePattern,
         _auth_ctx: &AuthCtx,

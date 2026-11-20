@@ -20,6 +20,7 @@ use crate::preview2::golem_api_1_x::retry::{
 };
 use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::host_functions::{
     GolemApiRetryGetRetryPolicies, GolemApiRetryGetRetryPolicyByName,
     GolemApiRetryResolveRetryPolicy,
@@ -31,6 +32,7 @@ use golem_common::model::oplog::{
     HostResponseGolemRetryResolvedPolicy, OplogEntry,
 };
 use golem_common::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryContext};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn next_retry_delay(
@@ -203,16 +205,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
-        } else if let Some((_, entry)) = self
+        } else if let Some((index, entry)) = self
             .get_oplog_entry_or_continue_live(SerializableToolPositionalRequest::SetRetryPolicy)
             .await?
         {
-            if !matches!(entry, OplogEntry::SetRetryPolicy { .. }) {
-                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
-                    "SetRetryPolicy",
-                    format!("{entry:?}"),
-                ).into());
-            }
+            check_recorded_change(
+                index,
+                &entry,
+                SerializableToolPositionalRequest::SetRetryPolicy,
+            )?;
         } else {
             self.public_state
                 .worker()
@@ -232,16 +233,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
-        } else if let Some((_, entry)) = self
+        } else if let Some((index, entry)) = self
             .get_oplog_entry_or_continue_live(SerializableToolPositionalRequest::RemoveRetryPolicy)
             .await?
         {
-            if !matches!(entry, OplogEntry::RemoveRetryPolicy { .. }) {
-                return Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
-                    "RemoveRetryPolicy",
-                    format!("{entry:?}"),
-                ).into());
-            }
+            check_recorded_change(
+                index,
+                &entry,
+                SerializableToolPositionalRequest::RemoveRetryPolicy,
+            )?;
         } else {
             self.public_state
                 .worker()
@@ -254,5 +254,68 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         self.state.apply_remove_retry_policy(&name);
         Ok(())
+    }
+}
+
+/// Checks that the recorded `entry` at `index` is the retry-policy change that the replay makes.
+fn check_recorded_change(
+    index: OplogIndex,
+    entry: &OplogEntry,
+    replayed: SerializableToolPositionalRequest,
+) -> Result<(), WorkerExecutorError> {
+    match (&replayed, entry) {
+        (SerializableToolPositionalRequest::SetRetryPolicy, OplogEntry::SetRetryPolicy { .. })
+        | (
+            SerializableToolPositionalRequest::RemoveRetryPolicy,
+            OplogEntry::RemoveRetryPolicy { .. },
+        ) => Ok(()),
+        _ => Err(WorkerExecutorError::unexpected_oplog_entry(
+            index,
+            format!("{entry:?}"),
+            format!("{replayed:?}"),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::oplog::ReplayStep;
+    use test_r::test;
+
+    #[test]
+    fn a_replayed_change_that_differs_from_the_recorded_one_is_the_actual_step() {
+        let recorded = OplogEntry::remove_retry_policy(None, "http-transient".to_string());
+
+        let error = check_recorded_change(
+            OplogIndex::from_u64(7),
+            &recorded,
+            SerializableToolPositionalRequest::SetRetryPolicy,
+        )
+        .unwrap_err();
+
+        let WorkerExecutorError::UnexpectedOplogEntry { divergence } = error else {
+            panic!("expected a replay divergence, got {error}");
+        };
+        assert_eq!(divergence.oplog_index, OplogIndex::from_u64(7));
+        let (ReplayStep::Other(expected), ReplayStep::Other(actual)) =
+            (&divergence.expected, &divergence.actual)
+        else {
+            panic!("expected described steps, got {divergence}");
+        };
+        assert!(
+            expected.description.starts_with("RemoveRetryPolicy"),
+            "the recorded entry is the expected step: {}",
+            expected.description
+        );
+        assert_eq!(actual.description, "SetRetryPolicy");
+        assert!(
+            check_recorded_change(
+                OplogIndex::from_u64(7),
+                &recorded,
+                SerializableToolPositionalRequest::RemoveRetryPolicy,
+            )
+            .is_ok()
+        );
     }
 }

@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
-use crate::model::InvocationId;
+use crate::model::{AgentId, InvocationId};
 use crate::schema::SchemaGraph;
 
 pub const INVOCATION_SESSION_SUBPROTOCOL: &str = "golem.agent-invocation.v1";
@@ -246,8 +246,6 @@ pub struct InvocationSelector {
     pub constructor_parameters: Value,
     pub environment: String,
     pub method: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub phantom_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -258,13 +256,8 @@ pub struct InvocationSelector {
     deny_unknown_fields
 )]
 pub enum PublicNativeToolTarget {
-    Agent {
-        component_id: Uuid,
-        agent_id: String,
-    },
-    Component {
-        component_id: Uuid,
-    },
+    Agent { agent_id: AgentId },
+    Component { component_id: Uuid },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -687,7 +680,7 @@ pub enum PublicServerMessage {
         #[serde(rename = "attemptId")]
         attempt_id: Uuid,
         #[serde(rename = "agentId")]
-        agent_id: crate::model::AgentId,
+        agent_id: AgentId,
         #[serde(rename = "idempotencyKey")]
         idempotency_key: InvocationId,
         mappings: Vec<PublicStreamMapping>,
@@ -1027,11 +1020,6 @@ fn prevalidate_uuid_fields(value: &Value) -> Result<(), PublicProtocolError> {
     if let Some(attempt_id) = object.get("attemptId") {
         validate_canonical_uuid(attempt_id, true, "attempt ID")?;
     }
-    if let Some(selector) = object.get("selector").and_then(Value::as_object)
-        && let Some(phantom_id) = selector.get("phantomId")
-    {
-        validate_canonical_uuid(phantom_id, false, "phantom ID")?;
-    }
     if let Some(mappings) = object.get("mappings").and_then(Value::as_array) {
         for mapping in mappings {
             if let Some(provisional_ref) = mapping
@@ -1141,12 +1129,12 @@ fn validate_client_message(message: &PublicClientMessage) -> Result<(), PublicPr
                     "tool start names, command path segments, and idempotency key must not be empty",
                 ));
             }
-            if let PublicNativeToolTarget::Agent { agent_id, .. } = target
-                && agent_id.is_empty()
+            if let PublicNativeToolTarget::Agent { agent_id } = target
+                && (!agent_id.is_issued() || agent_id.type_id().is_none())
             {
                 return Err(PublicProtocolError::new(
                     PublicErrorCode::ValidationError,
-                    "tool target agent ID must not be empty",
+                    "tool target agent ID must be a version 8 agent ID with an agent type tag",
                 ));
             }
         }
@@ -1214,10 +1202,10 @@ fn validate_server_message(message: &PublicServerMessage) -> Result<(), PublicPr
             ..
         } => {
             validate_uuid_v4(*attempt_id, "attempt ID")?;
-            if agent_id.agent_id.is_empty() {
+            if !agent_id.is_issued() {
                 return Err(PublicProtocolError::new(
                     PublicErrorCode::MalformedMessage,
-                    "accepted agent ID must not be empty",
+                    "accepted agent ID must be a version 8 agent ID",
                 ));
             }
             validate_token_text(session_token)?;
@@ -1643,6 +1631,39 @@ mod tests {
             }
             .unwrap();
             assert_eq!(encoded, vector.canonical);
+        }
+    }
+
+    #[test]
+    fn accepted_message_requires_an_issued_agent_id_of_any_tag() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../golem-client/tests/fixtures/stream-session-v1/json-messages.json"
+        )))
+        .unwrap();
+        let canonical = fixture["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|vector| vector["name"] == "invocation-accepted")
+            .unwrap()["canonical"]
+            .as_str()
+            .unwrap();
+        let with_agent_id = |agent_id: &str| {
+            let mut message: serde_json::Value = serde_json::from_str(canonical).unwrap();
+            message["agentId"] = serde_json::Value::String(agent_id.to_string());
+            decode_server_text(&serde_json::to_vec(&message).unwrap())
+        };
+        assert!(with_agent_id("00000000-0000-8000-8000-000000000004").is_ok());
+        for not_issued in [
+            "00000007-0000-4000-8000-000000000004",
+            "00000007-0000-8000-c000-000000000004",
+        ] {
+            assert_eq!(
+                with_agent_id(not_issued).unwrap_err().code,
+                PublicErrorCode::MalformedMessage,
+                "{not_issued}"
+            );
         }
     }
 

@@ -34,7 +34,7 @@ steps:
         named `items` parameter and success schema are arrays of `Schema.Number`.
 
         Implement `fanOut` by creating one remote-call Effect per item. Use the item's index as the
-        durable worker id, obtain it through `Worker.client.get({ id })`, and invoke
+        durable worker id, obtain the keyed worker through `Worker.client.upsert({ id })`, and invoke
         `compute({ value })`. Run and collect those Effects with `Effect.all` and explicit
         concurrent execution, preserving input order and returning an empty array for empty input.
         Handle or convert the typed RPC errors so the no-error public contract type-checks. Do not

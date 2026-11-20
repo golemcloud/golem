@@ -68,6 +68,8 @@ type Spec struct {
 	// RequiresFilesystem declares that the tool cannot work without a
 	// filesystem binding. It does not grant filesystem access.
 	RequiresFilesystem bool
+	// HTTP declares the tool's path-only HTTP mount.
+	HTTP *golem.Mount
 }
 
 // toolEntry is one tool: defined here and exported, or declared for calling.
@@ -104,6 +106,7 @@ type toolNode struct {
 	globals  *globalsDecl
 	children []*toolNode
 	body     *commandEntry
+	http     *toolCommon.CommandHttp
 }
 
 func (n *toolNode) label() string { return commandLabel(n.path) }
@@ -252,8 +255,17 @@ func (g *Group[T]) Aliases(names ...string) *Group[T] {
 }
 
 // Group declares a group of subcommands under this one.
-func (g *Group[T]) Group(name string) *Group[T] {
-	return &Group[T]{node: g.node.child(name)}
+func (g *Group[T]) Group(name string, opts ...golem.MethodOpt) *Group[T] {
+	node := g.node.child(name)
+	if len(opts) != 0 {
+		decl, err := golem.ToolHTTPDeclaration(opts...)
+		if err != nil {
+			node.entry.fail("command %s: %s", node.label(), err)
+		} else {
+			node.http = &decl
+		}
+	}
+	return &Group[T]{node: node}
 }
 
 // Globals declares options and flags that every command at or below this node
@@ -351,6 +363,13 @@ func declareBody[A any, O any](n *toolNode, spec func(*A, *CommandSpec), outputs
 		n.doc = d
 	}
 	n.aliases = append(n.aliases, s.settings.aliases...)
+	if s.settings.http != nil {
+		if n.http != nil {
+			e.fail("command %s declares HTTP more than once", n.label())
+		} else {
+			n.http = s.settings.http
+		}
+	}
 	n.body = ce
 	e.changed()
 	return ce
@@ -432,7 +451,6 @@ type commandLayout struct {
 	// (options before flags per node), positionals, the tail, options, flags.
 	fields      []boundArg
 	stdin       *stdinBinding
-	principal   []int
 	defaults    reflect.Value
 	constraints []toolCommon.Constraint
 	formatters  []toolCommon.Formatter
@@ -592,7 +610,6 @@ func (ce *commandEntry) resolve() (*commandLayout, bool) {
 	if l.stdin != nil {
 		bound[pathString(l.stdin.path)] = true
 	}
-	principalType := reflect.TypeFor[golem.Principal]()
 	var walk func(t reflect.Type, prefix []int)
 	walk = func(t reflect.Type, prefix []int) {
 		for i := range t.NumField() {
@@ -605,11 +622,8 @@ func (ce *commandEntry) resolve() (*commandLayout, bool) {
 					walk(f.Type, path)
 				}
 			case !f.IsExported():
-			case f.Type == principalType:
-				if l.principal != nil {
-					fail("has more than one golem.Principal field")
-				}
-				l.principal = path
+			case isLiveValue(f.Type):
+				fail("field %s: %s", f.Name, misplacedCaller)
 			default:
 				fail("field %s is not bound; bind it in the spec, or unexport it", f.Name)
 			}
@@ -814,6 +828,9 @@ func (d *definitions) buildTool(e *toolEntry) (toolCommon.Tool, bool) {
 			Doc:     n.doc.toWit(),
 			Body:    witTypes.None[toolCommon.CommandBody](),
 		}
+		if n.http != nil {
+			cn.Http = witTypes.Some(*n.http)
+		}
 		if n.globals != nil {
 			args, gok := n.globals.resolve(n)
 			ok = ok && gok
@@ -853,6 +870,15 @@ func (d *definitions) buildTool(e *toolEntry) (toolCommon.Tool, bool) {
 		RequiresFilesystem: e.spec.RequiresFilesystem,
 		Commands:           toolCommon.CommandTree{Nodes: nodes},
 		Schema:             g.Build(),
+	}
+	if e.spec.HTTP != nil {
+		mount, err := e.spec.HTTP.ToolDeclaration()
+		if err != nil {
+			e.fail("HTTP mount: %s", err)
+			ok = false
+		} else {
+			tool.HttpMount = witTypes.Some(mount)
+		}
 	}
 	e.built, e.builtOK = &tool, ok
 	return tool, ok
@@ -1096,7 +1122,7 @@ func (l *commandLayout) encode(d *definitions, args reflect.Value) (input types.
 // handler, and package the result as a self-contained typed value.
 func (d *definitions) invokeCommand(
 	e *toolEntry, commandPath []string, input types.TypedSchemaValue,
-	stdin *byteReader, outs hostOutputs, principal golem.Principal,
+	stdin *byteReader, outs hostOutputs, caller func() golem.Caller,
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
 	defer stdin.closeAfterHandler()
@@ -1112,7 +1138,7 @@ func (d *definitions) invokeCommand(
 	}
 	var args reflect.Value
 	if terr == nil {
-		args, terr = ce.decodeArgs(d, input, stdin, principal)
+		args, terr = ce.decodeArgs(d, input, stdin)
 	}
 	if terr != nil {
 		refused := OutputFailed(fmt.Sprintf("command %s was refused before it ran", ce.label()))
@@ -1121,7 +1147,7 @@ func (d *definitions) invokeCommand(
 		return fail(*terr)
 	}
 	ctx := &OutputContext{
-		Context: Context{tool: e.name, path: slices.Clone(commandPath)}, stdout: stdout, stderr: stderr,
+		Context: Context{tool: e.name, path: slices.Clone(commandPath), caller: caller}, stdout: stdout, stderr: stderr,
 	}
 	out, err := runWithOutputs(ce.label(), []*Output{stdout, stderr},
 		func() (reflect.Value, error) {
@@ -1163,9 +1189,9 @@ func (ce *commandEntry) outputsFor(outs hostOutputs) (stdout, stderr *Output, te
 }
 
 // decodeArgs fills a command's argument struct from an invocation: the
-// canonical input record, the principal and standard input.
+// canonical input record and standard input.
 func (ce *commandEntry) decodeArgs(
-	d *definitions, input types.TypedSchemaValue, stdin *byteReader, principal golem.Principal,
+	d *definitions, input types.TypedSchemaValue, stdin *byteReader,
 ) (reflect.Value, *types.ToolError) {
 	l, ok := ce.resolve()
 	if !ok {
@@ -1182,9 +1208,6 @@ func (ce *commandEntry) decodeArgs(
 	if err := l.decode(input.Value, args); err != nil {
 		e := types.MakeToolErrorInvalidInput(err.Error())
 		return reflect.Value{}, &e
-	}
-	if l.principal != nil && principal != nil {
-		args.FieldByIndex(l.principal).Set(reflect.ValueOf(&principal).Elem())
 	}
 	if l.stdin != nil && stdin.present() {
 		args.FieldByIndex(l.stdin.path).Set(reflect.ValueOf(io.Reader(stdin)))

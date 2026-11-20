@@ -1045,7 +1045,7 @@ pub(super) fn fork_began(mut state: State, from: &AgentSnapshots, flight: &Fligh
     let began = !all_requested(&state, from) && !state.flights.contains_key(flight);
     if began {
         state.busy = with_one_more(state.busy, from);
-        state.flights.insert(flight.clone(), ForkPhase::Copying);
+        state.flights.insert(*flight, ForkPhase::Copying);
     }
     Next::of(Transition::ForkBegan, state, began)
 }

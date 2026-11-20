@@ -19,19 +19,19 @@ impl Receiver for ReceiverImpl {
 }
 
 async fn lend_persistent_card(card: &PermissionCard) {
-    ReceiverClient::get("target".to_string())
+    ReceiverClient::upsert("target".to_string())
         .with_scope_card(card)
         .call()
         .await;
 }
 
 fn default_persistent_card(card: &PermissionCard) {
-    let mut client = ReceiverClient::get("target".to_string());
+    let mut client = ReceiverClient::upsert("target".to_string());
     client.set_default_scope_card(card);
 }
 
 fn scope_card_view_has_no_trigger(card: &ScopeCard) {
-    ReceiverClient::get("target".to_string())
+    ReceiverClient::upsert("target".to_string())
         .with_scope_card(card)
         .trigger_call();
 }

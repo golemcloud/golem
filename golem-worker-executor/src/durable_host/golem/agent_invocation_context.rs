@@ -26,17 +26,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(self
             .current_invocation_id()
             .map(|invocation_id| CurrentInvocationId {
-                owner: wire::InvocationOwner::Agent(invocation_id.agent_id().clone().into()),
+                owner: wire::InvocationOwner::Agent((*invocation_id.agent_id()).into()),
                 id: invocation_id.uuid().into(),
             }))
     }
 
     async fn caller(&mut self) -> anyhow::Result<InvocationCaller> {
         DurabilityHost::observe_function_call(self, "golem_agent", "caller");
-        let principal = self.invocation_principal();
-        Ok(InvocationCaller {
-            original: principal.clone().into(),
-            immediate: principal.into(),
-        })
+        Ok(self.invocation_caller().into())
     }
 }

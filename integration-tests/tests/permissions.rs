@@ -20,7 +20,7 @@ use golem_common::model::card::parse_polymorphic_permission;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::ComponentName;
 use golem_common::model::{AgentStatus, IdempotencyKey, PromiseId};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_schema::model::{CardId as SchemaCardId, ComponentId as SchemaComponentId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -86,14 +86,14 @@ async fn permission_cards_work_across_services_and_replay(
         })?
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "permissions-caller");
-    let replay_caller = agent_id!("ScopeCardAgent", "permissions-replay-caller");
-    let target = agent_id!("ScopeCardAgent", "permissions-target");
-    user.start_agent(&component.id, caller.clone()).await?;
+    let caller = agent_key!("ScopeCardAgent", "permissions-caller");
+    let replay_caller = agent_key!("ScopeCardAgent", "permissions-replay-caller");
+    let target = agent_key!("ScopeCardAgent", "permissions-target");
+    let caller_worker = user.start_agent(&component.id, caller.clone()).await?;
     let replay_caller_worker = user
         .start_agent(&component.id, replay_caller.clone())
         .await?;
-    user.start_agent(&component.id, target.clone()).await?;
+    let target_worker = user.start_agent(&component.id, target.clone()).await?;
 
     let initial_card_id = component
         .metadata
@@ -109,7 +109,11 @@ async fn permission_cards_work_across_services_and_replay(
         .worker_http_client(&user.token)
         .await;
     let caller_wallet = worker_client
-        .get_agent_wallet(&component.id.0, &caller.to_string())
+        .get_agent_wallet(
+            &caller_worker.environment_id.0,
+            &caller_worker.agent_id.0,
+            None,
+        )
         .await?;
     assert!(
         caller_wallet
@@ -190,7 +194,8 @@ async fn permission_cards_work_across_services_and_replay(
     )
     .await?;
     user.simulated_crash(&replay_caller_worker).await?;
-    user.complete_promise(&release, vec![1]).await?;
+    user.complete_promise(&replay_caller_worker.environment_id, &release, vec![1])
+        .await?;
     let replay_card_id = user
         .invoke_and_await_agent_with_key(
             &component,
@@ -231,10 +236,18 @@ async fn permission_cards_work_across_services_and_replay(
     );
 
     let caller_wallet = worker_client
-        .get_agent_wallet(&component.id.0, &caller.to_string())
+        .get_agent_wallet(
+            &caller_worker.environment_id.0,
+            &caller_worker.agent_id.0,
+            None,
+        )
         .await?;
     let target_wallet = worker_client
-        .get_agent_wallet(&component.id.0, &target.to_string())
+        .get_agent_wallet(
+            &target_worker.environment_id.0,
+            &target_worker.agent_id.0,
+            None,
+        )
         .await?;
     assert!(
         !caller_wallet
@@ -297,9 +310,9 @@ async fn typed_permission_card_api_runs_the_shared_scenario(
         })?
         .store()
         .await?;
-    let caller = agent_id!("ScopeCardAgent", "typed-scenario-caller");
+    let caller = agent_key!("ScopeCardAgent", "typed-scenario-caller");
     let target_name = "typed-scenario-target";
-    let target = agent_id!("ScopeCardAgent", target_name);
+    let target = agent_key!("ScopeCardAgent", target_name);
     user.start_agent(&component.id, caller.clone()).await?;
     user.start_agent(&component.id, target.clone()).await?;
 
@@ -433,7 +446,7 @@ async fn filesystem_permissions_enforce_recipient_isolation_across_recovery(
         })?
         .store()
         .await?;
-    let agent = agent_id!("FileSystem", "host-permission-recovery");
+    let agent = agent_key!("FileSystem", "host-permission-recovery");
     let worker = user.start_agent(&component.id, agent.clone()).await?;
 
     let allowed = user
