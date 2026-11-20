@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::schema::SchemaValue;
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Settles a returned method error, including session work that must keep driving the Store.
@@ -650,6 +651,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
         hydrated: crate::worker::HydratedInvocation,
+        input: Option<&SchemaValue>,
     ) -> Result<bool, WorkerExecutorError> {
         let crate::worker::HydratedInvocation {
             invocation,
@@ -685,12 +687,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )
             .await;
 
-            let input = match &invocation {
-                AgentInvocation::AgentInitialization { input, .. }
-                | AgentInvocation::AgentMethod { input, .. } => Some(input),
-                AgentInvocation::ExternalTool { input, .. } => Some(input.value()),
-                _ => None,
-            };
             if let Some(input) = input
                 && !self.secret_holds_allowed_for_value(input).await?
             {

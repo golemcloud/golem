@@ -3919,9 +3919,10 @@ impl InvocationHooks for TestWorkerCtx {
     async fn on_agent_invocation_started(
         &mut self,
         invocation: golem_worker_executor::worker::HydratedInvocation,
+        input: Option<&SchemaValue>,
     ) -> Result<bool, WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_invocation_started(invocation)
+            .on_agent_invocation_started(invocation, input)
             .await
     }
 

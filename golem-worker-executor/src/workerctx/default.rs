@@ -79,6 +79,7 @@ use golem_common::model::{
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
+use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -697,9 +698,10 @@ impl InvocationHooks for Context {
     async fn on_agent_invocation_started(
         &mut self,
         invocation: crate::worker::HydratedInvocation,
+        input: Option<&SchemaValue>,
     ) -> Result<bool, WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_invocation_started(invocation)
+            .on_agent_invocation_started(invocation, input)
             .await
     }
 

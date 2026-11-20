@@ -133,7 +133,7 @@ pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
     let started = async {
         store
             .data_mut()
-            .on_agent_invocation_started(invocation)
+            .on_agent_invocation_started(invocation, lowered.input())
             .await
     }
     .instrument(span!(Level::INFO, "on_agent_invocation_started"))
@@ -2090,6 +2090,18 @@ pub struct LoweredInvocation {
     pub read_only_method: Option<String>,
     /// The typed export call to perform.
     call: LoweredCall,
+}
+
+impl LoweredInvocation {
+    fn input(&self) -> Option<&SchemaValue> {
+        match &self.call {
+            LoweredCall::Initialize { input, .. } | LoweredCall::Invoke { input, .. } => {
+                Some(input)
+            }
+            LoweredCall::ExternalTool { input, .. } => Some(input.value()),
+            _ => None,
+        }
+    }
 }
 
 /// The typed guest-export call an [`AgentInvocation`] lowers to.
