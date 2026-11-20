@@ -336,7 +336,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .invoke_in_snapshotting_mode(lowered, local_span_ids, inherited_span_ids)
             .await;
 
-        match result {
+        let failed = match result {
             Ok(InvokeResult::Succeeded { result, .. }) => {
                 let AgentInvocationResult::SaveSnapshot { snapshot } = *result else {
                     return Err(self
@@ -348,7 +348,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         )
                         .await);
                 };
-                Ok(snapshot)
+                return Ok(snapshot);
             }
 
             Ok(InvokeResult::Failed { error, .. }) => {
@@ -400,7 +400,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     format!("failed to get a snapshot for manual update: {error:?}"),
                 )
                 .await),
-        }
+        };
+        // The save hook did not return a snapshot. After a trap in the hook the next save on this
+        // instance traps at once, so the loop starts a new instance, as after a failed periodic
+        // snapshot; a pending interrupt still decides the stop.
+        failed.map_err(|outcome| match outcome {
+            CommandOutcome::Continue => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
+            outcome => outcome,
+        })
     }
 }
 
