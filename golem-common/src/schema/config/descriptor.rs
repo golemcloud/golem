@@ -16,8 +16,8 @@ use super::{
     ConfigCatalogKind, ConfigCatalogSources, ConfigError, ConfigOrigin, ConfigSchema, catalog_kind,
     children, deref_type, parse_catalog_path, union_branch,
 };
-use crate::model::parse_agent_config_path;
 use crate::model::retry_policy::RetryPolicy;
+use crate::model::split_config_path;
 use crate::model::tool::ToolName;
 use crate::model::tool_middleware::{ToolMiddlewareInstallation, ToolMiddlewareName};
 use crate::schema::{SchemaType, TypeId};
@@ -114,7 +114,7 @@ impl ConfigDescriptorKind {
                                                     .as_str()
                                                     .filter(|path| *path != "*")
                                                     .ok_or_else(|| source.error("scope paths must be strings other than '*'"))?;
-                                                parse_agent_config_path(path).map_err(|error| {
+                                                split_config_path(path).map_err(|error| {
                                                     source.error(error.to_string())
                                                 })?;
                                             }
@@ -171,7 +171,7 @@ impl ConfigDescriptorKind {
                 parse_catalog_path(&resource).map_err(|error| origin.error(error))?;
                 if let Some(catalogs) = catalogs {
                     let (entry, _) = catalogs.select(&resource, origin)?;
-                    if catalog_kind(entry) != ConfigCatalogKind::Resource {
+                    if catalog_kind(&entry) != ConfigCatalogKind::Resource {
                         return Err(origin
                             .error(format!("'{resource}' is not a quota-resource declaration")));
                     }

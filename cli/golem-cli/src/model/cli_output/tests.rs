@@ -1073,10 +1073,32 @@ fn component_metadata_displays_tools_middlewares_and_files() {
 
 #[test]
 fn component_manifest_trace_structured_output_masks_secret_payloads() {
-    let value = hidden_structured_output(crate::model::component::ComponentManifestTraceView {
+    let mut field = arb_static_config_field()
+        .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
+        .unwrap()
+        .current();
+    field.fill = json!({"password": "resolved-config-secret"}).into();
+    let trace = crate::model::component::ComponentManifestTraceView {
         component_name: golem_common::model::component::ComponentName("component".to_string()),
         properties: sample_component_layer_properties(),
-    });
+        resolved_config: Some(vec![field]),
+    };
+    let visible =
+        to_structured_output_value_masked(trace.clone(), MaskingConfig::show_secrets()).unwrap();
+    assert_eq!(
+        visible["properties"]["configInputs"][0]["value"]["db"]["password"],
+        "manifest-config-secret"
+    );
+    assert_eq!(
+        visible["resolvedConfig"][0]["fill"]["password"],
+        "resolved-config-secret"
+    );
+    assert_eq!(
+        visible["properties"]["configSchema"]["value"]["declarations"][0]["default_value"],
+        "\"manifest-default-secret\""
+    );
+    assert!(visible["properties"].get("config").is_none());
+    let value = hidden_structured_output(trace);
 
     assert_no_plaintext(
         &value,
@@ -1084,6 +1106,8 @@ fn component_manifest_trace_structured_output_masks_secret_payloads() {
             "manifest-config-secret",
             "manifest-env-secret",
             "manifest-plugin-secret",
+            "resolved-config-secret",
+            "manifest-default-secret",
         ],
     );
     assert!(value.to_string().contains("***"));
@@ -1180,10 +1204,12 @@ fn sample_component_view() -> crate::model::component::ComponentView {
                     "API_TOKEN".to_string(),
                     "component-env-secret".to_string(),
                 )]),
-                config: vec![golem_common::model::agent::TypedAgentConfigEntry {
-                    path: vec!["db".to_string(), "password".to_string()],
-                    value: typed_schema_string("component-config-secret"),
-                }],
+                config: golem_common::model::component_metadata::OwnerConfig::from_captures(vec![
+                    golem_common::model::agent::TypedAgentConfigEntry {
+                        path: vec!["db".to_string(), "password".to_string()],
+                        value: typed_schema_string("component-config-secret"),
+                    },
+                ]),
                 plugins: vec![golem_common::model::component::InstalledPlugin {
                     environment_plugin_grant_id:
                         golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId(
@@ -1378,7 +1404,7 @@ fn typed_schema_string(value: &str) -> golem_common::schema::TypedSchemaValue {
 }
 
 fn sample_component_layer_properties() -> crate::model::app::ComponentLayerProperties {
-    use crate::model::cascade::property::Property;
+    use golem_common::cascade::property::Property;
 
     let layer = crate::model::app::ComponentLayerId::ComponentCommon(
         golem_common::model::component::ComponentName("component".to_string()),
@@ -1389,10 +1415,28 @@ fn sample_component_layer_properties() -> crate::model::app::ComponentLayerPrope
         None,
         Some(crate::model::language::GuestLanguage::Effect),
     );
-    properties.config.apply_layer(
+    properties
+        .config_layers
+        .push(golem_common::schema::config::ConfigLayer {
+            origin: golem_common::schema::config::ConfigOrigin {
+                file: "golem.yaml".into(),
+                path: vec!["components".into(), "component".into(), "config".into()],
+                layer: layer.to_string(),
+            },
+            value: json!({ "db": { "password": "manifest-config-secret" } }),
+        });
+    properties.config_schema.apply_layer(
         &layer,
         None,
-        Some(json!({ "db": { "password": "manifest-config-secret" } })),
+        Some(golem_common::schema::ComponentConfigSchema {
+            schema: golem_common::schema::SchemaGraph::empty(),
+            declarations: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
+                source: golem_common::model::agent::AgentConfigSource::Local,
+                path: vec!["password".into()],
+                value_type: golem_common::schema::SchemaType::string(),
+                default_value: Some("\"manifest-default-secret\"".into()),
+            }],
+        }),
     );
     properties.env.apply_layer(
         &layer,
@@ -5592,12 +5636,18 @@ fn arb_component_list_result() -> OutputDocumentStrategy {
 
 fn arb_component_manifest_trace_result() -> OutputDocumentStrategy {
     serialized_output(
-        (arb_small_string(), arb_component_layer_properties()).prop_map(
-            |(component_name, properties)| crate::model::component::ComponentManifestTraceView {
-                component_name: golem_common::model::component::ComponentName(component_name),
-                properties,
-            },
-        ),
+        (
+            arb_small_string(),
+            arb_component_layer_properties(),
+            proptest::option::of(proptest::collection::vec(arb_static_config_field(), 0..4)),
+        )
+            .prop_map(|(component_name, properties, resolved_config)| {
+                crate::model::component::ComponentManifestTraceView {
+                    component_name: golem_common::model::component::ComponentName(component_name),
+                    properties,
+                    resolved_config,
+                }
+            }),
     )
 }
 
@@ -5631,7 +5681,7 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
         ),
     )
         .prop_map(|(left, right)| {
-            use crate::model::cascade::property::Property;
+            use golem_common::cascade::property::Property;
 
             let (
                 layer_id,
@@ -5733,15 +5783,18 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                     custom_commands.into_iter().collect(),
                 ),
             );
-            properties
-                .config
-                .apply_layer(&layer_id, selection, Some(config_first));
-            properties
-                .config
-                .apply_layer(&second_layer_id, selection, Some(config_second));
-            properties
-                .config
-                .apply_layer(&layer_id, selection, Some(json!("replacement")));
+            properties.config_layers =
+                [(&layer_id, config_first), (&second_layer_id, config_second)]
+                    .into_iter()
+                    .map(|(id, value)| golem_common::schema::config::ConfigLayer {
+                        origin: golem_common::schema::config::ConfigOrigin {
+                            file: "golem.yaml".into(),
+                            path: vec!["components".into(), "generated".into(), "config".into()],
+                            layer: id.to_string(),
+                        },
+                        value,
+                    })
+                    .collect();
             properties.config_schema.apply_layer(
                 &layer_id,
                 selection,
@@ -6114,6 +6167,18 @@ fn arb_agent_type_provision_config()
         arb_polymorphic_card(),
     )
         .prop_map(|(env, config, plugins, files, initial_permission)| {
+            let mut config =
+                golem_common::model::component_metadata::OwnerConfig::from_captures(config);
+            if !config.entries.is_empty() {
+                config.source_meta.insert(
+                    "/audit~1member/0".into(),
+                    golem_common::model::component_metadata::ConfigSourceMetadata {
+                        source: "golem.yaml".into(),
+                        path: vec!["config".into()],
+                        layer: "prod".into(),
+                    },
+                );
+            }
             golem_common::model::component_metadata::AgentTypeProvisionConfig {
                 env,
                 config,

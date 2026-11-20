@@ -153,12 +153,14 @@ impl ComponentMetadata {
 
     pub fn redact_host_managed_values_for_external(&mut self) {
         let data = Arc::make_mut(&mut self.data);
-        for entry in &mut data.component_provision_config.config {
-            entry.value = crate::schema::redact_host_managed_typed_value(entry.value.clone());
-        }
-        for provision in data.agent_type_provision_configs.values_mut() {
-            for entry in &mut provision.config {
-                entry.value = crate::schema::redact_host_managed_typed_value(entry.value.clone());
+        for config in std::iter::once(&mut data.component_provision_config.config).chain(
+            data.agent_type_provision_configs
+                .values_mut()
+                .map(|provision| &mut provision.config),
+        ) {
+            for entry in &mut config.entries {
+                let OwnerConfigSource::Captured(value) = &mut entry.source;
+                *value = crate::schema::redact_host_managed_typed_value(value.clone());
             }
         }
     }
@@ -319,9 +321,9 @@ impl ComponentMetadata {
             .map(|config| &config.env)
     }
 
-    pub fn agent_type_config(&self, name: &AgentTypeName) -> Option<&[TypedAgentConfigEntry]> {
+    pub fn agent_type_config(&self, name: &AgentTypeName) -> Option<Vec<TypedAgentConfigEntry>> {
         self.agent_type_provision_config(name)
-            .map(|config| config.config.as_slice())
+            .map(|config| config.config.captures())
     }
 
     pub fn agent_type_files(&self, name: &AgentTypeName) -> Option<&[InitialAgentFile]> {

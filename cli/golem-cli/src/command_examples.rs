@@ -485,10 +485,15 @@ pub const COMPONENT_REDEPLOY_AGENTS: &str = "Examples:
   golem-cli component redeploy-agents my-component";
 
 pub const COMPONENT_MANIFEST_TRACE: &str = "Examples:
-  # Show component manifest properties together with which manifest file/line
-  # each value originates from (useful for debugging multi-file manifests)
+  # Trace manifest properties and ordered config inputs without built components
   golem-cli component manifest-trace
-  golem-cli component manifest-trace my-component";
+
+  # Also show schema-validated static config and provenance, including code defaults.
+  # Requires locally built components; does not build or read deployed state.
+  golem-cli component manifest-trace --resolved
+
+  # Config payloads are masked by default. Only reveal them in a trusted terminal.
+  golem-cli component manifest-trace --resolved --show-secrets";
 
 // Environment commands -----------------------------------------------------------------------------
 

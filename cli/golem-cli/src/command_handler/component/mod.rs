@@ -32,7 +32,6 @@ use crate::model::agent::{AgentActionError, AgentUpdateMode};
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
 use crate::model::app_raw;
-use crate::model::cascade::property::Property;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{
     AGENT_ID_ENV_VAR, AGENT_ID_READ_GRANT, AgentTypeManifestProvisionConfig,
@@ -66,6 +65,7 @@ use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
+use golem_common::cascade::property::Property;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
@@ -138,9 +138,10 @@ impl ComponentCommandHandler {
                     self.cmd_redeploy_agents(component_name.component_name)
                         .await
                 }
-                ComponentSubcommand::ManifestTrace { component_name } => {
-                    self.cmd_manifest_trace(component_name).await
-                }
+                ComponentSubcommand::ManifestTrace {
+                    component_name,
+                    resolved,
+                } => self.cmd_manifest_trace(component_name, resolved).await,
             }
         })
     }
@@ -340,37 +341,66 @@ impl ComponentCommandHandler {
     async fn cmd_manifest_trace(
         &self,
         _component_names: OptionalComponentNames,
+        resolved: bool,
     ) -> anyhow::Result<()> {
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
+        let views = self.prepare_manifest_traces(resolved).await?;
+
+        for view in views {
+            log_action(
+                "Showing",
+                format!(
+                    "manifest trace for {}",
+                    view.component_name.as_str().log_color_highlight()
+                ),
+            );
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
+            self.ctx.log_handler().log_output(view)?;
+        }
+        Ok(())
+    }
+
+    async fn prepare_manifest_traces(
+        &self,
+        resolved: bool,
+    ) -> anyhow::Result<Vec<ComponentManifestTraceView>> {
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let app_ctx = app_ctx.some_or_err_mut()?;
 
         let component_names = app_ctx
             .application()
             .component_names()
             .cloned()
             .collect::<Vec<_>>();
+        let mut views = Vec::new();
         for component_name in component_names {
-            log_action(
-                "Showing",
-                format!(
-                    "manifest trace for {}",
-                    component_name.as_str().log_color_highlight()
-                ),
-            );
-            let _indent = self.ctx.log_handler().decorated_indent_primary();
-            self.ctx
-                .log_handler()
-                .log_output(ComponentManifestTraceView {
-                    component_name: component_name.clone(),
-                    properties: app_ctx
-                        .application()
-                        .component(&component_name)
-                        .layer_properties()
-                        .with_compacted_traces(),
-                })?
+            let resolved_config = if resolved {
+                let metadata = extract_and_store_component_metadata(
+                    &BuildContext::new(app_ctx, &BuildConfig::new()),
+                    &component_name,
+                )
+                .await
+                .context("Resolved manifest traces require built component Wasm; run `golem build` first")?;
+                Some(prepare_static_config(
+                    app_ctx.application(),
+                    &component_name,
+                    &metadata.agent_types,
+                    |_| true,
+                )?)
+            } else {
+                None
+            };
+            views.push(ComponentManifestTraceView {
+                component_name: component_name.clone(),
+                properties: app_ctx
+                    .application()
+                    .component(&component_name)
+                    .layer_properties()
+                    .with_compacted_traces(),
+                resolved_config,
+            });
         }
 
-        Ok(())
+        Ok(views)
     }
 
     pub async fn update_agents_by_components(
@@ -3275,7 +3305,7 @@ fn resolve_secret_scope(
                         ));
                         continue;
                     }
-                    match crate::args::parse_agent_config_path(raw_path) {
+                    match golem_common::model::split_config_path(raw_path) {
                         Ok(segments) => {
                             canonical_paths.insert(
                                 CanonicalAgentSecretPath::from_path_in_unknown_casing(&segments),
@@ -3330,7 +3360,7 @@ fn resolve_config_scope(
                         ));
                         continue;
                     }
-                    match crate::args::parse_agent_config_path(raw_path) {
+                    match golem_common::model::split_config_path(raw_path) {
                         Ok(segments) => canonical_paths.insert(
                             CanonicalAgentConfigPath::from_path_in_unknown_casing(&segments),
                         ),

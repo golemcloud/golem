@@ -49,15 +49,14 @@ import (
 // [InitContext.Config]):
 //
 //	cfg := ctx.Config(Shop)        // ctx is the running agent's *Context[S]
-//	_ = cfg.Greeting                // local field — cached (worker-lifetime), so this is fast
+//	_ = cfg.Greeting                // static field — resolved by the selected owner revision
 //	_ = cfg.APIKey.MustGet()        // secret field — re-reads the host each call (live)
 //
-// Config is materialized ONCE per worker and cached, so calling ctx.Config(Shop)
-// on a hot method is near-free: local fields are read from the host on the first
-// call and reused for the worker's life. Only **secret** fields stay live — a
-// [Secret] field is a lazy handle whose [Secret.Get] re-reads the host on every
-// call, so a *rotated* secret is observed and the user decides when to read (and
-// whether to store) it.
+// Each Config call reads static fields from the host's selected owner revision.
+// The SDK does not cache values read during replay across a revision update.
+// Values saved in application state remain the application's responsibility.
+// A [Secret] field is a lazy handle whose [Secret.Get] re-reads the host on every
+// call, so a rotated secret is observed when the application reads it.
 //
 // Each exported field becomes a config key in lowerCamelCase, including
 // initialisms (APIKey becomes apiKey). A struct field is one record value;
@@ -245,13 +244,10 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 //
 //	cfg := ctx.Config(shopagent.Agent)
 //
-// The config is materialized once per worker and cached, so repeated calls on a
-// hot method are near-free: its local fields are read from the host on the first
-// call and reused for the worker's life. Only its secret fields stay live — a
-// [Secret] field is a lazy handle whose [Secret.Get] re-reads the host each call,
-// so a rotated secret is observed and the user decides when to read (and whether
-// to store) it. A read failure has no in-band recovery, so it panics rather than
-// returning an error; the panic traps the component, as in Rust.
+// Each call reads static fields from the host's selected owner revision.
+// Secret fields are lazy handles whose [Secret.Get] reads the host each time.
+// A read failure has no in-band recovery, so it panics rather than returning an
+// error; the panic traps the component, as in Rust.
 //
 // def must be the running agent's own definition: another agent's config is not
 // this worker's, and reading it is a programming error, so it panics.
@@ -275,38 +271,19 @@ func checkConfigDefinition(running *instance, name string) error {
 }
 
 // Config reads the agent's config from within its constructor. It behaves like
-// [Context.Config] and populates the same per-worker cache the methods reuse.
+// [Context.Config]; saving the result in application state preserves that value.
 func (c *InitContext[Id, S, Cfg]) Config() Cfg {
 	return materializeAgentConfig[Cfg]()
 }
 
-// cachedAgentConfig returns the worker's already-materialized config, if any —
-// the cache-hit fast path with no host call. The host-backed miss path lives in
-// materializeAgentConfig.
-func cachedAgentConfig[Cfg any]() (Cfg, bool) {
-	if active != nil && active.config != nil {
-		return active.config.(Cfg), true
-	}
-	var zero Cfg
-	return zero, false
-}
-
-// materializeAgentConfig returns the agent's config, materializing it once per
-// worker and caching it on the running instance. On the first call it reads the
-// local leaves from the host (secret leaves become lazy handles) and stores the
-// Cfg; later calls return the cache. Host-backed on the miss path.
+// materializeAgentConfig reads static leaves from the host and builds lazy
+// handles for secret leaves. The host owns static-value revision selection.
 func materializeAgentConfig[Cfg any]() Cfg {
-	if cfg, ok := cachedAgentConfig[Cfg](); ok {
-		return cfg
-	}
 	cfg, err := materializeConfig[Cfg](func(lf configLeaf) (reflect.Value, error) {
 		return readConfigLeaf(defs, lf)
 	})
 	if err != nil {
 		panic(err)
-	}
-	if active != nil {
-		active.config = cfg
 	}
 	return cfg
 }

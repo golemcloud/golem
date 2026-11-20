@@ -960,8 +960,8 @@ fn catalog_tool_middleware_scopes_use_manifest_authoring_grammar() {
         (json!("*"), json!([])),
         (json!([]), json!("*")),
         (
-            json!([r"credentials.github\=token"]),
-            json!([r#""database url".password"#]),
+            json!(["credentials.github=token"]),
+            json!(["database url.password"]),
         ),
         (json!(null), json!(null)),
     ] {
@@ -989,6 +989,8 @@ fn catalog_tool_middleware_scopes_use_manifest_authoring_grammar() {
             json!(["credentials..key"]),
             json!(["credentials\\"]),
             json!([r#""credentials"#]),
+            json!([r#""database url".password"#]),
+            json!([r"credentials.github\=token"]),
             json!([4]),
             json!({"kind":"all"}),
         ] {

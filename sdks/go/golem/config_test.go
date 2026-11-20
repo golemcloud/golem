@@ -328,32 +328,6 @@ func TestWithConfigUndeclaredRejected(t *testing.T) {
 	})
 }
 
-// TestConfigCacheHit — once a worker's config is materialized it is cached on the
-// instance; the pure cache-hit path returns it as-is with no host read (so a hot
-// method's Config(ctx) is near-free). Misses report ok=false so the caller reads.
-func TestConfigCacheHit(t *testing.T) {
-	prev := active
-	defer func() { active = prev }()
-
-	active = nil
-	if _, ok := cachedAgentConfig[demoAppConfig](); ok {
-		t.Fatal("miss expected with no active instance")
-	}
-	active = &instance{}
-	if _, ok := cachedAgentConfig[demoAppConfig](); ok {
-		t.Fatal("miss expected before the first materialize")
-	}
-
-	active.config = demoAppConfig{Greeting: "cached", Db: demoDBConfig{Url: "db://x"}}
-	got, ok := cachedAgentConfig[demoAppConfig]()
-	if !ok {
-		t.Fatal("hit expected after caching")
-	}
-	if got.Greeting != "cached" || got.Db.Url != "db://x" {
-		t.Fatalf("cached config = %+v", got)
-	}
-}
-
 func TestSecretErrorToGo(t *testing.T) {
 	cases := []struct {
 		name string
@@ -439,8 +413,7 @@ func TestConfigFieldsTakeRestrictionTags(t *testing.T) {
 	})
 }
 
-// Reading the config through another agent's definition is refused, instead of
-// caching a value of the wrong type for the running agent.
+// Reading the config through another agent's definition is refused.
 func TestConfigThroughAnotherAgentsDefinitionIsRefused(t *testing.T) {
 	running := &instance{def: &agentEntry{name: "Shop"}}
 	if err := checkConfigDefinition(running, "Shop"); err != nil {

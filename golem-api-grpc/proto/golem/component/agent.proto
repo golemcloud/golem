@@ -5,9 +5,9 @@ package golem.component;
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
 import "golem/component/agent_files.proto";
+import "golem/component/owner_config.proto";
 import "golem/component/plugin.proto";
 import "golem/http/http.proto";
-import "golem/worker/agent_config.proto";
 import "golem/worker/worker_id.proto";
 
 enum AgentMode {
@@ -30,7 +30,7 @@ message CachePolicy {
 
 message AgentTypeProvisionConfig {
   map<string, string> env = 1;
-  repeated golem.worker.TypedAgentConfigEntry config = 2;
+  OwnerConfig config = 2;
   repeated golem.component.PluginInstallation plugins = 3;
   repeated golem.component.InitialAgentFile files = 4;
   bytes initial_permissions = 5;

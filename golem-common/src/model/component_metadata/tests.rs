@@ -126,6 +126,55 @@ fn component_metadata_helpers_use_exact_known_export_names() {
 }
 
 #[test]
+fn owner_config_preserves_native_captures_and_optional_audit_metadata() {
+    use poem_openapi::types::{ParseFromJSON, ToJSON};
+
+    let captures = vec![TypedAgentConfigEntry {
+        path: vec!["limits".into(), "maximum".into()],
+        value: TypedSchemaValue::new(
+            SchemaGraph {
+                root: crate::schema::SchemaType::u64(),
+                defs: vec![],
+            },
+            SchemaValue::U64(u64::MAX),
+        ),
+    }];
+    let mut config = OwnerConfig::from_captures(captures.clone());
+    config.source_meta.insert(
+        "/limits/maximum".into(),
+        ConfigSourceMetadata {
+            source: "golem.yaml".into(),
+            path: vec!["config".into(), "limits".into(), "maximum".into()],
+            layer: "prod".into(),
+        },
+    );
+    assert_eq!(config.captures(), captures);
+    let json = serde_json::to_value(&config).unwrap();
+    assert_eq!(json, config.to_json().unwrap());
+    assert_eq!(
+        OwnerConfig::parse_from_json(Some(json.clone())).unwrap(),
+        config
+    );
+    assert_eq!(serde_json::from_value::<OwnerConfig>(json).unwrap(), config);
+    let binary = crate::serialization::serialize(&config).unwrap();
+    assert_eq!(
+        crate::serialization::deserialize::<OwnerConfig>(&binary).unwrap(),
+        config
+    );
+    let proto: golem_api_grpc::proto::golem::component::OwnerConfig =
+        config.clone().try_into().unwrap();
+    assert_eq!(OwnerConfig::try_from(proto.clone()).unwrap(), config);
+    let mut invalid = proto;
+    invalid.entries[0].source = None;
+    assert!(OwnerConfig::try_from(invalid).is_err());
+    config.source_meta.clear();
+    assert_eq!(config.captures(), captures);
+    let json = serde_json::to_value(&config).unwrap();
+    assert!(json.get("sourceMeta").is_none());
+    assert_eq!(json, config.to_json().unwrap());
+}
+
+#[test]
 fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
     let agent_type = AgentTypeName("Cart".to_string());
     let card_id = CardId::new();
@@ -152,7 +201,7 @@ fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
             AgentTypeProvisionConfig {
                 initial_permissions: card.clone(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: OwnerConfig::default(),
                 plugins: Vec::new(),
                 files: Vec::new(),
             },
