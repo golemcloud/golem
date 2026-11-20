@@ -26,6 +26,7 @@ pub mod checkout_v2_regressions;
 pub mod manifest_status;
 pub mod permissions;
 pub mod sdk_policy;
+pub mod snapshot_divergence;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

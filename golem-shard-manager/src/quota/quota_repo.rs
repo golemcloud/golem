@@ -67,6 +67,7 @@ pub struct QuotaResourceRecord {
     pub resource_definition_id: Uuid,
     pub definition: Blob<ResourceDefinition>,
     pub remaining: NumericU64,
+    pub deficit: NumericU64,
     pub last_refilled_at: SqlDateTime,
     pub last_refreshed_at: SqlDateTime,
 }
@@ -305,9 +306,9 @@ impl<DBP: Pool> DbQuotaRepo<DBP> {
 /// is the refusal a create-only write owes.
 const INSERT_RESOURCE_SQL: &str = indoc! { r#"
     INSERT INTO quota_resources
-        (resource_definition_id, revision, definition, remaining,
+        (resource_definition_id, revision, definition, remaining, deficit,
          last_refilled_at, last_refreshed_at)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (resource_definition_id) DO NOTHING
 "#};
 
@@ -318,9 +319,10 @@ const UPDATE_RESOURCE_SQL: &str = indoc! { r#"
     SET revision = $2,
         definition = $3,
         remaining = $4,
-        last_refilled_at = $5,
-        last_refreshed_at = $6
-    WHERE resource_definition_id = $1 AND revision = $7
+        deficit = $5,
+        last_refilled_at = $6,
+        last_refreshed_at = $7
+    WHERE resource_definition_id = $1 AND revision = $8
 "#};
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -448,7 +450,7 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
             .pool
             .with_ro(SVC_NAME, "get_all_resources")
             .fetch_all_as(sqlx::query_as(indoc! { r#"
-                SELECT resource_definition_id, revision, definition, remaining,
+                SELECT resource_definition_id, revision, definition, remaining, deficit,
                        last_refilled_at, last_refreshed_at
                 FROM quota_resources
             "#}))
@@ -476,7 +478,7 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
             .with_ro(SVC_NAME, "get_resource")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT resource_definition_id, revision, definition, remaining,
+                    SELECT resource_definition_id, revision, definition, remaining, deficit,
                            last_refilled_at, last_refreshed_at
                     FROM quota_resources
                     WHERE resource_definition_id = $1
@@ -548,6 +550,7 @@ impl DbQuotaRepo<PostgresPool> {
                 .bind(next_revision)
                 .bind(&record.definition)
                 .bind(record.remaining)
+                .bind(record.deficit)
                 .bind(record.last_refilled_at.clone())
                 .bind(record.last_refreshed_at.clone())
         } else {
@@ -556,6 +559,7 @@ impl DbQuotaRepo<PostgresPool> {
                 .bind(next_revision)
                 .bind(&record.definition)
                 .bind(record.remaining)
+                .bind(record.deficit)
                 .bind(record.last_refilled_at.clone())
                 .bind(record.last_refreshed_at.clone())
                 .bind(previous_revision)
@@ -636,12 +640,13 @@ const READ_COMPACTED_RESTARTS: u32 = 3;
 
 /// The value stored at a resource's `state` key.
 #[derive(Debug, Clone, BinaryCodec)]
-#[desert(evolution())]
+#[desert(evolution(FieldAdded("deficit", 0)))]
 struct QuotaResourceState {
     definition: ResourceDefinition,
     remaining: u64,
     last_refilled_at: DateTime<Utc>,
     last_refreshed_at: DateTime<Utc>,
+    deficit: u64,
 }
 
 /// The value stored at a lease's key. The resource and the pod it belongs to are in the key.
@@ -801,6 +806,7 @@ impl EtcdQuotaRepo {
         encode(&QuotaResourceState {
             definition: record.definition.value().clone(),
             remaining: record.remaining.get(),
+            deficit: record.deficit.get(),
             last_refilled_at: *record.last_refilled_at.as_utc(),
             last_refreshed_at: *record.last_refreshed_at.as_utc(),
         })
@@ -938,6 +944,7 @@ impl EtcdQuotaRepo {
                             resource_definition_id: id,
                             definition: Blob::new(resource.definition),
                             remaining: resource.remaining.into(),
+                            deficit: resource.deficit.into(),
                             last_refilled_at: resource.last_refilled_at.into(),
                             last_refreshed_at: resource.last_refreshed_at.into(),
                         },
@@ -1249,6 +1256,74 @@ mod tests {
         ] {
             assert!(parse_key(key.as_bytes()).is_err(), "{key} was accepted");
         }
+    }
+
+    /// `QuotaResourceState` as stored before it had a deficit.
+    #[derive(Debug, Clone, BinaryCodec)]
+    #[desert(evolution())]
+    struct QuotaResourceStateWithoutDeficit {
+        definition: ResourceDefinition,
+        remaining: u64,
+        last_refilled_at: DateTime<Utc>,
+        last_refreshed_at: DateTime<Utc>,
+    }
+
+    fn capacity_definition() -> ResourceDefinition {
+        use golem_common::model::environment::EnvironmentId;
+        use golem_common::model::quota::{
+            EnforcementAction, ResourceCapacityLimit, ResourceDefinitionId,
+            ResourceDefinitionRevision, ResourceLimit, ResourceName,
+        };
+        ResourceDefinition {
+            id: ResourceDefinitionId(Uuid::new_v4()),
+            revision: ResourceDefinitionRevision::INITIAL,
+            environment_id: EnvironmentId(Uuid::new_v4()),
+            name: ResourceName("tokens".to_string()),
+            limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: 50 }),
+            enforcement_action: EnforcementAction::Reject,
+            unit: "token".to_string(),
+            units: "tokens".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_resource_state_stored_without_a_deficit_reads_as_no_deficit() {
+        let definition = capacity_definition();
+        let now = Utc::now();
+        let stored = encode(&QuotaResourceStateWithoutDeficit {
+            definition: definition.clone(),
+            remaining: 40,
+            last_refilled_at: now,
+            last_refreshed_at: now,
+        })
+        .unwrap();
+
+        let read: QuotaResourceState = try_deserialize(&stored).unwrap().unwrap();
+        assert_eq!(read.definition.id, definition.id);
+        assert_eq!(read.remaining, 40);
+        assert_eq!(read.deficit, 0);
+        assert_eq!(read.last_refilled_at, now);
+        assert_eq!(read.last_refreshed_at, now);
+    }
+
+    #[test]
+    fn a_resource_state_with_a_deficit_reads_without_it_in_the_earlier_shape() {
+        let definition = capacity_definition();
+        let now = Utc::now();
+        let stored = encode(&QuotaResourceState {
+            definition: definition.clone(),
+            remaining: 0,
+            last_refilled_at: now,
+            last_refreshed_at: now,
+            deficit: 10,
+        })
+        .unwrap();
+
+        let read: QuotaResourceStateWithoutDeficit = try_deserialize(&stored).unwrap().unwrap();
+        assert_eq!(read.definition.id, definition.id);
+        assert_eq!(read.remaining, 0);
+        assert_eq!(read.last_refilled_at, now);
+        assert_eq!(read.last_refreshed_at, now);
     }
 
     #[test]
