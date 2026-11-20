@@ -3202,6 +3202,47 @@ pub async fn force_oplog_retained_start(
     Ok(())
 }
 
+/// Removes the cached status and the invocation result index of the agent incarnation
+/// `fingerprint` from the key-value storage of executors started with the SQLite storage config.
+/// The durable status baseline stays. Call it while no executor runs; the next executor then
+/// answers the status and the results by key from the baseline and the oplog.
+pub async fn remove_cached_status_and_result_index(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    fingerprint: AgentFingerprint,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageNamespace;
+
+    let storage =
+        golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage::configured(
+            &sqlite_storage_config(deps, context),
+        )
+        .await
+        .map_err(|err| anyhow!(err))?;
+    let storage = &storage;
+    let namespaces = [
+        KeyValueStorageNamespace::AgentStatus {
+            agent_id: Arc::new(owned_agent_id.agent_id.clone()),
+            fingerprint,
+        },
+        KeyValueStorageNamespace::AgentInvocationResultIndex {
+            agent_id: owned_agent_id.agent_id.clone(),
+            fingerprint,
+        },
+    ];
+    futures::future::try_join_all(namespaces.into_iter().map(|namespace| async move {
+        let keys = storage
+            .keys("test", "remove_cached_status", namespace.clone())
+            .await?;
+        storage
+            .del_many("test", "remove_cached_status", namespace, keys.into())
+            .await
+    }))
+    .await?;
+    Ok(())
+}
+
 /// The indexed storage of executors started with the SQLite storage config (`start`,
 /// `start_with_overrides`, `start_customized`, `start_with_oplog_config`).
 async fn sqlite_indexed_storage(

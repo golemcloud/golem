@@ -1758,6 +1758,155 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> any
     Ok(())
 }
 
+/// Moves the retained start of the oplog of `agent_id` forward to `retained_start`, in the
+/// key-value storage that the worker executors read it from. Call it while no executor runs.
+async fn force_oplog_retained_start(
+    deps: &EnvBasedTestDependencies,
+    agent_id: &AgentId,
+    retained_start: OplogIndex,
+) -> anyhow::Result<()> {
+    use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
+    use golem_test_framework::components::rdb::DbInfo;
+    use golem_worker_executor::services::golem_config::KeyValueStoragePostgresConfig;
+    use golem_worker_executor::services::oplog::retention::advance_oplog_retention;
+    use golem_worker_executor::storage::keyvalue::postgres::PostgresKeyValueStorage;
+    use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
+
+    // The schema and the database name that the test framework gives the worker executors.
+    const NAMESPACE: &str = "golem_worker_executor";
+    match deps.rdb().info() {
+        DbInfo::Sqlite(path) => {
+            let storage = SqliteKeyValueStorage::configured(&DbSqliteConfig {
+                database: path
+                    .join(format!("{NAMESPACE}.db"))
+                    .to_string_lossy()
+                    .into_owned(),
+                max_connections: 1,
+                foreign_keys: true,
+            })
+            .await
+            .map_err(|error| anyhow!(error))?;
+            advance_oplog_retention(&storage, agent_id, AgentMode::Durable, retained_start).await?;
+        }
+        DbInfo::Postgres(postgres) => {
+            let storage = PostgresKeyValueStorage::configured(&KeyValueStoragePostgresConfig {
+                postgres: DbPostgresConfig {
+                    host: postgres.public_host.clone(),
+                    database: postgres.database_name.clone(),
+                    username: postgres.username.clone(),
+                    password: postgres.password.clone(),
+                    port: postgres.public_port,
+                    max_connections: 1,
+                    schema: Some(NAMESPACE.to_string()),
+                    acquire_timeout: None,
+                },
+            })
+            .await
+            .map_err(|error| anyhow!(error))?;
+            advance_oplog_retention(&storage, agent_id, AgentMode::Durable, retained_start).await?;
+        }
+        DbInfo::Mysql(_) => anyhow::bail!("worker executors do not store key-values in MySQL"),
+    }
+    Ok(())
+}
+
+/// `GET .../oplog` on an agent whose retained start is above 1 returns the entries from the
+/// start with their original indexes, and a `from` before the start returns the
+/// `OPLOG_EXPIRED` error body that names the start.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn get_oplog_starts_at_the_retained_start(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_host_api_tests_release")
+        .name("golem-it:host-api-tests")
+        .store()
+        .await?;
+    let parsed_agent_id = agent_id!("GolemHostApi", "oplog-retained-start");
+    let agent_id = user
+        .start_agent(&component.id, parsed_agent_id.clone())
+        .await?;
+    user.invoke_and_await_agent(
+        &component,
+        &parsed_agent_id,
+        "generate_idempotency_keys",
+        data_value!(),
+    )
+    .await?;
+    let history = user.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
+    let retained_start = OplogIndex::from_u64(3);
+    assert!(
+        history.len() > 3,
+        "the oplog has entries after the start: {history:?}"
+    );
+
+    let cluster = deps.worker_executor_cluster();
+    let started = cluster.started_indices().await;
+    futures::future::join_all(started.iter().map(|index| cluster.stop(*index))).await;
+    force_oplog_retained_start(deps, &agent_id, retained_start).await?;
+    futures::future::join_all(started.iter().map(|index| cluster.start(*index))).await;
+
+    let client = user
+        .deps
+        .worker_service()
+        .worker_http_client(&user.token)
+        .await;
+    let page = client
+        .get_oplog(
+            &agent_id.component_id.0,
+            &agent_id.agent_id,
+            None,
+            100,
+            None,
+            None,
+        )
+        .await?;
+    assert_eq!(page.first_index_in_chunk, retained_start.as_u64());
+    let page = user.get_oplog(&agent_id, retained_start).await?;
+    let retained = history
+        .iter()
+        .filter(|entry| entry.oplog_index >= retained_start)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        page[..retained.len()],
+        retained[..],
+        "the entries keep their original indexes"
+    );
+
+    match client
+        .get_oplog(
+            &agent_id.component_id.0,
+            &agent_id.agent_id,
+            Some(OplogIndex::INITIAL.as_u64()),
+            100,
+            None,
+            None,
+        )
+        .await
+    {
+        Err(golem_client::Error::Item(WorkerError::Error400(body))) => {
+            assert_eq!(
+                body.code,
+                golem_common::base_model::api::error_code::OPLOG_EXPIRED
+            );
+            assert!(
+                body.errors
+                    .iter()
+                    .any(|error| error.contains(&format!("starts at index {retained_start}"))),
+                "{body:?}"
+            );
+        }
+        other => panic!("expected the OPLOG_EXPIRED error body, got {other:?}"),
+    }
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
