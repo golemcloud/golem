@@ -50,6 +50,7 @@ use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::tool_middleware_release::ToolMiddlewareReleaseRecord;
 use golem_registry_service::repo::plan::DbPlanRepo;
+use golem_registry_service::repo::plan_storage::DbPlanStorageRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
@@ -263,6 +264,7 @@ async fn make_deps(pool: PostgresPool, routing_test_pool: PostgresPool) -> Deps 
             pool.clone(),
         )),
         account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::logged(pool.clone())),
+        plan_storage_repo: std::sync::Arc::new(DbPlanStorageRepo::logged(pool.clone())),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(pool.clone())),
         installation_repo: Box::new(DbInstallationRepo::logged(pool.clone())),
@@ -1299,6 +1301,74 @@ async fn test_account_tree_cache_expiry_backup(#[dimension(postgres_variant)] de
 #[test]
 async fn test_account_tree_cache_eviction_and_lag(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::account_tree::test_account_tree_cache_eviction_and_lag(deps).await;
+}
+
+#[test]
+async fn test_plan_definitions_are_versioned_and_owner_scoped(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::plan_storage::test_plan_definitions_are_versioned_and_owner_scoped(deps).await;
+}
+
+#[test]
+async fn test_plan_assignment_follows_owner_and_latest_revision(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::plan_storage::test_plan_assignment_follows_owner_and_latest_revision(deps).await;
+}
+
+#[test]
+async fn test_plan_writes_refuse_impossible_ranges(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_writes_refuse_impossible_ranges(deps).await;
+}
+
+#[test]
+async fn test_plan_opposing_writes_cannot_commit_impossible_range(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::plan_storage::test_plan_opposing_writes_cannot_commit_impossible_range(deps).await;
+}
+
+#[test]
+async fn test_plan_retire_races_assignment(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_retire_races_assignment(deps).await;
+}
+
+#[test]
+async fn test_plan_seed_keeps_later_edits(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_seed_keeps_later_edits(deps).await;
+}
+
+#[test]
+async fn test_plan_operating_defaults_are_validated(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_operating_defaults_are_validated(deps).await;
+}
+
+#[test]
+async fn test_plan_edit_scales_with_members(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_edit_scales_with_members(deps).await;
+}
+
+#[test]
+async fn test_tree_purge_releases_plan_records(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_tree_purge_releases_plan_records(deps).await;
+}
+
+#[test]
+async fn test_plan_edit_rediscovers_members_after_wait(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_edit_rediscovers_members_after_wait(deps).await;
+}
+
+#[test]
+async fn test_plan_guard_scope_timeout_and_cancellation(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::plan_storage::test_plan_guard_scope_timeout_and_cancellation(deps).await;
+}
+
+#[test]
+async fn test_plan_guard_key_collisions(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_guard_key_collisions(deps).await;
 }
 
 #[test]
