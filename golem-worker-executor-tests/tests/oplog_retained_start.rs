@@ -20,7 +20,7 @@ use crate::Tracing;
 use crate::hot_update::wait_for_snapshot_after;
 
 use futures::{StreamExt, TryStreamExt};
-use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{ParsedAgentKey, RevertLastInvocations, RevertWorkerTarget};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{
@@ -59,7 +59,7 @@ async fn increment(
         .await
 }
 
-fn from(
+fn entries_from(
     entries: &[PublicOplogEntryWithIndex],
     start: OplogIndex,
 ) -> Vec<PublicOplogEntryWithIndex> {
@@ -68,6 +68,21 @@ fn from(
         .filter(|entry| entry.oplog_index >= start)
         .cloned()
         .collect()
+}
+
+/// Whether `text` names `retained_start` as the start of an expired oplog: the expired text of
+/// the agent error, or the `retained_start` field of the gRPC error. A start with more digits,
+/// such as 40 for 4, does not match.
+fn names_expired_start(text: &str, retained_start: OplogIndex) -> bool {
+    [
+        format!("expired: it starts at index {retained_start}"),
+        format!("retained_start: {}", retained_start.as_u64()),
+    ]
+    .iter()
+    .any(|needle| {
+        text.match_indices(needle.as_str())
+            .any(|(at, _)| !text[at + needle.len()..].starts_with(|c: char| c.is_ascii_digit()))
+    })
 }
 
 /// The invocations of `increment` that the entries start, and the invocations that they finish.
@@ -112,7 +127,8 @@ fn first_start(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<OplogInd
 /// the oplog after the start. The agent answers pages from the start with their original indexes,
 /// the `Create` entry alone, and search. A page before the start is refused as expired with the
 /// start. The repeated call by key runs nothing: each call of `increment` has one start and one
-/// finish.
+/// finish. A fork of the agent is refused as expired. A revert of more invocations than the oplog
+/// keeps stops at the start, and a revert of the last invocation reads only retained entries.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -177,7 +193,7 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
         page.first().map(|entry| entry.oplog_index),
         Some(retained_start)
     );
-    let retained = from(&history, retained_start);
+    let retained = entries_from(&history, retained_start);
     assert_eq!(
         page[..retained.len()],
         retained[..],
@@ -207,7 +223,7 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
         .expect_err("a page before the start is refused");
     let expired = format!("{expired:#}");
     assert!(
-        expired.contains("OplogExpired") && expired.contains(&format!("{retained_start}")),
+        expired.contains("OplogExpired") && names_expired_start(&expired, retained_start),
         "{expired}"
     );
     let expired = executor
@@ -219,9 +235,10 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
         )
         .await
         .expect_err("a single entry before the start is refused");
+    let expired = format!("{expired:#}");
     assert!(
-        format!("{expired:#}").contains("OplogExpired"),
-        "{expired:#}"
+        expired.contains("OplogExpired") && names_expired_start(&expired, retained_start),
+        "{expired}"
     );
 
     let found = executor.search_oplog(&agent_id, "increment").await?;
@@ -232,6 +249,45 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
             .all(|entry| entry.oplog_index >= retained_start),
         "{found:?}"
     );
+
+    let last = page
+        .last()
+        .map(|entry| entry.oplog_index)
+        .unwrap_or(retained_start);
+    let refused = executor
+        .fork_worker(&agent_id, "retained-start-fork", last)
+        .await
+        .expect_err("a fork copies the history from index 1");
+    let refused = format!("{refused:#}");
+    assert!(names_expired_start(&refused, retained_start), "{refused}");
+
+    let too_far = executor
+        .revert(
+            &agent_id,
+            RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                number_of_invocations: 100,
+            }),
+        )
+        .await
+        .expect_err("the revert walk stops at the start");
+    let too_far = format!("{too_far:#}");
+    assert!(
+        too_far.contains("Could not find 100 invocations to revert"),
+        "{too_far}"
+    );
+    executor
+        .revert(
+            &agent_id,
+            RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                number_of_invocations: 1,
+            }),
+        )
+        .await?;
+    let value = executor
+        .invoke_and_await_agent(&component, &agent, "get", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(value, 4, "the revert of the last `get` keeps the counter");
     Ok(())
 }
 
@@ -274,13 +330,19 @@ async fn a_recovery_without_a_usable_restore_source_keeps_the_oplog(
         .await
         .expect_err("the recovery has no usable restore source");
     let failure = format!("{failure:#}");
-    assert!(
-        failure.contains(&format!("starts at index {retained_start}")),
-        "{failure}"
-    );
+    assert!(names_expired_start(&failure, retained_start), "{failure}");
 
+    let create = executor
+        .get_oplog_entry(
+            &agent_id,
+            context.default_environment_id,
+            OplogIndex::INITIAL,
+            None,
+        )
+        .await?;
+    assert_eq!(create, history[0], "the `Create` entry is kept");
     let kept = executor.get_oplog(&agent_id, retained_start).await?;
-    let retained = from(&history, retained_start);
+    let retained = entries_from(&history, retained_start);
     assert_eq!(kept[..retained.len()], retained[..]);
     assert!(
         kept[retained.len()..].iter().all(|entry| matches!(
@@ -294,7 +356,7 @@ async fn a_recovery_without_a_usable_restore_source_keeps_the_oplog(
     assert_eq!(metadata.status, AgentStatus::Failed);
     let last_error = metadata.last_error.unwrap_or_default();
     assert!(
-        last_error.contains(&format!("starts at index {retained_start}")),
+        names_expired_start(&last_error, retained_start),
         "{last_error}"
     );
     Ok(())

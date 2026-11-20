@@ -14,7 +14,8 @@
 
 use super::*;
 use crate::services::golem_config::ScanBudget;
-use crate::services::oplog::{CommitLevel, OplogOps, PrimaryOplogService};
+use crate::services::oplog::retention::OplogRetention;
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PrimaryOplogService};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
@@ -1220,6 +1221,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
         oplog_service,
         &owned_agent_id,
         AgentMode::Durable,
+        OplogRetention::FULL,
         test_component_id(),
         OwnerKind::ComponentAgent,
         None,
@@ -1651,6 +1653,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        OplogRetention::FULL,
         test_component_id(),
         OwnerKind::ComponentAgent,
         None,
@@ -1835,6 +1838,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        OplogRetention::FULL,
         test_component_id(),
         OwnerKind::ComponentAgent,
         None,
@@ -1857,6 +1861,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         oplog_service,
         &owned_agent_id,
         AgentMode::Durable,
+        OplogRetention::FULL,
         test_component_id(),
         OwnerKind::ComponentAgent,
         None,
@@ -1980,6 +1985,7 @@ async fn explicit_entity_attribution_rejects_non_start_and_non_entity_anchors() 
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        OplogRetention::FULL,
         test_component_id(),
         OwnerKind::ComponentAgent,
         None,
@@ -2004,6 +2010,7 @@ async fn explicit_entity_attribution_rejects_non_start_and_non_entity_anchors() 
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -2766,6 +2773,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        OplogRetention::FULL,
         test_component_id(),
         OwnerKind::ComponentAgent,
         None,
@@ -2887,6 +2895,7 @@ async fn oplog_pages_end_at_the_byte_budget_and_resume_at_the_next_entry() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -2943,6 +2952,7 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -2999,6 +3009,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -3033,6 +3044,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -3086,6 +3098,7 @@ async fn component_revision_lookup_reads_past_its_batch_size() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             index,
         )
     };
@@ -3151,6 +3164,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -3172,6 +3186,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        OplogRetention::FULL,
         None,
         Some(indices[2]),
     )
@@ -3222,6 +3237,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        OplogRetention::FULL,
         Some(cursor),
         None,
     )
@@ -3266,6 +3282,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             Some(OplogCursor {
                 next_oplog_index,
                 current_component_revision: updated_revision.into(),
@@ -4301,6 +4318,10 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
     )
     .await
     .unwrap();
+    let retention = oplog_service
+        .retention(&owned_agent_id, AgentMode::Durable)
+        .await
+        .unwrap();
     let expired = WorkerExecutorError::oplog_expired(agent_id.clone(), retained_start);
 
     let page_start = |cursor: Option<OplogCursor>, from: Option<u64>| {
@@ -4308,6 +4329,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            retention,
             cursor,
             from.map(OplogIndex::from_u64),
         )
@@ -4350,6 +4372,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        retention,
         owned_agent_id.component_id(),
         OwnerKind::ComponentAgent,
         None,
@@ -4403,6 +4426,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            retention,
             owned_agent_id.component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -4429,6 +4453,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
+        retention,
         owned_agent_id.component_id(),
         OwnerKind::ComponentAgent,
         None,
@@ -4450,72 +4475,171 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         expired,
         "a search below the start keeps the expired error"
     );
+
+    // A new guest search starts at the retained start: it moves its start there and reads no
+    // entry below it.
+    let guest_search = search_public_oplog(
+        Arc::new(PanicComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        retention,
+        owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        ComponentRevision::INITIAL,
+        retention.clamp(OplogIndex::INITIAL),
+        Some(OplogIndex::from_u64(5)),
+        10,
+        "context",
+        ScanBudget::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(guest_search.next_oplog_index, OplogIndex::from_u64(6));
+    assert!(
+        guest_search
+            .entries
+            .iter()
+            .all(|entry| entry.oplog_index >= retained_start),
+        "{:?}",
+        guest_search.entries
+    );
+}
+
+/// An oplog service with the retention layer, and an open oplog of one agent in it.
+struct RetainedAttribution {
+    key_value_storage: Arc<crate::storage::keyvalue::memory::InMemoryKeyValueStorage>,
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: OwnedAgentId,
+    oplog: Arc<dyn Oplog>,
+}
+
+impl RetainedAttribution {
+    async fn new(name: &str) -> Self {
+        let key_value_storage =
+            Arc::new(crate::storage::keyvalue::memory::InMemoryKeyValueStorage::new());
+        let primary = PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await;
+        let oplog_service: Arc<dyn OplogService> = Arc::new(
+            crate::services::oplog::retention::RetentionOplogService::new(
+                Arc::new(primary),
+                key_value_storage.clone(),
+            ),
+        );
+        let environment_id = EnvironmentId::new();
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: format!("Agent(\"{name}\")"),
+        };
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let oplog = oplog_service
+            .open(
+                &mut oplog_service.lock_lifecycle(&agent_id).await,
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                make_agent_metadata(agent_id, AccountId::new(), environment_id),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await
+            .unwrap();
+        Self {
+            key_value_storage,
+            oplog_service,
+            owned_agent_id,
+            oplog,
+        }
+    }
+
+    /// Adds an entity `Start` whose parent `Start` is `parent`.
+    async fn add_entity_start(&self, parent: Option<OplogIndex>) -> OplogIndex {
+        let entity_request = test_entity_request(
+            &self.owned_agent_id,
+            AgentEntity::Tool(ToolName::try_from("retained").unwrap()),
+            EntityCallMode::Synchronous,
+            None,
+            "input".to_string().into_typed_schema_value().unwrap(),
+        );
+        self.oplog
+            .add(OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: parent,
+                function_name: HostFunctionName::GolemEntityInvoke,
+                invocation_id: None,
+                observational_owner: None,
+                request: Some(OplogPayload::Inline(Box::new(entity_request))),
+                durable_function_type: DurableFunctionType::WriteLocal,
+                span_started: None,
+                denial: None,
+            })
+            .await
+            .unwrap()
+    }
+
+    async fn advance(&self, to: OplogIndex) {
+        crate::services::oplog::retention::advance_oplog_retention(
+            self.key_value_storage.as_ref(),
+            &self.owned_agent_id.agent_id,
+            AgentMode::Durable,
+            to,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// The attributions of `count` entries from `from`, read with the stored retention.
+    async fn attributions(
+        &self,
+        from: OplogIndex,
+        count: usize,
+    ) -> Vec<PublicOplogEntryAttribution> {
+        let retention = self
+            .oplog_service
+            .retention(&self.owned_agent_id, AgentMode::Durable)
+            .await
+            .unwrap();
+        get_public_oplog_chunk(
+            Arc::new(PanicComponentService),
+            self.oplog_service.clone(),
+            &self.owned_agent_id,
+            AgentMode::Durable,
+            retention,
+            self.owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            from,
+            count,
+        )
+        .await
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|entry| entry.attribution)
+        .collect()
+    }
 }
 
 #[test]
 async fn an_entry_whose_start_is_below_the_retained_start_has_the_agent_attribution() {
-    use crate::services::oplog::retention::{RetentionOplogService, advance_oplog_retention};
-    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
-
-    let key_value_storage = Arc::new(InMemoryKeyValueStorage::new());
-    let primary = PrimaryOplogService::new(
-        Arc::new(InMemoryIndexedStorage::new()),
-        Arc::new(InMemoryBlobStorage::new()),
-        1,
-        1,
-        100,
-        32,
-        RetryConfig::default(),
-    )
-    .await;
-    let oplog_service: Arc<dyn OplogService> = Arc::new(RetentionOplogService::new(
-        Arc::new(primary),
-        key_value_storage.clone(),
-    ));
-    let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: golem_common::model::component::ComponentId::new(),
-        agent_id: "Agent(\"retained-attribution\")".to_string(),
-    };
-    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let oplog = oplog_service
-        .open(
-            &mut oplog_service.lock_lifecycle(&agent_id).await,
-            &owned_agent_id,
-            AgentMode::Durable,
-            None,
-            make_agent_metadata(agent_id.clone(), AccountId::new(), environment_id),
-            default_last_known_status(),
-            default_execution_status(AgentMode::Durable),
-            None,
-        )
-        .await
-        .unwrap();
-    let entity_request = test_entity_request(
-        &owned_agent_id,
-        AgentEntity::Tool(ToolName::try_from("retained").unwrap()),
-        EntityCallMode::Synchronous,
-        None,
-        "input".to_string().into_typed_schema_value().unwrap(),
-    );
+    let retained = RetainedAttribution::new("retained-attribution").await;
     // Index 1 stays readable alone below the start, so the entity `Start` is at index 2.
-    oplog.add(log_entry(1)).await.unwrap();
-    let entity_start = oplog
-        .add(OplogEntry::Start {
-            timestamp: Timestamp::now_utc(),
-            parent_start_index: None,
-            function_name: HostFunctionName::GolemEntityInvoke,
-            invocation_id: None,
-            observational_owner: None,
-            request: Some(OplogPayload::Inline(Box::new(entity_request))),
-            durable_function_type: DurableFunctionType::WriteLocal,
-            span_started: None,
-            denial: None,
-        })
-        .await
-        .unwrap();
+    retained.oplog.add(log_entry(1)).await.unwrap();
+    let entity_start = retained.add_entity_start(None).await;
     assert_eq!(entity_start, OplogIndex::from_u64(2));
-    let owned_log = oplog
+    let owned_log = retained
+        .oplog
         .add(OplogEntry::Log {
             timestamp: Timestamp::now_utc(),
             parent_start_index: Some(entity_start),
@@ -4526,52 +4650,91 @@ async fn an_entry_whose_start_is_below_the_retained_start_has_the_agent_attribut
         })
         .await
         .unwrap();
-    oplog
+    retained
+        .oplog
         .add(OplogEntry::remove_retry_policy(
             Some(entity_start),
             "test-policy".to_string(),
         ))
         .await
         .unwrap();
-    oplog.commit(CommitLevel::Always).await.unwrap();
-
-    let attributions = || async {
-        get_public_oplog_chunk(
-            Arc::new(PanicComponentService),
-            oplog_service.clone(),
-            &owned_agent_id,
-            AgentMode::Durable,
-            owned_agent_id.component_id(),
-            OwnerKind::ComponentAgent,
-            None,
-            ComponentRevision::INITIAL,
-            owned_log,
-            2,
-        )
-        .await
-        .unwrap()
-        .entries
-        .into_iter()
-        .map(|entry| matches!(entry.attribution, PublicOplogEntryAttribution::Entity(_)))
-        .collect::<Vec<_>>()
+    retained.oplog.commit(CommitLevel::Always).await.unwrap();
+    let entity = |attributions: Vec<PublicOplogEntryAttribution>| {
+        attributions
+            .iter()
+            .map(|attribution| matches!(attribution, PublicOplogEntryAttribution::Entity(_)))
+            .collect::<Vec<_>>()
     };
+
     assert_eq!(
-        attributions().await,
+        entity(retained.attributions(owned_log, 2).await),
         vec![true, true],
         "with the full oplog, both entries belong to the entity"
     );
-
-    advance_oplog_retention(
-        key_value_storage.as_ref(),
-        &agent_id,
-        AgentMode::Durable,
-        owned_log,
-    )
-    .await
-    .unwrap();
+    retained.advance(owned_log).await;
     assert_eq!(
-        attributions().await,
+        entity(retained.attributions(owned_log, 2).await),
         vec![false, false],
         "the entity `Start` is below the retained start: the page reads, with the agent attribution"
     );
+}
+
+/// An entity `Start` at or after the retained start whose ancestor is below the start keeps its
+/// entity attribution, without the ancestors below the start.
+#[test]
+async fn an_entity_whose_ancestor_is_below_the_retained_start_keeps_its_attribution_without_it() {
+    let retained = RetainedAttribution::new("retained-ancestor").await;
+    retained.oplog.add(log_entry(1)).await.unwrap();
+    let ancestor = retained.add_entity_start(None).await;
+    let child = retained.add_entity_start(Some(ancestor)).await;
+    let owned_log = retained
+        .oplog
+        .add(OplogEntry::Log {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: Some(child),
+            level: LogLevel::Stdout,
+            context: "context".to_string(),
+            message: "owned by the child entity".to_string(),
+            trace_context: None,
+        })
+        .await
+        .unwrap();
+    retained.oplog.commit(CommitLevel::Always).await.unwrap();
+    let contexts = |attributions: Vec<PublicOplogEntryAttribution>| {
+        attributions
+            .into_iter()
+            .map(|attribution| match attribution {
+                PublicOplogEntryAttribution::Entity(context) => context,
+                other => panic!("expected an entity attribution, got {other:?}"),
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let full = contexts(retained.attributions(child, 2).await);
+    assert_eq!(
+        full.iter()
+            .map(|context| context.ancestors.len())
+            .collect::<Vec<_>>(),
+        vec![1, 1],
+        "with the full oplog, the ancestor entity is in the context"
+    );
+    retained.advance(child).await;
+    let cut = contexts(retained.attributions(child, 2).await);
+    assert_eq!(
+        cut.iter()
+            .map(|context| context.ancestors.len())
+            .collect::<Vec<_>>(),
+        vec![0, 0],
+        "the ancestor below the start is cut"
+    );
+    assert_eq!(
+        cut.iter()
+            .map(|context| context.invocation.clone())
+            .collect::<Vec<_>>(),
+        full.iter()
+            .map(|context| context.invocation.clone())
+            .collect::<Vec<_>>(),
+        "the entity of the entries stays the same"
+    );
+    assert_eq!(owned_log, child.next());
 }

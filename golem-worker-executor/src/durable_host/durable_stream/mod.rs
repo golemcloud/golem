@@ -974,10 +974,10 @@ impl DurableStreamStore {
                 .map_err(StreamStoreError::CorruptHistory)?;
         let mut index = ProducerStreamIndex::default();
         let mut pending_nested_registrations = Vec::new();
-        let mut covered = oplog.retention().start().previous();
-        while covered < current_index {
-            let count = (current_index.as_u64() - covered.as_u64()).min(1024);
-            let entries = oplog.read_exact(covered.next(), count).await?;
+        let retention = oplog.retention();
+        let mut covered = OplogIndex::NONE;
+        while let Some(chunk) = retention.chunk(covered.next(), current_index, 1024) {
+            let entries = oplog.read_exact(chunk.start, chunk.count).await?;
             for (oplog_index, entry) in entries {
                 covered = oplog_index;
                 if lineage.deleted_regions().is_in_deleted_region(oplog_index) {

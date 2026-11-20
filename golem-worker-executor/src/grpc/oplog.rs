@@ -76,6 +76,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let limits = self.oplog_query_limits(request.count)?;
         let claims = ClaimVisibility::from_protobuf(request.claims)
             .map_err(WorkerExecutorError::invalid_request)?;
+        let retention = self
+            .oplog_service()
+            .retention(&owned_agent_id, agent_mode)
+            .await?;
         if let Some(to) = request.to_oplog_index {
             let allowance = oplog_range_allowance(
                 request.scan_allowance.map(Into::into),
@@ -90,7 +94,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 identity.create_parameters().owner_kind,
                 agent_type_name.as_ref(),
                 cursor,
-                OplogIndex::from_u64(request.from_oplog_index),
+                request
+                    .from_oplog_index
+                    .map_or(retention.start(), OplogIndex::from_u64),
                 OplogIndex::from_u64(to),
                 limits,
                 allowance,
@@ -115,6 +121,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
+            retention,
             cursor,
             request.from_oplog_index.map(OplogIndex::from_u64),
         )
@@ -124,6 +131,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
+            retention,
             identity.create_parameters().component_id,
             identity.create_parameters().owner_kind,
             agent_type_name.as_ref(),
@@ -234,10 +242,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name = &identity.create_parameters().agent_type_name;
 
         let limits = self.oplog_query_limits(request.count)?;
+        let retention = self
+            .oplog_service()
+            .retention(&owned_agent_id, agent_mode)
+            .await?;
         let (start, start_component_revision) = oplog_page_start(
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
+            retention,
             cursor,
             None,
         )
@@ -247,6 +260,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
+            retention,
             identity.create_parameters().component_id,
             identity.create_parameters().owner_kind,
             agent_type_name.as_ref(),

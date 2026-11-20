@@ -14,9 +14,11 @@
 
 use super::*;
 use crate::services::golem_config::ScanBudget;
-use crate::services::oplog::{OplogReadError, UnreadableOplog};
+use crate::services::oplog::UnreadableOplog;
+use crate::services::oplog::retention::OplogRetention;
 use golem_common::model::oplog::{OplogCursor, OplogScan, OplogScanAllowance};
 use golem_service_base::error::worker_executor::StaleCursorReason;
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::time::{Duration, Instant};
 
@@ -26,7 +28,7 @@ pub enum PublicOplogReadError {
     /// The oplog did not give the entries, for example because the read reaches below the
     /// retained start.
     Unreadable(UnreadableOplog),
-    /// An entry or the query could not be read into its public form.
+    /// The reader cannot give an entry or the query in its public form.
     Invalid(String),
 }
 
@@ -45,24 +47,14 @@ impl From<UnreadableOplog> for PublicOplogReadError {
     }
 }
 
-impl From<String> for PublicOplogReadError {
-    fn from(details: String) -> Self {
-        Self::Invalid(details)
-    }
-}
-
-/// A read below the retained start keeps its expired error, which names the start. Every other
-/// failure is an unknown error with the text of the failure.
+/// A failed oplog read maps like every [`UnreadableOplog`], so a read below the retained start
+/// keeps its expired error, which names the start. An entry or a query without a public form is
+/// an unknown error with its text.
 impl From<PublicOplogReadError> for WorkerExecutorError {
     fn from(error: PublicOplogReadError) -> Self {
         match error {
-            PublicOplogReadError::Unreadable(
-                unreadable @ UnreadableOplog {
-                    error: OplogReadError::Expired { .. },
-                    ..
-                },
-            ) => unreadable.into(),
-            other => WorkerExecutorError::unknown(other.to_string()),
+            PublicOplogReadError::Unreadable(unreadable) => unreadable.into(),
+            PublicOplogReadError::Invalid(details) => WorkerExecutorError::unknown(details),
         }
     }
 }
@@ -157,11 +149,14 @@ impl ChunkBuilder for RemotePage {
     }
 }
 
+/// Reads up to `count` oplog entries from `initial_oplog_index` in full. `retention` is the
+/// retention of the oplog, which the caller reads once for each page.
 pub async fn get_public_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    retention: OplogRetention,
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
@@ -175,6 +170,7 @@ pub async fn get_public_oplog_chunk(
         oplog_service,
         owned_agent_id,
         agent_mode,
+        retention,
         owner_component_id,
         owner_kind,
         agent_type_name,
@@ -198,6 +194,7 @@ pub async fn get_public_oplog_page(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    retention: OplogRetention,
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
@@ -214,6 +211,7 @@ pub async fn get_public_oplog_page(
         oplog_service,
         owned_agent_id,
         agent_mode,
+        retention,
         owner_component_id,
         owner_kind,
         agent_type_name,
@@ -229,8 +227,9 @@ pub async fn get_public_oplog_page(
 }
 
 /// Reads one oplog entry in full. `component_revision` is the revision to decode the entry with,
-/// as an oplog page reports it for an omitted entry; without it, the oplog is scanned up to the
-/// entry to find the revision.
+/// as an oplog page reports it for an omitted entry; without it, the reader scans the oplog up to
+/// the entry to find the revision. The read serves the `Create` entry at index 1 also when it is
+/// below the retained start; any other entry below the start is expired.
 pub async fn get_public_oplog_entry(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -251,11 +250,8 @@ pub async fn get_public_oplog_entry(
             "agent {owned_agent_id} has no oplog entry at index {oplog_index}"
         )));
     }
-    oplog_service
-        .retention(owned_agent_id, agent_mode)
-        .await?
-        .check_read(oplog_index, 1)
-        .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?;
+    let retention = oplog_service.retention(owned_agent_id, agent_mode).await?;
+    retention.check_agent_read(&owned_agent_id.agent_id, oplog_index, 1)?;
     let component_revision = match component_revision {
         Some(component_revision) => component_revision,
         None => {
@@ -263,6 +259,7 @@ pub async fn get_public_oplog_entry(
                 oplog_service.clone(),
                 owned_agent_id,
                 agent_mode,
+                retention,
                 oplog_index,
             )
             .await?
@@ -273,6 +270,7 @@ pub async fn get_public_oplog_entry(
         oplog_service,
         owned_agent_id,
         agent_mode,
+        retention,
         owner_component_id,
         owner_kind,
         agent_type_name,
@@ -292,13 +290,15 @@ pub async fn get_public_oplog_entry(
 /// Reads up to `count` oplog entries from `initial_oplog_index` and adds the entries that match
 /// `filter` to the chunk, in the form that `builder` selects. The chunk ends early at the first
 /// matching entry that does not fit; the cursor of the chunk then points to that entry, and the
-/// returned flag is `true`.
+/// returned flag is `true`. `retention` decides which entries the read may reach: see
+/// [`OplogRetention::page`].
 #[allow(clippy::too_many_arguments)]
 async fn read_public_oplog_chunk<B: ChunkBuilder>(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    retention: OplogRetention,
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
@@ -313,19 +313,17 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
         .await?;
-    let available = if initial_oplog_index <= last_index {
-        last_index.as_u64() - initial_oplog_index.as_u64() + 1
-    } else {
-        0
+    let page = retention
+        .page(initial_oplog_index, last_index, count as u64)
+        .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?;
+    let raw_entries = match page {
+        Some(page) => {
+            oplog_service
+                .read_exact(owned_agent_id, agent_mode, page.start, page.count)
+                .await?
+        }
+        None => BTreeMap::new(),
     };
-    let raw_entries = oplog_service
-        .read_exact(
-            owned_agent_id,
-            agent_mode,
-            initial_oplog_index,
-            (count as u64).min(available),
-        )
-        .await?;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;
@@ -333,7 +331,6 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     let mut first_index_in_chunk = None;
     let mut page_full = false;
 
-    let retention = oplog_service.retention(owned_agent_id, agent_mode).await?;
     let mut attribution_resolver = PublicOplogAttributionResolver::new(
         oplog_service.clone(),
         owned_agent_id,
@@ -351,7 +348,8 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
 
         let attribution = attribution_resolver
             .attribution_for_entry(index, &raw_entry)
-            .await?;
+            .await
+            .map_err(PublicOplogReadError::Invalid)?;
         let entry = PublicOplogEntry::from_oplog_entry(
             index,
             raw_entry,
@@ -365,14 +363,18 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
             entry_component_revision,
             claims,
         )
-        .await?;
+        .await
+        .map_err(PublicOplogReadError::Invalid)?;
         if filter.is_none_or(|query| entry.matches(query)) {
             let entry = PublicOplogEntryWithIndex {
                 oplog_index: index,
                 attribution,
                 entry,
             };
-            match builder.admit(entry, entry_component_revision)? {
+            match builder
+                .admit(entry, entry_component_revision)
+                .map_err(PublicOplogReadError::Invalid)?
+            {
                 Some(chunk_entry) => entries.push(chunk_entry),
                 None => {
                     page_full = true;
@@ -408,6 +410,7 @@ pub async fn search_public_oplog(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    retention: OplogRetention,
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
@@ -424,6 +427,7 @@ pub async fn search_public_oplog(
         oplog_service,
         owned_agent_id,
         agent_mode,
+        retention,
         owner_component_id,
         owner_kind,
         agent_type_name,
@@ -447,6 +451,7 @@ pub async fn search_public_oplog_page(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    retention: OplogRetention,
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
@@ -465,6 +470,7 @@ pub async fn search_public_oplog_page(
         oplog_service,
         owned_agent_id,
         agent_mode,
+        retention,
         owner_component_id,
         owner_kind,
         agent_type_name,
@@ -492,6 +498,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    retention: OplogRetention,
     owner_component_id: ComponentId,
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
@@ -511,7 +518,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     let mut current_index = initial_oplog_index;
     let mut current_component_revision = initial_component_revision;
 
-    let query = Query::parse(query)?;
+    let query = Query::parse(query).map_err(PublicOplogReadError::Invalid)?;
 
     loop {
         let to_last = last_oplog_index.map_or(u64::MAX, |last| {
@@ -525,6 +532,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
             oplog_service.clone(),
             owned_agent_id,
             agent_mode,
+            retention,
             owner_component_id,
             owner_kind,
             agent_type_name,
@@ -561,16 +569,21 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     })
 }
 
+/// The component revision in effect at `start`: the revision of the last entry before it that
+/// names one, or the revision that the agent started with. `retention` is the retention of the
+/// oplog, which the caller reads once.
 pub async fn find_component_revision_at(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    retention: OplogRetention,
     start: OplogIndex,
 ) -> Result<ComponentRevision, WorkerExecutorError> {
     let revision = scan_component_revision(
         oplog_service,
         owned_agent_id,
         agent_mode,
+        retention,
         start,
         &mut RangeScan::unlimited(),
     )
@@ -585,6 +598,7 @@ async fn scan_component_revision(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    retention: OplogRetention,
     start: OplogIndex,
     scan: &mut RangeScan,
 ) -> Result<Option<ComponentRevision>, WorkerExecutorError> {
@@ -592,12 +606,10 @@ async fn scan_component_revision(
     let last_oplog_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
         .await?;
-    const BATCH_SIZE: u64 = 256;
     let last = OplogIndex::from_u64(start.as_u64().saturating_sub(1)).min(last_oplog_index);
     // The scan reads the retained entries before `start`. When the `Create` entry is below the
     // retained start, the scan reads it alone first: it gives the revision that the agent started
     // with.
-    let retention = oplog_service.retention(owned_agent_id, agent_mode).await?;
     if let Some(create) = retention.create_read().filter(|_| last.is_defined()) {
         if scan.is_spent() {
             return Ok(None);
@@ -611,13 +623,13 @@ async fn scan_component_revision(
         scan.charge(create.count);
     }
     let mut current = OplogIndex::INITIAL;
-    while let Some(range) = retention.range(current, last) {
+    while let Some(chunk) = retention.chunk(current, last, 256) {
         if scan.is_spent() {
             return Ok(None);
         }
-        let count = range.count.min(BATCH_SIZE).min(scan.remaining_entries());
+        let count = chunk.count.min(scan.remaining_entries());
         let entries = oplog_service
-            .read_exact(owned_agent_id, agent_mode, range.start, count)
+            .read_exact(owned_agent_id, agent_mode, chunk.start, count)
             .await?;
         for entry in entries.into_values() {
             if let Some(revision) = entry.specifies_component_revision() {
@@ -625,7 +637,7 @@ async fn scan_component_revision(
             }
         }
         scan.charge(count);
-        current = OplogIndex::from_u64(range.start.as_u64() + count);
+        current = OplogIndex::from_u64(chunk.start.as_u64() + count);
     }
 
     Ok(Some(initial_component_revision))
@@ -881,8 +893,8 @@ pub fn check_oplog_cursor_query(
 /// Where a paged oplog read starts, and the component revision to decode its first entry with:
 /// the cursor of the previous page, or else `from` with the revision in effect there. Without a
 /// cursor and `from`, the read starts at the retained start of the oplog. A start below the
-/// retained start is refused as expired, with the error that names the start. The caller
-/// checks the query of the cursor first, with [`check_oplog_cursor_query`].
+/// retained start fails with the expired error that names the start. The caller checks the
+/// query of the cursor first, with [`check_oplog_cursor_query`].
 ///
 /// A page hands out a cursor only while the oplog has entries after it, and the oplog only grows,
 /// so a cursor that points past the last entry did not come from a page of this oplog: the agent
@@ -893,17 +905,15 @@ pub async fn oplog_page_start(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    retention: OplogRetention,
     cursor: Option<OplogCursor>,
     from: Option<OplogIndex>,
 ) -> Result<(OplogIndex, ComponentRevision), WorkerExecutorError> {
-    let retention = oplog_service.retention(owned_agent_id, agent_mode).await?;
     let start = cursor.as_ref().map_or_else(
         || from.map_or(retention.start(), |from| from.max(OplogIndex::INITIAL)),
         |cursor| OplogIndex::from_u64(cursor.next_oplog_index),
     );
-    retention
-        .check_from(start)
-        .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?;
+    retention.check_agent_from(&owned_agent_id.agent_id, start)?;
     match cursor {
         Some(cursor) => {
             let last_index = oplog_service
@@ -926,9 +936,14 @@ pub async fn oplog_page_start(
             Ok((OplogIndex::from_u64(cursor.next_oplog_index), revision))
         }
         None => {
-            let revision =
-                find_component_revision_at(oplog_service, owned_agent_id, agent_mode, start)
-                    .await?;
+            let revision = find_component_revision_at(
+                oplog_service,
+                owned_agent_id,
+                agent_mode,
+                retention,
+                start,
+            )
+            .await?;
             Ok((start, revision))
         }
     }

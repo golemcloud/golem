@@ -198,10 +198,7 @@ where
             OplogEntry::Revert { dropped_region, .. } => dropped_region.start.min(current),
             _ => current,
         };
-        if retention
-            .range(OplogIndex::INITIAL, continue_before.previous())
-            .is_none()
-        {
+        if !retention.retains(continue_before.previous()) {
             return Ok(None);
         }
         current = continue_before.previous();

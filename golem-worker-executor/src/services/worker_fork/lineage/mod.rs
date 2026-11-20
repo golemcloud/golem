@@ -119,18 +119,14 @@ impl StreamForkLineage {
             owner,
             mode,
         };
-        let from = source.retention().await?.clamp(from);
-        if from > horizon {
-            return Ok(false);
-        }
-        let mut covered = from.previous();
-        while covered < horizon {
-            let count = (horizon.as_u64() - covered.as_u64()).min(1024);
+        let retention = source.retention().await?;
+        let mut covered = retention.clamp(from).previous();
+        while let Some(chunk) = retention.chunk(covered.next(), horizon, 1024) {
             let entries = source
-                .read_exact(covered.next(), count)
+                .read_exact(chunk.start, chunk.count)
                 .await
                 .map_err(|error| error.to_string())?;
-            if entries.len() as u64 != count {
+            if entries.len() as u64 != chunk.count {
                 return Err("missing oplog entries while discovering stream fork lineage".into());
             }
             for (index, entry) in entries {
@@ -206,17 +202,16 @@ impl StreamForkLineage {
         // Both passes start at the retained start of the oplog: the history before it is gone.
         // The first bounded pass reads no external payloads. It builds the complete deletion mask
         // used by the second pass, so payloads in deleted regions are never downloaded.
-        let retained_start = source.retention().await?.start();
+        let retention = source.retention().await?;
         let mut reverts = Vec::new();
         let mut first_stream_entry = None;
-        let mut covered = retained_start.previous();
-        while covered < horizon {
-            let count = (horizon.as_u64() - covered.as_u64()).min(1024);
+        let mut covered = retention.start().previous();
+        while let Some(chunk) = retention.chunk(covered.next(), horizon, 1024) {
             let entries = source
-                .read_exact(covered.next(), count)
+                .read_exact(chunk.start, chunk.count)
                 .await
                 .map_err(|error| error.to_string())?;
-            if entries.len() as u64 != count {
+            if entries.len() as u64 != chunk.count {
                 return Err(
                     "missing oplog entries while discovering reverted stream history".into(),
                 );
@@ -249,14 +244,13 @@ impl StreamForkLineage {
         let mut cuts = Vec::new();
         let mut registrations = Vec::new();
         let mut finished = Vec::new();
-        let mut covered = retained_start.previous();
-        while covered < horizon {
-            let count = (horizon.as_u64() - covered.as_u64()).min(1024);
+        let mut covered = retention.start().previous();
+        while let Some(chunk) = retention.chunk(covered.next(), horizon, 1024) {
             let entries = source
-                .read_exact(covered.next(), count)
+                .read_exact(chunk.start, chunk.count)
                 .await
                 .map_err(|error| error.to_string())?;
-            if entries.len() as u64 != count {
+            if entries.len() as u64 != chunk.count {
                 return Err("missing oplog entries while loading stream fork lineage".into());
             }
             for (index, entry) in entries {

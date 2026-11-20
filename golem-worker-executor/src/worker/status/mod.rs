@@ -1,3 +1,4 @@
+use crate::services::oplog::retention::OplogRetention;
 use crate::services::oplog::{
     CommitLevel, Oplog, OplogPayloadDownloadError, OplogReadError, OplogReadSource, OplogService,
     OplogServiceOps, UnreadableOplog,

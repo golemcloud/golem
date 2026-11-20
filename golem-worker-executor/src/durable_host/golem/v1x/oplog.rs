@@ -224,6 +224,12 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
     let agent_mode = identity.agent_mode;
+    let retention = ctx
+        .state
+        .oplog_service()
+        .retention(&entry.owned_agent_id, agent_mode)
+        .await
+        .map_err(|error| error.to_string())?;
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
     } else {
@@ -231,6 +237,7 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
             ctx.state.oplog_service(),
             &entry.owned_agent_id,
             agent_mode,
+            retention,
             entry.next_oplog_index,
         )
         .await
@@ -242,6 +249,7 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         ctx.state.oplog_service(),
         &entry.owned_agent_id,
         agent_mode,
+        retention,
         identity.create_parameters().component_id,
         identity.create_parameters().owner_kind,
         agent_type.as_ref(),
@@ -266,21 +274,22 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
     let agent_mode = identity.agent_mode;
+    let retention = ctx
+        .state
+        .oplog_service()
+        .retention(&entry.owned_agent_id, agent_mode)
+        .await
+        .map_err(|error| error.to_string())?;
     // A new search starts at the retained start of the oplog.
     let (start, current_component_revision) = if entry.initialized {
         (entry.next_oplog_index, entry.current_component_revision)
     } else {
-        let start = ctx
-            .state
-            .oplog_service()
-            .retention(&entry.owned_agent_id, agent_mode)
-            .await
-            .map_err(|error| error.to_string())?
-            .clamp(entry.next_oplog_index);
+        let start = retention.clamp(entry.next_oplog_index);
         let revision = find_component_revision_at(
             ctx.state.oplog_service(),
             &entry.owned_agent_id,
             agent_mode,
+            retention,
             start,
         )
         .await
@@ -299,6 +308,7 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         ctx.state.oplog_service(),
         &entry.owned_agent_id,
         agent_mode,
+        retention,
         identity.create_parameters().component_id,
         identity.create_parameters().owner_kind,
         agent_type.as_ref(),

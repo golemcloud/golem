@@ -10706,3 +10706,164 @@ async fn successful_session_finishes_agent_writers_but_abandons_tool_writers() {
         assert!(reader.next().await.unwrap().is_none());
     }
 }
+
+/// The stream readers of a store go by the retained start of its oplog: the load of the stream
+/// index and the refresh of the session control metadata read no entry below the start. With the
+/// full oplog, the same readers read from index 1.
+#[test]
+async fn the_stream_index_and_the_control_refresh_read_from_the_retained_start() {
+    use crate::durable_host::durable_stream::session_state::SessionControlMetadata;
+    use crate::services::oplog::retention::RetentionOplog;
+    use crate::services::oplog::retention::test_oplog::{at, idx, jump};
+    use futures::{StreamExt, TryStreamExt};
+
+    let identity = identity();
+    let physical = Arc::new(TestOplog::default());
+    futures::stream::iter(1..=6)
+        .then(|index| physical.add(jump(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let handle = registered_stream(
+        OplogIndex::from_u64(5),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        root_registration(&identity),
+    )
+    .handle;
+    let session_key = attachment_key(&identity, handle.stream_id).session_key;
+    let read_starts = |retention| {
+        let physical = physical.clone();
+        let identity = &identity;
+        let session_key = &session_key;
+        async move {
+            physical.take_read_ranges();
+            let oplog: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(
+                physical.clone(),
+                identity.agent_id.clone(),
+                retention,
+            ));
+            let store = DurableStreamStore::load(
+                oplog,
+                identity.environment_id,
+                identity.agent_id.clone(),
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let loaded = physical.take_read_ranges();
+            store
+                .refresh_control_metadata(session_key, &mut SessionControlMetadata::default())
+                .await
+                .unwrap();
+            let refreshed = physical.take_read_ranges();
+            (
+                loaded.into_iter().map(|(start, _)| start).min(),
+                refreshed.into_iter().map(|(start, _)| start).min(),
+            )
+        }
+    };
+
+    assert_eq!(read_starts(at(4)).await, (Some(idx(4)), Some(idx(4))));
+    assert_eq!(read_starts(at(1)).await, (Some(idx(1)), Some(idx(1))));
+}
+
+/// The control metadata starts at the retained start, so an attach of a reader that a record
+/// below the start introduced fails with the expired error that names the start. With the
+/// introducing record at the start, the same attach commits, and a repeat finds the commit.
+#[test]
+async fn an_attach_of_a_reader_introduced_below_the_retained_start_is_expired() {
+    use crate::services::oplog::UnreadableOplog;
+    use crate::services::oplog::retention::RetentionOplog;
+    use crate::services::oplog::retention::test_oplog::{at, expired, jump};
+    use futures::{StreamExt, TryStreamExt};
+
+    let source_identity = identity();
+    let source = producer(Arc::new(TestOplog::default()), &source_identity, None).await;
+    let handle = source
+        .register(None, root_registration(&source_identity))
+        .await
+        .unwrap()
+        .value;
+    let offsets = source
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7]),
+        )
+        .await
+        .unwrap()
+        .value;
+    let key = attachment_key(&source_identity, handle.stream_id);
+    let consumer_identity = TestIdentity {
+        environment_id: key.consumer_environment_id,
+        agent_id: key.consumer.clone(),
+        fingerprint: key.expected_consumer_fingerprint,
+        invocation: key.consumer_invocation.clone(),
+    };
+    let physical = Arc::new(TestOplog::default());
+    futures::stream::iter(1..=2)
+        .then(|index| physical.add(jump(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let consumer = producer(physical.clone(), &consumer_identity, None).await;
+    consumer
+        .append_session_record(
+            None,
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: StreamRegistrationInvocation::Local(key.session_key.idempotency_key),
+                mapping: StreamBindingRecord {
+                    transport_stream_id: 0,
+                    source: StreamRecordReference::Foreign(handle),
+                    role: SessionStreamRole::Input,
+                },
+            }),
+        )
+        .await
+        .unwrap();
+    let reader_id = LocalStreamReaderId {
+        introducing_oplog_index: consumer.oplog.current_oplog_index().await,
+        binding_slot: 0,
+    };
+    assert_eq!(reader_id.introducing_oplog_index, OplogIndex::from_u64(3));
+    physical.add(jump(4)).await.unwrap();
+    let offset = offsets[0];
+    let attach = |retention| {
+        let physical = physical.clone();
+        let consumer_identity = &consumer_identity;
+        let key = key.clone();
+        async move {
+            let oplog: Arc<dyn Oplog> = Arc::new(RetentionOplog::new(
+                physical,
+                consumer_identity.agent_id.clone(),
+                retention,
+            ));
+            DurableStreamStore::load(
+                oplog,
+                consumer_identity.environment_id,
+                consumer_identity.agent_id.clone(),
+                consumer_identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap()
+            .commit_source_unavailable_overlay(None, key, reader_id, offset, 0)
+            .await
+        }
+    };
+
+    assert_eq!(
+        attach(at(4)).await,
+        Err(StreamStoreError::Unreadable(UnreadableOplog::new(
+            &consumer_identity.agent_id,
+            expired(4),
+        )))
+    );
+    assert_eq!(attach(at(3)).await, Ok(false), "the attach commits");
+    assert_eq!(attach(at(3)).await, Ok(true), "the repeat finds the commit");
+}

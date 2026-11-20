@@ -720,11 +720,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             )
             .await?;
         // The fork copies the source history from index 1 and keeps its indexes, so it needs the
-        // whole source history. A source oplog whose retained start is after index 1 is refused.
+        // whole source history. The fork refuses a source oplog whose retained start is after
+        // index 1.
         source_oplog
             .retention()
-            .check_from(OplogIndex::INITIAL)
-            .map_err(|error| UnreadableOplog::new(&owned_source_agent_id.agent_id, error))?;
+            .check_agent_from(&owned_source_agent_id.agent_id, OplogIndex::INITIAL)?;
         let source_oplog = Ctx::wrap_oplog(
             owned_source_agent_id.clone(),
             source_oplog,
@@ -765,6 +765,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let source_skipped_regions = crate::worker::status::skipped_regions_at(
             self,
             &owned_source_agent_id,
+            source_oplog.retention(),
             source_oplog_end,
         )
         .await?;

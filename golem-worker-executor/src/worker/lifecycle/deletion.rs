@@ -462,74 +462,72 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let current = self.oplog.current_oplog_index().await;
         let mut deleting_recorded = false;
         let mut dependencies = HashMap::new();
-        if let Some(retained) = self.oplog.retention().range(OplogIndex::INITIAL, current) {
-            for (_, entry) in self
+        for (_, entry) in self
+            .oplog
+            .read_retained_range(OplogIndex::INITIAL, current)
+            .await?
+        {
+            let OplogEntry::StreamSession { record, .. } = entry else {
+                continue;
+            };
+            let record = self
                 .oplog
-                .read_exact(retained.start, retained.count)
-                .await?
-            {
-                let OplogEntry::StreamSession { record, .. } = entry else {
-                    continue;
-                };
-                let record = self
-                    .oplog
-                    .download_payload(record)
-                    .await
-                    .map_err(WorkerExecutorError::runtime)?;
-                validate_stream_session_record(&record)?;
-                match record {
-                    StreamSessionRecord::ConsumerDeleting(record)
-                        if record.consumer_environment_id == self.owned_agent_id.environment_id
-                            && record.consumer == self.owned_agent_id.agent_id
-                            && record.consumer_fingerprint
-                                == self.initial_worker_metadata.fingerprint =>
-                    {
-                        deleting_recorded = true;
-                    }
-                    StreamSessionRecord::TopologyPrepared(record)
-                        if record.attachment.consumer_environment_id
-                            == self.owned_agent_id.environment_id
-                            && record.attachment.consumer == self.owned_agent_id.agent_id
-                            && record.attachment.expected_consumer_fingerprint
-                                == self.initial_worker_metadata.fingerprint =>
-                    {
-                        let slot = (
-                            record.attachment.producer_environment_id,
-                            record.attachment.producer,
-                            record.attachment.attachment_id,
-                            record.attachment.stream_id,
-                        );
-                        if dependencies.get(&slot).is_none_or(
-                            |(key, _): &(StreamAttachmentKey, StreamSessionMappingRecord)| {
-                                key.epoch <= record.attachment.epoch
-                            },
-                        ) {
-                            dependencies.insert(slot, (record.attachment, record.mapping));
-                        }
-                    }
-                    StreamSessionRecord::TopologyActivated(record)
-                        if record.attachment.consumer_environment_id
-                            == self.owned_agent_id.environment_id
-                            && record.attachment.consumer == self.owned_agent_id.agent_id
-                            && record.attachment.expected_consumer_fingerprint
-                                == self.initial_worker_metadata.fingerprint =>
-                    {
-                        let slot = (
-                            record.attachment.producer_environment_id,
-                            record.attachment.producer,
-                            record.attachment.attachment_id,
-                            record.attachment.stream_id,
-                        );
-                        if dependencies.get(&slot).is_none_or(
-                            |(key, _): &(StreamAttachmentKey, StreamSessionMappingRecord)| {
-                                key.epoch <= record.attachment.epoch
-                            },
-                        ) {
-                            dependencies.insert(slot, (record.attachment, record.mapping));
-                        }
-                    }
-                    _ => {}
+                .download_payload(record)
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            validate_stream_session_record(&record)?;
+            match record {
+                StreamSessionRecord::ConsumerDeleting(record)
+                    if record.consumer_environment_id == self.owned_agent_id.environment_id
+                        && record.consumer == self.owned_agent_id.agent_id
+                        && record.consumer_fingerprint
+                            == self.initial_worker_metadata.fingerprint =>
+                {
+                    deleting_recorded = true;
                 }
+                StreamSessionRecord::TopologyPrepared(record)
+                    if record.attachment.consumer_environment_id
+                        == self.owned_agent_id.environment_id
+                        && record.attachment.consumer == self.owned_agent_id.agent_id
+                        && record.attachment.expected_consumer_fingerprint
+                            == self.initial_worker_metadata.fingerprint =>
+                {
+                    let slot = (
+                        record.attachment.producer_environment_id,
+                        record.attachment.producer,
+                        record.attachment.attachment_id,
+                        record.attachment.stream_id,
+                    );
+                    if dependencies.get(&slot).is_none_or(
+                        |(key, _): &(StreamAttachmentKey, StreamSessionMappingRecord)| {
+                            key.epoch <= record.attachment.epoch
+                        },
+                    ) {
+                        dependencies.insert(slot, (record.attachment, record.mapping));
+                    }
+                }
+                StreamSessionRecord::TopologyActivated(record)
+                    if record.attachment.consumer_environment_id
+                        == self.owned_agent_id.environment_id
+                        && record.attachment.consumer == self.owned_agent_id.agent_id
+                        && record.attachment.expected_consumer_fingerprint
+                            == self.initial_worker_metadata.fingerprint =>
+                {
+                    let slot = (
+                        record.attachment.producer_environment_id,
+                        record.attachment.producer,
+                        record.attachment.attachment_id,
+                        record.attachment.stream_id,
+                    );
+                    if dependencies.get(&slot).is_none_or(
+                        |(key, _): &(StreamAttachmentKey, StreamSessionMappingRecord)| {
+                            key.epoch <= record.attachment.epoch
+                        },
+                    ) {
+                        dependencies.insert(slot, (record.attachment, record.mapping));
+                    }
+                }
+                _ => {}
             }
         }
         if !deleting_recorded {

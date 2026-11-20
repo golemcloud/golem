@@ -192,6 +192,7 @@ async fn fork_regions_use_the_pinned_horizon_before_later_reverts() {
     let before = super::skipped_regions_at(
         &test_case,
         &test_case.owned_agent_id,
+        OplogRetention::FULL,
         OplogIndex::from_u64(3),
     )
     .await
@@ -199,6 +200,7 @@ async fn fork_regions_use_the_pinned_horizon_before_later_reverts() {
     let after = super::skipped_regions_at(
         &test_case,
         &test_case.owned_agent_id,
+        OplogRetention::FULL,
         OplogIndex::from_u64(4),
     )
     .await
@@ -10021,10 +10023,14 @@ mod region_fold {
             .collect::<BTreeMap<_, _>>();
         let horizon = *list.keys().next_back().unwrap();
 
-        let regions =
-            super::super::skipped_regions_at(&test_case, &test_case.owned_agent_id, horizon)
-                .await
-                .unwrap();
+        let regions = super::super::skipped_regions_at(
+            &test_case,
+            &test_case.owned_agent_id,
+            OplogRetention::FULL,
+            horizon,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(regions, fold_status(list).skipped_regions);
         assert!(regions.is_overridden());
@@ -10058,10 +10064,14 @@ mod region_fold {
             .collect::<BTreeMap<_, _>>();
         let horizon = *list.keys().next_back().unwrap();
 
-        let regions =
-            super::super::skipped_regions_at(&test_case, &test_case.owned_agent_id, horizon)
-                .await
-                .unwrap();
+        let regions = super::super::skipped_regions_at(
+            &test_case,
+            &test_case.owned_agent_id,
+            OplogRetention::FULL,
+            horizon,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(regions, fold_status(list).skipped_regions);
         assert!(regions.is_overridden());
@@ -11234,4 +11244,155 @@ fn cancelled_standalone_retention_survives_every_checkpoint_cut() {
             "lost or shifted cancellation deadline at cut {cut}",
         );
     }
+}
+
+/// A [`TestCase`] behind the retention layer, whose retained start is `start`.
+struct RetainedTestCase {
+    case: TestCase,
+    service: Arc<dyn OplogService>,
+}
+
+impl RetainedTestCase {
+    async fn new(case: TestCase, start: u64) -> Self {
+        let key_value_storage =
+            Arc::new(crate::storage::keyvalue::memory::InMemoryKeyValueStorage::new());
+        crate::services::oplog::retention::advance_oplog_retention(
+            key_value_storage.as_ref(),
+            &case.owned_agent_id.agent_id,
+            AgentMode::Durable,
+            OplogIndex::from_u64(start),
+        )
+        .await
+        .unwrap();
+        Self {
+            service: Arc::new(
+                crate::services::oplog::retention::RetentionOplogService::new(
+                    Arc::new(case.clone()),
+                    key_value_storage,
+                ),
+            ),
+            case,
+        }
+    }
+}
+
+impl HasOplogService for RetainedTestCase {
+    fn oplog_service(&self) -> Arc<dyn OplogService> {
+        self.service.clone()
+    }
+}
+
+impl HasConfig for RetainedTestCase {
+    fn config(&self) -> Arc<GolemConfig> {
+        self.case.config()
+    }
+}
+
+impl HasComponentService for RetainedTestCase {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
+        self.case.component_service()
+    }
+}
+
+fn retained_test_case() -> TestCase {
+    TestCase::builder(0)
+        .add(OplogEntry::grow_memory(0), |status| status)
+        .add(
+            OplogEntry::jump(
+                None,
+                OplogRegion {
+                    start: OplogIndex::from_u64(2),
+                    end: OplogIndex::from_u64(2),
+                },
+            ),
+            |status| status,
+        )
+        .add(OplogEntry::grow_memory(0), |status| status)
+        .add(
+            OplogEntry::jump(
+                None,
+                OplogRegion {
+                    start: OplogIndex::from_u64(4),
+                    end: OplogIndex::from_u64(4),
+                },
+            ),
+            |status| status,
+        )
+        .build()
+}
+
+/// A full status rebuild folds from a default baseline at index 1. With a retained start above
+/// 1, the fold has no start, so the rebuild fails with the expired error that names the start.
+#[test]
+async fn a_full_status_rebuild_with_a_retained_start_above_1_fails_as_expired() {
+    let case = retained_test_case();
+    let owned_agent_id = case.owned_agent_id.clone();
+    let full = RetainedTestCase::new(case.clone(), 1).await;
+    assert!(
+        super::calculate_last_known_status(&full, &owned_agent_id, AgentMode::Durable, None)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let retained = RetainedTestCase::new(case, 3).await;
+    let error =
+        super::calculate_last_known_status(&retained, &owned_agent_id, AgentMode::Durable, None)
+            .await
+            .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            super::StatusError::Unreadable(UnreadableOplog {
+                error: crate::services::oplog::OplogReadError::Expired { retained_start },
+                ..
+            }) if *retained_start == OplogIndex::from_u64(3)
+        ),
+        "{error:?}"
+    );
+}
+
+/// The skipped regions of a fork source read from the start of the retention that the caller
+/// passes, and keep the regions after it.
+#[test]
+async fn skipped_regions_at_reads_from_the_retained_start() {
+    let case = retained_test_case();
+    let owned_agent_id = case.owned_agent_id.clone();
+    let horizon = OplogIndex::from_u64(case.entries.len() as u64);
+    let retained = RetainedTestCase::new(case.clone(), 3).await;
+    case.read_starts.lock().unwrap().clear();
+    let regions = super::skipped_regions_at(
+        &retained,
+        &owned_agent_id,
+        crate::services::oplog::retention::test_oplog::at(3),
+        horizon,
+    )
+    .await
+    .unwrap();
+    assert_eq!(case.read_starts.lock().unwrap().first(), Some(&3));
+    assert!(
+        case.read_starts
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|start| *start >= 3),
+        "{:?}",
+        case.read_starts.lock().unwrap()
+    );
+    assert!(regions.is_in_deleted_region(OplogIndex::from_u64(4)));
+
+    let error =
+        super::skipped_regions_at(&retained, &owned_agent_id, OplogRetention::FULL, horizon)
+            .await
+            .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            super::StatusError::Unreadable(UnreadableOplog {
+                error: crate::services::oplog::OplogReadError::Expired { .. },
+                ..
+            })
+        ),
+        "a read from index 1 is expired: {error:?}"
+    );
 }

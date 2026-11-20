@@ -868,15 +868,13 @@ impl StreamSessionIndexService {
             }
             // The index covers the retained oplog: the entries before its start are gone. The
             // `Create` entry is kept below the start, and names the producer.
+            // A horizon below the retained start leaves nothing to index.
             let retention = oplog.retention(id, mode).await?;
-            let Some(range) = retention.range(metadata.covered_through.next(), horizon) else {
-                return Err(
-                    format!("empty oplog range while indexing stream sessions for {id}").into(),
-                );
+            let Some(chunk) = retention.chunk(metadata.covered_through.next(), horizon, 1024)
+            else {
+                return Ok(());
             };
-            let mut entries = oplog
-                .read_exact(id, mode, range.start, range.count.min(1024))
-                .await?;
+            let mut entries = oplog.read_exact(id, mode, chunk.start, chunk.count).await?;
             if entries.is_empty() {
                 return Err(
                     format!("empty oplog range while indexing stream sessions for {id}").into(),

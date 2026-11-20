@@ -116,9 +116,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let status = self.try_get_last_known_status().await?;
         let retention = self.oplog.retention();
         let mut next = OplogIndex::INITIAL;
-        while let Some(range) = retention.range(next, status.oplog_idx) {
-            let count = range.count.min(256);
-            let entries = self.oplog.read_exact(range.start, count).await?;
+        while let Some(chunk) = retention.chunk(next, status.oplog_idx, 256) {
+            let entries = self.oplog.read_exact(chunk.start, chunk.count).await?;
             for (index, entry) in entries {
                 if status.deleted_regions.is_in_deleted_region(index) {
                     continue;
@@ -138,7 +137,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     return Ok(invocation_id);
                 }
             }
-            next = OplogIndex::from_u64(range.start.as_u64() + count);
+            next = chunk.end();
         }
         Err(self.missing_initialization())
     }

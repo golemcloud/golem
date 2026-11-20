@@ -54,10 +54,18 @@ enum AttributionPathNode {
 }
 
 /// Resolves the attribution of oplog entries from their `Start` entries. It reads only the
-/// `Start` entries that the oplog keeps: a chain of `Start` entries that reaches below the retained
-/// start ends there, as a chain ends at a `Start` without a parent. An entry whose entity parent
-/// `Start` is below the retained start has the agent attribution, because the oplog does not keep
-/// the context of that entity.
+/// `Start` entries that the oplog keeps ([`OplogRetention::retains`]):
+///
+/// - An entry whose entity parent `Start` is below the retained start has the agent attribution,
+///   because the oplog does not keep the context of that entity.
+/// - A chain of `Start` entries that reaches below the retained start ends there, as a chain ends
+///   at a `Start` without a parent. An entity `Start` at or after the start whose ancestor is
+///   below it keeps its entity attribution, without the ancestors below the start.
+///
+/// A cut of the oplog moves the start only to a restore point, where no `Start` is open, so in
+/// production no chain crosses the start. A start that a test forces can cross one. The fallback
+/// keeps such a page readable: an expired error would make the page fail, and a separate public
+/// attribution for an entity that the oplog does not keep would change the public API.
 pub(super) struct PublicOplogAttributionResolver<'a> {
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &'a OwnedAgentId,
@@ -100,7 +108,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                     "oplog entry {index} has non-causal entity parent Start index {start_index}"
                 ));
             }
-            if !self.retains(start_index) {
+            if !self.retention.retains(start_index) {
                 return Ok(PublicOplogEntryAttribution::agent());
             }
             let source = self.load_start(start_index).await?.ok_or_else(|| {
@@ -362,7 +370,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
         if let Some(start) = self.starts.get(&index) {
             return Ok(start.clone());
         }
-        if !self.retains(index) {
+        if !self.retention.retains(index) {
             return Ok(None);
         }
 
@@ -377,10 +385,6 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             .and_then(OplogStartAttributionSource::from_entry);
         self.starts.insert(index, start.clone());
         Ok(start)
-    }
-
-    fn retains(&self, index: OplogIndex) -> bool {
-        self.retention.check_read(index, 1).is_ok()
     }
 
     async fn load_public_entity_invocation(

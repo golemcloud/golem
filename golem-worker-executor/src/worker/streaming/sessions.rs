@@ -204,14 +204,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None => None,
         };
         let current = self.oplog.current_oplog_index().await;
-        'suffix: while metadata.covered_through() < current {
-            let entries = self
-                .oplog
-                .read_exact(
-                    metadata.covered_through().next(),
-                    (current.as_u64() - metadata.covered_through().as_u64()).min(1024),
-                )
-                .await?;
+        let retention = self.oplog.retention();
+        'suffix: while let Some(chunk) =
+            retention.chunk(metadata.covered_through().next(), current, 1024)
+        {
+            let entries = self.oplog.read_exact(chunk.start, chunk.count).await?;
             for (index, entry) in entries {
                 if let OplogEntry::StreamSession { record, .. } = entry {
                     let record = self

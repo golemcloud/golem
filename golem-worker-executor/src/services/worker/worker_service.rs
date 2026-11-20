@@ -674,27 +674,19 @@ impl WorkerService for DefaultWorkerService {
                     }
                 };
 
-                while metadata.covered_through < status.oplog_idx {
-                    let Some(range) =
-                        retention.range(metadata.covered_through.next(), status.oplog_idx)
-                    else {
-                        return Err(WorkerExecutorError::runtime(format!(
-                            "failed to advance invocation result index for {owned_agent_id}: no retained oplog entry after {}",
-                            metadata.covered_through
-                        )));
-                    };
-                    let start = range.start;
-                    let count = range
-                        .count
-                        .min(
-                            self.config
-                                .invocation_results
-                                .physical_index_catch_up_chunk_size,
-                        )
-                        .max(1);
+                // The catch-up ends when no retained entry is after the covered index, also when
+                // the last index is below the retained start: then nothing is left to index.
+                while let Some(chunk) = retention.chunk(
+                    metadata.covered_through.next(),
+                    status.oplog_idx,
+                    self.config
+                        .invocation_results
+                        .physical_index_catch_up_chunk_size,
+                ) {
+                    let start = chunk.start;
                     let entries = self
                         .oplog_service
-                        .read_exact(owned_agent_id, agent_mode, start, count)
+                        .read_exact(owned_agent_id, agent_mode, start, chunk.count)
                         .await?;
                     if entries.is_empty() {
                         return Err(WorkerExecutorError::runtime(format!(
