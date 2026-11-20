@@ -844,7 +844,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
         offset: Filesize,
     ) -> Result<Resource<InputStream>, FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Read, path)]).await?;
@@ -870,7 +870,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         fd: Resource<Descriptor>,
         offset: Filesize,
     ) -> Result<Resource<OutputStream>, FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
@@ -894,7 +894,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         &mut self,
         fd: Resource<Descriptor>,
     ) -> Result<Resource<OutputStream>, FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
@@ -930,7 +930,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn sync_data(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
@@ -955,7 +955,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
@@ -974,7 +974,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_access_timestamp: NewTimestamp,
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
@@ -996,7 +996,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         length: Filesize,
         offset: Filesize,
     ) -> Result<(Vec<u8>, bool), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Read, path)]).await?;
@@ -1011,11 +1011,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error))),
             OpenNode::Directory(_) => Err(ErrorCode::BadDescriptor.into()),
         })?;
-        let read = observe_filesystem_operation(self.create_interrupt_signal(), call)
+        let bytes = observe_filesystem_operation(self.create_interrupt_signal(), call)
             .await
-            .map_err(FsError::trap)?;
-        self.taint_never_live_generation(|| "a local filesystem read".to_string());
-        let bytes = read.map_err(p2_agent_error)?;
+            .map_err(FsError::trap)?
+            .map_err(p2_agent_error)?;
         let eof = bytes.is_empty();
         Ok((bytes.to_vec(), eof))
     }
@@ -1026,7 +1025,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         buffer: Vec<u8>,
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
@@ -1044,7 +1043,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         &mut self,
         self_: Resource<Descriptor>,
     ) -> Result<Resource<DirectoryEntryStream>, FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::List, path)]).await?;
@@ -1079,7 +1078,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn sync(&mut self, self_: Resource<Descriptor>) -> Result<(), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
@@ -1094,7 +1093,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
         path: String,
     ) -> Result<(), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
         let _authorization_permit =
@@ -1109,7 +1108,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     }
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, "")?;
         let root_relative_path = p2_root_relative_path(&guest_path);
@@ -1242,7 +1241,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         path_flags: PathFlags,
         path: String,
     ) -> Result<DescriptorStat, FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
         let root_relative_path = p2_root_relative_path(&guest_path);
@@ -1378,7 +1377,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         data_access_timestamp: NewTimestamp,
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
         let _authorization_permit =
@@ -1407,7 +1406,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_descriptor: Resource<Descriptor>,
         new_path: String,
     ) -> Result<(), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let source_descriptor = p2_agent_descriptor(self, &self_)?;
         let destination_descriptor = p2_agent_descriptor(self, &new_descriptor)?;
         let source_path = p2_descriptor_guest_path(&source_descriptor, &old_path)?;
@@ -1438,7 +1437,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         open_flags: OpenFlags,
         flags: DescriptorFlags,
     ) -> Result<Resource<Descriptor>, FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
         let mut permissions = Vec::new();
@@ -1465,9 +1464,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             flags,
             self.create_interrupt_signal(),
         )
-        .await;
-        self.taint_never_live_generation(|| "a local filesystem open".to_string());
-        let opened = opened?;
+        .await?;
         Ok(push_agent_descriptor(
             self,
             AgentDescriptor::new(opened.node, descriptor_path),
@@ -1479,7 +1476,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
         path: String,
     ) -> Result<String, FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
         let _authorization_permit =
@@ -1498,7 +1495,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self_: Resource<Descriptor>,
         path: String,
     ) -> Result<(), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
         let _authorization_permit =
@@ -1519,7 +1516,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> Result<(), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let source_descriptor = p2_agent_descriptor(self, &old_fd)?;
         let destination_descriptor = p2_agent_descriptor(self, &new_fd)?;
         let source_path = p2_descriptor_guest_path(&source_descriptor, &old_path)?;
@@ -1548,7 +1545,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         old_path: String,
         new_path: String,
     ) -> Result<(), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
         let destination_path = p2_descriptor_guest_path(&descriptor, &new_path)?;
         let _authorization_permit =
@@ -1567,7 +1564,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         fd: Resource<Descriptor>,
         path: String,
     ) -> Result<(), FsError> {
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
         let _authorization_permit =
@@ -1587,7 +1584,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         other: Resource<Descriptor>,
     ) -> wasmtime::Result<bool> {
         self.observe_function_call("filesystem::types::descriptor", "is_same_object");
-        let generation_handle = self.filesystem_generation_handle();
+        let generation_handle = self.guest_filesystem_generation_handle();
         let left = p2_agent_descriptor(self, &self_)?;
         let right = p2_agent_descriptor(self, &other)?;
         let call = AgentDescriptor::with_nodes(&left, &right, |left, right| {

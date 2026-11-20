@@ -154,7 +154,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor =
             accessor.with(|mut store| agent_descriptor_from_access::<Ctx, U>(&mut store, &fd))?;
@@ -162,9 +162,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             return Err(types::ErrorCode::BadDescriptor.into());
         }
 
-        let taint = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).never_live_generation_taint()
-        });
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let producer = FilesystemReadProducer::new(
             generation_handle,
@@ -173,19 +170,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             result_tx,
             filesystem_interrupt::<Ctx, U>(accessor),
         )
-        .await?
-        .tainting(taint.clone());
+        .await?;
         let result_interrupt = filesystem_interrupt::<Ctx, U>(accessor);
-        let result = async move {
-            let result = wait_filesystem_task_result(result_rx, result_interrupt).await;
-            if let Some(taint) = &taint {
-                taint.set(|| "a local filesystem read result".to_string());
-            }
-            result
-        };
         accessor.with(|mut store| {
             let mut stream = StreamReader::new(&mut store, producer)?;
-            let future = match FutureReader::new(&mut store, result) {
+            let future = match FutureReader::new(
+                &mut store,
+                wait_filesystem_task_result(result_rx, result_interrupt),
+            ) {
                 Ok(future) => future,
                 Err(error) => {
                     let _ = stream.close(&mut store);
@@ -227,7 +219,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor =
             accessor.with(|mut store| agent_descriptor_from_access::<Ctx, U>(&mut store, &fd))?;
@@ -310,7 +302,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor =
             accessor.with(|mut store| agent_descriptor_from_access::<Ctx, U>(&mut store, &fd))?;
@@ -401,7 +393,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor = store
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
@@ -462,7 +454,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor = accessor
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
@@ -485,7 +477,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let _authorization_permit =
             authorize_paths(accessor, &[(FilesystemVerb::Write, path)]).await?;
         let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
@@ -528,7 +520,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor =
             accessor.with(|mut store| agent_descriptor_from_access::<Ctx, U>(&mut store, &fd))?;
@@ -593,7 +585,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor = store
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
@@ -619,7 +611,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor = store
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
@@ -788,7 +780,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let _authorization_permit =
             authorize_paths(accessor, &[(FilesystemVerb::Write, guest_path)]).await?;
         let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         accessor.with(|mut access| {
             observe_function_call_store::<Ctx, U>(
@@ -842,7 +834,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let source_descriptor = store
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
@@ -889,7 +881,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor = accessor
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
@@ -904,12 +896,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             flags,
             filesystem_interrupt::<Ctx, U>(accessor),
         )
-        .await;
-        accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .taint_never_live_generation(|| "a local filesystem open".to_string())
-        });
-        let opened = opened?;
+        .await?;
         push_agent_descriptor_from_accessor(
             accessor,
             AgentDescriptor::new(opened.node, descriptor_path),
@@ -932,7 +919,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor = store
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
@@ -961,7 +948,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor = store
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
@@ -993,7 +980,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         )
         .await?;
         let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let source_descriptor = accessor
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
@@ -1028,7 +1015,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let _authorization_permit =
             authorize_paths(accessor, &[(FilesystemVerb::Write, destination_path)]).await?;
         let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor = accessor
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
@@ -1057,7 +1044,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let _authorization_permit =
             authorize_paths(accessor, &[(FilesystemVerb::Delete, guest_path)]).await?;
         let generation_handle = accessor.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let descriptor = accessor
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
@@ -1090,7 +1077,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let generation_handle = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
         });
         let left =
             store.with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))?;

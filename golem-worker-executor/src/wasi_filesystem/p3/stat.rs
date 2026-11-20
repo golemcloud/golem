@@ -30,7 +30,7 @@ pub(super) async fn p3_is_immutable_initial_file<Ctx: WorkerCtx, U: 'static>(
     let root_relative_path =
         std::path::Path::new(guest_path.as_str().strip_prefix('/').unwrap_or_default());
     let generation_handle = store.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+        durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
     });
     let descriptor = store
         .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, fd))
@@ -125,7 +125,7 @@ where
     U: Send + 'static,
 {
     let generation_handle = store.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+        durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
     });
     let descriptor =
         match store.with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd)) {
@@ -163,7 +163,7 @@ where
     U: Send + 'static,
 {
     let generation_handle = store.with(|mut access| {
-        durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+        durable_worker_ctx::<Ctx, U>(access.data_mut()).guest_filesystem_generation_handle()
     });
     let descriptor =
         match store.with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd)) {

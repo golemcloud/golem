@@ -15800,7 +15800,7 @@ async fn bootstrap_cursor_over(
         OplogIndex::from_u64(skip_through),
         OplogIndex::from_u64(target),
         tail,
-        false,
+        None,
     )
     .await
     .expect("failed to build bootstrap cursor")
@@ -15878,6 +15878,46 @@ async fn strict_bootstrap_cursor_replays_its_block_after_history_that_the_main_c
         claim_and_resolve(&main, HostFunctionName::MonotonicClockResolution).await,
         (2, 3)
     );
+}
+
+/// The bootstrap cursor of a never-live owner shares the generation taint of the main cursor, so
+/// a core initializer's unrecorded observation taints the generation that the start outcome
+/// samples on the main cursor, both when the initializer fails and after the main cursor is
+/// restored. A bootstrap cursor of an unmarked owner has a taint of its own.
+#[test]
+async fn a_never_live_bootstrap_cursor_taints_the_generation_of_the_main_cursor() {
+    let oplog = oplog_of(history_with_bootstrap_block()).await;
+    let main = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    let bootstrap = ReplayState::new_for_bootstrap(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        &DeletedRegions::default(),
+        OplogIndex::from_u64(3),
+        OplogIndex::from_u64(5),
+        BootstrapTail::Strict,
+        Some(main.generation_taint()),
+    )
+    .await
+    .unwrap();
+    let unmarked = bootstrap_cursor_over(&oplog, 3, 5, BootstrapTail::Strict).await;
+
+    unmarked
+        .generation_taint()
+        .set(|| "an unmarked observation".to_string());
+    assert!(!main.generation_taint().is_tainted());
+    bootstrap
+        .generation_taint()
+        .set(|| "a native socket create".to_string());
+    drop(bootstrap);
+    assert!(main.generation_taint().is_tainted());
 }
 
 #[test]

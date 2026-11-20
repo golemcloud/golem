@@ -26,9 +26,6 @@ pub(super) struct FilesystemReadProducer {
     buffered: Bytes,
     pending: Option<Pin<Box<agent_filesystem::FilesystemCall<Bytes>>>>,
     result_tx: Option<tokio::sync::oneshot::Sender<FilesystemReadResult>>,
-    /// The generation taint of a never-live owner: the producer taints it when it delivers
-    /// bytes, the end of the file or an error, since the oplog does not record them.
-    taint: Option<crate::durable_host::never_live::GenerationTaint>,
     #[cfg(test)]
     read_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -51,7 +48,6 @@ impl FilesystemReadProducer {
             buffered: Bytes::new(),
             pending: None,
             result_tx: Some(result_tx),
-            taint: None,
             #[cfg(test)]
             read_calls,
         };
@@ -71,21 +67,6 @@ impl FilesystemReadProducer {
             },
         }
         Ok(producer)
-    }
-
-    /// The producer of a never-live owner, which taints `taint` when it delivers a result.
-    pub(super) fn tainting(
-        mut self,
-        taint: Option<crate::durable_host::never_live::GenerationTaint>,
-    ) -> Self {
-        self.taint = taint;
-        self
-    }
-
-    fn deliver(&self) {
-        if let Some(taint) = &self.taint {
-            taint.set(|| "a local filesystem read".to_string());
-        }
     }
 
     fn close(&mut self, result: FilesystemReadResult) {
@@ -205,7 +186,6 @@ impl<D> StreamProducer<D> for FilesystemReadProducer {
         let mut dst = dst.as_direct(store, FILESYSTEM_READ_CHUNK_SIZE);
         let length = dst.remaining().len().min(FILESYSTEM_READ_CHUNK_SIZE);
         if !self.buffered.is_empty() {
-            self.deliver();
             let bytes = self.take_buffered(length);
             let length = bytes.len();
             dst.remaining()[..length].copy_from_slice(&bytes);
@@ -215,11 +195,7 @@ impl<D> StreamProducer<D> for FilesystemReadProducer {
         if self.result_tx.is_none() {
             return Poll::Ready(Ok(StreamResult::Dropped));
         }
-        let polled = self.poll_read_chunk(cx, length);
-        if polled.is_ready() {
-            self.deliver();
-        }
-        match polled {
+        match self.poll_read_chunk(cx, length) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(Some(bytes))) => {
                 let length = bytes.len();

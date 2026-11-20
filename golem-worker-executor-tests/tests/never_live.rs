@@ -574,3 +574,101 @@ async fn an_interrupted_never_live_fork_appends_only_its_update_outcomes(
     );
     Ok(())
 }
+
+/// A full replay of a never-live fork lists its preopened root directory with a recorded
+/// permission check, and the native listing is the only result it observes that the oplog does
+/// not record. The listing taints the generation, so the divergence right after it proves no
+/// incompatibility: the marked update fails as `Operational` and keeps the divergence. The
+/// unmarked twin of the same cut is never tainted and fails as `Divergence` at the same index.
+#[test]
+#[timeout("4m")]
+async fn a_divergence_after_a_replayed_directory_listing_of_a_never_live_fork_is_operational(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = crate::fork::start_with_local_resume(deps, &context, false).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let source = agent_id!("DirectoryListing");
+    let source_id = executor.start_agent(&component.id, source.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &source, "list_then_draw", data_value!())
+        .await?;
+    let cut = tip(&executor, &source_id).await?;
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    let fork = || {
+        ForkTarget::new(
+            &component,
+            phantom_agent_id!("DirectoryListing", uuid::Uuid::new_v4()),
+        )
+    };
+    let (marked, twin) = (fork()?, fork()?);
+    executor
+        .fork_worker_never_live(&source_id, &marked.agent.to_string(), cut)
+        .await?;
+    executor
+        .auto_update_worker(&marked.worker_id, target.revision, false)
+        .await?;
+    let outcomes =
+        settled_update_outcomes(&executor, context.default_environment_id, &marked.worker_id)
+            .await?;
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    let PublicOplogEntry::FailedUpdate(marked_failure) = &outcomes[0].entry else {
+        return Err(anyhow!("the marked update did not fail: {outcomes:?}"));
+    };
+    assert!(
+        marked_failure.snapshot_assisted_details.is_none(),
+        "{marked_failure:?}"
+    );
+    assert_eq!(
+        marked_failure.failure_class,
+        UpdateFailureClass::Operational,
+        "{marked_failure:?}"
+    );
+
+    executor
+        .fork_worker(&source_id, &twin.agent.to_string(), cut)
+        .await?;
+    executor
+        .auto_update_worker(&twin.worker_id, target.revision, false)
+        .await?;
+    let twin_outcomes = tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let outcomes = update_outcomes(&executor, &twin.worker_id).await?;
+            if !outcomes.is_empty() {
+                break anyhow::Ok(outcomes);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    let PublicOplogEntry::FailedUpdate(twin_failure) = &twin_outcomes[0].entry else {
+        return Err(anyhow!("the twin update did not fail: {twin_outcomes:?}"));
+    };
+    assert_eq!(
+        twin_failure.failure_class,
+        UpdateFailureClass::Divergence,
+        "{twin_failure:?}"
+    );
+    let twin_divergence = twin_failure
+        .divergence
+        .as_ref()
+        .map(|divergence| divergence.oplog_index);
+    assert!(twin_divergence.is_some(), "{twin_failure:?}");
+    assert_eq!(
+        marked_failure
+            .divergence
+            .as_ref()
+            .map(|divergence| divergence.oplog_index),
+        twin_divergence
+    );
+    Ok(())
+}

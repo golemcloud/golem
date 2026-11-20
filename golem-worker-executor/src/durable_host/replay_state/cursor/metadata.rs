@@ -67,6 +67,7 @@ impl ReplayState {
             wallet,
             None,
             never_live,
+            Default::default(),
         )
         .await
     }
@@ -75,6 +76,9 @@ impl ReplayState {
     /// `INITIAL.next()..=skip_through` and the operator-reverted `deleted_regions`, and replays up
     /// to `target`. It has no wallet, records no replay events, and does not publish live when it
     /// starts exhausted; `tail` decides what a durable call after the block does.
+    /// `never_live` is the generation taint of a never-live owner: the bootstrap cursor shares
+    /// it, so an unrecorded observation of the core initializer taints the generation that the
+    /// start outcome samples on the main cursor.
     pub(crate) async fn new_for_bootstrap(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -83,7 +87,7 @@ impl ReplayState {
         skip_through: OplogIndex,
         target: OplogIndex,
         tail: BootstrapTail,
-        never_live: bool,
+        never_live: Option<crate::durable_host::never_live::GenerationTaint>,
     ) -> Result<Self, WorkerExecutorError> {
         let mut skipped_regions = DeletedRegions::from_regions(deleted_regions.regions().cloned());
         if skip_through > OplogIndex::INITIAL {
@@ -100,7 +104,8 @@ impl ReplayState {
             target,
             None,
             Some(tail),
-            never_live,
+            never_live.is_some(),
+            never_live.unwrap_or_default(),
         )
         .await
     }
@@ -115,6 +120,7 @@ impl ReplayState {
         wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
         bootstrap: Option<BootstrapTail>,
         never_live: bool,
+        taint: crate::durable_host::never_live::GenerationTaint,
     ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
@@ -150,7 +156,7 @@ impl ReplayState {
             bootstrap,
             never_live,
             initializer_running: AtomicBool::new(false),
-            taint: Default::default(),
+            taint,
             owner_tool_operations,
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
             delivery_in_progress: AtomicBool::new(false),

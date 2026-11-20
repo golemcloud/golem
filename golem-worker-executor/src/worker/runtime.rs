@@ -1089,7 +1089,7 @@ impl RunningWorker {
                 skip_through,
                 target,
                 tail,
-                parent.never_live(),
+                context.durable_ctx().never_live_generation_taint(),
             )
             .await
             {

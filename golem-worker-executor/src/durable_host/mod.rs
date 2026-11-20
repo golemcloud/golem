@@ -662,6 +662,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.filesystem_generation_handle.clone()
     }
 
+    /// The filesystem generation handle for a guest filesystem host function. Each one that
+    /// takes it runs a native filesystem operation, whose result the oplog does not record in
+    /// full even when its permission check or timestamps replay, so the handle taints the
+    /// generation of a never-live owner.
+    pub(crate) fn guest_filesystem_generation_handle(&self) -> FilesystemGenerationHandle {
+        self.taint_never_live_generation(|| "a local filesystem operation".to_string());
+        self.filesystem_generation_handle()
+    }
+
     /// Taints the generation of a never-live owner with `source`, because its guest observed a
     /// native result that the oplog does not record, such as local filesystem data or a socket
     /// bind result. An unmarked owner is not tainted.

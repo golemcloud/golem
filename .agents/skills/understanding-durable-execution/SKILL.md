@@ -1477,8 +1477,11 @@ call that executes instead of replaying is checked against the host-call decisio
 read-only strictness; a refused call traps with `NeverLiveEffectRefused`, which every classifier
 keeps typed up to the outcome table, where it is `NotReplayable` / `UPDATE_NOT_REPLAYABLE`. An
 allowed call whose result the oplog does not record (clock, random, environment, filesystem) sets
-the generation taint, and so do the native filesystem reads and opens and the native socket
-creates and binds of a marked owner.
+the generation taint. So does every guest filesystem host function that runs a native
+filesystem operation (`guest_filesystem_generation_handle`), because a replayed permission check
+or replayed timestamps do not record the native result, and so do the native socket creates and
+binds of a marked owner. The bootstrap cursor of a core initializer shares the taint of the main
+cursor, which the start outcome samples.
 Native peer boundaries (P2 TCP connect, a native DNS lookup, a P3 HTTP send, an incomplete
 transaction terminal) are refused before the native call; under them `SocketPolicy` refuses
 connect, send and receive and the `WasiCtx` disables name lookup. A socket error from that floor
