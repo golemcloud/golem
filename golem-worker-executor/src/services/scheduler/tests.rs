@@ -194,6 +194,23 @@ struct RecordingActiveWorkerAccess {
     fingerprint: AgentFingerprint,
     executions: Arc<Mutex<Vec<String>>>,
     complete_not_before: Option<DateTime<Utc>>,
+    started: CancellationToken,
+}
+
+impl RecordingActiveWorkerAccess {
+    async fn wait_until_completion(&self) {
+        self.started.cancel();
+        if let Some(deadline) = self.complete_not_before {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while Utc::now().timestamp_millis() < deadline.timestamp_millis() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("wall clock must reach the delivery completion deadline");
+            assert!(Utc::now().timestamp_millis() >= deadline.timestamp_millis());
+        }
+    }
 }
 
 #[async_trait]
@@ -233,6 +250,7 @@ impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
         _last_oplog_index: OplogIndex,
         _wait: ArchiveWait,
     ) -> Result<Option<bool>, WorkerExecutorError> {
+        self.wait_until_completion().await;
         self.executions.lock().unwrap().push("archive".to_string());
         Ok(Some(true))
     }
@@ -249,16 +267,7 @@ impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
         let ExactExistingDelivery::WakeInvocation(idempotency_key) = delivery else {
             unreachable!()
         };
-        if let Some(deadline) = self.complete_not_before {
-            tokio::time::timeout(Duration::from_secs(5), async {
-                while Utc::now().timestamp_millis() < deadline.timestamp_millis() {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .expect("wall clock must reach the delivery completion deadline");
-            assert!(Utc::now().timestamp_millis() >= deadline.timestamp_millis());
-        }
+        self.wait_until_completion().await;
         self.executions
             .lock()
             .unwrap()
@@ -761,6 +770,9 @@ struct RecordingSchedulerStorage {
     insert_after_first_claim: Mutex<Option<(ScheduleId, ScheduledAction)>>,
     ack_failures: AtomicUsize,
     claims_after_ack_failure: AtomicUsize,
+    expire_renewal: AtomicUsize,
+    renewal_refused: CancellationToken,
+    hold_ack_until_renewal_refused: bool,
 }
 
 #[async_trait]
@@ -840,6 +852,29 @@ impl SchedulerStorage for RecordingSchedulerStorage {
         lease_until: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
+        if self
+            .expire_renewal
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            == Ok(1)
+        {
+            // Simulate a renewal delayed past expiry, without reclaiming the action.
+            // Its requested deadline is at least as late as the previous lease deadline.
+            while Utc::now().timestamp_millis() < lease_until.timestamp_millis() {
+                tokio::task::yield_now().await;
+            }
+            let renewed = self
+                .inner
+                .extend_lease(schedule_id, lease_owner, lease_until, Utc::now())
+                .await?;
+            assert!(
+                !renewed,
+                "delayed renewal must not revive the expired lease"
+            );
+            self.renewal_refused.cancel();
+            return Ok(renewed);
+        }
         self.inner
             .extend_lease(schedule_id, lease_owner, lease_until, now)
             .await
@@ -851,6 +886,9 @@ impl SchedulerStorage for RecordingSchedulerStorage {
         lease_owner: Uuid,
         now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
+        if self.hold_ack_until_renewal_refused {
+            self.renewal_refused.cancelled().await;
+        }
         if self.failed_ack_ids.lock().unwrap().remove(&schedule_id.id) {
             self.ack_failures.fetch_add(1, Ordering::SeqCst);
             self.failed_acknowledgements
@@ -1079,6 +1117,7 @@ async fn acknowledgement_uses_completion_time_not_original_tick() {
                 fingerprint,
                 executions: executions.clone(),
                 complete_not_before: expire_before_completion.then_some(lease_until),
+                started: CancellationToken::new(),
             }),
             oplog_service,
             Duration::from_secs(1000),
@@ -1112,9 +1151,15 @@ async fn acknowledgement_uses_completion_time_not_original_tick() {
         assert_eq!(claimed.len(), 1);
         assert!(tick.timestamp_millis() < lease_until.timestamp_millis());
 
-        // The tick still precedes expiry, but delivery finishes at or beyond expiry.
-        // WakeInvocation does not renew its lease, so only a completion-time ack is refused.
-        svc.process_claimed_actions(claimed, tick).await.unwrap();
+        // Exercise acknowledgement independently of batch renewal: the tick precedes
+        // expiry, but a delivery completing after expiry must not delete the action.
+        svc.process_and_ack_claimed_action(
+            claimed.into_iter().next().unwrap(),
+            tick,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(*executions.lock().unwrap(), vec![invocation_id.to_string()]);
         if expire_before_completion {
             assert!(Utc::now().timestamp_millis() >= lease_until.timestamp_millis());
@@ -1129,13 +1174,257 @@ async fn acknowledgement_uses_completion_time_not_original_tick() {
 }
 
 #[test]
-async fn each_batch_claims_with_fresh_time_but_archive_followup_uses_original_tick() {
-    let storage = Arc::new(RecordingSchedulerStorage::default());
+#[test_r::timeout("10s")]
+async fn batch_lease_renewal_covers_running_and_queued_actions() {
+    for scenario in ["same-agent", "distinct-agents", "archive"] {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent(scenario));
+        let fingerprint = AgentFingerprint::new();
+        let executions = Arc::new(Mutex::new(Vec::new()));
+        let oplog_service = create_oplog_service_with_presence(&owned_agent_id).await;
+        let tick = Utc::now();
+        let lease_ttl = Duration::from_millis(300);
+        let complete_not_before = tick + chrono::Duration::milliseconds(900);
+        let svc = SchedulerServiceDefault::new(
+            storage.clone(),
+            create_shard_service_mock(),
+            Arc::new(RecordingActiveWorkerAccess {
+                fingerprint,
+                executions: executions.clone(),
+                complete_not_before: Some(complete_not_before),
+                started: CancellationToken::new(),
+            }),
+            oplog_service,
+            Duration::from_secs(1000),
+            3,
+            lease_ttl,
+            2,
+            RetryConfig::max_attempts_3(),
+            1,
+            CancellationToken::new(),
+        );
+        let mut expected = Vec::new();
+        if scenario == "archive" {
+            svc.schedule(
+                tick - chrono::Duration::seconds(10),
+                ScheduledAction::ArchiveOplog {
+                    account_id: AccountId::new(),
+                    owned_agent_id,
+                    agent_mode: AgentMode::Durable,
+                    last_oplog_index: OplogIndex::from_u64(1),
+                    next_after: Duration::from_secs(3600),
+                },
+            )
+            .await;
+            expected.push("archive".to_string());
+        } else {
+            for index in 0..3 {
+                let invocation_id = InvocationId(Uuid::new_v4());
+                expected.push(invocation_id.to_string());
+                svc.schedule(
+                    tick - chrono::Duration::seconds(10) + chrono::Duration::milliseconds(index),
+                    ScheduledAction::WakeInvocation {
+                        owned_agent_id: if scenario == "same-agent" {
+                            owned_agent_id.clone()
+                        } else {
+                            OwnedAgentId::new(
+                                owned_agent_id.environment_id,
+                                &agent(&format!("agent-{index}")),
+                            )
+                        },
+                        idempotency_key: invocation_id,
+                        target_worker_fingerprint: fingerprint,
+                    },
+                )
+                .await;
+            }
+        }
+
+        let (processed, ()) = tokio::join!(svc.process(tick), async {
+            // Probe after the original lease has expired, while the first action is
+            // still running. Both serial and concurrency-limited queues must stay leased.
+            let probe_at = tick + chrono::Duration::milliseconds(600);
+            while Utc::now().timestamp_millis() < probe_at.timestamp_millis() {
+                tokio::task::yield_now().await;
+            }
+            assert!(Utc::now() < complete_not_before);
+            assert!(
+                storage
+                    .claim_due(
+                        Utc::now(),
+                        &ShardAssignment::unexpiring(1, [ShardId::new(0)]),
+                        10,
+                        lease_ttl,
+                    )
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "{scenario}: another executor reclaimed queued or running work"
+            );
+        });
+        processed.unwrap();
+        svc.process(Utc::now()).await.unwrap();
+        let mut actual = executions.lock().unwrap().clone();
+        if scenario == "distinct-agents" {
+            actual.sort();
+            expected.sort();
+        }
+        assert_eq!(
+            actual, expected,
+            "{scenario}: actions must run once, in agent order"
+        );
+        assert!(
+            claim_all(&storage).await.is_empty(),
+            "{scenario}: action was not acknowledged"
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn lease_renewal_refuses_expired_work_and_cancels_in_flight_archival() {
+    for expire_before_start in [false, true] {
+        let storage = Arc::new(RecordingSchedulerStorage {
+            // Accept preflight, then let the first heartbeat reach storage after expiry.
+            expire_renewal: AtomicUsize::new(if expire_before_start { 0 } else { 2 }),
+            ..Default::default()
+        });
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("lost-lease"));
+        let executions = Arc::new(Mutex::new(Vec::new()));
+        let started = CancellationToken::new();
+        let svc = SchedulerServiceDefault::new(
+            storage.clone(),
+            create_shard_service_mock(),
+            Arc::new(RecordingActiveWorkerAccess {
+                fingerprint: AgentFingerprint::new(),
+                executions: executions.clone(),
+                // Cancellation must drop this future, not wait for completion.
+                complete_not_before: Some(Utc::now() + chrono::Duration::days(1)),
+                started: started.clone(),
+            }),
+            create_oplog_service_with_presence(&owned_agent_id).await,
+            Duration::from_secs(1000),
+            1,
+            Duration::from_millis(300),
+            1,
+            RetryConfig::max_attempts_3(),
+            1,
+            CancellationToken::new(),
+        );
+        let tick = Utc::now();
+        let id = svc
+            .schedule(
+                tick - chrono::Duration::seconds(10),
+                ScheduledAction::ArchiveOplog {
+                    account_id: AccountId::new(),
+                    owned_agent_id,
+                    agent_mode: AgentMode::Durable,
+                    last_oplog_index: OplogIndex::from_u64(1),
+                    next_after: Duration::from_secs(3600),
+                },
+            )
+            .await;
+        let claim_time = if expire_before_start {
+            tick - chrono::Duration::seconds(1)
+        } else {
+            tick
+        };
+        let claimed = storage
+            .inner
+            .claim_due(
+                claim_time,
+                &ShardAssignment::unexpiring(1, [ShardId::new(0)]),
+                1,
+                svc.lease_ttl,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            svc.process_claimed_actions(claimed, tick),
+        )
+        .await
+        .expect("lost lease must stop the batch without waiting for archival")
+        .unwrap();
+        assert_eq!(started.is_cancelled(), !expire_before_start);
+        assert!(
+            executions.lock().unwrap().is_empty(),
+            "lost lease must prevent completion"
+        );
+        let remaining = claim_all(&storage.inner).await;
+        assert_eq!(
+            remaining.len(),
+            1,
+            "lost lease must leave the action unacknowledged"
+        );
+        assert_eq!(remaining[0].schedule_id, id);
+        assert_eq!(remaining[0].attempt_count, 2);
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn acknowledgement_error_is_not_discarded_when_renewal_fails_during_ack() {
+    let id = ScheduleId::fresh();
+    let storage = Arc::new(RecordingSchedulerStorage {
+        failed_ack_ids: Arc::new(Mutex::new(HashSet::from([id.id]))),
+        expire_renewal: AtomicUsize::new(2),
+        hold_ack_until_renewal_refused: true,
+        ..Default::default()
+    });
     let fingerprint = AgentFingerprint::new();
     let executions = Arc::new(Mutex::new(Vec::new()));
-    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("batch-clock"));
+    let svc = SchedulerServiceDefault::new(
+        storage.clone(),
+        create_shard_service_mock(),
+        Arc::new(RecordingActiveWorkerAccess {
+            fingerprint,
+            executions: executions.clone(),
+            complete_not_before: None,
+            started: CancellationToken::new(),
+        }),
+        create_oplog_service_mock().await,
+        Duration::from_secs(1000),
+        1,
+        Duration::from_millis(300),
+        1,
+        RetryConfig::max_attempts_3(),
+        1,
+        CancellationToken::new(),
+    );
+    let invocation_id = InvocationId(Uuid::new_v4());
+    svc.schedule_with_id(
+        id,
+        Utc::now() - chrono::Duration::seconds(10),
+        ScheduledAction::WakeInvocation {
+            owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("ack-lease-loss")),
+            idempotency_key: invocation_id,
+            target_worker_fingerprint: fingerprint,
+        },
+    )
+    .await;
+
+    let result = tokio::time::timeout(Duration::from_secs(3), svc.process(Utc::now()))
+        .await
+        .expect("renewal must continue while acknowledgement is pending");
+    assert!(storage.renewal_refused.is_cancelled());
+    assert!(
+        result.is_err(),
+        "lease loss must not hide an acknowledgement error"
+    );
+    assert_eq!(*executions.lock().unwrap(), vec![invocation_id.to_string()]);
+    assert_eq!(storage.ack_failures.load(Ordering::SeqCst), 1);
+    let remaining = claim_all(&storage.inner).await;
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].schedule_id, id);
+}
+
+async fn create_oplog_service_with_presence(
+    owned_agent_id: &OwnedAgentId,
+) -> Arc<dyn OplogService> {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
-    // Archival only checks existence here; the worker mock owns the archive operation.
+    // Only existence is needed; the recording worker mock performs the archive operation.
     indexed_storage
         .append(
             "test",
@@ -1152,7 +1441,7 @@ async fn each_batch_claims_with_fresh_time_but_archive_followup_uses_original_ti
         )
         .await
         .unwrap();
-    let oplog_service = Arc::new(
+    Arc::new(
         PrimaryOplogService::new(
             indexed_storage,
             Arc::new(InMemoryBlobStorage::new()),
@@ -1163,7 +1452,16 @@ async fn each_batch_claims_with_fresh_time_but_archive_followup_uses_original_ti
             RetryConfig::default(),
         )
         .await,
-    );
+    )
+}
+
+#[test]
+async fn each_batch_claims_with_fresh_time_but_archive_followup_uses_original_tick() {
+    let storage = Arc::new(RecordingSchedulerStorage::default());
+    let fingerprint = AgentFingerprint::new();
+    let executions = Arc::new(Mutex::new(Vec::new()));
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("batch-clock"));
+    let oplog_service = create_oplog_service_with_presence(&owned_agent_id).await;
     let svc = SchedulerServiceDefault::new(
         storage.clone(),
         create_shard_service_mock(),
@@ -1171,6 +1469,7 @@ async fn each_batch_claims_with_fresh_time_but_archive_followup_uses_original_ti
             fingerprint,
             executions: executions.clone(),
             complete_not_before: None,
+            started: CancellationToken::new(),
         }),
         oplog_service,
         Duration::from_secs(1000),
@@ -1712,6 +2011,7 @@ proptest! {
                     fingerprint,
                     executions: executions.clone(),
                     complete_not_before: None,
+                    started: CancellationToken::new(),
                 });
             let svc = SchedulerServiceDefault::new(
                 storage.clone(),
@@ -2324,4 +2624,145 @@ async fn all_exact_deliveries_retry_failures_and_acknowledge_successful_retry() 
 
 fn test_invocation_id(value: String) -> InvocationId {
     InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
+}
+
+mod lease_renewal_isolation {
+    use super::*;
+    use test_r::test;
+
+    #[derive(Debug)]
+    struct SlowRenewalStorage {
+        inner: InMemorySchedulerStorage,
+        slow_id: ScheduleId,
+        slow_calls: AtomicUsize,
+        delay: Duration,
+    }
+
+    #[async_trait]
+    impl SchedulerStorage for SlowRenewalStorage {
+        async fn insert(
+            &self,
+            id: ScheduleId,
+            due: DateTime<Utc>,
+            shard: ShardId,
+            action: &[u8],
+        ) -> Result<(), SchedulerStorageError> {
+            self.inner.insert(id, due, shard, action).await
+        }
+
+        async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+            self.inner.cancel(id).await
+        }
+
+        async fn claim_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+            limit: u32,
+            ttl: Duration,
+        ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+            self.inner.claim_due(now, assignment, limit, ttl).await
+        }
+
+        async fn count_due(
+            &self,
+            now: DateTime<Utc>,
+            assignment: &ShardAssignment,
+        ) -> Result<u64, SchedulerStorageError> {
+            self.inner.count_due(now, assignment).await
+        }
+
+        async fn ack(
+            &self,
+            id: &ScheduleId,
+            owner: Uuid,
+            now: DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.ack(id, owner, now).await
+        }
+
+        async fn extend_lease(
+            &self,
+            id: &ScheduleId,
+            owner: Uuid,
+            until: DateTime<Utc>,
+            now: DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            if *id == self.slow_id && self.slow_calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                // Only one action's first heartbeat waits. The wait is shorter than
+                // the 600ms lease, and every other storage operation is immediate.
+                tokio::time::sleep(self.delay).await;
+            }
+            self.inner.extend_lease(id, owner, until, now).await
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn one_slow_renewal_must_not_expire_healthy_sibling() {
+        assert_healthy_sibling_completes(Duration::from_millis(500)).await;
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn control_immediate_renewals_keep_healthy_sibling_alive() {
+        assert_healthy_sibling_completes(Duration::ZERO).await;
+    }
+
+    async fn assert_healthy_sibling_completes(delay: Duration) {
+        let slow_id = ScheduleId::fresh();
+        let storage = Arc::new(SlowRenewalStorage {
+            inner: InMemorySchedulerStorage::new(),
+            slow_id,
+            slow_calls: AtomicUsize::new(0),
+            delay,
+        });
+        let executions = Arc::new(Mutex::new(Vec::new()));
+        let now = Utc::now();
+        let fingerprint = AgentFingerprint::new();
+        let svc = SchedulerServiceDefault::new(
+            storage.clone(),
+            create_shard_service_mock(),
+            Arc::new(RecordingActiveWorkerAccess {
+                fingerprint,
+                executions: executions.clone(),
+                complete_not_before: Some(now + chrono::Duration::milliseconds(1500)),
+                started: CancellationToken::new(),
+            }),
+            create_oplog_service_mock().await,
+            Duration::from_secs(1000),
+            2,
+            Duration::from_millis(600),
+            1,
+            RetryConfig::max_attempts_3(),
+            2,
+            CancellationToken::new(),
+        );
+        let healthy_invocation = InvocationId(Uuid::new_v4());
+        for (id, name, invocation) in [
+            (slow_id, "slow-renewal", InvocationId(Uuid::new_v4())),
+            (ScheduleId::fresh(), "healthy-renewal", healthy_invocation),
+        ] {
+            svc.schedule_with_id(
+                id,
+                now - chrono::Duration::seconds(1),
+                ScheduledAction::WakeInvocation {
+                    owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent(name)),
+                    idempotency_key: invocation,
+                    target_worker_fingerprint: fingerprint,
+                },
+            )
+            .await;
+        }
+
+        svc.process(now).await.unwrap();
+
+        assert!(
+            executions
+                .lock()
+                .unwrap()
+                .contains(&healthy_invocation.to_string()),
+            "a sibling with immediate renewals lost its lease because another renewal waited less than one lease TTL"
+        );
+    }
 }
