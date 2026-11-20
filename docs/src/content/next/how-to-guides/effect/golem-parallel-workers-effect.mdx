@@ -12,12 +12,12 @@ Use the mechanisms according to their semantics:
 | `Effect.all`                      | Run remote-call Effects concurrently and collect ordered results    |
 | `Effect.forkChild` / `Fiber.join` | Manage individual child fibers within the current invocation        |
 | `remote.method.trigger(input)`    | Submit durable background work when no result is needed             |
-| `Agents.fork`                     | Clone the current Golem agent and its state into a phantom instance |
+| `Agents.fork`                     | Clone the current Golem agent and its state into a new agent without a key |
 
 ## Fan Out to Durable Child Agents
 
-Define each worker as a normal durable agent. Constructor parameters are its durable identity, so
-different `id` values address different worker instances.
+Define each worker as a normal durable agent. Constructor parameters form its key, so `upsert` with
+different `id` values addresses different worker instances.
 
 ```typescript
 import { Effect, Schema } from "effect";
@@ -63,7 +63,7 @@ export const Coordinator = defineAgent({
       Effect.all(
         items.map((value, id) =>
           Effect.gen(function* () {
-            const worker = yield* Worker.client.get({ id });
+            const worker = yield* Worker.client.upsert({ id });
             return yield* worker.compute({ value });
           }),
         ),
@@ -73,7 +73,7 @@ export const Coordinator = defineAgent({
 });
 ```
 
-`Worker.client.get({ id })` and `worker.compute({ value })` both return lazy Effects. `Effect.all`
+`Worker.client.upsert({ id })` and `worker.compute({ value })` both return lazy Effects. `Effect.all`
 executes those Effects concurrently, retains input order in its output, and returns an empty array
 for empty input. In a stateful existing application, add the method contract and handler to the
 existing coordinator instead of registering a duplicate agent type.
@@ -93,7 +93,7 @@ limit:
 ```typescript
 const calls = items.map((value, id) =>
   Effect.gen(function* () {
-    const worker = yield* Worker.client.get({ id });
+    const worker = yield* Worker.client.upsert({ id });
     return yield* worker.compute({ value });
   }),
 );
@@ -171,7 +171,7 @@ yield *
   Effect.all(
     regions.map((region) =>
       Effect.gen(function* () {
-        const worker = yield* RegionWorker.client.get({ region });
+        const worker = yield* RegionWorker.client.upsert({ region });
         yield* worker.runReport.trigger({ reportId });
       }),
     ),
@@ -189,7 +189,8 @@ JavaScript `Promise`; this SDK version does not export a ready-made Effect Schem
 
 `Agents.fork` is an Effect value that asks Golem to clone the current agent at the current execution
 point. Both agents resume from it: the source sees `tag: "original"`, and the clone sees
-`tag: "forked"`. Only a durable agent can fork, and the clone is durable too. This is different from
+`tag: "forked"`; both receive the clone's agent ID in `branch.val.forkedAgentId`. The clone has a
+new agent ID and no key. Only a durable agent can fork, and the clone is durable too. This is different from
 `Effect.forkChild`.
 
 Use a host-backed Golem promise created before the fork to return data from the cloned agent:
@@ -235,7 +236,7 @@ a peer that completes it.
 - Calls to the same agent identity are still processed sequentially; use distinct identities for
   real worker parallelism.
 - Compose SDK-returned Effects. Do not use `Promise.all`, plain `async` handlers, or floating Effects.
-- Use named records for `client.get` and remote method inputs, including `{}` for no parameters.
+- Use named records for `client.upsert` and remote method inputs, including `{}` for no parameters.
 - Avoid synchronous RPC cycles in which two sequential agents await each other; use `.trigger`
   only when the callback result is not required.
 - Durable child agents remain addressable after fan-in. The pinned Effect SDK client has no remote

@@ -45,7 +45,7 @@ impl RawAgent for ConfigRefreshingAgent with fn invoke(
   self,
   method_name,
   input,
-  principal,
+  context,
 ) {
   // Ordinary recorded reads preserve each historical invocation's config during
   // replay; new invocations see the host's capture from the selected revision.
@@ -57,7 +57,7 @@ impl RawAgent for ConfigRefreshingAgent with fn invoke(
       }
     }
   }
-  self.raw.invoke(method_name, input, principal)
+  self.raw.invoke(method_name, input, context)
 }
 
 ///|
@@ -140,22 +140,55 @@ pub(all) struct ConstructedAgent {
 }
 
 ///|
-/// Information available while constructing a fresh agent from a snapshot.
-pub(all) struct SnapshotRestoreContext {
-  agent_id : String
-  agent_type : String
-  identity_fields : SnapshotIdentity
-  phantom_id : @schema.Uuid?
-  principal : @common.Principal
+pub using @caller {
+  type Caller,
+  type InvocationContext,
+  type Principal,
+  type PrincipalKind,
+  type PrincipalRef,
+  type TokenProvenance,
+  type UserPrincipal,
+  type AccountPrincipal,
+  type AgentPrincipal,
+  type ToolPrincipal,
+  type AccountAuthentication,
 }
 
 ///|
-/// Decodes an identity field from the ambient agent ID.
+/// Information available while constructing a fresh agent from a snapshot.
+/// `identity_fields` holds the constructor parameters that the host passes
+/// to `load`, in the form that `initialize` received them.
+pub(all) struct SnapshotRestoreContext {
+  agent_id : @schema.AgentId
+  agent_type : String
+  identity_fields : WireInput
+}
+
+///|
+/// Decodes the constructor parameter at `index`. A restoration that does not
+/// decode a constructor parameter holding a resource fails.
 pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(
   self : SnapshotRestoreContext,
   index : Int32,
 ) -> T raise @common.AgentError {
-  decode_snapshot_identity_field(self.identity_fields, index)
+  decode_wire_param(self.identity_fields, index, "\{self.agent_type}::new")
+}
+
+///|
+/// Decodes the constructor parameters that `load` receives against the
+/// constructor schema of the registered agent type, as `initialize` decodes
+/// its input. The capabilities in `input` are dropped on failure.
+pub fn decode_snapshot_constructor(
+  agent_type : String,
+  input : @types.SchemaValueTree,
+) -> WireInput raise @common.AgentError {
+  guard get_registered_agent(agent_type) is Some(registered_agent) else {
+    @model.drop_wit_capabilities(input)
+    raise @common.AgentError::InvalidType("Agent type not found: \{agent_type}")
+  }
+  let @common.InputSchema::Parameters(fields) = registered_agent.agent_type.constructor_.input_schema
+  let arity = fields.filter(field => field.source is UserSupplied).length()
+  decode_wire_input(input, arity, "\{agent_type}::new")
 }
 
 ///|
@@ -163,7 +196,7 @@ pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : async (@types.SchemaValueTree, @common.Principal) -> Result[
+  construct : async (@types.SchemaValueTree, InvocationContext) -> Result[
     ConstructedAgent,
     @common.AgentError,
   ]
@@ -175,11 +208,10 @@ pub(all) struct RegisteredAgent {
 
 ///|
 /// A live agent instance with its name, type definition, dispatch interface,
-/// snapshot support, and the principal that initialized it.
+/// and snapshot support.
 pub(all) struct AgentInstance {
   name : String
   agent_type : @common.AgentType
-  principal : @common.Principal
   interface : &RawAgent
   snapshottable : &Snapshottable?
   snapshot_format : SnapshotFormat?
@@ -190,7 +222,6 @@ pub(all) struct AgentInstance {
 /// Installs a complete agent returned by an initialization or restoration factory.
 fn install_constructed_agent(
   registered_agent : RegisteredAgent,
-  principal : @common.Principal,
   constructed : ConstructedAgent,
 ) -> Unit {
   let interface : &RawAgent = match state.constructing_config {
@@ -201,7 +232,6 @@ fn install_constructed_agent(
   set_agent_instance({
     name: registered_agent.name,
     agent_type: registered_agent.agent_type,
-    principal,
     interface,
     snapshottable: constructed.snapshottable,
     snapshot_format: constructed.snapshot_format,
@@ -213,13 +243,12 @@ fn install_constructed_agent(
 /// Commits a restoration result atomically to the agent singleton.
 fn finish_restoration(
   registered_agent : RegisteredAgent,
-  principal : @common.Principal,
   restored : Result[ConstructedAgent, String],
 ) -> Result[Unit, String] {
   match restored {
     Err(e) => Err(e)
     Ok(constructed) => {
-      install_constructed_agent(registered_agent, principal, constructed)
+      install_constructed_agent(registered_agent, constructed)
       Ok(())
     }
   }
@@ -231,7 +260,7 @@ fn finish_restoration(
 pub async fn construct_and_set_instance(
   agent_type : String,
   input : @types.SchemaValueTree,
-  principal : @common.Principal,
+  context : InvocationContext,
 ) -> Result[Unit, @common.AgentError] {
   match get_registered_agent(agent_type) {
     None =>
@@ -244,10 +273,10 @@ pub async fn construct_and_set_instance(
       defer {
         state.constructing_config = None
       }
-      let constructed = (registered_agent.construct)(input, principal)
+      let constructed = (registered_agent.construct)(input, context)
       match constructed {
         Ok(constructed) => {
-          install_constructed_agent(registered_agent, principal, constructed)
+          install_constructed_agent(registered_agent, constructed)
           Ok(())
         }
         Err(e) => Err(e)
@@ -275,15 +304,15 @@ pub async fn restore_and_set_instance(
           defer {
             state.constructing_config = None
           }
-          let principal = context.principal
           let restored = match load_snapshot(snapshot, context) {
             Ok(restored) => restored
             Err(error) => return Err(error)
           }
           context.identity_fields.finish() catch {
-            error => return Err("Invalid agent identity: \{repr(error)}")
+            error =>
+              return Err("Invalid constructor parameters: \{repr(error)}")
           }
-          finish_restoration(registered_agent, principal, Ok(restored))
+          finish_restoration(registered_agent, Ok(restored))
         }
       }
   }
@@ -304,6 +333,6 @@ pub(open) trait RawAgent {
     Self,
     method_name : String,
     input : @types.SchemaValueTree,
-    principal : @common.Principal,
+    context : InvocationContext,
   ) -> Result[@types.SchemaValueTree?, @common.AgentError]
 }

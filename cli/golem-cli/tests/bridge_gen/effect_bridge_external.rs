@@ -99,8 +99,8 @@ function compileChecks(client: GuestStreamingAgent) {
   const nested: Effect.Effect<Stream.Stream<Stream.Stream<StreamItem, unknown>, unknown>, unknown, Scope.Scope> =
     client.nested(Stream.make(Stream.make({ itemStream: "root", children: [] })))
   const status: Effect.Effect<StreamItem, unknown> = client.status()
-  const configured = GuestStreamingAgent.getWithConfig("id", 10n)
-  const unconfigured = GuestStreamingAgent.getWithConfig("id")
+  const configured = GuestStreamingAgent.create("id", { keyed: true, config: { limits: { maximum: 10n } }, env: { MODE: "test" } })
+  const unconfigured = GuestStreamingAgent.upsert("id")
   void produced
   void unconfigured
   void nested
@@ -191,15 +191,133 @@ fn effect_external_nonstream_named_record_consumer_compiles() {
 import { NamedRecordAgent, type Profile } from "./named-record-agent-client.js"
 
 const profile: Profile = { displayName: "Ada" }
-const created: Effect.Effect<NamedRecordAgent, unknown> = NamedRecordAgent.get(profile)
+const upserted: Effect.Effect<NamedRecordAgent, unknown> = NamedRecordAgent.upsert(profile)
+const created: Effect.Effect<NamedRecordAgent, unknown> = NamedRecordAgent.create(profile, { keyed: true, env: { MODE: "test" } })
+const found: Effect.Effect<NamedRecordAgent, unknown> = NamedRecordAgent.getById("00000000-0000-0000-0000-000000000001")
 declare const client: NamedRecordAgent
 const replaced: Effect.Effect<Profile, unknown> = client.replace(profile)
-void created
-void replaced
+const id: Effect.Effect<string, unknown> = client.agentId()
+void [upserted, created, found, replaced, id]
 "#,
     )
     .unwrap();
     compile(target, &generated);
+}
+
+#[test]
+fn effect_external_get_by_id_checks_the_agent_and_pins_its_fingerprint() {
+    let schema = agent(
+        "ByIdAgent",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![method(
+            "echo",
+            vec![field("value", SchemaType::string())],
+            Some(SchemaType::string()),
+        )],
+        vec![],
+        AgentMode::Durable,
+    );
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    EffectExternalBridgeGenerator::new(schema, target, true)
+        .unwrap()
+        .generate()
+        .unwrap();
+
+    let generated = target.join("by-id-agent-client.ts");
+    let source = std::fs::read_to_string(&generated).unwrap();
+    assert!(
+        source.contains("static getById(agentId: string): Effect.Effect<ByIdAgent, unknown>"),
+        "{source}"
+    );
+    let graph = serde_json::to_string(&golem_common::schema::graph::SchemaGraph {
+        defs: vec![],
+        root: SchemaType::string(),
+    })
+    .unwrap();
+    std::fs::write(
+        target.join("consumer.ts"),
+        format!(
+            r#"import {{ Effect }} from "effect"
+import http from "node:http"
+import type {{ AddressInfo }} from "node:net"
+import {{ ByIdAgent, configure }} from "./by-id-agent-client.js"
+
+const KNOWN = "00000000-0000-8000-8000-000000000001"
+const OTHER_TYPE = "00000000-0000-8000-8000-000000000002"
+const UNKNOWN = "00000000-0000-8000-8000-000000000003"
+const FINGERPRINT = "00000000-0000-4000-8000-00000000f001"
+const metadata = (agentId: string, agentTypeName: string) =>
+  ({{ agentId, ownerKind: "agent", agentTypeName, environmentId: "env-id", fingerprint: FINGERPRINT }})
+const invocations: any[] = []
+const server = http.createServer((req, res) => {{
+  let body = ""
+  req.on("data", chunk => (body += chunk))
+  req.on("end", () => {{
+    res.setHeader("Content-Type", "application/json")
+    if (req.url === "/v1/me/token") return res.end(JSON.stringify({{ accountId: "account" }}))
+    if (req.url?.startsWith("/v1/me/visible-environments?")) return res.end(JSON.stringify({{ values: [
+      {{ account: {{ id: "account" }}, application: {{ name: "app" }}, environment: {{ id: "env-id", name: "env" }} }},
+    ] }}))
+    if (req.method === "GET" && req.url === `/v1/runtime/envs/env-id/agents/${{KNOWN}}`)
+      return res.end(JSON.stringify(metadata(KNOWN, "ByIdAgent")))
+    if (req.method === "GET" && req.url === `/v1/runtime/envs/env-id/agents/${{OTHER_TYPE}}`)
+      return res.end(JSON.stringify(metadata(OTHER_TYPE, "OtherAgent")))
+    if (req.method === "POST" && req.url === "/v1/runtime/envs/env-id/agent-types/ByIdAgent/invoke") {{
+      const request = JSON.parse(body)
+      invocations.push(request)
+      return res.end(JSON.stringify({{
+        agentId: KNOWN, idempotencyKey: "00000000-0000-0000-0000-000000000002",
+        result: {{ graph: {graph}, value: request.methodParameters.value.fields[0] }},
+      }}))
+    }}
+    res.statusCode = 404
+    res.end(JSON.stringify({{ code: "AGENT_NOT_FOUND", error: "agent not found" }}))
+  }})
+}})
+await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
+configure({{
+  server: {{ type: "custom", url: `http://127.0.0.1:${{(server.address() as AddressInfo).port}}`, token: "test" }},
+  application: "app", environment: "env",
+}})
+try {{
+  for (const agentId of [UNKNOWN, OTHER_TYPE]) {{
+    const failure = await Effect.runPromise(Effect.match(ByIdAgent.getById(agentId), {{
+      onFailure: error => ({{ error }}),
+      onSuccess: () => undefined,
+    }}))
+    if (failure === undefined) throw new Error(`getById(${{agentId}}) succeeded`)
+    const error = failure.error as {{ name?: string; status?: number }}
+    if (error.name !== "GolemServiceError" || error.status !== 404)
+      throw new Error(`getById(${{agentId}}) failed with ${{String(failure.error)}}`)
+  }}
+  const echoed = await Effect.runPromise(ByIdAgent.getById(KNOWN).pipe(Effect.flatMap(client => client.echo("hello"))))
+  if (echoed !== "hello") throw new Error(`wrong echo ${{echoed}}`)
+  if (invocations.length !== 1) throw new Error(`expected one invocation, got ${{invocations.length}}`)
+  if (invocations[0].agentId !== KNOWN || invocations[0].parameters !== undefined)
+    throw new Error(`invocation does not name the agent by ID: ${{JSON.stringify(invocations[0])}}`)
+  if (invocations[0].expectedFingerprint !== FINGERPRINT)
+    throw new Error(`invocation does not carry the fingerprint: ${{JSON.stringify(invocations[0])}}`)
+}} finally {{
+  server.close()
+}}
+"#
+        ),
+    )
+    .unwrap();
+    compile(target, &generated);
+    let output = std::process::Command::new("node")
+        .arg("consumer.js")
+        .current_dir(target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generated consumer failed for {generated}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -228,7 +346,7 @@ fn effect_external_stream_agent_and_schema_name_compile() {
         target.join("consumer.ts"),
         r#"import { Effect } from "effect"
 import { Stream as GeneratedStream } from "./stream-client.js"
-const produced = GeneratedStream.get().pipe(Effect.flatMap(client => client.produce()))
+const produced = GeneratedStream.upsert().pipe(Effect.flatMap(client => client.produce()))
 void produced
 "#,
     )
@@ -298,9 +416,9 @@ const raw = {
     },
   },
 }
-;(Transport as any).get = async (...received: unknown[]) => { check(received); return raw }
+;(Transport as any).upsert = (...received: unknown[]) => { check(received); return raw }
 await Effect.runPromise(Effect.scoped(Effect.gen(function*() {
-  const client = yield* CollisionAgent.get(...args)
+  const client = yield* CollisionAgent.upsert(...args)
   if ((yield* client.echo(...args)) !== "echoed") throw new Error("wrong echo")
   yield* client.echotrigger(...args)
   yield* client.echoschedule("later", ...args)

@@ -38,7 +38,7 @@ use std::marker::PhantomData;
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, DurableCallSession, OnDelivered,
 };
 use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost};
 use crate::workerctx::WorkerCtx;
@@ -159,22 +159,21 @@ where
 /// budget is exhausted, are persisted and returned to the guest as before. Recorded failures
 /// replay deterministically to the guest without re-classification (`classify` only runs on the
 /// live path, including incomplete-replay re-execution). A live denied call completes with
-/// [`DeniablePair::denied`] and runs neither `live` nor `classify`. `on_delivered` runs when the
-/// guest receives the result, live or at its recorded delivery marker on replay, and never for a
-/// result that the guest discards.
+/// [`DeniablePair::denied`] and runs neither `live` nor `classify`. `on_delivered` builds a hook
+/// from the result, which runs when the guest receives that result, live or at its recorded
+/// delivery marker on replay, and never for a result that the guest discards.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn run_deniable_access_classified<T, D, Ctx, Pair, F, Fut, H>(
+pub(crate) async fn run_deniable_access_classified<T, D, Ctx, Pair, F, Fut>(
     store: &wasmtime::component::Accessor<T, D>,
     request: Pair::Req,
     function_type: DurableFunctionType,
     targets: Result<Vec<PermissionTarget>, String>,
     classify: impl Fn(&Pair::Resp) -> Option<ClassifiedHostError>,
     retry_properties: RetryProperties,
-    on_delivered: H,
+    on_delivered: impl Fn(&Pair::Resp) -> OnDelivered,
     live: F,
 ) -> wasmtime::Result<Pair::Resp>
 where
-    H: FnOnce() + Clone + Send + 'static,
     T: 'static,
     D: HasData + ?Sized + 'static,
     Ctx: WorkerCtx,
@@ -200,24 +199,16 @@ where
     if handle.is_live()
         && let Some(response) = denied
     {
+        let hook = on_delivered(&response);
         return handle
-            .complete_access_with_delivered(
-                store,
-                durable_worker_ctx::<Ctx, T>,
-                response,
-                Box::new(on_delivered),
-            )
+            .complete_access_with_delivered(store, durable_worker_ctx::<Ctx, T>, response, hook)
             .await
             .map_err(wasmtime::Error::from);
     }
 
     if !handle.is_live() {
         match handle
-            .replay_access_with_delivered(
-                store,
-                durable_worker_ctx::<Ctx, T>,
-                Box::new(on_delivered.clone()),
-            )
+            .replay_access_with_delivered(store, durable_worker_ctx::<Ctx, T>, &on_delivered)
             .await
             .map_err(wasmtime::Error::from)?
         {
@@ -257,13 +248,9 @@ where
             .map_err(wasmtime::Error::from_anyhow)?;
     }
 
+    let hook = on_delivered(&response);
     handle
-        .complete_access_with_delivered(
-            store,
-            durable_worker_ctx::<Ctx, T>,
-            response,
-            Box::new(on_delivered),
-        )
+        .complete_access_with_delivered(store, durable_worker_ctx::<Ctx, T>, response, hook)
         .await
         .map_err(wasmtime::Error::from)
 }

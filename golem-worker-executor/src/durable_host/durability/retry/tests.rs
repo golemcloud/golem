@@ -25,6 +25,10 @@ use test_r::test;
 /// A mock DurabilityHost for testing `try_trigger_retry_or_loop` in isolation.
 struct MockDurabilityHost {
     max_in_function_retry_delay: Duration,
+    /// Reported as `DurableExecutionState::durable_wait`.
+    durable_wait: bool,
+    /// The deadline of the latest retry `Error` entry written via `append_retry_error_entry`.
+    last_retry_at: Option<Timestamp>,
     named_retry_policies: Vec<NamedRetryPolicy>,
     oplog_retry_count: u32,
     /// Tracks how many times `append_retry_error_entry` was called.
@@ -48,6 +52,8 @@ impl MockDurabilityHost {
     fn new() -> Self {
         Self {
             max_in_function_retry_delay: Duration::from_secs(20),
+            durable_wait: false,
+            last_retry_at: None,
             named_retry_policies: Vec::new(),
             oplog_retry_count: 0,
             retry_entries_appended: 0,
@@ -64,6 +70,7 @@ impl MockDurabilityHost {
             is_live: true,
             snapshotting_mode: false,
             max_in_function_retry_delay: self.max_in_function_retry_delay,
+            durable_wait: self.durable_wait,
         }
     }
 }
@@ -99,8 +106,10 @@ impl InFunctionRetryHost for MockDurabilityHost {
         &mut self,
         _retry_from: OplogIndex,
         retry_policy_state: Option<RetryPolicyState>,
+        retry_at: Timestamp,
     ) -> Result<(), OplogError> {
         self.retry_entries_appended += 1;
+        self.last_retry_at = Some(retry_at);
         self.current_retry_policy_state = retry_policy_state;
         Ok(())
     }
@@ -534,6 +543,98 @@ async fn fallback_to_trap_when_delay_exceeds_threshold() {
         ctx.retry_entries_appended, 0,
         "should NOT append in-function retry entry"
     );
+}
+
+#[test]
+async fn durable_wait_retries_inline_above_threshold_and_records_the_deadline() {
+    let mut ctx = MockDurabilityHost::new();
+    ctx.named_retry_policies = vec![NamedRetryPolicy {
+        name: "default".to_string(),
+        priority: 0,
+        predicate: Predicate::True,
+        policy: RetryPolicy::Periodic(Duration::from_secs(30)),
+    }];
+    ctx.max_in_function_retry_delay = Duration::from_secs(20);
+    ctx.durable_wait = true;
+    // The interrupt ends the wait at once, so the test observes the decision without sleeping.
+    ctx.interrupt_signal = Some(InterruptKind::Interrupt(Timestamp::now_utc()));
+    let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
+
+    let before = Timestamp::now_utc().to_millis();
+    let result: Result<String, String> = Err("timeout".to_string());
+    let err = controller
+        .try_trigger_retry_or_loop_with_properties(
+            &mut ctx,
+            &result,
+            |_| HostFailureKind::Transient,
+            RetryProperties::new(),
+        )
+        .await
+        .expect_err("the interrupted wait propagates the interrupt");
+    let after = Timestamp::now_utc().to_millis();
+
+    assert!(err.downcast_ref::<InterruptKind>().is_some(), "got: {err}");
+    assert_eq!(ctx.trap_triggered_count, 0, "must not fall back to trap");
+    assert_eq!(ctx.retry_entries_appended, 1);
+    let retry_at = ctx
+        .last_retry_at
+        .expect("the retry Error entry carries its deadline")
+        .to_millis();
+    assert!(
+        (before + 30_000..=after + 30_000).contains(&retry_at),
+        "retry_at {retry_at} must be 30s after the decision ({before}..={after})"
+    );
+}
+
+#[test]
+fn remaining_backoff_counts_down_to_the_deadline_and_stops_at_zero() {
+    let retry_at = Timestamp::from(100_000);
+    assert_eq!(
+        remaining_backoff(retry_at, Timestamp::from(70_000)),
+        Duration::from_secs(30)
+    );
+    assert_eq!(
+        remaining_backoff(retry_at, Timestamp::from(100_000)),
+        Duration::ZERO
+    );
+    assert_eq!(
+        remaining_backoff(retry_at, Timestamp::from(250_000)),
+        Duration::ZERO,
+        "a deadline that passed during the outage retries at once"
+    );
+}
+
+#[test]
+async fn durable_wait_keeps_the_trap_fallback_for_a_saturated_backoff() {
+    let mut ctx = MockDurabilityHost::new();
+    ctx.named_retry_policies = vec![NamedRetryPolicy {
+        name: "default".to_string(),
+        priority: 0,
+        predicate: Predicate::True,
+        policy: RetryPolicy::Exponential {
+            base_delay: Duration::from_secs(1),
+            factor: 2.0,
+        },
+    }];
+    // 2^70 s saturates to `Duration::MAX` in the evaluator: no deadline or timer can hold it.
+    ctx.current_retry_policy_state = Some(RetryPolicyState::Counter(70));
+    ctx.durable_wait = true;
+    let mut controller = make_retry_controller(&mut ctx, DurableFunctionType::ReadRemote).await;
+
+    let result: Result<String, String> = Err("timeout".to_string());
+    let action = controller
+        .try_trigger_retry_or_loop_with_properties(
+            &mut ctx,
+            &result,
+            |_| HostFailureKind::Transient,
+            RetryProperties::new(),
+        )
+        .await
+        .expect("mock try_trigger_retry returns Ok");
+
+    assert_eq!(action, InternalRetryResult::Persist);
+    assert_eq!(ctx.trap_triggered_count, 1, "falls back to trap");
+    assert_eq!(ctx.retry_entries_appended, 0);
 }
 
 #[test]

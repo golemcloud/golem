@@ -1,0 +1,62 @@
+[package]
+name = "golem-size-analysis"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Component size measurement and Rule 2 size breakdown for Golem components"
+
+[lints]
+workspace = true
+
+[lib]
+harness = false
+
+[[bin]]
+name = "golem-size-analysis"
+required-features = ["analysis"]
+test = false
+
+[[test]]
+name = "retention"
+harness = false
+required-features = ["analysis"]
+
+[features]
+default = ["analysis"]
+# Everything except the shared gzip measurement, the fixture list and the descriptor types. Consumers such as `golem build`
+# use only those and do not need twiggy, WAT/WIT decoding or the command line.
+analysis = [
+    "dep:anyhow",
+    "dep:clap",
+    "dep:hex",
+    "dep:regex",
+    "dep:sha2",
+    "dep:twiggy-ir",
+    "dep:twiggy-parser",
+    "dep:wasmparser",
+    "dep:wasmprinter",
+    "dep:wit-component",
+    "dep:wit-parser",
+]
+
+[dependencies]
+anyhow = { workspace = true, optional = true }
+clap = { workspace = true, optional = true }
+flate2 = { workspace = true }
+hex = { workspace = true, optional = true }
+regex = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true, optional = true }
+twiggy-ir = { workspace = true, optional = true }
+twiggy-parser = { workspace = true, optional = true }
+wasmparser = { workspace = true, optional = true }
+wasmprinter = { workspace = true, optional = true }
+wit-component = { workspace = true, optional = true }
+wit-parser = { workspace = true, optional = true }
+
+[dev-dependencies]
+test-r = { workspace = true }
+wat = { workspace = true }

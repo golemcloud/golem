@@ -67,7 +67,6 @@ use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
 use std::collections::HashSet;
 use std::sync::{Arc, Weak};
-use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
@@ -297,7 +296,6 @@ pub trait WorkerCtx:
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
         pending_update: Option<HydratedUpdate>,
-        original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<OwnerExecution>,

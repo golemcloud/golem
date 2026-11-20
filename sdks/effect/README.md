@@ -5,6 +5,37 @@ targeting Golem's WASI Preview 3 agent, tool, and tool-middleware contracts.
 
 > Keep the `effect` version generated for an application aligned with the SDK.
 
+## Agent endpoint query schemas
+
+Declared GET, HEAD, and DELETE endpoints bind remaining user method inputs from query
+parameters by name. Scalars, scalar lists, native `WitTypes.Map` schemas with scalar keys
+and values, and repeated outer options are supported. Maps use `name[key]=value` and cannot bind
+from headers. Tuples, fixed lists, records, variants, and rich payloads need a body method.
+Top-level DurableStreams input slots remain resource bindings rather than query inputs.
+
+A required list or map must have at least one entry; an absent optional collection is none.
+Repeated scalars, duplicate parsed map keys (including numeric `1` and `01`), malformed
+brackets, and nested map forms return `400` naming the input. Original schema constraints
+also apply to collection elements and map keys and values.
+
+Other declared verbs keep remaining inputs in the body; explicit query templates still
+work on those verbs. Inference uses the declared verb, not expanded DurableStreams
+resource verbs. In 2.0, typed agent endpoints reject unknown query keys with a named `400`,
+including on body methods and cache hits. Declared phantom selectors and applicable
+DurableStreams read controls remain recognized. File routes still ignore query strings;
+raw handlers receive them unchanged.
+
+Compile-time checks inspect Effect 4 schema constructors and concrete child schemas.
+Golem helpers retain their wire kinds in phantom types: for example, `WitTypes.Text()`
+does not become a query scalar just because its JavaScript value is a string.
+
+Widened `Schema.Top`/`Schema.Codec` types, suspended schemas, and arbitrary runtime
+annotations can erase or change the wire shape without exposing that change to TypeScript.
+These cases still undergo registration-time checks against the compiled schema graph and
+registry compilation. A scalar-like `Schema.Type` alone is not a query-binding guarantee.
+The TypeScript SDK's Effect 3 `standardSchemaV1` adapter is a separate, erased-schema path;
+this SDK uses Effect 4 schemas directly.
+
 ## Install and define an agent
 
 ```console
@@ -39,49 +70,72 @@ Counter.implement({
 ```
 
 `method` optionally accepts `error`, `description`, `promptHint`, HTTP endpoints, and `readOnly`.
-Read-only metadata may be `true` or `{ cache }`; principal-aware caching is derived from a declared
-`PrincipalSchema` input. Public modules are namespaces from
-the root (`Agent`, `Client`, `Config`, `Durability`, `Snapshot`, `Tool`, etc.); only
+Read-only metadata may be `true` or `{ cache }`. Every handler, read-only ones included, can read
+the caller of its invocation with `(yield* InvocationContext.InvocationContext).caller`; the host is
+asked only when the handler reads it. A `Principal`, a `Caller` and a `TokenProvenance` are live
+values and are refused in method inputs, results, agent ids and value types; store
+`caller.original.ref` as an `InvocationContext.PrincipalRefSchema` value instead. Public modules are
+namespaces from the root (`Agent`, `Client`, `Config`, `Durability`, `Snapshot`, `Tool`, etc.); only
 `defineAgent`, `defineAgentClient`, `defineConfig`, and `method` are flat DSL aliases. Database adapters and standalone
 middleware use the documented sub-imports. `internal/*` and `host/*` are not public imports.
 
 ## Typed clients
 
 Keep a definition in a module without calling `.implement` when another component only needs its
-client. Durable definitions expose `client.get`, `getPhantom`, and `newPhantom`; ephemeral
-definitions expose `getPhantom` and `newPhantom`, but not ordinary `get`. Calls, triggers, and
+client. Agent IDs are opaque UUIDs that Golem issues, carried as the typed `AgentId`
+(`{ uuid }`; its text form is the UUID). Durable definitions expose `client.upsert`, `create`,
+`getById`, and `bindSelf`; ephemeral definitions expose only `upsert`. Calls, triggers, and
 schedules take one typed input object.
 
 ```ts
 const program = Effect.scoped(
   Effect.gen(function* () {
-    const counter = yield* Counter.client.get({ name: "orders" })
+    const counter = yield* Counter.client.upsert({ name: "orders" })
     yield* counter.add({ by: 2 })
     yield* counter.add.trigger({ by: 3 })
     const scheduled = yield* counter.add.schedule("10 minutes", { by: 1 })
     // yield* scheduled.cancel()
+    const id = yield* counter.agentId
+    const again = yield* Counter.client.getById(id)
+    yield* again.add({ by: 1 })
   }),
 )
 ```
+
+- `upsert(input)` connects to the keyed agent of the constructor input and creates it when it is
+  missing. It takes no config or env overrides.
+- `create(input, { keyed, config, env })` creates an agent and connects to it after its
+  initialization. Without `keyed`, the new agent has a new ID. With `keyed: true` it creates the
+  keyed agent of the input and fails with a typed `RpcCallError` whose cause is `conflict` when
+  that key is current. `config` overrides declared non-secret configuration values; `env` adds
+  environment variables. Nothing copies the caller's environment.
+- `getById(id)` connects to an existing agent. It never creates one: an unknown ID, or an ID of
+  another agent type, fails with a typed `not-found` cause.
+- Every durable remote client has `agentId: Effect<AgentId, RemoteCallError>`, read from the host.
+  On a client of `upsert` it creates the agent when it is missing. A method named `agentId` is not
+  part of a typed client.
+- `AgentId.parse(text)` and `AgentId.format(id)` convert an ID to and from its UUID text. The
+  parse checks only the text form; only the host knows whether an agent has the ID.
 
 Awaited RPC is interruptible: fiber interruption cancels the result handle. Cancellation is best
 effort; remote side effects may already have happened. Triggering and scheduling methods whose
 schema contains a live stream is rejected because streams require an awaited invocation. An
 ephemeral call returns `{ metadata, value }`, and an ephemeral trigger/schedule exposes invocation
 metadata: the target `agentId` and the typed `invocationId`. `InvocationId.format` and
-`InvocationId.parse` convert an invocation ID to and from its `<agent-id>.<uuid>` text form. Config overrides are passed as the second argument to `client.get`/`newPhantom`.
+`InvocationId.parse` convert an invocation ID to and from its `<agent-uuid>.<uuid>` text form.
 
 Use `defineAgentClient` for caller-owned clients. A full client definition has a declared name,
-constructor schema, lifecycle mode, and methods; it exposes `agentId` and `client` factories without
-registering an implementation. A method-only `{ methods }` definition has neither factory nor
-identity constructor; it binds without discovery and assumes durable result semantics. An
-unimplemented `defineAgent` spec remains usable as a shared implementation/caller definition.
-`identity.client(clientDefinition)` validates the declared name and constructor schema before opening RPC.
-`Client.bind(identity, clientDefinition)` and `DynamicClient.bind(identity)` remain lower-level functions.
+constructor schema, lifecycle mode, and methods; it exposes the `client` factories without
+registering an implementation. A method-only `{ methods }` definition has no factory and assumes
+durable result semantics. An unimplemented `defineAgent` spec remains usable as a shared
+implementation/caller definition. `Client.bind(id, definition)` binds a typed client to an
+existing agent: it reads the agent type from the host by the ID, rejects a full definition of
+another type or an ephemeral type, and connects through `getById`. `DynamicClient.bind(id)` is
+the lower-level schema-native form.
 
 ```ts
 import { Effect, Schema } from "effect"
-import { AgentIdentity, defineAgentClient, method } from "@golemcloud/effect-golem"
+import { AgentId, Client, DynamicClient, defineAgentClient, method } from "@golemcloud/effect-golem"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 
 const Target = defineAgentClient({
@@ -90,16 +144,15 @@ const Target = defineAgentClient({
   methods: { echo: method({ input: { message: Schema.String }, success: Schema.String }) },
 })
 
-const calls = (inputTree: CoreTypes.SchemaValueTree) =>
+const calls = (text: string, inputTree: CoreTypes.SchemaValueTree) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const identity = yield* Target.agentId({ name: "main" })
-      const full = yield* identity.client(Target)
+      const id = yield* AgentId.parse(text)
+      const full = yield* Client.bind(id, Target)
       const first = yield* full.echo({ message: "full" })
       const methods = defineAgentClient({ methods: Target.methods })
-      const second = yield* (yield* identity.client(methods)).echo({ message: "method only" })
-      const parsed = yield* AgentIdentity.parse(identity.encoded)
-      const dynamic = yield* parsed.dynamicClient()
+      const second = yield* (yield* Client.bind(id, methods)).echo({ message: "method only" })
+      const dynamic = yield* DynamicClient.bind(id)
       const raw = yield* dynamic.method("echo").invoke(inputTree)
       // Dynamic methods accept native SchemaValueTree inputs and return metadata plus native values.
       return { first, second, raw }
@@ -107,13 +160,10 @@ const calls = (inputTree: CoreTypes.SchemaValueTree) =>
   )
 ```
 
-Complete ephemeral specs require a phantom ID for `agentId(input, phantomId)` and reject generic
-existing-ID binding. Address known or fresh phantoms through their factories instead.
-
-For runtime-selected targets, use `Reflection.getAgentType(name)`,
-`getAgentTypeByAgentId(parsedIdentity)`, or `getAllAgentTypes`. Each immutable registration exposes
-constructor/method `SchemaRef` values with JSON/value validation and JSON Schema rendering.
-Narrow `type.mode` to select its lifecycle factory:
+For runtime-selected targets, use `Reflection.getAgentType(name)`, `getAgentTypeByAgentId(id)`,
+or `getAllAgentTypes`. Each immutable registration exposes constructor/method `SchemaRef` values
+with JSON/value validation and JSON Schema rendering. Narrow `type.mode` to select its lifecycle
+factory:
 
 ```ts
 import { Effect } from "effect"
@@ -123,31 +173,30 @@ const invokeCounter = Effect.scoped(
   Effect.gen(function* () {
     const type = yield* Reflection.getAgentType("Counter")
     if (type === undefined || type.mode !== "durable") return undefined
-    const client = yield* type.client.get({ name: "main" })
+    const client = yield* type.client.upsert({ name: "main" })
     const add = yield* client.method("add")
     return yield* add.invoke({ by: 1 })
   }),
 )
 ```
 
-Reflected invocation results contain metadata and, for non-unit outputs, `value`.
-Ephemeral `newPhantom` returns a client whose actual identity arrives in invocation metadata;
-`getPhantom(input, phantomId)` addresses a known phantom without offering ordinary existing-ID
-binding. Durable `newPhantom` returns `{ client, agentId, phantomId }`, with a parsed `agentId`.
-Durable reflected types also bind through `Client.bind(identity, reflectedType)` after name and
-constructor validation. Discovery misses remain `undefined`; host and malformed-schema failures
-enter the typed error channel. `invokeValue`, `triggerValue`,
-and `scheduleValue` accept native WIT schema-value trees when JSON cannot represent capabilities.
-`parsedIdentity.dynamicClient()` binds without discovery and uses value-only methods; callers
-must supply the correct remote method definitions. Both APIs use scopes and fiber interruption and expose
-the same structured remote-call errors as typed clients.
+Reflected invocation results contain metadata and, for non-unit outputs, `value`. A durable
+reflected factory has `upsert`, `create(input, { keyed, config, env })`, and `getById(id)`, plus
+`upsertValue` and `createValue` for schema-value trees; its clients have `agentId`. An ephemeral
+reflected factory has only `upsert` and `upsertValue`, and its clients expose their ID only in
+invocation metadata. Durable reflected types also bind through `Client.bind(id, reflectedType)`.
+Discovery misses remain `undefined`; host and malformed-schema failures enter the typed error
+channel. `invokeValue`, `triggerValue`, and `scheduleValue` accept native WIT schema-value trees
+when JSON cannot represent capabilities. `DynamicClient.bind(id)` uses value-only methods;
+callers must supply the correct remote method definitions. Both APIs use scopes and fiber
+interruption and expose the same structured remote-call errors as typed clients.
 
 The four client approaches are: Normal RPC through the ordinary client for a shared source
 definition; method-only or full caller-defined static clients; discovered clients backed by an
 immutable deployed schema snapshot; and fully dynamic schema-native clients for existing durable
-identities. Method-only clients do not own
-identity, lifecycle, mode, or config declarations. Full clients own those declarations and the
-matching durable, phantom, or ephemeral factories. Dynamic clients neither discover nor create.
+agents. Method-only clients do not own
+constructor, lifecycle, mode, or config declarations. Full clients own those declarations and the
+matching durable or ephemeral factories. Dynamic clients never create an agent.
 
 Normal RPC and caller-defined static clients encode through their local schemas before opening RPC;
 full binding also checks the declared name and constructor shape. Discovered clients apply all
@@ -261,14 +310,14 @@ Service.implement({
 ```
 
 Plain leaves are invocation-local cached; secret reads are not cached. `Schema.optional(...)`
-declares optional values. Nested structs map to path segments. RPC overrides include only non-secret
-leaves:
+declares optional values. Nested structs map to path segments. The `config` option of `create`
+overrides only non-secret leaves; `upsert` takes no overrides:
 
 ```ts
 yield *
-  Service.client.get(
+  Service.client.create(
     { tenant: "acme" },
-    { overrides: { endpoint: "https://example.test", tuning: { retries: 2 } } },
+    { config: { endpoint: "https://example.test", tuning: { retries: 2 } }, env: { MODE: "test" } },
   )
 ```
 
@@ -278,8 +327,9 @@ Config is never stored in snapshots. Restoration reads current host values.
 
 Snapshotting agents initialize runtime state with `init(id)`. The implementation's snapshot
 strategy restores that state before `methods(state)` constructs handlers. Custom restoration
-receives a `SnapshotRestorationContext` containing `id`, `principal`, `phantomId`, `agentId`,
-`parsedAgentId`, and current `config`; it must not perform fresh-instance initialization effects.
+receives a `SnapshotRestorationContext` containing `id`, `principal`, the typed `agentId`, and
+current `config`; it must not perform fresh-instance initialization effects. `id` is the
+constructor input that the host passes to `load-snapshot`, decoded as `initialize` decodes it.
 
 ```ts
 import { Effect, Ref, Schema } from "effect"
@@ -323,7 +373,7 @@ databases? })` and provide an explicit strategy. `save(ref)` returns an Effect o
 `yield* Snapshot.requirePart(saved.parts, "index", "application/octet-stream")` checks both presence
 and MIME type. Binary-only applications use `Schema.Null` state. Logical names are case-sensitive
 `[A-Za-z0-9_][A-Za-z0-9_.-]*`; content types are bare ASCII MIME types without parameters.
-The SDK owns the envelope and principal, always emits multipart (including zero parts), and never
+The SDK owns the envelope (which holds no caller), always emits multipart (including zero parts), and never
 interprets user parts as resources. Existing JSON and byte-only modes are unchanged.
 
 Optional managed SQLite composition uses the same `databases` accessor in both `Snapshot.define`
@@ -375,7 +425,7 @@ const routes = Layer.mergeAll(
     "GET",
     "/count",
     Effect.gen(function* () {
-      const counter = yield* Counter.client.get({ name: "web" })
+      const counter = yield* Counter.client.upsert({ name: "web" })
       return HttpServerResponse.text(String(yield* counter.value({})))
     }),
   ),
@@ -706,11 +756,10 @@ const program = Effect.gen(function* () {
       upperPositive: [grant],
     },
   )
-  // Reader is a defineAgent spec whose read method needs the kv grant;
-  // ReaderClient is the matching defineAgentClient definition.
-  const reader = yield* Reader.client.get({ name: "reader" })
+  // Reader is a defineAgent spec whose read method needs the kv grant.
+  const reader = yield* Reader.client.upsert({ name: "reader" })
   yield* reader.read.withScopeCard(scope)({ key: "key" })
-  const holder = yield* Permissions.agentHolder(yield* ReaderClient.agentId({ name: "reader" }))
+  const holder = Permissions.Holder.agent(yield* reader.agentId)
   yield* Permissions.install(child, holder)
   return yield* Permissions.revoke(card)
 }).pipe(Effect.scoped)
@@ -750,10 +799,11 @@ const program = Effect.gen(function* () {
   logging, and JSON serialization show `CardId(<redacted>)`.
 - `wallet` returns owned cards; release the ones that you do not keep with `release`, or use
   `walletScoped` to release them when the scope closes.
-- `install` accepts `Holder.agent(...)` or `agentHolder(identity)`. The host rejects account and
+- `install` accepts `Holder.agent(agentId)` with a typed `AgentId`, such as the `agentId` of a
+  client or the value of `SelfAgentId.SelfAgentId`. The host rejects account and
   app holders with `not-permitted`.
 - Scope cards attach only to awaited calls: `method.withScopeCard(scope)(input)` for one call, or
-  the `scopeCard` option of `get`, `getPhantom`, `newPhantom`, and `bindWithConfig` for every
+  the `scopeCard` option of `upsert`, `create`, `getById`, and `bindSelf` for every
   awaited call of a client. `DynamicMethod.invoke` and the reflected `invoke` and `invokeValue`
   take a `{ scopeCard }` option for one call. Generated Effect bridges have
   `client.withScopeCard(scope)` for a client default and `client.method.withScopeCard(scope)(...args)`
@@ -786,7 +836,7 @@ Self metadata is read in these cases:
 | Restoration with an explicit snapshot strategy, including `Snapshot.ref()` | Yes, to populate the restoration context's `agentId` |
 | Plain schema-state restoration without a snapshot strategy                 | No implicit self-metadata read                       |
 
-Every snapshot load also reads `GOLEM_AGENT_ID` through the WASI environment API,
+Every snapshot load also reads `GOLEM_AGENT_TYPE` through the WASI environment API,
 including plain schema-state restoration. This requires environment-read permission
 for that variable independently of self-view; neither permission grants the other.
 

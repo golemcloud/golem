@@ -46,6 +46,7 @@ pub mod fuzzy;
 pub mod log;
 pub mod model;
 pub mod oplog_export;
+pub mod package;
 pub mod process;
 pub mod sdk_overrides;
 pub mod toon;
@@ -104,6 +105,9 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
         filter = filter.add_directive(warn("opentelemetry_sdk"));
         filter = filter.add_directive(warn("opentelemetry"));
         filter = filter.add_directive(warn("poem"));
+        // rmcp traces each request of `golem mcp serve` with its arguments, which can be data of
+        // an agent.
+        filter = filter.add_directive(warn("rmcp"));
         filter = filter.add_directive(
             // Special case: only show sqlx debug logs on TRACE level
             if level == tracing::Level::TRACE {

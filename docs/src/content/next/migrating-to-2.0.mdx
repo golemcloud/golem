@@ -1,0 +1,56 @@
+import { Callout } from "nextra/components"
+
+# Migrating to Golem 2.0
+
+Golem 2.0 changes how agents are identified and addressed. This page lists what changes for code, scripts, and tools written for Golem 1.x.
+
+## Agent IDs and keys
+
+- An **agent ID** is a UUID that Golem issues when it creates an agent. It no longer contains the agent type or the constructor parameters, and Golem never derives it from them on the client side.
+- A **key** is the agent type and its constructor parameter values, written `Type(params)`, for example `CounterAgent("alice")`. An agent created with a key is a **keyed agent**. There is at most one keyed agent per key, so the key finds the same agent every time.
+- An agent created **without a key** is reachable only by its agent ID. Any number of these agents can have the same constructor parameters. They replace 1.x phantom agents.
+- Ephemeral agent types have no IDs to address: their clients offer only `upsert`, and each invocation runs on a new one-shot instance.
+
+## Agent clients
+
+Every SDK renames its client operations. The table uses the TypeScript names; each language uses its own casing (`get_by_id` in Rust and MoonBit, `GetByID` in Go). The [multi-instance agents guide](/next/how-to-guides/ts/golem-multi-instance-agent-ts) of each language shows the exact names.
+
+| Golem 1.x | Golem 2.0 |
+| --- | --- |
+| `client.get(params)` | `client.upsert(params)`: returns the keyed agent and creates it when it does not exist. It takes no config or env overrides. |
+| `client.get(params, config)`, `getWithConfig` | `await client.create(params, { keyed: true, config })`: creates the keyed agent, and fails with a conflict error when it exists. |
+| `client.newPhantom(params)` | `await client.create(params)`: creates an agent without a key, with a new agent ID. |
+| `client.newPhantom(params, config)`, `newPhantomWithConfig` | `await client.create(params, { config, env })` |
+| `client.getPhantom(params, phantomId)` | `await client.getById(agentId)`: checks that the agent exists and has this type, and fails with a not-found error otherwise. |
+| `ParsedAgentId`, parsing or building agent ID text | The typed `AgentId` and `agentId()` on every client. |
+
+`create` and `getById` contact Golem, so they are asynchronous or fallible in every SDK.
+
+## Snapshots
+
+Custom snapshot restore code now receives the agent's constructor parameters, because they are no longer part of the agent ID. See the custom snapshot guide of your language, for example [TypeScript](/next/how-to-guides/ts/golem-custom-snapshot-ts).
+
+## Environment variables
+
+An agent sees `GOLEM_AGENT_ID` (the agent ID), `GOLEM_AGENT_TYPE`, and, for a keyed agent, `GOLEM_AGENT_KEY`. `GOLEM_WORKER_NAME` and `GOLEM_COMPONENT_ID` are removed. An agent no longer inherits the environment variables of its component.
+
+## CLI
+
+- `golem agent new` is replaced by `golem agent create` and `golem agent upsert`. `agent create` without `--keyed` creates an agent without a key; with `--keyed` it creates the keyed agent and fails when it exists. `agent upsert` returns the keyed agent and creates it when needed.
+- An agent address is a key, `Type(params)`, or an agent ID, written `Type[<agent-id>]` or as a bare UUID. Addresses still take the `<ENVIRONMENT>/`, `<APPLICATION>/` and `<ACCOUNT>/` prefixes. See [Agents](/next/cli/agents).
+- `agent invoke` takes `--expected-fingerprint` to fail when the agent was deleted and created again.
+- `agent list` filters by `key` and `id` instead of `name`. It lists agents per agent type and returns one combined cursor.
+- `deploy --redeploy-agents` recreates a keyed agent with its agent ID, and an agent without a key from its constructor parameters, env, and config with a new agent ID.
+
+## REST API
+
+Runtime endpoints are under `/v1/runtime/envs/{environment_id}/agents/`. They address an agent by its agent ID, or look up a keyed agent by its key. The [REST API reference](/next/rest-api) lists them.
+
+## Observability and oplog processors
+
+- The OTLP exporter reports `golem.agent.id` as the agent ID and adds `golem.agent.type`. It no longer reports `golem.component.id`.
+- The `process` export of an oplog processor plugin no longer receives a component ID. The agent's environment, agent ID, and agent type are in its metadata.
+
+<Callout type="info">
+Golem 2.0 does not migrate agents created by Golem 1.x.
+</Callout>

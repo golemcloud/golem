@@ -18,7 +18,7 @@
 
 use crate::Tracing;
 use golem_common::model::{AgentStatus, OplogIndex};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
@@ -56,7 +56,7 @@ async fn go_rpc_sync_and_async_calls(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("RpcAgent", "go-rpc-1");
+    let agent_id = agent_key!("RpcAgent", "go-rpc-1");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -150,7 +150,7 @@ async fn rpc_caller_resumes_after_suspending_mid_call(
         .await?;
 
     let target_name = format!("go-rpc-suspend-target-{method}");
-    let target_id = agent_id!("PromiseAgent", target_name.clone());
+    let target_id = agent_key!("PromiseAgent", target_name.clone());
     let target = executor
         .start_agent_with(&component.id, target_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -159,7 +159,7 @@ async fn rpc_caller_resumes_after_suspending_mid_call(
         .await?
         .into_typed::<i64>()?;
 
-    let caller_id = agent_id!("RpcAgent", format!("go-rpc-suspend-caller-{method}"));
+    let caller_id = agent_key!("RpcAgent", format!("go-rpc-suspend-caller-{method}"));
     let caller = executor
         .start_agent_with(&component.id, caller_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -190,6 +190,7 @@ async fn rpc_caller_resumes_after_suspending_mid_call(
 
     executor
         .complete_promise(
+            &executor.context.default_environment_id,
             &executor
                 .promise_id(&target, OplogIndex::from_u64(oplog_idx as u64))
                 .await?,
@@ -232,7 +233,7 @@ async fn go_parallel_rpc_from_goroutines_replays(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("RpcAgent", "go-rpc-parallel");
+    let agent_id = agent_key!("RpcAgent", "go-rpc-parallel");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

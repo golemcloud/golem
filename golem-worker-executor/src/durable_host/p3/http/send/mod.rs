@@ -26,7 +26,7 @@ use crate::durable_host::concurrent::{
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
     InFunctionRetryState, TaskRetryContext, semantic_trap_retry_override_error,
-    try_trigger_host_trap_retry,
+    try_trigger_host_trap_retry, wait_retry_backoff,
 };
 use crate::durable_host::http::policy::{
     apply_managed_http_headers, classify_serializable_http_error_code, golem_managed_http_headers,
@@ -764,9 +764,15 @@ where
     let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
         store,
         handle.trap_context().retry_from,
+        handle.start_index(),
         RetryContext::http(&retry_method, &retry_uri),
     )
     .await;
+    // A backoff waits durably only while the request body can become resendable
+    // (`may_replay_after_send_failure`); a body that is still streaming is drained to its terminal
+    // before the wait. Otherwise a delay above the threshold keeps the trap fallback, whose
+    // reconstruction rebuilds the body from its recording.
+    let send_waits_durably = retry_task_ctx.durable_wait;
 
     let mut send_semantic_override = None;
     let send_result = loop {
@@ -861,6 +867,8 @@ where
                         &serialized_request.method,
                     );
                     retry_task_ctx.retry_properties = properties.clone();
+                    retry_task_ctx.durable_wait =
+                        send_waits_durably && physical.body.may_replay_after_send_failure();
                     match retry_state
                         .decide_retry_for_named_policy(
                             &mut retry_task_ctx,
@@ -877,7 +885,19 @@ where
                             physical.body.abandon_active_live_view();
                             match physical.body.drain_to_terminal().await {
                                 DurableRequestBodyDrainOutcome::Replayable => {
-                                    tokio::time::sleep(delay).await;
+                                    if let Err(interrupt_kind) = wait_retry_backoff(
+                                        store,
+                                        durable_worker_ctx::<Ctx, U>,
+                                        delay,
+                                    )
+                                    .await
+                                    {
+                                        handle.abandon_for_trap();
+                                        let error: anyhow::Error = interrupt_kind.into();
+                                        return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                                            error,
+                                        )));
+                                    }
                                     continue;
                                 }
                                 // The body cannot be resent (guest body error
@@ -955,6 +975,8 @@ where
                     &serialized_request.method,
                 );
                 retry_task_ctx.retry_properties = properties.clone();
+                retry_task_ctx.durable_wait =
+                    send_waits_durably && physical.body.may_replay_after_send_failure();
                 // A transient failure after request-body frames were already
                 // pulled (i.e. the attempt was writing the body to the
                 // network) is charged as a distinct request-body-write retry
@@ -969,14 +991,30 @@ where
                     .decide_retry_with_properties(&mut retry_task_ctx, retry_label, &properties)
                     .await
                 {
-                    AsyncRetryDecision::RetryAfterDelay(delay)
-                        if physical.body.can_replay_after_send_failure() =>
-                    {
-                        tokio::time::sleep(delay).await;
+                    AsyncRetryDecision::RetryAfterDelay(delay) => {
+                        // A durable wait was allowed for a body that can still become
+                        // replayable: when the attempt failed while the body was streaming,
+                        // drain it to its terminal, as a status-code retry does, instead of
+                        // failing a send that the trap fallback would have repaired.
+                        let replayable = physical.body.can_replay_after_send_failure()
+                            || (retry_task_ctx.durable_wait && {
+                                physical.body.abandon_active_live_view();
+                                matches!(
+                                    physical.body.drain_to_terminal().await,
+                                    DurableRequestBodyDrainOutcome::Replayable
+                                )
+                            });
+                        if !replayable {
+                            break Err(error_code);
+                        }
+                        if let Err(interrupt_kind) =
+                            wait_retry_backoff(store, durable_worker_ctx::<Ctx, U>, delay).await
+                        {
+                            handle.abandon_for_trap();
+                            let error: anyhow::Error = interrupt_kind.into();
+                            return Err(HttpError::trap(wasmtime::Error::from_anyhow(error)));
+                        }
                         continue;
-                    }
-                    AsyncRetryDecision::RetryAfterDelay(_) => {
-                        break Err(error_code);
                     }
                     AsyncRetryDecision::FallBackToTrap(semantic_override) => {
                         send_semantic_override = semantic_override;
@@ -1119,6 +1157,7 @@ where
                     let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
                         store,
                         handle.trap_context().retry_from,
+                        handle.start_index(),
                         properties.clone(),
                     )
                     .await;

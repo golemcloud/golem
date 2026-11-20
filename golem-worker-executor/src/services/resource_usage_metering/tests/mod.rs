@@ -6,7 +6,6 @@ use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND;
 use golem_common::model::account_usage::MonthlyUsageMode;
-use golem_common::model::component::ComponentId;
 use golem_service_base::model::MonthlyResourcePolicy;
 use std::collections::VecDeque;
 use std::path::Path;
@@ -81,13 +80,7 @@ async fn close_task_panic_reports_observer_loss_and_returns_physical_capacity() 
     let (scheduler, account_id, owned) = permit(&entry).await;
     let window = open_window(&meter, owned).await.unwrap();
     let settled = window.settlement_observer();
-    let mut contender = Box::pin(scheduler.acquire(
-        account_id,
-        AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "after-close-task-panic".into(),
-        },
-    ));
+    let mut contender = Box::pin(scheduler.acquire(account_id, AgentId::from_parts(7, 1)));
     assert!(futures::poll!(contender.as_mut()).is_pending());
 
     // The memory-only window has no sampler. This faults complete_close in the actual spawned
@@ -413,13 +406,7 @@ async fn permit(
     let account_id = AccountId(Uuid::new_v4());
     scheduler.register_account(account_id, entry.clone()).await;
     let permit = scheduler
-        .acquire(
-            account_id,
-            AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "metered-agent".to_string(),
-            },
-        )
+        .acquire(account_id, AgentId::from_parts(7, 2))
         .await;
     (scheduler, account_id, permit)
 }
@@ -1445,13 +1432,7 @@ async fn close_timeout_exhausts_in_customers_favor_and_rejects_late_generation_r
     close.await.unwrap().unwrap();
     assert_eq!(scheduler.running_count(&account_id).await, Some(0));
     let second_permit = scheduler
-        .acquire(
-            account_id,
-            AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "next-generation".to_string(),
-            },
-        )
+        .acquire(account_id, AgentId::from_parts(7, 3))
         .await;
     let second = open_window(&meter, second_permit).await.unwrap();
     assert!(
@@ -1511,13 +1492,7 @@ async fn closed_window_queued_baseline_is_discarded_before_observer_call() {
     ));
 
     let second_permit = scheduler
-        .acquire(
-            account_id,
-            AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "queued-window".to_string(),
-            },
-        )
+        .acquire(account_id, AgentId::from_parts(7, 4))
         .await;
     let second = open_window(&meter, second_permit).await.unwrap();
     wait_for_active_observation(&second).await;
@@ -1544,13 +1519,7 @@ async fn closed_window_queued_baseline_is_discarded_before_observer_call() {
     wait_for_observations_to_finish(&reader).await;
 
     let third_permit = scheduler
-        .acquire(
-            account_id,
-            AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "current-window".to_string(),
-            },
-        )
+        .acquire(account_id, AgentId::from_parts(7, 5))
         .await;
     let third = open_window(&meter, third_permit).await.unwrap();
     wait_for_active_observation(&third).await;

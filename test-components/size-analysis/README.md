@@ -1,86 +1,99 @@
 # Component size analysis
 
-This is an explicitly invoked local report, not a byte-budget gate. Run the complete
-representative build, retention checks, release-profile matrix, Binaryen comparison,
-and allocator smoke test with:
+The `golem-size-analysis` crate (repository root) measures component size. This directory holds
+its inputs: the retention fixtures, the retention experiment and the allocator smoke benchmark.
+
+## The local report
+
+This is an explicitly invoked local report, not a byte-budget gate. Run the representative
+fixture builds, the export-contract and retention checks, the release-profile matrix and the
+allocator smoke test with:
 
 ```sh
-cargo make component-size-report
+cargo make component-size-report             # or add --optimize for the Binaryen comparison
 ```
 
-The command writes a human-readable `tmp/component-size-report/report.md`, a combined
-machine-readable `report.json`, and the detailed component, core, section, symbol,
-Cargo, tool-version, WIT, retention, and performance artifacts below that directory.
-The output directory must not already exist.
+It needs Rust's `wasm32-wasip2` target. Node runs the allocator smoke benchmark when it is on
+PATH; `--optimize` needs Binaryen's `wasm-opt`. The report writes `tmp/component-size-report/report.md`,
+a combined machine-readable `report.json`, and per-component directories with the component,
+extracted cores, the section table, twiggy symbols, crate estimates, WIT, Cargo output, lockfile
+and tool versions. The output directory must not exist. Builds use `--locked`; generate or update
+an application's lockfile intentionally before analysis. Cargo artifact messages select the WASM,
+so redirected target directories and workspaces work.
 
-`--wasm` inputs to the lower-level analyzer are
-never modified; `--manifest` runs Cargo normally and copies its build output.
-Reports contain the original component, extracted core modules,
-section accounting, tool versions, Cargo output/lockfile, and optional attribution
-and optimized components. Run from the repository root with Python 3.11+, Rust's
-`wasm32-wasip2` target, and `wasm-tools` 1.253.0 (older versions cannot decode the
-Preview 3 component types used here).
+Build times are wall-clock observations, not clean-build benchmarks: cache state and concurrent
+work matter. Keep the same toolchain, lockfile, Cargo configuration and environment when comparing
+reports; do not run concurrent builds of the same application. The report records explicit matrix
+overrides, not arbitrary environment variables or secrets.
+
+## Measuring one component
+
+`collect` prints the size, gzip size, section table and Rule 2 breakdown of one uploaded file as
+deterministic JSON; `--diagnostics` writes the fine breakdown (twiggy symbols and namespaces):
 
 ```sh
-cargo binstall --no-confirm --locked wasm-tools@1.253.0 twiggy@0.8.0
-python3 -m unittest discover -s test-components/size-analysis -v
-python3 test-components/size-analysis/analyze.py \
-  --manifest test-components/agent-counters/Cargo.toml \
-  --matrix --out tmp/counters-size
-python3 test-components/size-analysis/analyze.py \
-  --manifest test-components/benchmarks/benchmark-agent-rust/Cargo.toml \
-  --matrix --out tmp/benchmark-size
+cargo run -p golem-size-analysis -- collect --sdk rust --wasm component.wasm \
+  --user my-component [--named-wasm named.wasm] [--diagnostics symbols.json]
+cargo run -p golem-size-analysis -- collect --sdk ts --wasm app.preinitialized.wasm \
+  --guest agent_guest.wasm --dynamic app.dynamic.wasm --module-map modules.json
+cargo run -p golem-size-analysis -- collect --sdk go --wasm release.wasm \
+  --named-wasm debug.wasm --user example.com/app
 ```
+
+The buckets add up to the uploaded file:
+
+- TS and Effect: the guest is the runtime; the bytes the injection added are split into SDK,
+  dependencies and user code in proportion to the rollup module map; the snapshot is the data
+  growth of the preinitialized component over its `.dynamic.wasm` input.
+- Scala: runtime, one bundle bucket and the snapshot.
+- Rust: twiggy crate attribution of a named build (`--named-wasm`, or the uploaded file itself
+  when it keeps names), scaled to the uploaded file when they differ. A trait impl belongs to the
+  crate of its type, or of its trait when the type is not a path (`<[u8] as core::fmt::Debug>`).
+- Go and MoonBit: twiggy over the `name` section of a debug build, scaled to the release file and
+  marked approximate.
+
+Go symbols belong to their package path. The standard library of the pinned Go toolchain, its
+vendored packages and linker-generated `type:` and `go:` symbols are the runtime; any other
+package, including a local module with a dotless path, is a dependency. MoonBit symbols are
+mangled by `moonc` (`_M0FP28username5hello12use__generic`); the collector decodes their package
+(`username/hello`), and `moonbitlang/core` with the compiler's `moonbit.*` and `tlsf/*` helpers
+is the runtime. Imports, data segments, section headers and code the compiler generates are
+`other`. A scaled breakdown leaves out the custom sections that only the named build carries
+(its `name` section and DWARF `.debug_*` sections), so they do not shrink the attributed buckets.
+A main core module without function names in its `name` section fails instead of attributing
+nothing.
 
 ## Reflection retention contracts
 
-The `fixtures` workspace provides named, unstripped empty, non-reflective tool/client,
-and explicit reflection components. Build them through `analyze.py`, then run:
+The `fixtures` workspace provides named, unstripped empty, non-reflective tool/client, and
+explicit reflection components. `./build-components.sh rust` builds `retention-empty`,
+`retention-non-reflective` and `retention-reflection` into `test-components/`, and the
+`golem-size-analysis` `retention` test checks them:
 
 ```sh
-python3 test-components/size-analysis/retention.py \
-  --negative empty=tmp/retention-empty/current/component.wasm \
-  --negative tool=tmp/retention-non-reflective/current/component.wasm \
-  --positive reflection=tmp/retention-reflection/current/component.wasm \
-  --enforce-option-b
+cargo test -p golem-size-analysis --test retention
 ```
 
-The gate rejects reflection host imports and model/reflection helper retention
-in both negative fixtures, and requires `get-agent-type` plus the positive
-fixture's named reflection method.
-
-The output directory must not exist. Builds use `--locked`; generate/update the
-application's lockfile intentionally before analysis if necessary. Cargo artifact
-messages select the WASM, so redirected target directories and workspaces work.
-Use `--package` if a manifest builds multiple WASMs. Use `--wasm path.wasm` instead
-of `--manifest` to analyze an already-built component or core module, or omit
-`--matrix` to measure the current profile (`--profile dev` includes debug symbols).
-Build times are wall-clock observations, not clean-build benchmarks: cache state
-and concurrent work matter. Keep the same toolchain, lockfile, Cargo configuration,
-and environment when comparing reports; do not run concurrent builds of the same
-application. The tool records explicit matrix overrides, not arbitrary environment
-variables or secrets.
+The test rejects reflection host imports and model/reflection helper retention in both negative
+fixtures, and requires `get-agent-type` plus the positive fixture's named reflection method. The
+report runs the same check on its own builds, and also checks that the empty fixture keeps the
+canonical floor's five-interface export contract and imports nothing new.
 
 ## Read the right numbers
 
-`summary.json` separates complete component, code, data, and custom-section bytes.
+`summary.json` separates complete component, gzip, code, data, and custom-section bytes.
 Code/data totals include section framing and sum across all embedded core modules.
-`report/sections.json` is a non-overlapping byte table including nested component
-framing; its rows sum exactly to the original file length. `objdump.txt` also
-contains wasm-tools' human-readable table (whose sizes exclude section framing).
-Neither number is linear-memory usage, compiled machine-code size, or wire size
-after compression.
+`report/sections.json` is a non-overlapping byte table including nested component framing; its
+rows sum exactly to the original file length. Neither number is linear-memory usage or compiled
+machine-code size. The gzip size uses the one fixed level every Golem size measurement uses.
 
-`report/core-N/module.wasm` contains each core in traversal order. With `twiggy`
-installed, `symbols.json` records shallow symbol sizes and `crate-estimates.json`
-groups demangled symbol namespaces. Names with Rust v0 disambiguator hashes work.
-This is approximate ownership after LTO/inlining, **not** per-crate retained size:
-shared generic code, trait methods, data and unknown symbols can be unattributed.
-The attribution copy has demangled names, which can enlarge its custom sections;
-use the original section table for total sizes. Missing/unsupported optional
-attribution tools produce `attribution-unavailable.txt`, not a failed size report.
-Stripped release binaries cannot recover symbol names; use the named baseline or
-`CARGO_PROFILE_RELEASE_STRIP=debuginfo` for attribution.
+`report/core-N/module.wasm` contains each core in traversal order. `symbols.json` records twiggy's
+shallow symbol sizes (demangled in process) and `crate-estimates.json` groups symbol namespaces.
+Names with Rust v0 disambiguator hashes work. This is approximate ownership after LTO/inlining,
+**not** per-crate retained size: shared generic code, trait methods, data and unknown symbols can
+be unattributed. Stripped release binaries cannot recover symbol names; their report has
+`attribution-unavailable.txt`. Use the named baseline or `CARGO_PROFILE_RELEASE_STRIP=debuginfo`
+for attribution.
 
 ## Defaults and independent comparisons
 
@@ -112,40 +125,40 @@ test consumers to chase a WASM-only size saving.
 
 ## Experimental Binaryen pipeline
 
-Install Binaryen 123 and put its `bin` directory on PATH, then add `--optimize`.
-For a complete component, the tool extracts every core, runs
-`wasm-opt -Oz -g` with bulk-memory, sign-ext, nontrapping-float-to-int,
-mutable-globals, multivalue and reference-types enabled, and re-embeds each core
-at its original position. Unsupported input proposals fail rather than silently
-broadening the feature set.
-Nested section lengths are rewritten, but the wrapper's component types, aliases,
-instances, canonical ABI wiring, and custom metadata are preserved. It validates
-the result and requires the decoded WIT to match before/after. This is rebundling
-an existing component, not reconstructing its world from untyped machine code.
-
-For a raw core with `component-type*` custom sections, the tool restores those
-sections byte-for-byte after Binaryen. Only then is this safe:
+Install Binaryen 123, put its `bin` directory on PATH, then run the report with `--optimize`, or
+optimize one component:
 
 ```sh
-python3 test-components/size-analysis/analyze.py \
-  --wasm typed-core.wasm --optimize --out tmp/typed-core-size
-wasm-tools component new tmp/typed-core-size/current/optimized.wasm \
-  -o tmp/optimized-component.wasm
+cargo run -p golem-size-analysis -- optimize --wasm component.wasm -o optimized.wasm
+```
+
+For a complete component, the tool extracts every core, runs `wasm-opt -Oz -g` with bulk-memory,
+sign-ext, nontrapping-float-to-int, mutable-globals, multivalue and reference-types enabled, and
+re-embeds each core at its original position. Unsupported input proposals fail rather than
+silently broadening the feature set. Nested section lengths are rewritten, but the wrapper's
+component types, aliases, instances, canonical ABI wiring, and custom metadata are preserved. It
+validates the result and requires the decoded WIT to match before/after. This is rebundling an
+existing component, not reconstructing its world from untyped machine code.
+
+For a raw core with `component-type*` custom sections, the tool restores those sections
+byte-for-byte after Binaryen. Only then is this safe:
+
+```sh
+cargo run -p golem-size-analysis -- optimize --wasm typed-core.wasm -o optimized-core.wasm
+wasm-tools component new optimized-core.wasm -o tmp/optimized-component.wasm
 wasm-tools validate --features all tmp/optimized-component.wasm
 ```
 
-An unbundled core from an already-encoded component often no longer has that
-metadata. Do not call `component new` on it and assume the original world survives.
-Use the original wrapper instead. Preview 1 adapters also require their original
-componentization configuration.
+An unbundled core from an already-encoded component often no longer has that metadata. Do not
+call `component new` on it and assume the original world survives. Use the original wrapper
+instead. Preview 1 adapters also require their original componentization configuration.
 
-Do not substitute `--all-features`: Binaryen 123 introduced typed references that
-passed wasm-tools validation but failed Golem's engine during schema extraction
-("function references required for index reference types"). Validation with
-`--features all` and equal WIT are structural checks, not semantic or
-deployment-engine proof. `-Oz` is **not** enabled in release
-builds or deployment paths. Test the resulting component with the actual executor
-and workload before adopting it. Binaryen can change stack/fuel usage and timing.
+Do not substitute `--all-features`: Binaryen 123 introduced typed references that passed
+wasm-tools validation but failed Golem's engine during schema extraction ("function references
+required for index reference types"). Validation with every feature and equal WIT are structural
+checks, not semantic or deployment-engine proof. `-Oz` is **not** enabled in release builds or
+deployment paths. Test the resulting component with the actual executor and workload before
+adopting it. Binaryen can change stack/fuel usage and timing.
 
 ## Export and constructor retention experiment
 
@@ -155,25 +168,13 @@ through `run() == 42`. It does not change an SDK WIT world.
 
 ```sh
 wasm-tools parse test-components/size-analysis/retention.wat -o tmp/retention.wasm
-python3 test-components/size-analysis/analyze.py \
-  --wasm tmp/retention.wasm --optimize --out tmp/retention-size
-wasmtime run --invoke 'run()' tmp/retention-size/current/optimized.wasm
-wasm-metadce tmp/retention-size/current/report/core-0/module.wasm \
-  --graph-file test-components/size-analysis/retention-graph.json -g \
-  -o tmp/retention-dce-core.wasm
-PYTHONPATH=test-components/size-analysis python3 - <<'PY'
-from pathlib import Path
-from analyze import rewrite_cores
-Path('tmp/retention-dce.wasm').write_bytes(rewrite_cores(
-    Path('tmp/retention.wasm').read_bytes(),
-    lambda _: Path('tmp/retention-dce-core.wasm').read_bytes()))
-PY
-wasm-tools validate --features all tmp/retention-dce.wasm
-wasmtime run --invoke 'run()' tmp/retention-dce.wasm
+cargo run -p golem-size-analysis -- optimize --wasm tmp/retention.wasm -o tmp/retention-Oz.wasm
+wasmtime run --invoke 'run()' tmp/retention-Oz.wasm
 ```
 
 Ordinary `-Oz` removes the private unreachable body but retains the unused core
-export. The hand-authored graph accounts for this fixture's component alias and
+export. The metadce step ran `wasm-metadce` on the extracted core with
+`retention-graph.json` and re-embedded the result in the original wrapper. The hand-authored graph accounts for this fixture's component alias and
 lets `wasm-metadce` remove that export and its loop; the constructor effect remains.
 This graph is **fixture-specific**, not a generic Golem optimization. Live canonical
 exports (including post-return/callback functions), table references and ctor
@@ -184,11 +185,11 @@ for arbitrary component instances/aliases is not implemented.
 ## Performance and CI
 
 ```sh
+matrix=tmp/component-size-report/release-profile-matrix
 node test-components/size-analysis/benchmark-core.mjs \
-  tmp/counters-size/baseline-s/report/core-0/module.wasm \
-  tmp/counters-size/strip/report/core-0/module.wasm \
-  tmp/counters-size/cgu1/report/core-0/module.wasm \
-  tmp/counters-size/z/report/core-0/module.wasm > tmp/allocator-performance.json
+  $matrix/baseline-s/report/core-0/module.wasm $matrix/strip/report/core-0/module.wasm \
+  $matrix/cgu1/report/core-0/module.wasm $matrix/z/report/core-0/module.wasm \
+  > tmp/allocator-performance.json
 ```
 
 This isolates core instantiation and 100,000 allocate/grow/free cycles (two warmups,

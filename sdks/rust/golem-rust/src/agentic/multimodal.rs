@@ -255,14 +255,12 @@ impl<T: MultimodalSchema> Schema for MultimodalAdvanced<T> {
     where
         Self: Sized,
     {
-        match schema {
-            StructuredSchema::Default(schema) => Self::convert_from_schema_value(
-                value,
-                multimodal_case_names_from_schema_graph(&schema)
-                    .ok_or_else(|| "Expected Multimodal schema".to_string())?,
-            ),
-            _ => Err("Expected Multimodal schema".to_string()),
-        }
+        let StructuredSchema::Default(schema) = schema;
+        Self::convert_from_schema_value(
+            value,
+            multimodal_case_names_from_schema_graph(&schema)
+                .ok_or_else(|| "Expected Multimodal schema".to_string())?,
+        )
     }
 }
 

@@ -698,6 +698,8 @@ pub enum SerializableP3TcpChunk {
 )]
 pub struct AgentMetadataForGuests {
     pub agent_id: AgentId,
+    pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
+    pub fingerprint: crate::model::AgentFingerprint,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub config: BTreeMap<String, String>,
@@ -774,6 +776,25 @@ pub struct SerializableP3UdpDatagram {
     pub remote_address: SerializableP3IpSocketAddress,
 }
 
+/// How a P3 UDP call changed the local endpoint of its socket.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3UdpEndpoint {
+    /// The local address of the socket changed to this address: an implicit bind, or the
+    /// interface address that a connect selected for a wildcard bind.
+    Bound(SerializableP3IpSocketAddress),
+    /// The socket could not get its recorded local address back after recovery.
+    Lost,
+}
+
 #[derive(
     Debug,
     Clone,
@@ -791,6 +812,118 @@ pub enum SerializableP3IpNameLookupError {
     TemporaryResolverFailure,
     PermanentResolverFailure,
     Other(Option<String>),
+}
+
+/// The record type of a `golem:network/dns` lookup.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableDnsRecordType {
+    A,
+    Aaaa,
+    Cname,
+    Mx,
+    Ns,
+    Ptr,
+    Srv,
+    Txt,
+    Caa,
+    Soa,
+    Naptr,
+}
+
+/// One record of a `golem:network/dns` answer.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableDnsRecord {
+    pub ttl: u32,
+    pub data: SerializableDnsRecordData,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableDnsRecordData {
+    A(SerializableIpAddress),
+    Aaaa(SerializableIpAddress),
+    Cname(String),
+    Mx {
+        preference: u16,
+        exchange: String,
+    },
+    Ns(String),
+    Ptr(String),
+    Srv {
+        priority: u16,
+        weight: u16,
+        port: u16,
+        target: String,
+    },
+    Txt(Vec<Vec<u8>>),
+    Caa {
+        issuer_critical: bool,
+        tag: String,
+        value: Vec<u8>,
+    },
+    Soa {
+        mname: String,
+        rname: String,
+        serial: u32,
+        refresh: u32,
+        retry: u32,
+        expire: u32,
+        minimum: u32,
+    },
+    Naptr {
+        order: u16,
+        preference: u16,
+        flags: String,
+        services: String,
+        regexp: String,
+        replacement: String,
+    },
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableDnsError {
+    AccessDenied,
+    InvalidName,
+    NameNotFound,
+    NoData,
+    TemporaryResolverFailure,
+    PermanentResolverFailure,
 }
 
 #[derive(
@@ -880,6 +1013,9 @@ pub enum SerializableRpcError {
     },
     RemoteAgentError {
         error: Box<crate::model::agent::AgentError>,
+    },
+    Conflict {
+        details: String,
     },
 }
 

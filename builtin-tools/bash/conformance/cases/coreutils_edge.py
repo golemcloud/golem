@@ -163,7 +163,7 @@ CASES = [
     # kernel for these to report, so they answer this sandbox's own fixed identity instead.
     ("coreutils: chmod refuses canonically instead of pretending to succeed", "cd /tmp; touch c; chmod 644 c; echo s=$?; rm -f c"),
     ("coreutils: nproc reports this sandbox's one logical core", "nproc; echo s=$?"),
-    ("coreutils: hostname answers from GOLEM_WORKER_NAME", "hostname; echo s=$?"),
+    ("coreutils: hostname answers from GOLEM_AGENT_ID", "hostname; echo s=$?"),
     ("coreutils: uname -a reports this sandbox's fixed, synthetic fields", "uname -a; echo s=$?"),
 
     # cp: a process substitution's read end is a pipe, not a regular file, and
@@ -258,7 +258,7 @@ EXPECTED = {
     # these all deliberately diverge from the oracle -- WASI has no permission bits for
     # `chmod` to change, and no real hostname/CPU-count/kernel to report, so each answers this
     # sandbox's own fixed, documented identity instead (see the README's Commands section).
-    # `GOLEM_WORKER_NAME` is pinned to "conformance-agent" for every case in this file (see
+    # `GOLEM_AGENT_ID` is pinned to "conformance-agent" for every case in this file (see
     # conformance.py's fixed environment), so these are as reproducible as any other case here.
     "coreutils: chmod refuses canonically instead of pretending to succeed": (
         0,
@@ -266,7 +266,7 @@ EXPECTED = {
         b"chmod: changing file modes is unsupported in bash-tool\n",
     ),
     "coreutils: nproc reports this sandbox's one logical core": (0, b"1\ns=0\n", b""),
-    "coreutils: hostname answers from GOLEM_WORKER_NAME": (
+    "coreutils: hostname answers from GOLEM_AGENT_ID": (
         0,
         b"conformance-agent\ns=0\n",
         b"",

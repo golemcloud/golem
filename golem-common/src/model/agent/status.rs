@@ -20,7 +20,6 @@ use desert_rust::{
     SerializationContext,
 };
 use im::{OrdMap, Vector};
-use uuid::Uuid;
 
 use super::{AgentMode, OwnedAgentId, PendingInvocationRef};
 use crate::model::account::{AccountEmail, AccountId};
@@ -35,9 +34,9 @@ use crate::model::oplog::{
 use crate::model::regions::{DeletedRegions, OplogRegion};
 use crate::model::{
     AgentAndFilter, AgentConfigVarsFilter, AgentCreatedAtFilter, AgentEnvFilter, AgentFilter,
-    AgentFingerprint, AgentId, AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentOrFilter,
-    AgentResourceDescription, AgentRevisionFilter, AgentStatus, AgentStatusFilter, InvocationId,
-    RetryConfig, RetryPolicyState, Timestamp,
+    AgentFingerprint, AgentId, AgentIdFilter, AgentKeyFilter, AgentModeFilter, AgentNotFilter,
+    AgentOrFilter, AgentResourceDescription, AgentRevisionFilter, AgentStatus, AgentStatusFilter,
+    InvocationId, RetryConfig, RetryPolicyState, Timestamp,
 };
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -45,6 +44,8 @@ pub struct AgentMetadata {
     pub component_id: crate::model::component::ComponentId,
     pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
     pub canonical_key: Option<String>,
+    /// The canonical constructor parameter text of a component agent, without its type name.
+    pub constructor_parameters: Option<String>,
     pub agent_id: AgentId,
     pub owner_kind: crate::model::agent::OwnerKind,
     pub env: Vec<(String, String)>,
@@ -55,7 +56,6 @@ pub struct AgentMetadata {
     pub created_at: Timestamp,
     pub parent: Option<AgentId>,
     pub last_known_status: AgentStatusRecord,
-    pub original_phantom_id: Option<Uuid>,
     pub fingerprint: AgentFingerprint,
     pub agent_mode: AgentMode,
     pub create_request: oplog::CreateRequest,
@@ -66,7 +66,7 @@ impl AgentMetadata {
         OwnedAgentId::new(self.environment_id, &self.agent_id)
     }
 
-    /// Resolves the persisted type and decodes constructor parameters from the current-format ID.
+    /// Resolves the persisted type and decodes the persisted constructor parameters.
     pub fn parse_agent_id(
         &self,
         metadata: &crate::model::component_metadata::ComponentMetadata,
@@ -75,18 +75,26 @@ impl AgentMetadata {
             .agent_type_name
             .as_ref()
             .ok_or_else(|| "Owner has no agent type".to_string())?;
+        let parameters = self
+            .constructor_parameters
+            .as_deref()
+            .ok_or_else(|| "Owner has no constructor parameters".to_string())?;
         let agent_type = metadata
             .find_agent_type_by_name_ref(name)
             .ok_or_else(|| format!("Agent type not found: {name}"))?;
-        super::ParsedAgentKey::parse(&self.agent_id.agent_id, agent_type)
+        super::ParsedAgentKey::parse_parameters(name, parameters, agent_type)
     }
 }
 
 impl AgentFilter {
     pub fn matches(&self, metadata: &AgentMetadata) -> bool {
         match self.clone() {
-            AgentFilter::Name(AgentNameFilter { comparator, value }) => {
-                comparator.matches(&metadata.agent_id.agent_id, &value)
+            AgentFilter::Key(AgentKeyFilter { comparator, value }) => metadata
+                .canonical_key
+                .as_ref()
+                .is_some_and(|key| comparator.matches(key, &value)),
+            AgentFilter::Id(AgentIdFilter { comparator, value }) => {
+                comparator.matches(&metadata.agent_id, &value)
             }
             AgentFilter::Revision(AgentRevisionFilter { comparator, value }) => {
                 let revision: ComponentRevision = metadata.last_known_status.component_revision;
@@ -127,7 +135,7 @@ impl AgentFilter {
                 comparator.matches(&metadata.created_at, &value)
             }
             AgentFilter::Status(AgentStatusFilter { comparator, value }) => {
-                comparator.matches(&metadata.last_known_status.status, &value)
+                comparator.matches(&metadata.last_known_status.reported_status(), &value)
             }
             AgentFilter::Mode(AgentModeFilter { comparator, value }) => {
                 comparator.matches(&metadata.agent_mode, &value)
@@ -588,6 +596,10 @@ pub struct AgentStatusRecord {
     pub received_card_transfers: ReceivedCardTransferIndex,
     pub source_card_transfers: SourceCardTransferIndex,
     pub entity_replay_progress: EntityReplayProgress,
+    /// The links from addresses to the hostnames that the address lookups of the primary Store
+    /// returned them for. A Store that starts takes them, so its hostname grants match the same
+    /// raw-socket connects as in the run that recorded the lookups.
+    pub resolved_names: super::ResolvedNameIndex,
     pub durable_stream_sessions: DurableStreamSessionIndex,
     pub export_fork_admissions: ExportForkAdmissions,
     pub has_durable_stream_history: bool,
@@ -595,6 +607,9 @@ pub struct AgentStatusRecord {
     /// any of its guest code runs, so a set bit means the agent may have executed and must never
     /// be started again.
     pub ephemeral_execution_begun: bool,
+    /// The never-live mark of the `Create` entry. The fold sets it from `Create` and never
+    /// changes it.
+    pub never_live: bool,
     pub pending_durable_stream_cancellations: HashMap<
         (crate::model::durable_stream::StreamRecordReference, u64),
         Vec<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
@@ -622,6 +637,10 @@ pub struct AgentStatusRecord {
     pub component_revision_start_index: OplogIndex,
     /// Semantic retry policy state per `retry_from` oplog index.
     pub current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
+    /// The backoff deadline of each host call that waits for an in-function retry, keyed by the
+    /// call's `Start` index until its terminal. Repair of the incomplete call waits until this
+    /// time, so a restart does not shorten its backoff.
+    pub current_retry_at: HashMap<OplogIndex, Timestamp>,
     /// Mandatory recovery snapshot established by a successful update. Agent will call
     /// load_snapshot on this payload before starting replay.
     pub authoritative_snapshot: Option<AuthoritativeSnapshot>,
@@ -663,10 +682,12 @@ impl Default for AgentStatusRecord {
             received_card_transfers: ReceivedCardTransferIndex::default(),
             source_card_transfers: SourceCardTransferIndex::default(),
             entity_replay_progress: EntityReplayProgress::default(),
+            resolved_names: super::ResolvedNameIndex::default(),
             durable_stream_sessions: DurableStreamSessionIndex::default(),
             export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
             ephemeral_execution_begun: false,
+            never_live: false,
             pending_durable_stream_cancellations: HashMap::new(),
             current_idempotency_key: None,
             current_invocation_started_at: None,
@@ -682,6 +703,7 @@ impl Default for AgentStatusRecord {
             component_revision_for_replay: ComponentRevision::INITIAL,
             component_revision_start_index: OplogIndex::INITIAL,
             current_retry_state: HashMap::new(),
+            current_retry_at: HashMap::new(),
             authoritative_snapshot: None,
             last_automatic_snapshot: None,
             previous_usable_automatic_snapshot: None,
@@ -1303,6 +1325,22 @@ impl BinaryDeserializer for DurableStreamSessionIndex {
 }
 
 impl AgentStatusRecord {
+    /// The status that the agent reports outside: `Sandboxed` for a never-live agent, and the
+    /// folded `status` otherwise. The folded `status` never holds `Sandboxed`; control code
+    /// decides by it, by `never_live` and by `pending_updates`.
+    pub fn reported_status(&self) -> AgentStatus {
+        if self.never_live {
+            AgentStatus::Sandboxed
+        } else {
+            self.status
+        }
+    }
+
+    /// The folded status underneath a reported `Sandboxed` status, and `None` otherwise.
+    pub fn underlying_status(&self) -> Option<AgentStatus> {
+        self.never_live.then_some(self.status)
+    }
+
     pub fn has_pending_work(&self, now: Timestamp) -> bool {
         self.pending_invocations
             .iter()
@@ -1322,6 +1360,8 @@ pub struct FailedUpdateRecord {
     /// Whether the failure is about the record that the update selected. `None` for any other
     /// failure.
     pub snapshot_fault: Option<oplog::SnapshotFault>,
+    pub failure_class: oplog::UpdateFailureClass,
+    pub divergence: Option<Box<oplog::ReplayDivergence>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]

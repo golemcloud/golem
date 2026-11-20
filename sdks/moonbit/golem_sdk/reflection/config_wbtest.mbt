@@ -9,7 +9,6 @@ fn configured_reflected_type() -> AgentType {
     description: "",
     source_language: "moonbit",
     mode: Durable,
-    implemented_by: { uuid: { high_bits: 0UL, low_bits: 1UL, }, },
     constructor_input: string_schema,
     methods: [],
     config: [
@@ -149,7 +148,6 @@ test "reflected config preserves absent, null, and native defaults" {
       snapshotting: @common.Snapshotting::Disabled,
       config,
     },
-    implemented_by: { uuid: { high_bits: 0UL, low_bits: 1UL, }, },
   })
   let declarations = reflected.config()
   for i, expected in defaults {

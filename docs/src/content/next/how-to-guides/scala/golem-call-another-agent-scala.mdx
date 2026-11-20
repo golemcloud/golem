@@ -24,13 +24,15 @@ trait CounterAgent extends BaseAgent {
 
 ## Getting a Client
 
-Use `CounterAgentClient.get(...)` with the target agent's constructor parameters:
+Use `CounterAgentClient.upsert(...)` with the target agent's constructor parameters:
 
 ```scala
-val counter = CounterAgentClient.get("my-counter")
+val counter = CounterAgentClient.upsert("my-counter")
 ```
 
-This returns a `CounterAgentRemote` with per-method wrapper fields. It does **not** create the agent — the agent is created implicitly on its first invocation. If it already exists, you get a handle to the existing instance.
+This returns a `CounterAgentRemote` with per-method wrapper fields for the **keyed** agent of these constructor parameters. The host creates the agent when it is missing; if it already exists, you get a handle to the existing instance. It throws `AgentRpcException` when the host rejects the client.
+
+To create a new agent instead, use `CounterAgentClient.create(...)`, and to address an existing agent by its `golem.AgentId`, use `CounterAgentClient.getById(agentId)`; both return a `Future` of the client. `counter.agentId()` returns the client's `Future[AgentId]`. See the [`golem-multi-instance-agent-scala`](/next/how-to-guides/scala/golem-multi-instance-agent-scala) guide.
 
 ## Awaited Call
 
@@ -45,7 +47,7 @@ The call uses `async-invoke-and-await` under the hood — the calling agent **su
 
 ## Cancelable Call
 
-The signatures here describe native SDK durable targets with stream-free methods. Native ephemeral clients expose `newPhantom` / `getPhantom`; CLI-generated ephemeral guest bridges expose only `newPhantom`. Their awaited calls return `Future[InvocationResult[T]]`, cancelable calls return `Future[CancelableAsyncInvocation[T]]`, trigger/schedule return `Future[InvocationReceipt]`, and cancelable scheduling returns `Future[CancelableInvocationReceipt]` (types in `golem.runtime.rpc`).
+The signatures here describe native SDK durable targets with stream-free methods. Ephemeral clients, native and CLI-generated, expose only `upsert`. Their awaited calls return `Future[InvocationResult[T]]`, cancelable calls return `Future[CancelableAsyncInvocation[T]]`, trigger/schedule return `Future[InvocationReceipt]`, and cancelable scheduling returns `Future[CancelableInvocationReceipt]` (types in `golem.runtime.rpc`).
 
 Get a `(Future[Out], CancellationToken)` pair to cancel a pending call:
 
@@ -66,9 +68,9 @@ counter.increment.scheduleCancelableAt(Datetime.afterSeconds(60)) // cancelable 
 
 See the [`golem-fire-and-forget-scala`](/next/how-to-guides/scala/golem-fire-and-forget-scala) and [`golem-schedule-future-call-scala`](/next/how-to-guides/scala/golem-schedule-future-call-scala) skills.
 
-## Phantom Agents
+## Agents Without a Key
 
-To create multiple distinct instances with the same constructor parameters, use phantom agents. See the [`golem-multi-instance-agent-scala`](/next/how-to-guides/scala/golem-multi-instance-agent-scala) guide.
+To create multiple distinct instances with the same constructor parameters, use `create` without `keyed`: each call makes a new agent with a new agent ID. See the [`golem-multi-instance-agent-scala`](/next/how-to-guides/scala/golem-multi-instance-agent-scala) guide.
 
 ## Cross-Component RPC
 

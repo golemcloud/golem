@@ -5,6 +5,7 @@ import { ToolType } from "../src/ToolReflection.js"
 import { compileDefinition, resetTools } from "../src/internal/tool/model.js"
 import { invokeRegistered } from "../src/internal/tool/runtime.js"
 import { ToolClient } from "../src/host/ToolClient.js"
+import { userPrincipal } from "./callers.js"
 import {
   artifactDefinition,
   GeneratedArtifactClient,
@@ -21,7 +22,8 @@ import {
 } from "./fixtures/gol-40-effect-sdk-acceptance.js"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
 
-const principal = { tag: "oidc", val: { subject: "effect-acceptance", claims: [] } } as const
+const principal = userPrincipal("effect-acceptance")
+const callerText = `user ("https://example.test","effect-acceptance")`
 const request = {
   region: "us-east-1",
   trace: true,
@@ -76,7 +78,9 @@ describe("GOL-40 Effect SDK acceptance", () => {
       new TextDecoder().decode(Uint8Array.from([...stdout].flatMap((chunk) => [...chunk]))),
     ).toBe("compiled:2:effect")
     expect([...stderr].flatMap((chunk) => [...chunk])).toEqual([0, 1, 2])
-    expect(observations).toMatchObject([{ path: "render/execute", principal, stdinClosed: true }])
+    expect(observations).toMatchObject([
+      { path: "render/execute", caller: callerText, stdinClosed: true },
+    ])
   })
 
   it("SDK-REFLECTION matches generated success, streams, principal, and cleanup", async () => {
@@ -139,7 +143,7 @@ describe("GOL-40 Effect SDK acceptance", () => {
     )
     expect([...reflectedResult[2]!]).toEqual([...generatedResult[2]].flatMap((chunk) => [...chunk]))
     expect(observations).toHaveLength(2)
-    expect(observations.every((entry) => entry.principal === principal && entry.stdinClosed)).toBe(
+    expect(observations.every((entry) => entry.caller === callerText && entry.stdinClosed)).toBe(
       true,
     )
   })

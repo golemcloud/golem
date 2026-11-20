@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{WorkerExecutorImpl, extract_owned_agent_id};
+use super::WorkerExecutorImpl;
 use crate::durable_host::durable_session::{
     StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
 };
@@ -46,9 +46,8 @@ use golem_common::base_model::durable_stream::{
     StreamTerminalAuthor,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, ParsedAgentKey, Principal,
-};
+use golem_common::model::agent::{AgentMode, InvocationFreshnessDisposition};
+use golem_common::model::caller::Principal;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
@@ -142,6 +141,8 @@ fn retained_response_stream(
 }
 
 struct AcceptedInvocation {
+    /// The agent that accepted the invocation, which a key target resolves to.
+    agent_id: AgentId,
     idempotency_key: golem_common::model::InvocationId,
     component_revision: Option<ComponentRevision>,
     durable_streams: Option<StreamSession>,

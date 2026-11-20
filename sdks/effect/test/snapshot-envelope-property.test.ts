@@ -1,85 +1,17 @@
 import { describe, expect } from "@effect/vitest"
 import { Schema } from "effect"
 import * as fc from "fast-check"
-import type * as AgentCommon from "golem:agent/common@2.0.0"
 import {
   decodeEnvelope,
   encodeBinaryEnvelope,
   encodeJsonEnvelope,
   encodeMultipartJsonEnvelope,
-  serializePrincipal,
 } from "../src/internal/snapshotEnvelope.js"
 import { prop } from "./property.js"
 
 // ---------------------------------------------------------------------------
 // Arbitraries
 // ---------------------------------------------------------------------------
-
-/**
- * Build a `Principal` (runtime form, with bigint UUIDs) from canonical
- * UUID strings. We hand-roll the arbitrary instead of relying on
- * `Schema.toArbitrary(SerializedPrincipal)` because the JSON shape's
- * `componentId` / `accountId` slots are typed as `Schema.String`, but
- * `deserializePrincipal` round-trips them through `parseUuid` which
- * requires the canonical 8-4-4-4-12 hex form.
- */
-const principalArb: fc.Arbitrary<AgentCommon.Principal> = fc.oneof(
-  fc.constant({ tag: "anonymous" } as const satisfies AgentCommon.Principal),
-  fc.record({ componentId: fc.uuid(), agentId: fc.string() }).map(
-    (v) =>
-      ({
-        tag: "agent",
-        val: {
-          agentId: {
-            componentId: { uuid: parseUuid(v.componentId) },
-            agentId: v.agentId,
-          },
-        },
-      }) satisfies AgentCommon.Principal,
-  ),
-  fc.record({ accountId: fc.uuid() }).map(
-    (v) =>
-      ({
-        tag: "golem-user",
-        val: { accountId: { uuid: parseUuid(v.accountId) } },
-      }) satisfies AgentCommon.Principal,
-  ),
-  fc
-    .record(
-      {
-        sub: fc.string(),
-        issuer: fc.webUrl(),
-        email: fc.option(fc.emailAddress(), { nil: undefined }),
-        name: fc.option(fc.string(), { nil: undefined }),
-        emailVerified: fc.option(fc.boolean(), { nil: undefined }),
-        givenName: fc.option(fc.string(), { nil: undefined }),
-        familyName: fc.option(fc.string(), { nil: undefined }),
-        picture: fc.option(fc.webUrl(), { nil: undefined }),
-        preferredUsername: fc.option(fc.string(), { nil: undefined }),
-        claims: fc.string(),
-      },
-      { requiredKeys: ["sub", "issuer", "claims"] },
-    )
-    .map(
-      (val) =>
-        ({
-          tag: "oidc",
-          val,
-        }) satisfies AgentCommon.Principal,
-    ),
-)
-
-/**
- * Re-implement parseUuid locally so the arbitrary stays self-contained
- * (and the test does not need to import the host alias module twice).
- */
-function parseUuid(uuid: string): { highBits: bigint; lowBits: bigint } {
-  const hex = uuid.replace(/-/g, "")
-  return {
-    highBits: BigInt("0x" + hex.slice(0, 16)),
-    lowBits: BigInt("0x" + hex.slice(16)),
-  }
-}
 
 /**
  * A JSON-safe state schema that exercises strings, finite numbers,
@@ -117,44 +49,34 @@ const dbPartArb = fc.record({
 // ---------------------------------------------------------------------------
 
 describe("snapshot-envelope properties", () => {
-  prop(
-    "JSON envelope round-trips arbitrary principal + arbitrary state",
-    { principal: principalArb, state: stateArb },
-    ({ principal, state }) => {
-      expect(Schema.is(StateSchema)(state)).toBe(true)
-      const env = encodeJsonEnvelope(principal, state)
-      expect(env.mimeType).toBe("application/json")
-      const decoded = decodeEnvelope(env, { tag: "anonymous" })
-      expect(decoded.kind).toBe("json")
-      if (decoded.kind !== "json") throw new Error("expected json envelope")
-      // Principal round-trips through serialise + deserialise.
-      expect(serializePrincipal(decoded.principal)).toEqual(serializePrincipal(principal))
-      // State round-trips through JSON exactly (the schema only contains
-      // JSON-safe leaves).
-      expect(decoded.state).toEqual(state)
-    },
-  )
+  prop("JSON envelope round-trips arbitrary state", { state: stateArb }, ({ state }) => {
+    expect(Schema.is(StateSchema)(state)).toBe(true)
+    const env = encodeJsonEnvelope(state)
+    expect(env.mimeType).toBe("application/json")
+    const decoded = decodeEnvelope(env)
+    expect(decoded.kind).toBe("json")
+    if (decoded.kind !== "json") throw new Error("expected json envelope")
+    // State round-trips through JSON exactly (the schema only contains
+    // JSON-safe leaves).
+    expect(decoded.state).toEqual(state)
+  })
 
   prop(
-    "binary envelope round-trips arbitrary principal + arbitrary user payload",
-    { principal: principalArb, userPayload: fc.uint8Array({ maxLength: 1024 }) },
-    ({ principal, userPayload }) => {
-      const env = encodeBinaryEnvelope(principal, userPayload)
+    "binary envelope round-trips an arbitrary user payload",
+    { userPayload: fc.uint8Array({ maxLength: 1024 }) },
+    ({ userPayload }) => {
+      const env = encodeBinaryEnvelope(userPayload)
       expect(env.mimeType).toBe("application/octet-stream")
-      // The fallback principal here is anonymous; v2 envelopes carry the
-      // principal inline, so the fallback must NOT be observed.
-      const decoded = decodeEnvelope(env, { tag: "anonymous" })
+      const decoded = decodeEnvelope(env)
       expect(decoded.kind).toBe("binary")
       if (decoded.kind !== "binary") throw new Error("expected binary envelope")
-      expect(serializePrincipal(decoded.principal)).toEqual(serializePrincipal(principal))
       expect(Array.from(decoded.userPayload)).toEqual(Array.from(userPayload))
     },
   )
 
   prop(
-    "multipart envelope round-trips arbitrary principal + state + DB parts",
+    "multipart envelope round-trips arbitrary state + DB parts",
     {
-      principal: principalArb,
       state: stateArb,
       // De-duplicate DB names to avoid the multipart decoder's
       // duplicate-name check (an unrelated, well-tested invariant).
@@ -170,13 +92,12 @@ describe("snapshot-envelope properties", () => {
           })),
         ),
     },
-    ({ principal, state, databases }) => {
-      const env = encodeMultipartJsonEnvelope(principal, state, databases)
+    ({ state, databases }) => {
+      const env = encodeMultipartJsonEnvelope(state, databases)
       expect(env.mimeType.startsWith("multipart/mixed")).toBe(true)
-      const decoded = decodeEnvelope(env, { tag: "anonymous" })
+      const decoded = decodeEnvelope(env)
       expect(decoded.kind).toBe("multipart")
       if (decoded.kind !== "multipart") throw new Error("expected multipart envelope")
-      expect(serializePrincipal(decoded.principal)).toEqual(serializePrincipal(principal))
       expect(decoded.state).toEqual(state)
       // Order is preserved by `encodeMultipartJsonEnvelope` (state first,
       // then DBs in input order); decoder strips the state part and

@@ -8,7 +8,6 @@ use crate::worker::{InterruptEstablishment, WorkerInterruptState};
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use std::sync::atomic::Ordering;
 use test_r::{test, timeout};
 
@@ -108,24 +107,8 @@ async fn prepaid_stop_owners() -> (Arc<AtomicResourceEntry>, MonthlyStopOwner, M
     let scheduler = Arc::new(ConcurrentAgentsScheduler::new());
     let account = AccountId::new();
     scheduler.register_account(account, entry.clone()).await;
-    let caller = scheduler
-        .acquire(
-            account,
-            AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "stop-caller".into(),
-            },
-        )
-        .await;
-    let callee = scheduler
-        .acquire(
-            account,
-            AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "stop-target".into(),
-            },
-        )
-        .await;
+    let caller = scheduler.acquire(account, AgentId::from_parts(7, 1)).await;
+    let callee = scheduler.acquire(account, AgentId::from_parts(7, 2)).await;
     (
         entry.clone(),
         MonthlyStopOwner::new(entry.clone(), caller),
@@ -389,6 +372,7 @@ async fn monthly_supersedes_restart_without_reclassifying_an_already_observed_de
             error: AgentError::InternalError("invocation timer elapsed".into()),
             retry_from: golem_common::model::OplogIndex::INITIAL,
             semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
         };
         assert!(
             monthly_failure::<Context>(
@@ -402,7 +386,7 @@ async fn monthly_supersedes_restart_without_reclassifying_an_already_observed_de
             .is_none()
         );
         assert!(
-            matches!(trap, TrapType::Error { error: AgentError::InternalError(message), retry_from, semantic_trap_retry_override: None }
+            matches!(trap, TrapType::Error { error: AgentError::InternalError(message), retry_from, semantic_trap_retry_override: None, .. }
             if message == "invocation timer elapsed" && retry_from == golem_common::model::OplogIndex::INITIAL)
         );
         assert!(
@@ -644,26 +628,14 @@ async fn unmetered_window() -> (
     let account_id = AccountId::new();
     scheduler.register_account(account_id, entry).await;
     let permit = scheduler
-        .acquire(
-            account_id,
-            AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "unmetered-close".into(),
-            },
-        )
+        .acquire(account_id, AgentId::from_parts(7, 3))
         .await;
     let window = resource_usage_metering::open_window(&meter, permit)
         .await
         .unwrap();
     let mut contender = Box::pin(async move {
         scheduler
-            .acquire(
-                account_id,
-                AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: "waiting-for-close".into(),
-                },
-            )
+            .acquire(account_id, AgentId::from_parts(7, 4))
             .await
     });
     assert!(futures::poll!(contender.as_mut()).is_pending());

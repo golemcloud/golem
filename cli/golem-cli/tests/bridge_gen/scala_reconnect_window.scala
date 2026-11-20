@@ -15,12 +15,15 @@ class StreamRuntimeTest extends munit.FunSuite {
   // Generated streaming methods keep their plain form and gain a cancelable one.
   def generatedCancelable(agent: StreamerAgentClient.StreamerAgentRemote): CancellationToken = agent.numbers.cancelable()._2
 
-  private class Peer(val socket: Socket) {
+  // `head` is the upgrade request when the caller has already read it.
+  private class Peer(val socket: Socket, head: String = "") {
     socket.setSoTimeout(10000)
     private val in = socket.getInputStream
     private val out = socket.getOutputStream
-    private val request = new StringBuilder
+    private val request = new StringBuilder(head)
     while (!request.toString.endsWith("\r\n\r\n")) request.append(in.read().toChar)
+    // A plain check: munit's assert blocks a peer thread until the test ends.
+    if (!request.toString.startsWith("GET /v1/runtime/envs/env-id/invoke-agent-session ")) throw new AssertionError(request.toString)
     private val key = request.toString.split("\r\n").find(_.toLowerCase.startsWith("sec-websocket-key:")).get.split(":", 2)(1).trim
     private val accept = Base64.getEncoder.encodeToString(MessageDigest.getInstance("SHA-1").digest((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").getBytes(UTF_8)))
     out.write(s"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Protocol: golem.agent-invocation.v1\r\nSec-WebSocket-Accept: $accept\r\n\r\n".getBytes(UTF_8))
@@ -58,6 +61,49 @@ class StreamRuntimeTest extends munit.FunSuite {
     } finally socket.close()
   }
 
+  // Answers each environment lookup on `server` with `answer` of its path, records the path in
+  // `lookups`, and accepts and finishes the call on the session upgrade.
+  private def serveLookup(server: ServerSocket, lookups: java.util.Queue[String])(answer: String => (Int, String)): Unit = {
+    val serving = new Thread(() => try while (true) {
+      val socket = server.accept()
+      try {
+        socket.setSoTimeout(10000)
+        val in = socket.getInputStream
+        val request = new StringBuilder
+        while (!request.toString.endsWith("\r\n\r\n")) {
+          val byte = in.read()
+          if (byte < 0) throw new java.io.EOFException(request.toString)
+          request.append(byte.toChar)
+        }
+        val path = request.toString.split(" ", 3)(1)
+        if (path.startsWith("/v1/runtime/envs/")) {
+          val p = new Peer(socket, request.toString)
+          val start = p.receive()
+          accepted(p, start, field(start, "idempotencyKey"))
+          finish(p)
+        } else {
+          lookups.add(path)
+          val (status, body) = answer(path)
+          val bytes = body.getBytes(UTF_8)
+          socket.getOutputStream.write(s"HTTP/1.1 $status Answer\r\nContent-Type: application/json\r\nContent-Length: ${bytes.length}\r\nConnection: close\r\n\r\n".getBytes(UTF_8) ++ bytes)
+          socket.getOutputStream.flush()
+          socket.close()
+        }
+      } catch { case _: java.io.IOException => socket.close() }
+    } catch { case _: Throwable => () })
+    serving.setDaemon(true)
+    serving.start()
+  }
+  private val tokenAnswer = (200, """{"accountId":"me"}""")
+  private val environmentsAnswer =
+    (200, """{"values":[{"account":{"id":"me"},"application":{"name":"app"},"environment":{"id":"env-id","name":"env"}}]}""")
+  private def tokenLookups(lookups: java.util.Queue[String]): Int =
+    lookups.toArray(Array.empty[String]).count(_.startsWith("/v1/me/token"))
+
+  private def environmentKey(port: Int) = (s"http://127.0.0.1:$port", "token", "app", "env")
+  // Seeds the environment lookup, so the peer sees only the session upgrade.
+  private def seedEnvironment(port: Int): Unit =
+    Bridge.environmentIds.put(environmentKey(port), "env-id")
   private def field(value: Json, name: String): Json = Json.requireField(value, name).toOption.get
   private def text(value: Json, name: String): String = Json.asString(field(value, name)).toOption.get
   private def message(kind: String, fields: (String, Json)*): Json =
@@ -65,7 +111,7 @@ class StreamRuntimeTest extends munit.FunSuite {
   private def accepted(p: Peer, descriptor: Json, key: Json): Unit = {
     assertNotEquals(key.render, Json.string("00000000-0000-0000-0000-000000000123").render)
     p.send(message("invocationAccepted",
-      "agentId" -> Json.obj("componentId" -> Json.string("component"), "agentId" -> Json.string("accepted-agent")),
+      "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
       "attemptId" -> field(descriptor, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
       "sessionToken" -> Json.string("stable-session"), "mappings" -> Json.arr(Vector.empty)))
   }
@@ -79,10 +125,14 @@ class StreamRuntimeTest extends munit.FunSuite {
   private val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
   private def call(port: Int, window: Duration): (Future[AgentInvocationResult], CancellationToken) =
     callWith(port, window, SchemaValue.TupleValue(Nil), empty)
-  private def callWith(port: Int, window: Duration, parameters: SchemaValue, codec: PublicValueCodec.Codec): (Future[AgentInvocationResult], CancellationToken) = {
+  // A call that resolves its environment with the server.
+  private def lookupCall(port: Int, window: Duration): (Future[AgentInvocationResult], CancellationToken) =
+    callWith(port, window, SchemaValue.TupleValue(Nil), empty, seeded = false)
+  private def callWith(port: Int, window: Duration, parameters: SchemaValue, codec: PublicValueCodec.Codec, seeded: Boolean = true): (Future[AgentInvocationResult], CancellationToken) = {
+    if (seeded) seedEnvironment(port) else Bridge.environmentIds.remove(environmentKey(port))
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:$port", "token"), "app", "env", global, window),
-      "StreamerAgent", SchemaValue.TupleValue(Nil), None, Nil, None)
-    Bridge.invokeStreamingAgentCancelable(resolved, "run", () => parameters, empty, codec, None, Nil)
+      "StreamerAgent", Some(SchemaValue.TupleValue(Nil)), None)
+    Bridge.invokeStreamingAgentCancelable(resolved, "run", () => parameters, empty, codec, None)
   }
   private def eventually(what: String)(condition: => Boolean): Unit = {
     val deadline = System.nanoTime() + 5.seconds.toNanos
@@ -109,6 +159,94 @@ class StreamRuntimeTest extends munit.FunSuite {
     assert(error.lastCause != null)
     assert(error.isInstanceOf[BridgeException])
     assert(elapsed >= 300.millis && elapsed < 5.seconds, elapsed.toString)
+  }
+
+  test("an environment lookup against a closed port is unreachable at the server after the window") {
+    val port = closedPort()
+    val started = System.nanoTime()
+    val error = intercept[BridgeUnreachableException](Await.result(lookupCall(port, 300.millis)._1, 10.seconds))
+    val elapsed = (System.nanoTime() - started).nanos
+    assertEquals(error.endpoint, s"http://127.0.0.1:$port/")
+    assert(error.lastCause.isInstanceOf[java.io.IOException], String.valueOf(error.lastCause))
+    assert(elapsed >= 300.millis && elapsed < 5.seconds, elapsed.toString)
+  }
+
+  test("an environment lookup that finds no environment fails the call at once") {
+    val server = new ServerSocket(0)
+    val lookups = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    serveLookup(server, lookups) { path =>
+      if (path.startsWith("/v1/me/token")) tokenAnswer else (200, """{"values":[]}""")
+    }
+    try {
+      val started = System.nanoTime()
+      val error = intercept[BridgeException](Await.result(lookupCall(server.getLocalPort, 10.seconds)._1, 15.seconds))
+      assert(!error.isInstanceOf[BridgeUnreachableException], error.toString)
+      assertEquals(error.getMessage, "Environment 'env' of application 'app' does not exist in the account of the token")
+      assert((System.nanoTime() - started).nanos < 5.seconds)
+      Thread.sleep(300)
+      assertEquals(tokenLookups(lookups), 1)
+    } finally server.close()
+  }
+
+  test("401 and 403 on the environment lookup fail the call at once") {
+    List(401, 403).foreach { status =>
+      val server = new ServerSocket(0)
+      val lookups = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+      serveLookup(server, lookups)(_ => (status, "denied"))
+      try {
+        val started = System.nanoTime()
+        val error = intercept[BridgeHttpException](Await.result(lookupCall(server.getLocalPort, 10.seconds)._1, 15.seconds))
+        assertEquals(error.status, status)
+        assert((System.nanoTime() - started).nanos < 5.seconds)
+        Thread.sleep(300)
+        assertEquals(tokenLookups(lookups), 1)
+      } finally server.close()
+    }
+  }
+
+  test("429 and 5xx on the environment lookup are retried") {
+    val server = new ServerSocket(0)
+    val lookups = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    val refusals = Vector(503, 429, 502)
+    val tokens = new AtomicInteger(0)
+    serveLookup(server, lookups) { path =>
+      if (path.startsWith("/v1/me/token")) refusals.lift(tokens.getAndIncrement()).fold(tokenAnswer)(status => (status, "busy"))
+      else environmentsAnswer
+    }
+    try {
+      Await.result(lookupCall(server.getLocalPort, 10.seconds)._1, 15.seconds)
+      assertEquals(tokenLookups(lookups), 4)
+    } finally server.close()
+  }
+
+  test("an environment lookup whose answer body stalls is abandoned within the window") {
+    val server = new ServerSocket(0)
+    val lookups = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    val held = new java.util.concurrent.ConcurrentLinkedQueue[Socket]()
+    val serving = new Thread(() => try while (true) {
+      val socket = server.accept()
+      held.add(socket)
+      val in = socket.getInputStream
+      val request = new StringBuilder
+      while (!request.toString.endsWith("\r\n\r\n")) {
+        val byte = in.read()
+        if (byte < 0) throw new java.io.EOFException(request.toString)
+        request.append(byte.toChar)
+      }
+      lookups.add(request.toString.split(" ", 3)(1))
+      socket.getOutputStream.write(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"accountId\"".getBytes(UTF_8))
+      socket.getOutputStream.flush()
+    } catch { case _: Throwable => () })
+    serving.setDaemon(true)
+    serving.start()
+    try {
+      val started = System.nanoTime()
+      val error = intercept[BridgeUnreachableException](Await.result(lookupCall(server.getLocalPort, 1.second)._1, 10.seconds))
+      assert((System.nanoTime() - started).nanos < 5.seconds)
+      assertEquals(error.endpoint, s"http://127.0.0.1:${server.getLocalPort}/")
+      assert(error.lastCause.isInstanceOf[java.util.concurrent.TimeoutException], String.valueOf(error.lastCause))
+    } finally { server.close(); held.forEach(_.close()) }
   }
 
   test("an upgrade that never completes is abandoned within the window") {

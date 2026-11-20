@@ -16,13 +16,11 @@
 // `OutputSchema::Single`, and `AgentConfigDeclaration.value_type`.
 
 ///|
-/// How an input parameter's value is provided. `UserSupplied` carries the
-/// parameter's own schema graph; `AutoInjected` is filled in by the platform
-/// (e.g. the principal) and contributes no graph of its own — it encodes as an
-/// empty record placeholder, matching the Rust SDK.
+/// How an input parameter's value is provided: `UserSupplied` carries the
+/// parameter's own schema graph. A parameter that the SDK injects (the invocation
+/// context) is not an input parameter and never appears here.
 pub(all) enum InputParamSource {
   UserSupplied(@model.SchemaGraph)
-  AutoInjected(@common.AutoInjectedKind)
 }
 
 ///|
@@ -127,11 +125,6 @@ fn encode_input_schema(
     let (source, schema) = match param.source {
       UserSupplied(g) =>
         (@common.FieldSource::UserSupplied, encoder.encode_type(g.root))
-      AutoInjected(kind) =>
-        (
-          @common.FieldSource::AutoInjected(kind),
-          encoder.encode_type(@model.schema_type(Record([]))),
-        )
     }
     fields.push({
       name: param.name,

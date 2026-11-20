@@ -6,6 +6,7 @@ export default {
   },
   "what-is-golem": "What is Golem?",
   quickstart: "Quickstart",
+  "migrating-from-1-6": "Migrating from 1.6",
   concepts: {
     title: "Concepts",
   },
@@ -56,4 +57,5 @@ export default {
   "rest-api": "REST API",
   "stream-session-public-protocol-v1": "Streaming Protocol v1",
   "js-apis": "JavaScript APIs",
+  "migrating-to-2.0": "Migrating to 2.0",
 }

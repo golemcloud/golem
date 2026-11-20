@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { rollup, type OutputChunk } from "rollup"
+import { rollup, type OutputChunk, type OutputOptions } from "rollup"
 import ts from "typescript"
 import { nodeResolve } from "@rollup/plugin-node-resolve"
 import { describe, expect, it, vi } from "vitest"
@@ -10,7 +10,6 @@ import { compile } from "../src/WitCodec.js"
 import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v } from "../src/internal/schema-model/model.js"
 import {
-  __setParseAgentIdImpl,
   __setGetConfigValueImpl,
   __resetGetConfigValueImpl,
   __setRpcResponder,
@@ -21,6 +20,7 @@ import { __setEnvironment } from "./mocks/wasi-cli-environment.js"
 import { componentConfiguration } from "../build/component.mjs"
 import config from "../vitest.config.js"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
+import { bundleSourcePath, writeBundleFixture } from "../../javascript/js-bundle-fixtures.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sdk = resolve(root, "dist/component")
@@ -72,7 +72,7 @@ const sourcePlugin = () => ({
   },
 })
 
-const build = async (fixture: string, execute = true) => {
+const build = async (fixture: string, execute = true, outputOptions: OutputOptions = {}) => {
   const source = resolve(root, `test/fixtures/capabilities/${fixture}`)
   const options = await componentConfiguration(rollup, () => ({
     input: existsSync(`${source}.ts`) ? `${source}.ts` : `${source}.mjs`,
@@ -94,6 +94,7 @@ const build = async (fixture: string, execute = true) => {
       format: "cjs",
       inlineDynamicImports: true,
       dynamicImportInCjs: false,
+      ...outputOptions,
     })
     const chunk = output.find((item): item is OutputChunk => item.type === "chunk")!
     const capabilities = output.find(
@@ -131,6 +132,21 @@ const build = async (fixture: string, execute = true) => {
     await bundle.close()
   }
 }
+
+it("builds JS guest bundle fixtures", async () => {
+  const { chunk } = await build("js-guest-smoke", false, {
+    format: "es",
+    file: resolve(process.env.GOLEM_JS_GUEST_BUNDLE_DIR ?? root, "effect/smoke/smoke.mjs"),
+    sourcemap: true,
+    sourcemapPathTransform: bundleSourcePath,
+  })
+  expect(chunk.code).toContain("JsGuestSmoke")
+  expect(chunk.map).not.toBeNull()
+  writeBundleFixture("effect", "smoke", {
+    "smoke.mjs": chunk.code,
+    "smoke.mjs.map": chunk.map!.toString() + "\n",
+  })
+}, 30000)
 
 describe("capability-sensitive component exports", () => {
   it("keeps supported public subpath imports inside the modular component graph", async () => {
@@ -192,10 +208,9 @@ describe("capability-sensitive component exports", () => {
         ),
       ).toEqual(v.record([v.string("https://example.test/api"), v.bool(true)]))
       const snapshot = await runtime.saveSnapshot.save()
-      __setEnvironment([["GOLEM_AGENT_ID", `RuntimeMetadata(${JSON.stringify(path)})`]])
-      __setParseAgentIdImpl(() => ["RuntimeMetadata", { value: input }, undefined])
+      __setEnvironment([["GOLEM_AGENT_TYPE", "RuntimeMetadata"]])
       const restored = instantiate()
-      await restored.loadSnapshot.load(snapshot)
+      await restored.loadSnapshot.load(snapshot, input)
       expect(
         schemaValueFromWit(
           await withCaller(principal, () =>
@@ -364,9 +379,11 @@ describe("capability-sensitive component exports", () => {
           ),
         ),
       ).toEqual(v.ok(v.f64(41)))
-      expect(schemaValueFromWit(__getRecordedRpcCalls()[0]!.constructorValue)).toEqual(
-        v.record([v.string("3")]),
-      )
+      const target = __getRecordedRpcCalls()[0]!.target
+      expect(target.kind).toBe("upsert")
+      expect(
+        schemaValueFromWit(target.kind === "upsert" ? target.constructorValue : undefined!),
+      ).toEqual(v.record([v.string("3")]))
     } finally {
       __resetRpc()
     }
@@ -379,7 +396,7 @@ describe("capability-sensitive component exports", () => {
       v.binary(new Uint8Array([9, 255])),
       v.flags([true, false, true]),
       v.duration(1500000001n),
-      v.variant(2, v.record([v.record([v.uuid({ highBits: 17n, lowBits: 31n })])])),
+      v.record([v.string("https://example.test"), v.string("alice")]),
     ])
     expect(
       schemaValueFromWit(
@@ -513,10 +530,9 @@ describe("capability-sensitive component exports", () => {
           ),
         ).toEqual(v.f64(17))
         const snapshot = await runtime.saveSnapshot.save()
-        __setEnvironment([["GOLEM_AGENT_ID", "CapabilityCounter(17)"]])
-        __setParseAgentIdImpl(() => ["CapabilityCounter", { value: input }, undefined])
+        __setEnvironment([["GOLEM_AGENT_TYPE", "CapabilityCounter"]])
         const restored = instantiate()
-        await restored.loadSnapshot.load(snapshot)
+        await restored.loadSnapshot.load(snapshot, input)
         expect(
           schemaValueFromWit(
             await withCaller(

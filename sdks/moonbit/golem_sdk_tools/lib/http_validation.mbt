@@ -72,16 +72,16 @@ pub fn validate_http_routes(
           }
           None => ()
         }
-        // Rule 8: Principal params cannot be mount path variables
+        // Rule 8: InvocationContext params cannot be mount path variables
         for v in mount_var_names {
           let param = agent.constructor_params
             .iter()
             .find_first(fn(p) { p.0 == v })
           match param {
             Some((_, pt)) =>
-              if is_principal_type(pt) {
+              if is_invocation_context_type(pt) {
                 raise AgentParseError(
-                  "Mount path variable '\{v}' of agent '\{agent.name}' maps to a Principal param",
+                  "Mount path variable '\{v}' of agent '\{agent.name}' maps to an InvocationContext param",
                 )
               }
             None => ()
@@ -101,7 +101,7 @@ pub fn validate_http_routes(
             )
           }
         }
-        // Rule 4: All non-Principal constructor params must appear as mount path variables
+        // Rule 4: All non-InvocationContext constructor params must appear as mount path variables
         let vis_params = visible_params(agent.constructor_params)
         for p in vis_params {
           let (pname, _) = p
@@ -206,14 +206,14 @@ pub fn validate_http_routes(
               )
             }
           }
-          // Rule 7: Endpoint variables cannot bind to Principal params
+          // Rule 7: Endpoint variables cannot bind to InvocationContext params
           for v in all_var_names {
             let param = meth.params.iter().find_first(fn(p) { p.0 == v })
             match param {
               Some((_, pt)) =>
-                if is_principal_type(pt) {
+                if is_invocation_context_type(pt) {
                   raise AgentParseError(
-                    "Endpoint variable '\{v}' in method '\{meth.name}' on agent '\{agent.name}' binds to a Principal param which is not HTTP-safe",
+                    "Endpoint variable '\{v}' in method '\{meth.name}' on agent '\{agent.name}' binds to an InvocationContext param which is not HTTP-safe",
                   )
                 }
               None => ()

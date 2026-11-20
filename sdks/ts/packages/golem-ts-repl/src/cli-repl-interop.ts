@@ -199,13 +199,6 @@ export class CliReplInterop {
       return;
     }
 
-    const parameters = safeJsonStringify(request.parameters);
-
-    const idempotencyKey = request.idempotencyKey ?? uuid.v4().toString();
-    if (!request.idempotencyKey) {
-      request.idempotencyKey = idempotencyKey;
-    }
-
     const args = [
       '--environment',
       this.config.clientConfig.environment,
@@ -214,13 +207,7 @@ export class CliReplInterop {
       '--quiet',
       '--logs-only',
       request.agentTypeName,
-      parameters,
-      idempotencyKey,
-      request.methodName,
     ];
-    if (request.phantomId) {
-      args.push(request.phantomId);
-    }
 
     const child = childProcess.spawn(this.config.binary, args, {
       cwd: this.config.appMainDir,
@@ -250,13 +237,16 @@ export class CliReplInterop {
   }
 
   /**
-   * The accepted invocation ID selects the invocation whose output the stream shows. Without it,
-   * as when the call failed, the stream shows nothing more.
+   * The accepted invocation selects the invocation whose output the stream shows. Without it, as
+   * when the call failed, the stream shows nothing more.
    */
-  async stopAgentStream(request: base.AgentInvocationRequest, invocationId?: string) {
+  async stopAgentStream(
+    request: base.AgentInvocationRequest,
+    accepted?: base.AgentInvocationResult,
+  ) {
     const key = getAgentStreamKey(request);
-    if (invocationId) {
-      this.agentStreams.get(key)?.setTarget(invocationId);
+    if (accepted) {
+      this.agentStreams.get(key)?.setTarget(`${accepted.agentId}.${accepted.idempotencyKey}`);
     }
     await this.stopAgentStreamByKey(key);
   }
@@ -394,11 +384,9 @@ function createAgentStreamState(child: ChildProcess, onSigint: () => void): Agen
 }
 
 function getAgentStreamKey(request: base.AgentInvocationRequest): string {
-  return [
-    request.agentTypeName,
-    safeJsonStringify(request.parameters),
-    request.phantomId ?? '',
-  ].join('|');
+  return [request.agentTypeName, request.agentId ?? safeJsonStringify(request.parameters)].join(
+    '|',
+  );
 }
 
 function safeJsonStringify(value: unknown): string {

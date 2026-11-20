@@ -40,7 +40,7 @@ pub(crate) struct AgentHooks {
     ) -> ExportFuture<Result<Option<SchemaValueTree>, agent::AgentError>>,
     pub get_definition: fn() -> agent::AgentType,
     pub discover: fn() -> Result<Vec<agent::AgentType>, agent::AgentError>,
-    pub load: fn(load::Snapshot) -> ExportFuture<Result<(), String>>,
+    pub load: fn(load::Snapshot, SchemaValueTree) -> ExportFuture<Result<(), String>>,
     pub save: fn() -> ExportFuture<save::Snapshot>,
 }
 
@@ -124,9 +124,9 @@ impl agent::Guest for Component {
 }
 
 impl load::Guest for Component {
-    async fn load(snapshot: load::Snapshot) -> Result<(), String> {
+    async fn load(snapshot: load::Snapshot, constructor: SchemaValueTree) -> Result<(), String> {
         match AGENT.get() {
-            Some(hooks) => (hooks.load)(snapshot).await,
+            Some(hooks) => (hooks.load)(snapshot, constructor).await,
             None => Err("component has no agent snapshot support".into()),
         }
     }

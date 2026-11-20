@@ -17,6 +17,7 @@ use golem_common::model::oplog::{
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, HasWebSocketConnectionPool, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -184,14 +185,17 @@ async fn pending_receive(
         .store()
         .await?;
     let seed_id = executor
-        .start_agent(&component.id, agent_id!("WebsocketTest", "monthly-ws-seed"))
+        .start_agent(
+            &component.id,
+            agent_key!("WebsocketTest", "monthly-ws-seed"),
+        )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -205,25 +209,21 @@ async fn pending_receive(
     }
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("WebsocketTest", "monthly-ws-receive")
+        agent_key!("WebsocketTest", "monthly-ws-receive")
     } else {
-        agent_id!("EphemeralWebsocketTest", "monthly-ws-receive")
+        agent_key!("EphemeralWebsocketTest", "monthly-ws-receive")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                "connect_and_receive_first",
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        "connect_and_receive_first",
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -231,7 +231,16 @@ async fn pending_receive(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            "connect_and_receive_first",
+        ),
     )
     .await?;
     let stored_key = executor
@@ -262,7 +271,7 @@ async fn pending_receive(
         let receive_start = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 if entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == RECEIVE)) {
                     let start = receive_start(&entries, 0)?;
                     assert_invocation(&entries, &stored_key, 0)?;
@@ -345,7 +354,7 @@ async fn pending_receive(
         let released_slot = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
             .await.context("retired socket must release WebSocket slot")??;
         drop(released_slot);
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         assert_invocation(&stopped, &stored_key, 0)?;
         ensure!(
             self::receive_start(&stopped, 0)? == receive_start,
@@ -409,7 +418,7 @@ async fn pending_receive(
                     .is_err()
             );
         }
-        executor.wait_for_status(&id, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
+        executor.wait_for_status(&owned, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         info!(?resource, ?mode, ?errors, suspends, "WebSocket stop retained one unfinished method with mode-specific lifecycle outcome");
         flush_stopped_usage(&limits, &registry, resource).await?;
@@ -450,11 +459,11 @@ async fn pending_receive(
         registry.set_policy(grant);
         applied_refresh(&limits, &registry, context.account_id).await?.await?;
         if durable {
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             let second = peer.handshake().await?;
             ensure!(second.number == 2);
             executor.commit_oplog(&id).await?;
-            let repairing = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let repairing = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(self::receive_start(&repairing, 0)? == receive_start);
             assert_invocation(&repairing, &stored_key, 0)?;
             peer.assert_counts(2, 0)?;
@@ -462,7 +471,7 @@ async fn pending_receive(
             let resumed = tokio::time::timeout(Duration::from_secs(15), &mut invocation)
                 .await.context("retained WebSocket invocation continuation")???;
             ensure!(resumed.into_typed::<String>()? == "recovered");
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(self::receive_start(&recovered, 1)? == receive_start);
             assert_settled_history(&recovered)?;
             assert_invocation(&recovered, &stored_key, 1)?;
@@ -489,7 +498,7 @@ async fn pending_receive(
             let noop = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &noop_key, "noop", data_value!())).await??;
             ensure!(noop.into_typed::<String>()? == "ok");
             peer.assert_counts(2, 1)?;
-            let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let replayed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(self::receive_start(&replayed, 1)? == receive_start);
             ensure!(count_agent_invocation_pair_since(&replayed, OplogIndex::INITIAL) == (3, 3));
             assert_settled_history(&replayed)?;
@@ -509,7 +518,7 @@ async fn pending_receive(
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(fresh, response) }).await??;
             ensure!(fresh.into_typed::<String>()? == "fresh");
             peer.assert_counts(3, 2)?;
-            let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (4, 4));
             let receives = starts_named(&history, RECEIVE);
             ensure!(receives.len() == 2 && receives[0] == receive_start);
@@ -525,7 +534,7 @@ async fn pending_receive(
             ensure!(retry.is_err(), "failed ephemeral invocation cannot recover after capacity returns");
             peer.assert_counts(1, 0)?;
             // An independent durable Worker proves the failed connection released the only slot.
-            let probe_name = agent_id!("WebsocketTest", "monthly-ws-pool-probe");
+            let probe_name = agent_key!("WebsocketTest", "monthly-ws-pool-probe");
             let probe_key = IdempotencyKey::fresh();
             let probe = executor.invoke_and_await_agent_with_key(&component, &probe_name, &probe_key, "connect_and_receive_first", data_value!(peer.url.clone()));
             let response = async {
@@ -536,14 +545,14 @@ async fn pending_receive(
             };
             let (probe, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(probe, response) }).await??;
             ensure!(probe.into_typed::<String>()? == "probe");
-            let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let failed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(self::receive_start(&failed, 0)? == receive_start);
             assert_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!worker.is_loaded().await);
             peer.assert_counts(2, 1)?;
-            executor.wait_for_status(&id, AgentStatus::Failed, Duration::from_secs(10)).await?;
+            executor.wait_for_status(&owned, AgentStatus::Failed, Duration::from_secs(10)).await?;
             info!(?resource, %key, %receive_start, handshakes = 2, frames = 1, "Ephemeral failure stayed terminal after capacity restoration; independent Worker reused WebSocket slot");
         }
         // Keep accepting to detect unintended reconnects after the asserted work has completed.
@@ -554,7 +563,7 @@ async fn pending_receive(
     .await;
     let cleanup = peer.finish().await;
     if result.is_err() {
-        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&owned)).await;
         let _ = tokio::time::timeout(
             Duration::from_secs(10),
             worker.join_accepted_stops_for_test(),

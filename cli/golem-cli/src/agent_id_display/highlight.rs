@@ -94,7 +94,7 @@ fn kind_of(token: &Token) -> Kind {
 }
 
 /// Tokenizes the rendered id, recovering any character the lexer does not model
-/// (map arrows `=>`, `<unknown>` fallbacks, the hyphens of a phantom uuid) as a
+/// (map arrows `=>`, `<unknown>` fallbacks, the hyphens of the UUID in `Type[uuid]`) as a
 /// punctuation span instead of giving up — bailing out would drop both the line
 /// breaking and the coloring for the whole id. `None` only if it cannot advance.
 fn tokenize(input: &str) -> Option<Vec<Span>> {
@@ -345,23 +345,15 @@ mod tests {
         assert_eq!(format_agent_id_for_terminal(id, false, Some(80)), id);
     }
 
-    /// A phantom id ends in `[uuid]`, whose hyphens the lexer does not model.
-    /// Recovering from them matters: bailing out would drop the layout and the
-    /// coloring for the entire id, not just the suffix.
+    /// An ID address `Type[uuid]` has hyphens that the lexer does not model. Recovering from
+    /// them keeps the formatting, and the UUID is never split.
     #[test]
-    fn phantom_uuid_suffix_is_still_formatted() {
-        let id = r#"Probe("health-check-probe-with-a-longer-label", 3)[81db7b03-f3ff-456b-af38-a0fa0ce795b3]"#;
-        let formatted = format_agent_id_for_terminal(id, false, Some(40));
-
-        // The arguments break, the uuid is left intact on the closing line.
+    fn id_address_uuid_is_not_split() {
+        let id = "Probe[81db7b03-f3ff-856b-af38-a0fa0ce795b3]";
+        assert_eq!(format_agent_id_for_terminal(id, false, Some(80)), id);
         assert_eq!(
-            formatted,
-            concat!(
-                "Probe(\n",
-                "  \"health-check-probe-with-a-longer-label\",\n",
-                "  3\n",
-                ")[81db7b03-f3ff-456b-af38-a0fa0ce795b3]"
-            )
+            format_agent_id_for_terminal(id, false, Some(40)),
+            "Probe[\n  81db7b03-f3ff-856b-af38-a0fa0ce795b3\n]"
         );
     }
 

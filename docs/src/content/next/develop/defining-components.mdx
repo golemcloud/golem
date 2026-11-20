@@ -281,7 +281,7 @@ The component's `main.go` blank-imports each agent's `impl` package (`_ "myapp/a
 An agent component must define at least one agent, but can also define multiple ones.
 
 ### Agent constructors
-Every agent must define a **constructor** with an arbitrary number of parameters. These parameters form the **agent identifier**. Every possible parameter value combination identifies a particular agent instance.
+Every agent must define a **constructor** with an arbitrary number of parameters. Together with the agent type, these parameters form the **agent key**. Every possible parameter value combination is the key of at most one agent, the **keyed agent**, which is created on the first call by that key. Each agent also has an **agent ID**, a UUID that Golem issues when it creates the agent.
 
 For example, an agent working on a particular user's particular request could be defined as:
 
@@ -357,7 +357,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{Name: "RequestHandler"})
     </Tabs.Tab>
 </Tabs>
 
-The Effect agent shown here is identified by `RequestHandler("user-123", "request-456")`; agent identifiers preserve the declared agent name.
+The Effect agent shown here has the key `RequestHandler("user-123", "request-456")`; agent keys preserve the declared agent name.
 
 ### Agent methods
 
@@ -761,16 +761,14 @@ region := os.Getenv("REGION")
 
 Environment variables can be specified when an agent is **explicitly created**, but there are some environment variables that are always set by Golem:
 
-- `GOLEM_AGENT_ID` - the ID of the agent
-- `GOLEM_AGENT_TYPE` - the agent type (first part of the agent ID)
-- `GOLEM_COMPONENT_ID` - the ID of the agent's component
+- `GOLEM_AGENT_ID` - the agent ID, a UUID
+- `GOLEM_AGENT_TYPE` - the name of the agent type
+- `GOLEM_AGENT_KEY` - the key of a keyed agent, such as `CounterAgent("my-counter")`; an agent without a key does not have this variable
 - `GOLEM_COMPONENT_REVISION` - the revision of the component used for this agent
 
-An agent type with an explicit `initialCard` sees these variables only when its card allows the agent to read them, for example with `env(?agent) @ ?agent : read : GOLEM_AGENT_ID`; see [Default and explicit permissions](/next/concepts/permissions#default-and-explicit-permissions).
+An agent type with an explicit `initialCard` sees these variables only when its card allows the agent to read them, for example with `env(?agent) @ ?agent : read : GOLEM_AGENT_ID` and `env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE`; see [Default and explicit permissions](/next/concepts/permissions#default-and-explicit-permissions).
 
-In addition to these, when using [Agent to Agent communication](/next/develop/rpc), agents created by remote calls **inherit the environment variables of the caller**.
-
-This feature makes environment variables a good fit for passing configuration such as hostnames, ports, or access tokens to trees of agents.
+Agents created by [Agent to Agent communication](/next/develop/rpc) do **not** inherit the environment variables of the caller. To pass values such as hostnames, ports, or access tokens to a new agent, set them with the `env` option of the client's `create`.
 
 #### Default environment variables
 It is possible to define default environment values and config key-value pairs for a component using the **app manifest**. These values are automatically set for each agent created from the component, but can be overridden when creating the agent.
@@ -842,3 +840,13 @@ environments:
     server: cloud
     componentPresets: cloud
 ```
+
+#### How the presets differ
+
+The example above uses its own preset names. The built-in Rust, MoonBit, and Go templates name their presets `debug` and `release`: they build with the `debug` preset in the `local` environment and with the `release` preset in the `cloud` environment. Both presets build the same source, but in Rust and MoonBit the program can behave differently between them:
+
+- **Rust:** `debug` uses Cargo's `dev` profile, which checks integer overflow and runs `debug_assert!`. `release` uses Cargo's `release` profile, which does neither. For example, `u8::MAX + 1` on a runtime value panics in `debug` and gives `0` in `release`.
+- **MoonBit:** a file that a package's `targets` option gives a `debug` or `release` condition is compiled only into the matching build, so the two presets can compile different files.
+- **Go:** `release` only removes the `name` custom section (function names), so the behavior is the same in both presets.
+
+Test with the preset that the target environment selects, for example `golem build --yes -P release`. See [How the presets differ](/next/how-to-guides/common/golem-profiles-and-environments#how-the-presets-differ) for details.

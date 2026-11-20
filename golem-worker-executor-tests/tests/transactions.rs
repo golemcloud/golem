@@ -18,7 +18,7 @@ use axum::extract::Path;
 use axum::routing::{delete, get};
 use golem_common::model::IdempotencyKey;
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -136,7 +136,7 @@ async fn golem_rust_explicit_oplog_commit(
         .store()
         .await?;
 
-    let agent_id = agent_id!("GolemHostApi", "explicit-oplog-commit");
+    let agent_id = agent_key!("GolemHostApi", "explicit-oplog-commit");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -185,7 +185,7 @@ async fn golem_rust_fallible_transaction(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let agent_id = agent_id!("GolemHostApi", "fallible-transaction");
+    let agent_id = agent_key!("GolemHostApi", "fallible-transaction");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -254,7 +254,7 @@ async fn golem_rust_infallible_transaction(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let agent_id = agent_id!("GolemHostApi", "infallible-transaction");
+    let agent_id = agent_key!("GolemHostApi", "infallible-transaction");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -316,7 +316,7 @@ async fn idempotency_keys_in_ephemeral_workers(
         .store()
         .await?;
 
-    let agent_id = agent_id!("HostFunctionTests", "idempotency_keys_in_ephemeral_workers");
+    let agent_id = agent_key!("HostFunctionTests", "idempotency_keys_in_ephemeral_workers");
     let idempotency_key1 = IdempotencyKey::fresh();
     let idempotency_key2 = IdempotencyKey::fresh();
 

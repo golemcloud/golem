@@ -5,7 +5,7 @@ pub suberror ToolParseError {
 
 ///|
 pub(all) enum ToolHiddenType {
-  Principal
+  InvocationContext
   InputStream
   OutputStream
   ErrorStream
@@ -119,6 +119,7 @@ pub(all) struct ToolCommandInfo {
   examples : Array[ToolExample]
   description : String
   is_root : Bool
+  http : ToolHttpInfo?
 } derive(Debug, Eq)
 
 ///|
@@ -128,6 +129,7 @@ pub(all) struct ToolInfo {
   aliases : Array[String]
   version : String?
   requires_filesystem : Bool
+  http_mount : String?
   description : String
   examples : Array[ToolExample]
   commands : Array[ToolCommandInfo]
@@ -902,11 +904,24 @@ fn tool_type(ty : @syntax.Type) -> ParamType raise ToolParseError {
 }
 
 ///|
+/// A command's declared return type: a live value (a principal or a caller) is never a result.
+fn checked_return_type(ty : @syntax.Type) -> ParamType raise ToolParseError {
+  let parsed = tool_type(ty)
+  if contains_live_value_type(parsed) {
+    raise ToolParseError(live_value_message)
+  }
+  parsed
+}
+
+///|
 fn hidden_or_public(ty : @syntax.Type) -> ToolParamType raise ToolParseError {
   let pt = tool_type(ty)
   match pt {
-    Simple("@common.Principal" | "@agentCommon.Principal" | "@tool.Principal") =>
-      Hidden(Principal)
+    Simple(
+      "@tool.InvocationContext"
+      | "@agents.InvocationContext"
+      | "@caller.InvocationContext"
+    ) => Hidden(InvocationContext)
     Simple("@tool.ProviderOutput") => Hidden(OutputStream)
     Parameterized("@asyncCore.Stream" | "Stream", [_]) => Hidden(InputStream)
     Parameterized("@asyncCore.Sink" | "Sink", [_]) => Hidden(OutputStream)
@@ -919,14 +934,19 @@ fn hidden_or_public(ty : @syntax.Type) -> ToolParamType raise ToolParseError {
           OptionalHidden(OutputStream)
         _ => Public(pt)
       }
-    Simple(name) if name == "Principal" ||
+    Simple(name) if name == "InvocationContext" ||
       name == "InputStream" ||
       name == "OutputStream" ||
       name == "ProviderOutput" =>
       raise ToolParseError(
         "Hidden SDK type '" + name + "' must use its exact qualified name",
       )
-    _ => Public(pt)
+    _ =>
+      if contains_live_value_type(pt) {
+        raise ToolParseError(live_value_message)
+      } else {
+        Public(pt)
+      }
   }
 }
 
@@ -1413,7 +1433,7 @@ fn parse_command(
         },
       )
     Some(ty) =>
-      match tool_type(ty) {
+      match checked_return_type(ty) {
         ResultType(ok, err) => {
           error_via_result = true
           if decl.error_type is ErrorType(..) {
@@ -1460,6 +1480,7 @@ fn parse_command(
     examples,
     description: tool_doc(decl.doc),
     is_root: name == tool_name,
+    http: parse_tool_http(decl.attrs),
   }
 }
 
@@ -1586,6 +1607,7 @@ pub fn parse_tools(
                 aliases,
                 version,
                 requires_filesystem,
+                http_mount: parse_tool_mount(decl.attrs),
                 description: tool_doc(decl.doc),
                 examples: parse_examples(decl.attrs, "tool " + decl.tycon),
                 commands: [],
@@ -1745,7 +1767,7 @@ pub fn parse_tools(
             | OptionalHidden(_)
             | LabelledOptionalHidden(_) =>
               tool_fail(
-                "Subtree methods cannot declare hidden stream or principal parameters",
+                "Subtree methods cannot declare hidden stream or context parameters",
               )
           }
         }

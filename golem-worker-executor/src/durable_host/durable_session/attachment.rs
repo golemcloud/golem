@@ -510,10 +510,10 @@ impl StreamSession {
             epoch,
             session_key: self.session_key.clone(),
             producer_environment_id: handle.producer_environment_id,
-            producer: handle.producer.clone(),
+            producer: handle.producer,
             expected_producer_fingerprint: handle.expected_producer_fingerprint,
             consumer_environment_id: self.producer.environment_id(),
-            consumer: self.producer.agent_id().clone(),
+            consumer: *self.producer.agent_id(),
             expected_consumer_fingerprint: self.producer.fingerprint(),
             consumer_invocation: self.consumer_invocation.clone(),
         })

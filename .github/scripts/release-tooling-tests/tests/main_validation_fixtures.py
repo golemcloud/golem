@@ -170,6 +170,39 @@ class FixtureCacheTests(unittest.TestCase):
         copied.write_text("changed local implementation")
         self.assertNotEqual(baseline, self.key())
 
+    def test_stage_refuses_input_mutations_and_reports_each_path(self):
+        helper = self.write(".github/main-validation/fixture-cache.py", HELPER.read_bytes())
+        self.write("test-components/example/package-lock.json", "lockfile")
+        self.track()
+        environment = {**os.environ, "GOLEM_FIXTURE_CACHE": str(self.cache)}
+
+        def run(operation):
+            return subprocess.run([sys.executable, "-B", str(helper), operation, "example"],
+                                  cwd=self.root, env=environment, capture_output=True, text=True, timeout=30)
+
+        for paths in (("test-components/example/package-lock.json",),
+                      ("sdks/anything/runtime", "wit/interface.wit", "cli/golem-cli/src/lib.rs")):
+            with self.subTest(paths=paths):
+                self.assertEqual(run("begin").returncode, 0)
+                self.assertEqual(run("restore").returncode, 1)
+                for path in paths:
+                    self.write(path, "mutated input")
+                self.write("test-components/export.wasm", "compiled output")
+                result = run("stage")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("checked-in build inputs changed during compilation: " + ", ".join(sorted(paths)),
+                              result.stdout)
+                self.assertFalse(any(path.is_dir() for path in self.pending.iterdir()))
+
+        # An unchanged input snapshot still stages the exported output.
+        self.assertEqual(run("begin").returncode, 0)
+        self.assertEqual(run("restore").returncode, 1)
+        self.write("test-components/export.wasm", "new compiled output")
+        result = run("stage")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("stage miss", result.stdout)
+        CACHE.verify(self.pending / self.key(), self.key())
+
     def test_corrupt_incomplete_unsafe_and_symlink_bundles_are_misses_before_copy(self):
         key = self.bundle()
         bundle = self.pending / key
@@ -231,7 +264,7 @@ class FixtureCacheTests(unittest.TestCase):
             for app in re.findall(r'"([^"]+)"', declaration):
                 self.write(f"test-components/{app}/golem.yaml", f"app: {app}\n")
         for directory in ("tool-streaming/rust-provider", "tool-streaming/rust-caller",
-                          "agent-rpc/golem-it-agent-rpc-rust"):
+                          "agent-rpc/golem-it-agent-rpc-rust", "size-analysis/fixtures"):
             self.write(f"test-components/{directory}/Cargo.toml", "[package]\n")
         self.write("test-components/build-components.sh", script).chmod(0o755)
         self.write(".github/main-validation/fixture-cache.py", HELPER.read_bytes())
@@ -256,7 +289,14 @@ fi
         cli.chmod(0o755)
         self.write("bin/npm", "#!/bin/bash\nexit 0\n").chmod(0o755)
         self.write("bin/cargo", '''#!/bin/bash
+set -eu
 if [ "$1" = metadata ]; then printf '{"target_directory":"%s"}' "$CARGO_MAKE_CRATE_TARGET_DIRECTORY"; fi
+if [ "$1" = build ]; then
+  mkdir -p "$CARGO_MAKE_CRATE_TARGET_DIRECTORY/wasm32-wasip2/release"
+  for name in retention_empty retention_non_reflective retention_reflection; do
+    printf 'retention:%s' "$name" > "$CARGO_MAKE_CRATE_TARGET_DIRECTORY/wasm32-wasip2/release/$name.wasm"
+  done
+fi
 ''').chmod(0o755)
         self.track()
         environment = {**os.environ, "GOLEM_CLI": str(cli), "GOLEM_FIXTURE_CACHE": str(self.cache),
@@ -274,6 +314,8 @@ if [ "$1" = metadata ]; then printf '{"target_directory":"%s"}' "$CARGO_MAKE_CRA
         run("bash", "test-components/build-components.sh", "benchmarks", "rebuild")
         cold = {path.name: path.read_bytes() for path in (self.root / "test-components").glob("*.wasm")}
         self.assertGreater(len(cold), 30)
+        for name in ("retention_empty", "retention_non_reflective", "retention_reflection"):
+            self.assertEqual(cold[f"{name}.wasm"], f"retention:{name}".encode())
         run(*helper, "publish")
         for path in (self.root / "test-components").glob("*.wasm"):
             path.unlink()

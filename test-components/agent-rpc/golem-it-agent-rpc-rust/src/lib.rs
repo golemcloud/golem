@@ -64,20 +64,20 @@ impl RustParent for RustParentImpl {
             field2: uuid,
             field3: State::Initial,
         };
-        let mut child = RustChildClient::get_(uuid.clone());
+        let mut child = RustChildClient::upsert(uuid.clone());
         child.set(payload).await;
         uuid
     }
 
     async fn call_ts_agent(&self, name: String) -> f64 {
-        let client = SimpleChildAgentClient::get(name);
+        let client = SimpleChildAgentClient::upsert(name);
         client.value().await
     }
 
     fn inspect_missing_rpc_type(&self) -> String {
         let constructor = encode_schema_value(&SchemaValue::Record { fields: Vec::new() })
             .expect("failed to encode empty RPC constructor");
-        match WasmRpc::create("MissingReflectedType", constructor, None, Vec::new()) {
+        match WasmRpc::upsert("MissingReflectedType", constructor) {
             Ok(_) => "unexpected success".to_string(),
             Err(error) => format!("{error:?}"),
         }
@@ -188,10 +188,10 @@ impl ScheduledInvocationServer for ScheduledInvocationServerImpl {
 /// Schedules `inc_global_by(1)` on itself from its constructor, at `seconds` since the epoch
 #[agent_definition]
 pub trait ConstructorSelfScheduler {
-    fn new(name: String, seconds: u64) -> Self;
+    async fn new(name: String, seconds: u64) -> Self;
     fn inc_global_by(&mut self, value: u64);
     fn get_global_value(&self) -> u64;
-    fn bind_and_schedule(&mut self) -> String;
+    async fn bind_and_schedule(&mut self) -> String;
     fn last_binding_id(&self) -> Option<String>;
 }
 
@@ -202,7 +202,7 @@ struct ConstructorSelfSchedulerImpl {
 
 #[agent_implementation]
 impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
-    fn new(_name: String, seconds: u64) -> Self {
+    async fn new(_name: String, seconds: u64) -> Self {
         assert!(
             matches!(
                 RustParentClient::bind_self(),
@@ -213,8 +213,8 @@ impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
         let mut this =
             ConstructorSelfSchedulerClient::bind_self().expect("bind current incarnation");
         assert_eq!(
-            this.get_agent_id(),
-            golem_rust::agentic::get_agent_id().agent_id
+            this.agent_id().await.expect("bound agent ID"),
+            golem_rust::agentic::get_agent_id()
         );
         this.schedule_inc_global_by(
             1,
@@ -238,7 +238,7 @@ impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
         self.global
     }
 
-    fn bind_and_schedule(&mut self) -> String {
+    async fn bind_and_schedule(&mut self) -> String {
         let mut this =
             ConstructorSelfSchedulerClient::bind_self().expect("bind current incarnation");
         this.schedule_inc_global_by(
@@ -249,7 +249,12 @@ impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
             },
         )
         .expect("schedule on bound incarnation");
-        let id = this.get_agent_id().to_string();
+        let id = this
+            .agent_id()
+            .await
+            .expect("bound agent ID")
+            .uuid
+            .to_string();
         self.last_binding_id = Some(id.clone());
         id
     }
@@ -312,7 +317,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     }
 
     fn test1(&self, server_agent_name: String) {
-        let mut server = ScheduledInvocationServerClient::get(server_agent_name);
+        let mut server = ScheduledInvocationServerClient::upsert(server_agent_name);
         let scheduled_for = datetime_200ms_from_now();
         server
             .schedule_inc_global_by(1, scheduled_for)
@@ -320,7 +325,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     }
 
     fn test2(&self, server_agent_name: String) {
-        let mut server = ScheduledInvocationServerClient::get(server_agent_name);
+        let mut server = ScheduledInvocationServerClient::upsert(server_agent_name);
         let scheduled_for = datetime_200ms_from_now();
         let token = server
             .schedule_cancelable_inc_global_by(1, scheduled_for)
@@ -329,7 +334,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     }
 
     fn test3(&mut self) {
-        let mut self_client = ScheduledInvocationClientClient::get(self._name.clone());
+        let mut self_client = ScheduledInvocationClientClient::upsert(self._name.clone());
         let scheduled_for = datetime_200ms_from_now();
         self_client
             .schedule_inc_global_by(1, scheduled_for)
@@ -339,12 +344,11 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32) {
         // The generated durable client drops the receipt metadata, so this calls the host directly.
         use golem_rust::golem_agentic::golem::agent::host as agentic_host;
-        let server = agentic_host::WasmRpc::new(
+        let server = agentic_host::WasmRpc::upsert(
             "ScheduledInvocationServer",
             encode_single_parameter(server_agent_name),
-            None,
-            Vec::new(),
-        );
+        )
+        .expect("failed to create the RPC client");
         let receipt = server
             .schedule_cancelable_invocation(
                 agentic_host::Datetime {
@@ -384,7 +388,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
         seconds: u64,
         nanoseconds: u32,
     ) {
-        let target = ScheduledEphemeralTargetClient::new_phantom(target_name);
+        let target = ScheduledEphemeralTargetClient::upsert(target_name);
         self.token = Some(
             target
                 .schedule_cancelable_inc(
@@ -1258,12 +1262,11 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
     async fn run_ephemeral(&self, synchronous: bool) -> Vec<u32> {
         let input = agent_stream(vec![2, 7, 13]);
         let output = if synchronous {
-            let rpc = WasmRpc::new(
+            let rpc = WasmRpc::upsert(
                 "EphemeralStreamingRpcTarget",
                 encode_single_parameter(self.name.clone()),
-                None,
-                Vec::new(),
-            );
+            )
+            .expect("failed to create the RPC client");
             let input = golem_rust::encode_schema_value_async(&SchemaValue::Record {
                 fields: vec![input.to_value()],
             })
@@ -1275,7 +1278,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             )
             .unwrap()
         } else {
-            EphemeralStreamingRpcTargetClient::new_phantom(self.name.clone())
+            EphemeralStreamingRpcTargetClient::upsert(self.name.clone())
                 .transform(input)
                 .await
                 .value
@@ -1287,7 +1290,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
     }
 
     async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)> {
-        StreamingRpcTargetClient::get(self.name.clone())
+        StreamingRpcTargetClient::upsert(self.name.clone())
             .produce_context_stream(gate)
             .await
             .collect()
@@ -1301,7 +1304,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         chunk_size: u32,
     ) -> StreamingRpcBenchmarkResult {
         assert!(chunk_count > 0);
-        let target = StreamingRpcTargetClient::get(self.name.clone());
+        let target = StreamingRpcTargetClient::upsert(self.name.clone());
         let started = std::time::Instant::now();
         let mut output = target.produce_binary_chunks(chunk_count, chunk_size).await;
         let mut chunks_read = 0;
@@ -1324,7 +1327,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
     }
 
     async fn run(&self) -> StreamingRpcReport {
-        let mut target = StreamingRpcTargetClient::get(self.name.clone());
+        let target = StreamingRpcTargetClient::upsert(self.name.clone());
 
         let input_only = target.consume(agent_stream(vec![1, 2, 3])).await;
         let output_only = target
@@ -1395,7 +1398,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
     }
 
     async fn drop_gated_output(&self, gate: PromiseId) -> u64 {
-        let mut output = StreamingRpcTargetClient::get(self.name.clone())
+        let mut output = StreamingRpcTargetClient::upsert(self.name.clone())
             .produce_drop_probe(gate)
             .await;
         assert_eq!(output.next().await, Some(Ok(17)));
@@ -1412,19 +1415,18 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             writer.write_all([7, 201]).await.unwrap();
             writer.close().await.unwrap();
         });
-        StreamingRpcTargetClient::get(self.name.clone())
+        StreamingRpcTargetClient::upsert(self.name.clone())
             .consume(input)
             .await
     }
 
     async fn streaming_increment(&self, synchronous: bool) -> Vec<u64> {
         let output = if synchronous {
-            let rpc = WasmRpc::new(
+            let rpc = WasmRpc::upsert(
                 "StreamingRpcTarget",
                 encode_single_parameter(self.name.clone()),
-                None,
-                Vec::new(),
-            );
+            )
+            .expect("failed to create the RPC client");
             let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
             let result = rpc
                 .invoke_and_await("increment_stream", input, None)
@@ -1434,7 +1436,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             )
             .unwrap()
         } else {
-            StreamingRpcTargetClient::get(self.name.clone())
+            StreamingRpcTargetClient::upsert(self.name.clone())
                 .increment_stream_input(agent_stream(vec![13, 29]))
                 .await
         };
@@ -1445,7 +1447,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
     }
 
     async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32> {
-        let target = StreamingRpcTargetClient::get(self.name.clone());
+        let target = StreamingRpcTargetClient::upsert(self.name.clone());
         let (mut writer, input) = AgentStream::new();
         spawn_local(async move {
             writer
@@ -1477,7 +1479,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         use std::future::poll_fn;
         use std::task::Poll;
 
-        let output = StreamingRpcTargetClient::get(self.name.clone())
+        let output = StreamingRpcTargetClient::upsert(self.name.clone())
             .benchmark_gated_output(7, 17, source_gate)
             .await;
         let (mut reader, outcome) = output.into_raw().await.expect("unwrap durable output");
@@ -1542,7 +1544,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         use std::future::poll_fn;
         use std::task::Poll;
 
-        let output = StreamingRpcTargetClient::get(self.name.clone())
+        let output = StreamingRpcTargetClient::upsert(self.name.clone())
             .benchmark_gated_output(7, 17, source_gate)
             .await;
         let (mut reader, outcome) = output.into_raw().await.expect("unwrap durable output");
@@ -1586,14 +1588,20 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         original_agent_id: String,
         forwarded_drop: bool,
     ) -> Vec<u64> {
-        let output = StreamingRpcTargetClient::get(self.name.clone())
+        let output = StreamingRpcTargetClient::upsert(self.name.clone())
             .increment_gated_stream(gate)
             .await;
-        if golem_rust::get_self_metadata().unwrap().agent_id.agent_id == original_agent_id {
+        if golem_rust::get_self_metadata()
+            .unwrap()
+            .agent_id
+            .uuid
+            .to_string()
+            == original_agent_id
+        {
             output.collect().await.expect("original caller output")
         } else if forwarded_drop {
             assert_eq!(
-                StreamingRpcTargetClient::get(format!("{}-forwarded-drop", self.name))
+                StreamingRpcTargetClient::upsert(format!("{}-forwarded-drop", self.name))
                     .drop_input_u64(output)
                     .await,
                 42
@@ -1607,14 +1615,14 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
 
     async fn drop_new_increment_output(&self) {
         drop(
-            StreamingRpcTargetClient::get(self.name.clone())
+            StreamingRpcTargetClient::upsert(self.name.clone())
                 .increment_many_stream()
                 .await,
         );
     }
 
     async fn call_producer_error(&self) -> Vec<u32> {
-        let mut target = StreamingRpcTargetClient::get(self.name.clone());
+        let target = StreamingRpcTargetClient::upsert(self.name.clone());
         target
             .produce_error()
             .await
@@ -1625,12 +1633,12 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
 
     async fn catch_producer_outcome(&self, kind: u8) -> Vec<u32> {
         use golem_rust::agentic::StreamError;
-        let mut effect = StreamingRpcTargetClient::get(format!("{}-outcome-effect", self.name));
+        let mut effect = StreamingRpcTargetClient::upsert(format!("{}-outcome-effect", self.name));
         let sibling = effect.produce(vec![101, 307]).await;
-        let source = StreamingRpcTargetClient::get(self.name.clone())
+        let source = StreamingRpcTargetClient::upsert(self.name.clone())
             .produce_outcome(kind)
             .await;
-        let mut output = StreamingRpcTargetClient::get(format!("{}-forward", self.name))
+        let mut output = StreamingRpcTargetClient::upsert(format!("{}-forward", self.name))
             .forward_outcome(source)
             .await;
         assert_eq!(output.next().await, Some(Ok(17)));
@@ -1651,7 +1659,7 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
     }
 
     async fn call_producer_error_after_gate(&self, gate: PromiseId) -> Vec<u32> {
-        let mut output = StreamingRpcTargetClient::get(self.name.clone())
+        let mut output = StreamingRpcTargetClient::upsert(self.name.clone())
             .produce_error()
             .await;
         assert_eq!(output.next().await, Some(Ok(1)));
@@ -1660,12 +1668,12 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
     }
 
     async fn call_stream_free(&self) -> u64 {
-        let mut target = StreamingRpcTargetClient::get(self.name.clone());
+        let mut target = StreamingRpcTargetClient::upsert(self.name.clone());
         target.increment_scalar().await
     }
 
     async fn call_stream_free_while_fetching(&self, host: String, port: u16) -> u64 {
-        let mut target = StreamingRpcTargetClient::get(self.name.clone());
+        let mut target = StreamingRpcTargetClient::upsert(self.name.clone());
         let mut rpc = Box::pin(target.increment_scalar());
         let mut request = Box::pin(
             wasi_fetch::Client::new()
@@ -1836,9 +1844,9 @@ impl RpcCaller for RpcCallerImpl {
     async fn test1(&self) -> Vec<(String, u64)> {
         let counter_prefix = format!("{}_test1", self.name);
 
-        let mut counter1 = RpcCounterClient::get(format!("{counter_prefix}_counter1"));
-        let mut counter2 = RpcCounterClient::get(format!("{counter_prefix}_counter2"));
-        let mut counter3 = RpcCounterClient::get(format!("{counter_prefix}_counter3"));
+        let mut counter1 = RpcCounterClient::upsert(format!("{counter_prefix}_counter1"));
+        let mut counter2 = RpcCounterClient::upsert(format!("{counter_prefix}_counter2"));
+        let mut counter3 = RpcCounterClient::upsert(format!("{counter_prefix}_counter3"));
 
         counter1.inc_by(1).await;
         counter1.inc_by(1).await;
@@ -1869,19 +1877,19 @@ impl RpcCaller for RpcCallerImpl {
                 n
             }
         };
-        let mut counter = RpcCounterClient::get(counter_name);
+        let mut counter = RpcCounterClient::upsert(counter_name);
         counter.inc_by(1).await;
         counter.get_value().await
     }
 
     async fn test3(&self) -> u64 {
-        let mut global = RpcGlobalStateClient::get(format!("{}_test3", self.name));
+        let mut global = RpcGlobalStateClient::upsert(format!("{}_test3", self.name));
         global.inc_global_by(1).await;
         global.get_global_value().await
     }
 
     async fn test4(&self) -> (Vec<String>, Vec<(String, String)>) {
-        let counter = RpcCounterClient::get(format!("{}_test4_counter", self.name));
+        let counter = RpcCounterClient::upsert(format!("{}_test4_counter", self.name));
         let args = counter.get_args().await;
         let env = counter.get_env().await;
         (args, env)
@@ -1890,9 +1898,9 @@ impl RpcCaller for RpcCallerImpl {
     async fn test5(&self) -> Vec<u64> {
         let counter_prefix = format!("{}_test5", self.name);
 
-        let mut counter1 = RpcCounterClient::get(format!("{counter_prefix}_counter1"));
-        let mut counter2 = RpcCounterClient::get(format!("{counter_prefix}_counter2"));
-        let mut counter3 = RpcCounterClient::get(format!("{counter_prefix}_counter3"));
+        let mut counter1 = RpcCounterClient::upsert(format!("{counter_prefix}_counter1"));
+        let mut counter2 = RpcCounterClient::upsert(format!("{counter_prefix}_counter2"));
+        let mut counter3 = RpcCounterClient::upsert(format!("{counter_prefix}_counter3"));
 
         counter1.inc_by(1).await;
         counter1.inc_by(1).await;
@@ -1911,12 +1919,12 @@ impl RpcCaller for RpcCallerImpl {
     }
 
     async fn bug_wasm_rpc_i32(&self, node: TimelineNode) -> TimelineNode {
-        let global = RpcGlobalStateClient::get(format!("{}_bug32", self.name));
+        let global = RpcGlobalStateClient::upsert(format!("{}_bug32", self.name));
         global.bug_wasm_rpc_i32(node).await
     }
 
     async fn bug_golem1265(&self, s: String) -> Result<(), String> {
-        let global = RpcGlobalStateClient::get(format!("{}_bug1265", self.name));
+        let global = RpcGlobalStateClient::upsert(format!("{}_bug1265", self.name));
         global.bug_golem1265(s).await
     }
 }
@@ -1987,6 +1995,7 @@ pub enum RpcCallOutcome {
     NotFound { details: String },
     ProtocolError { details: String },
     RemoteInternalError { details: String },
+    Conflict { details: String },
 }
 
 impl From<RpcError> for RpcCallOutcome {
@@ -1999,6 +2008,7 @@ impl From<RpcError> for RpcCallOutcome {
             RpcError::RemoteAgentError(_) => Self::RemoteInternalError {
                 details: "remote agent error".to_string(),
             },
+            RpcError::Conflict(details) => Self::Conflict { details },
         }
     }
 }
@@ -2125,12 +2135,8 @@ async fn await_counter_result(
     promise_id: PromiseId,
     asynchronous: bool,
 ) -> u64 {
-    let rpc = WasmRpc::new(
-        "RpcBlockingCounter",
-        encode_single_parameter(counter_name),
-        None,
-        Vec::new(),
-    );
+    let rpc = WasmRpc::upsert("RpcBlockingCounter", encode_single_parameter(counter_name))
+        .expect("failed to create the RPC client");
     let input = encode_single_parameter(promise_id);
     let result = if asynchronous {
         rpc.async_invoke_and_await("inc_after_promise", input, None)
@@ -2155,12 +2161,11 @@ impl RpcAuthTester for RpcAuthTesterImpl {
     }
 
     fn try_ephemeral_call(&self) -> RpcCallOutcome {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::upsert(
             "EphemeralStreamingRpcTarget",
             encode_single_parameter("denied-target".to_string()),
-            None,
-            Vec::new(),
-        );
+        )
+        .expect("failed to create the RPC client");
         let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
         match rpc.invoke_and_await("spin", input, None) {
             Ok(_) => RpcCallOutcome::Ok,
@@ -2169,12 +2174,11 @@ impl RpcAuthTester for RpcAuthTesterImpl {
     }
 
     async fn try_ephemeral_call_async(&self) -> RpcCallOutcome {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::upsert(
             "EphemeralStreamingRpcTarget",
             encode_single_parameter("denied-target".to_string()),
-            None,
-            Vec::new(),
-        );
+        )
+        .expect("failed to create the RPC client");
         let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
         let result = rpc.async_invoke_and_await("spin", input, None);
         match result.future.get().await {
@@ -2184,12 +2188,11 @@ impl RpcAuthTester for RpcAuthTesterImpl {
     }
 
     async fn denied_streaming_metadata(&self) -> Option<String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::upsert(
             "EphemeralStreamingRpcTarget",
             encode_single_parameter("denied-streaming-target".to_string()),
-            None,
-            Vec::new(),
-        );
+        )
+        .expect("failed to create the RPC client");
         let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
         let result = rpc.async_invoke_and_await("produce_siblings", input, None);
         assert!(matches!(
@@ -2202,12 +2205,11 @@ impl RpcAuthTester for RpcAuthTesterImpl {
     }
 
     fn invalid_async_call_without_get(&self) -> Option<String> {
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::upsert(
             "RpcCounter",
             encode_single_parameter("invalid-async-target".to_string()),
-            None,
-            Vec::new(),
-        );
+        )
+        .expect("failed to create the RPC client");
         let result = rpc.async_invoke_and_await(
             "method-that-does-not-exist",
             encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap(),
@@ -2222,8 +2224,10 @@ impl RpcAuthTester for RpcAuthTesterImpl {
         let constructor = encode_single_parameter(counter_name);
 
         // Connect to the RpcCounter agent in the same component.
-        // WasmRpc::new resolves the component_id from the registered agent type.
-        let rpc = WasmRpc::new("RpcCounter", constructor, None, Vec::new());
+        let rpc = match WasmRpc::upsert("RpcCounter", constructor) {
+            Ok(rpc) => rpc,
+            Err(e) => return RpcCallOutcome::from(e),
+        };
 
         let arg = encode_single_parameter(1u64);
 
@@ -2250,22 +2254,18 @@ impl CancelTester for CancelTesterImpl {
         rounds: u32,
     ) -> u64 {
         let mut a = Box::pin(async move {
-            RpcBlockingCounterClient::get(target_a)
+            RpcBlockingCounterClient::upsert(target_a)
                 .inc_after_promise(gate_a)
                 .await
         });
         let mut b = Box::pin(async move {
-            let rpc = WasmRpc::new(
-                "RpcCounter",
-                encode_single_parameter(counter),
-                None,
-                Vec::new(),
-            );
+            let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter))
+                .expect("failed to create the RPC client");
             for _ in 0..rounds {
                 rpc.invoke_and_await("inc_by", encode_single_parameter(3u64), None)
                     .unwrap();
             }
-            let value = RpcBlockingCounterClient::get(target_b)
+            let value = RpcBlockingCounterClient::upsert(target_b)
                 .inc_after_promise(gate_b)
                 .await;
             for _ in 0..rounds {
@@ -2302,18 +2302,15 @@ impl CancelTester for CancelTesterImpl {
     fn grow_memory_before_rpc_activation(&self, counter_name: String) {
         let constructor = encode_single_parameter(counter_name);
         let input = encode_single_parameter(1u64);
-        let rpc = WasmRpc::new("RpcCounter", constructor, None, Vec::new());
+        let rpc =
+            WasmRpc::upsert("RpcCounter", constructor).expect("failed to create the RPC client");
         assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
         rpc.invoke_and_await("inc_by", input, None).unwrap();
     }
 
     fn inc_after_stdout(&self, counter_name: String, mode: String) {
-        let rpc = WasmRpc::new(
-            "RpcCounter",
-            encode_single_parameter(counter_name),
-            None,
-            Vec::new(),
-        );
+        let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter_name))
+            .expect("failed to create the RPC client");
         let no_input = encode_schema_value(&SchemaValue::Record { fields: Vec::new() })
             .expect("failed to encode empty RPC input");
         rpc.invoke_and_await("get_value", no_input, None).unwrap();
@@ -2340,12 +2337,8 @@ impl CancelTester for CancelTesterImpl {
     }
 
     async fn await_counter_after_timer(&self, counter_name: String, promise_id: PromiseId) -> u64 {
-        let rpc = WasmRpc::new(
-            "RpcBlockingCounter",
-            encode_single_parameter(counter_name),
-            None,
-            Vec::new(),
-        );
+        let rpc = WasmRpc::upsert("RpcBlockingCounter", encode_single_parameter(counter_name))
+            .expect("failed to create the RPC client");
         let future = rpc
             .async_invoke_and_await(
                 "inc_after_promise",
@@ -2363,12 +2356,8 @@ impl CancelTester for CancelTesterImpl {
         counter_name: String,
         promise_id: PromiseId,
     ) -> u64 {
-        let rpc = WasmRpc::new(
-            "RpcBlockingCounter",
-            encode_single_parameter(counter_name),
-            None,
-            Vec::new(),
-        );
+        let rpc = WasmRpc::upsert("RpcBlockingCounter", encode_single_parameter(counter_name))
+            .expect("failed to create the RPC client");
         let deadline = golem_rust::wasip3::clocks::monotonic_clock::now() + 30_000_000_000;
         let mut timer = Box::pin(golem_rust::wasip3::clocks::monotonic_clock::wait_until(
             deadline,
@@ -2394,12 +2383,8 @@ impl CancelTester for CancelTesterImpl {
     }
 
     async fn receive_large_rpc_result(&self, counter_name: String) -> u64 {
-        let rpc = WasmRpc::new(
-            "RpcCounter",
-            encode_single_parameter(counter_name),
-            None,
-            Vec::new(),
-        );
+        let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter_name))
+            .expect("failed to create the RPC client");
         let future = rpc
             .async_invoke_and_await(
                 "inc_and_return_text",
@@ -2415,12 +2400,8 @@ impl CancelTester for CancelTesterImpl {
     }
 
     async fn grow_memory_after_rpc_result(&self, counter_name: String) {
-        let rpc = WasmRpc::new(
-            "RpcCounter",
-            encode_single_parameter(counter_name),
-            None,
-            Vec::new(),
-        );
+        let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter_name))
+            .expect("failed to create the RPC client");
         let future = rpc
             .async_invoke_and_await("inc_by", encode_single_parameter(1u64), None)
             .future;
@@ -2434,12 +2415,8 @@ impl CancelTester for CancelTesterImpl {
         } else {
             None
         };
-        let rpc = WasmRpc::new(
-            "RpcCounter",
-            encode_single_parameter(counter_name),
-            None,
-            Vec::new(),
-        );
+        let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter_name))
+            .expect("failed to create the RPC client");
         let future = rpc
             .async_invoke_and_await("inc_by", encode_single_parameter(1u64), None)
             .future;
@@ -2484,7 +2461,8 @@ impl CancelTester for CancelTesterImpl {
 
     fn test_cancel_before_await(&self, counter_name: String) {
         let constructor_data = encode_single_parameter(counter_name);
-        let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
+        let wasm_rpc = WasmRpc::upsert("RpcCounter", constructor_data)
+            .expect("failed to create the RPC client");
 
         let input = encode_single_parameter(1u64);
         let future = wasm_rpc
@@ -2498,12 +2476,8 @@ impl CancelTester for CancelTesterImpl {
     }
 
     async fn drop_pending_get(&self, counter_name: String, promise_id: PromiseId) {
-        let rpc = WasmRpc::new(
-            "RpcBlockingCounter",
-            encode_single_parameter(counter_name),
-            None,
-            Vec::new(),
-        );
+        let rpc = WasmRpc::upsert("RpcBlockingCounter", encode_single_parameter(counter_name))
+            .expect("failed to create the RPC client");
         let result = rpc
             .async_invoke_and_await(
                 "inc_after_promise",
@@ -2526,7 +2500,8 @@ impl CancelTester for CancelTesterImpl {
 
     async fn test_cancel_completed(&self, counter_name: String) -> u64 {
         let constructor_data = encode_single_parameter(counter_name.clone());
-        let wasm_rpc = WasmRpc::new("RpcCounter", constructor_data, None, Vec::new());
+        let wasm_rpc = WasmRpc::upsert("RpcCounter", constructor_data)
+            .expect("failed to create the RPC client");
 
         // First, call inc_by to increment the counter
         let input = encode_single_parameter(5u64);
@@ -2543,7 +2518,7 @@ impl CancelTester for CancelTesterImpl {
         future.cancel();
 
         // Now get the value through the generated client to verify
-        let counter = RpcCounterClient::get(counter_name);
+        let counter = RpcCounterClient::upsert(counter_name);
         counter.get_value().await
     }
 }
@@ -2591,7 +2566,7 @@ impl HttpPollingSelfScheduler for HttpPollingSelfSchedulerImpl {
             .send()
             .await;
 
-        let me = HttpPollingSelfSchedulerClient::get(self.name.clone());
+        let me = HttpPollingSelfSchedulerClient::upsert(self.name.clone());
         me.schedule_tick(host, port, datetime_500ms_from_now())
             .expect("failed to schedule polling tick");
     }

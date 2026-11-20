@@ -146,7 +146,7 @@ fn write_rust_caller(ctx: &TestContext) {
                         length(i64::MIN, i32::MIN, "m"),
                         length(i64::MAX, i32::MAX, "cm"),
                     ];
-                    let target = $agent::get("hub".to_string()).unwrap();
+                    let target = $agent::upsert("hub".to_string()).unwrap();
                     for value in &values {
                         assert_eq!(&target.echo(value.clone()).await.unwrap(), value);
                     }
@@ -274,7 +274,7 @@ fn write_ts(ctx: &TestContext) {
                   const min: Length = { mantissa: -(2n ** 63n), scale: -(2 ** 31), unit: 'm' };
                   const max: Length = { mantissa: 2n ** 63n - 1n, scale: 2 ** 31 - 1, unit: 'cm' };
                   const values = [km, min, max];
-                  const target = RustQuantityTarget.get(this.name);
+                  const target = RustQuantityTarget.upsert(this.name);
                   for (const value of values) {
                     check(text(await target.echo(value)) === text(value), `echo ${text(value)}`);
                   }
@@ -399,7 +399,7 @@ fn write_go(ctx: &TestContext) {
             			{{Mantissa: math.MinInt64, Scale: math.MinInt32, Unit: "m"}},
             			{{Mantissa: math.MaxInt64, Scale: math.MaxInt32, Unit: "cm"}},
             		}}
-            		remote := golem.Must(rust.GetRustQuantityTarget(rust.RustQuantityTargetID{{Name: ctx.State.name}}))
+            		remote := golem.Must(rust.UpsertRustQuantityTarget(rust.RustQuantityTargetID{{Name: ctx.State.name}}))
             		for _, value := range all {{
             			echoed := golem.Must(remote.Echo(value))
             			check(echoed == value, "echo %+v returned %+v", value, echoed)
@@ -493,7 +493,7 @@ fn write_scala(ctx: &TestContext) {
                   Quantity[UnitM](Long.MinValue, Int.MinValue, "m"),
                   Quantity[UnitM](Long.MaxValue, Int.MaxValue, "cm")
                 )
-                val target = RustQuantityTargetClient.get(name)
+                val target = RustQuantityTargetClient.upsert(name)
                 for {
                   echoed <- Future.sequence(values.map(v => target.echo(v)))
                   withSome <- target.nested(RustHolder(values.head, Some(values(2)), values))
@@ -551,7 +551,7 @@ fn write_scala_caller(ctx: &TestContext) {
                   Quantity[UnitM](Long.MinValue, Int.MinValue, "m"),
                   Quantity[UnitM](Long.MaxValue, Int.MaxValue, "cm")
                 )
-                val target = ScalaQuantityTargetClient.get(name)
+                val target = ScalaQuantityTargetClient.upsert(name)
                 for {
                   echoed <- Future.sequence(values.map(v => target.echo(v)))
                   withSome <- target.nested(QuantityHolder(values.head, Some(values(2)), values))
@@ -790,7 +790,7 @@ async fn run_external_drivers(ctx: &TestContext) {
                 );
                 let length = |mantissa: i64, scale: i32, unit: &str| Quantity::<UnitM>::new(mantissa, scale, unit).unwrap();
                 let values = vec![length(1500, 3, "km"), length(i64::MIN, i32::MIN, "m"), length(i64::MAX, i32::MAX, "cm")];
-                let target = RustQuantityTarget::get("external-rust".to_string()).await?;
+                let target = RustQuantityTarget::upsert("external-rust".to_string())?;
                 for value in &values {{
                     assert_eq!(&target.echo(value.clone()).await?, value);
                 }}
@@ -838,7 +838,7 @@ async fn run_external_drivers(ctx: &TestContext) {
               {{ mantissa: -(2n ** 63n), scale: -(2 ** 31), unit: 'm' }},
               {{ mantissa: 2n ** 63n - 1n, scale: 2 ** 31 - 1, unit: 'cm' }},
             ]
-            const target = await RustQuantityTarget.get('external-typescript')
+            const target = RustQuantityTarget.upsert('external-typescript')
             for (const value of values) assert.deepEqual(await target.echo(value), value)
             for (const maybe of [values[2], undefined]) {{
               const holder = await target.nested({{ primary: values[0], maybe, all: values }})
@@ -891,7 +891,7 @@ async fn run_external_drivers(ctx: &TestContext) {
                   Quantity[UnitM](Long.MinValue, Int.MinValue, "m"),
                   Quantity[UnitM](Long.MaxValue, Int.MaxValue, "cm")
                 )
-                val target = Await.result(RustQuantityTargetClient.get("external-scala"), timeout)
+                val target = RustQuantityTargetClient.upsert("external-scala")
                 for (value <- values) assert(Await.result(target.echo(value), timeout) == value)
                 for (maybe <- List(Some(values(2)), None)) {{
                   val holder = QuantityHolder(values.head, maybe, values)
@@ -986,7 +986,7 @@ async fn run_external_drivers(ctx: &TestContext) {
             		{{Mantissa: math.MinInt64, Scale: math.MinInt32, Unit: "m"}},
             		{{Mantissa: math.MaxInt64, Scale: math.MaxInt32, Unit: "cm"}},
             	}}
-            	target := must(client.GetRustQuantityTarget(client.RustQuantityTargetID{{Name: "external-go"}}))
+            	target := must(client.UpsertRustQuantityTarget(client.RustQuantityTargetID{{Name: "external-go"}}))
             	for _, value := range all {{
             		if echoed := must(target.Echo(ctx, value)); echoed != value {{
             			log.Fatalf("echo %+v returned %+v", value, echoed)
@@ -1071,7 +1071,7 @@ async fn run_external_drivers(ctx: &TestContext) {
                 length(-9223372036854775807L - 1L, -2147483648, "m"),
                 length(9223372036854775807L, 2147483647, "cm"),
               ]
-              let target = @client.RustQuantityTarget::get("external-moonbit")
+              let target = @client.RustQuantityTarget::upsert("external-moonbit")
               for value in values {{
                 assert_eq(target.echo(value), value)
               }}

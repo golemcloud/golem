@@ -199,6 +199,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             }
             let _ = writeln!(result, "{pad}error:             {}", params.error);
             let _ = writeln!(result, "{pad}retry from:        {}", params.retry_from);
+            if let Some(retry_at) = &params.retry_at {
+                let _ = writeln!(result, "{pad}retry at:          {retry_at}");
+            }
+            if let Some(retrying_start_index) = &params.retrying_start_index {
+                let _ = writeln!(result, "{pad}retrying start:    {retrying_start_index}");
+            }
         }
         PublicOplogEntry::RecoverySucceeded(params) => {
             let _ = writeln!(result, "RECOVERY SUCCEEDED");
@@ -314,8 +320,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "FAILED UPDATE");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}target revision:   {}", params.target_revision,);
+            let _ = writeln!(result, "{pad}failure class:     {}", params.failure_class);
             if let Some(details) = &params.details {
                 let _ = writeln!(result, "{pad}error:             {details}");
+            }
+            if let Some(divergence) = &params.divergence {
+                let _ = writeln!(result, "{pad}divergence:        {divergence}");
             }
         }
         PublicOplogEntry::GrowMemory(params) => {

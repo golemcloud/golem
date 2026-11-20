@@ -73,12 +73,17 @@ private[macros] object HttpDeclarationMacro {
 
   def headerValues(using
     Quotes
-  )(symbol: quotes.reflect.Symbol, annotation: String, index: Int): List[FileResponseHeader] = {
+  )(
+    symbol: quotes.reflect.Symbol,
+    annotation: String,
+    index: Int,
+    argumentName: String = "fileResponseHeaders"
+  ): List[FileResponseHeader] = {
     import quotes.reflect.*
-    argument(symbol, annotation, "fileResponseHeaders", index).toList.flatMap(elements).map {
+    argument(symbol, annotation, argumentName, index).toList.flatMap(elements).map {
       case Apply(_, List(Literal(StringConstant(name)), Literal(StringConstant(value)))) =>
         FileResponseHeader(name, value)
-      case value => report.errorAndAbort(s"fileResponseHeaders requires literal (name, value) pairs: ${value.show}")
+      case value => report.errorAndAbort(s"$argumentName requires literal (name, value) pairs: ${value.show}")
     }
   }
 

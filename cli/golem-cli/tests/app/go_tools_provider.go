@@ -39,7 +39,6 @@ type CommitArgs struct {
 	Author   golem.Option[string]
 	Priority golem.Option[uint32]
 	Amend    bool
-	Caller   golem.Principal
 }
 
 type CommitResult struct {
@@ -71,24 +70,15 @@ var Push = Tool.Group("remote").OutputCommand[PushArgs, int32]("push", func(a *P
 	s.Raises(ErrRejected)
 })
 
-func describe(p golem.Principal) string {
-	switch p.(type) {
-	case golem.AgentPrincipal:
-		return "agent"
-	case golem.GolemUserPrincipal:
-		return "golem-user"
-	default:
-		return fmt.Sprintf("%T", p)
-	}
-}
+func describe(p golem.Principal) string { return string(p.Kind()) }
 
-var _ = Commit.Handle(func(_ *tool.Context, a CommitArgs) (CommitResult, error) {
+var _ = Commit.Handle(func(ctx *tool.Context, a CommitArgs) (CommitResult, error) {
 	if len(a.Paths) == 0 && !a.Amend {
 		return CommitResult{}, ErrNothingToCommit.New(golem.Unit{})
 	}
 	author := a.Author.Or("anonymous")
 	return CommitResult{
-		Summary: fmt.Sprintf("%s|%s|%s|%s", a.Dir, a.Message, author, describe(a.Caller)),
+		Summary: fmt.Sprintf("%s|%s|%s|%s", a.Dir, a.Message, author, describe(ctx.Caller().Immediate)),
 		Files:   int32(len(a.Paths)),
 	}, nil
 })

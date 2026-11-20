@@ -7,7 +7,7 @@ test_r::enable!();
 mod tests {
     use golem_rust::agentic::{
         AgentStream, AgentTypeName, BaseAgent, Config, Header, HttpRequest, HttpResponse,
-        HttpRouter, OriginalHttpRequest, Principal, get_agent_type_by_name,
+        HttpRouter, InvocationContext, OriginalHttpRequest, get_agent_type_by_name,
         get_enriched_agent_type_by_name, register_agent_type,
     };
     use golem_rust::golem_agentic::golem::agent::common::{
@@ -291,7 +291,7 @@ mod tests {
                 })
                 .await
                 .unwrap(),
-                Principal::Anonymous,
+                InvocationContext::anonymous(),
             )
             .await
             .unwrap();
@@ -315,7 +315,7 @@ mod tests {
             .invoke(
                 "openapi".into(),
                 golem_rust::encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap(),
-                Principal::Anonymous,
+                InvocationContext::anonymous(),
             )
             .await
             .unwrap();
@@ -330,7 +330,7 @@ mod tests {
                     "handle".into(),
                     golem_rust::encode_schema_value(&SchemaValue::Record { fields: vec![] })
                         .unwrap(),
-                    Principal::Anonymous
+                    InvocationContext::anonymous()
                 )
                 .await
                 .is_err()

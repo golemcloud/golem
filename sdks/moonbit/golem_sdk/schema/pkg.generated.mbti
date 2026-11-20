@@ -162,6 +162,29 @@ pub impl IntoSchema for AgentBinary
 pub impl IntoWire for AgentBinary
 pub impl WireSchema for AgentBinary
 
+pub struct AgentId {
+  // private fields
+} derive(Compare, Eq, Hash)
+pub fn AgentId::compare(Self, Self) -> Int32
+pub fn AgentId::equal(Self, Self) -> Bool
+pub fn AgentId::from_uuid(Uuid) -> Self
+pub fn AgentId::from_wit(@types.AgentId) -> Self
+pub fn AgentId::hash(Self) -> Int32
+pub fn AgentId::hash_combine(Self, Hasher) -> Unit
+pub fn AgentId::not_equal(Self, Self) -> Bool
+pub fn AgentId::op_ge(Self, Self) -> Bool
+pub fn AgentId::op_gt(Self, Self) -> Bool
+pub fn AgentId::op_le(Self, Self) -> Bool
+pub fn AgentId::op_lt(Self, Self) -> Bool
+pub fn AgentId::output(Self, &Logger) -> Unit
+pub fn AgentId::parse(String) -> Self raise UuidParseError
+pub fn AgentId::to_repr(Self) -> @debug.Repr
+pub fn AgentId::to_string(Self) -> String
+pub fn AgentId::to_wit(Self) -> @types.AgentId
+pub fn AgentId::uuid(Self) -> Uuid
+pub impl Show for AgentId
+pub impl @debug.Debug for AgentId
+
 pub(all) struct AgentStream[T] {
   // private fields
 }

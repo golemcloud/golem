@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { caller } from 'golem:agent/invocation-context@2.0.0';
 import type {
   InvocationResult,
   Tool,
@@ -23,7 +22,7 @@ import type {
 import type { UnderlyingTool } from 'golem:tool/underlying@0.1.0';
 import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
 import type { toolMiddlewareGuest as ToolMiddlewareGuest } from 'agent-guest';
-import { sdkPrincipalFromHost } from '../../principal';
+import { currentInvocationContext } from '../../caller';
 import {
   middlewareRegistrationError,
   ToolMiddlewareRegistry,
@@ -67,7 +66,7 @@ async function invokeToolMiddleware(
     stdin: stdin === undefined ? undefined : decodeByteStream(stdin),
     stdout,
     stderr,
-    principal: sdkPrincipalFromHost(caller().immediate),
+    caller: currentInvocationContext().caller,
     wrapped,
   });
 }

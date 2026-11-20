@@ -55,7 +55,7 @@ func localUnderlying(d *definitions, e *toolEntry) underlyingLayer {
 		if n != nil && n.body != nil {
 			streams = n.body.streams()
 		}
-		return localCall(d, e, path, input, stdin, streams, golem.AnonymousPrincipal{}), nil
+		return localCall(d, e, path, input, stdin, streams, golem.AnonymousCaller()), nil
 	}}
 }
 
@@ -97,7 +97,7 @@ func runMiddlewareFor(t *testing.T, r *toolRegistry, d *definitions, name string
 		stdin:       stdin,
 		stdout:      newToolOutput("stdout", sink),
 		stderr:      newToolOutput("stderr", stderr),
-		principal:   golem.AnonymousPrincipal{},
+		caller:      func() golem.Caller { return golem.AnonymousCaller() },
 		under:       run.under,
 	}
 	return d.runMiddleware(e, inv), sink
@@ -122,8 +122,8 @@ func TestTransparentMiddlewareInterceptsAHandledCommand(t *testing.T) {
 		if a.Message == ctx.Parameters().Block {
 			return CommitResult{}, ConstraintViolation("blocked by policy")
 		}
-		if _, ok := ctx.Principal().(golem.AnonymousPrincipal); !ok {
-			panic("lost the principal")
+		if _, ok := ctx.Caller().Immediate.(golem.AnonymousPrincipal); !ok {
+			panic("lost the caller")
 		}
 		a.Message += " (audited)"
 		return policy.Underlying(ctx, v.commit).Forward(a)
@@ -422,7 +422,7 @@ func TestUniversalMiddlewarePassesOutputsThrough(t *testing.T) {
 			stdin:      &byteReader{absent: absentStdin},
 			stdout:     newToolOutput("stdout", nil),
 			stderr:     newToolOutput("stderr", stderr),
-			principal:  golem.AnonymousPrincipal{},
+			caller:     func() golem.Caller { return golem.AnonymousCaller() },
 			under:      under,
 		})
 	}
@@ -575,7 +575,7 @@ func TestMiddlewareParametersAreTheFieldsOfP(t *testing.T) {
 		stdin:      &byteReader{absent: absentStdin},
 		stdout:     newToolOutput("stdout", nil),
 		stderr:     newToolOutput("stderr", nil),
-		principal:  golem.AnonymousPrincipal{},
+		caller:     func() golem.Caller { return golem.AnonymousCaller() },
 		under:      absentUnderlyingLayer,
 	})
 	if res.IsErr() || !ran {

@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{InvokeResult, cleanup_user_state, delete_workers};
+use crate::benchmarks::{InvokeResult, cleanup_user_state, delete_workers, lookup_keyed_agents};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::model::AgentId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkError, BenchmarkRecorder, BenchmarkResultValue, ResultKey, RunConfig,
 };
@@ -135,7 +134,7 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
             (component, "StreamingRpcCaller")
         };
         let agent_ids = (0..self.config.size)
-            .map(|index| agent_id!(caller, format!("streaming-{index}")))
+            .map(|index| agent_key!(caller, format!("streaming-{index}")))
             .collect();
         Ok(IterationContext {
             user,
@@ -204,11 +203,8 @@ impl<const TOOL: bool> Benchmark for Streaming<TOOL> {
         iteration: IterationContext,
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
-        let ids = iteration
-            .agent_ids
-            .iter()
-            .filter_map(|id| AgentId::from_agent_id(iteration.component.id, id).ok())
-            .collect::<Vec<_>>();
+        let ids =
+            lookup_keyed_agents(&iteration.user, &iteration.component, &iteration.agent_ids).await;
         delete_workers(&iteration.user, &ids, &recorder).await;
         cleanup_user_state(&iteration.user, &iteration.env_id, &recorder).await;
         Ok(())

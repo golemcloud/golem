@@ -138,7 +138,7 @@ pub(super) async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter
 ) -> Result<CreatedFilesystem<Adapter>, CreateFailure> {
     let name = SandboxFilesystemName::new(
         agent.environment_id.to_string(),
-        agent.agent_id.component_id.to_string(),
+        format!("{:08x}", agent.agent_id.type_tag()),
         agent_path_segment(&agent.agent_id),
     )
     .map_err(|source| CreateFailure { source })?;

@@ -23,8 +23,7 @@ pub fn create_webhook() -> Result<WebhookHandler, WebhookError> {
     let promise_id = create_promise();
 
     let webhook_promise_id = crate::schema::wit::wire::PromiseId::from(&promise_id);
-    let webhook_url =
-        crate::golem_agentic::golem::agent::host::create_webhook(&webhook_promise_id)?;
+    let webhook_url = crate::golem_agentic::golem::agent::host::create_webhook(webhook_promise_id)?;
 
     Ok(WebhookHandler::new(webhook_url, promise_id))
 }

@@ -1,13 +1,15 @@
 /** Effect-native runtime used by generated guest agent bridges. @since 1.6.0 */
 import { Effect, Schema, SchemaGetter, Scope, Stream } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import { uuidToString } from "golem:core/types@2.0.0"
-import type { InvocationMetadata, RemoteCallError as ClientRemoteCallError } from "./Client.js"
+import type { AgentId } from "./AgentId.js"
+import {
+  connectionAgentId,
+  type InvocationMetadata,
+  type RemoteCallError as ClientRemoteCallError,
+} from "./Client.js"
 import * as Datetime from "./Datetime.js"
-import { AgentHostClient } from "./host/AgentHostClient.js"
-import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
-import { RpcClient, type RpcConnection } from "./host/RpcClient.js"
-import { prepareRemoteAgent } from "./internal/agentIdentity.js"
+import { RpcClient, type RpcConnection, type RpcHostError } from "./host/RpcClient.js"
+import { agentIdToWit } from "./internal/agentId.js"
 import {
   agentStreamFromHandle as fromStreamHandle,
   agentStreamToHandle as toStreamHandle,
@@ -36,6 +38,7 @@ import {
   restoreEncodedCapabilitiesOnAbort,
   schemaValueFromWit,
   schemaValueToWitAsync,
+  typedSchemaValueToWit,
 } from "./internal/schema-model/wit.js"
 import { QuotaTokenSchema, type QuotaToken } from "./Quota.js"
 import {
@@ -359,7 +362,11 @@ export interface ScopeCardOptions {
 }
 /** Definition-independent generated guest RPC handle. @since 1.6.0 @category clients */
 export interface RemoteAgentHandle {
-  readonly agentId: string
+  /**
+   * The ID of the connected agent, read from the host. On a handle of `upsertRemoteAgent` it
+   * creates the agent when it is missing. A handle of an ephemeral agent type has no ID.
+   */
+  readonly agentId: Effect.Effect<AgentId, RemoteCallError>
   readonly invokeAndAwait: <A>(
     name: string,
     input: SchemaValue,
@@ -398,9 +405,7 @@ export interface RemoteAgentHandle {
 }
 
 /** Host services and scope needed by generated constructors. @since 1.6.0 @category models */
-export type ConnectionRequirements = RpcClient | AgentHostClient | Scope.Scope
-/** Host service needed for a fresh phantom identity. @since 1.6.0 @category models */
-export type PhantomRequirements = DurabilityModeClient
+export type ConnectionRequirements = RpcClient | Scope.Scope
 /** Suspend generated codecs and report failures in the Effect error channel. @since 1.6.0 @category codecs */
 export const attempt = <A>(body: () => A): Effect.Effect<A, RemoteCallError> =>
   Effect.try({ try: () => withCapabilityAdoptionTransaction(body), catch: wrapHostThrow })
@@ -429,7 +434,7 @@ export const decodeWire = <A>(
   }
 }
 
-const remote = (rpc: RpcConnection, agentId: string): RemoteAgentHandle => {
+const remote = (rpc: RpcConnection): RemoteAgentHandle => {
   const awaitWithMetadata = <A>(
     name: string,
     input: SchemaValue,
@@ -462,7 +467,7 @@ const remote = (rpc: RpcConnection, agentId: string): RemoteAgentHandle => {
       Effect.flatMap(([time, tree]) => scheduleCancelableInvocation(rpc, time, name, tree)),
     )
   return {
-    agentId,
+    agentId: connectionAgentId(rpc),
     invokeAndAwait: (name, input, decode, options) =>
       Effect.map(awaitWithMetadata(name, input, decode, options), ({ value }) => value),
     invokeAndAwaitWithMetadata: awaitWithMetadata,
@@ -474,37 +479,105 @@ const remote = (rpc: RpcConnection, agentId: string): RemoteAgentHandle => {
   }
 }
 
-/** Resolve a remote guest agent using injected host services and scoped ownership. @since 1.6.0 @category clients */
-export const resolveRemoteAgent = (
-  agentTypeName: string,
-  constructor: SchemaValue,
-  phantomId: string | undefined,
-  configs: readonly AgentConfigEntry[],
-  mode: "durable" | "ephemeral",
-): Effect.Effect<RemoteAgentHandle, RemoteCallError, RpcClient | AgentHostClient | Scope.Scope> =>
-  Effect.suspend(() =>
-    Effect.gen(function* () {
-      const { agentId, connect } = yield* prepareRemoteAgent(
-        agentTypeName,
-        constructor,
-        phantomId,
-        configs,
-        mode,
-      )
-      const rpc = yield* Effect.acquireRelease(
-        Effect.mapError(connect, (error) => wrapHostThrow(error.cause)),
-        (connection) => Effect.sync(() => connection.drop()),
-      )
-      return remote(rpc, agentId)
-    }),
+const encodeConfigs = (configs: readonly AgentConfigEntry[]) =>
+  Effect.try({
+    try: () =>
+      withCapabilityAdoptionTransaction(() =>
+        configs.map(({ path, value }) => ({
+          path: [...path],
+          value: typedSchemaValueToWit(value),
+        })),
+      ),
+    catch: wrapHostThrow,
+  })
+
+const connected = (acquire: Effect.Effect<RpcConnection, RpcHostError>) =>
+  Effect.map(
+    Effect.acquireRelease(
+      Effect.mapError(acquire, (error) => wrapHostThrow(error.cause)),
+      (connection) => Effect.sync(() => connection.drop()),
+    ),
+    remote,
   )
 
-/** Generate a durable phantom identity from the host durability service. @since 1.6.0 @category clients */
-export const generatePhantomId: Effect.Effect<string, RemoteCallError, DurabilityModeClient> =
+/**
+ * Connect to the keyed agent of the constructor input, creating it when it is missing. For an
+ * ephemeral agent type, each invocation runs on a new one-shot instance.
+ *
+ * @since 1.6.0
+ * @category clients
+ */
+export const upsertRemoteAgent = (
+  agentTypeName: string,
+  constructor: SchemaValue,
+): Effect.Effect<RemoteAgentHandle, RemoteCallError, ConnectionRequirements> =>
   Effect.gen(function* () {
-    const host = yield* DurabilityModeClient
-    return yield* Effect.try({
-      try: () => uuidToString(host.generateIdempotencyKey()),
-      catch: wrapHostThrow,
+    const tree = yield* encode(constructor)
+    const host = yield* RpcClient
+    return yield* connected(host.upsert(agentTypeName, tree))
+  })
+
+/**
+ * Options of {@link createRemoteAgent}. `keyed` creates the keyed agent of the constructor input
+ * and fails with a `conflict` cause when it already exists; otherwise the new agent has a new
+ * ID. `configs` override local configuration values and `env` adds environment variables.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface CreateRemoteAgentOptions {
+  readonly keyed?: boolean
+  readonly configs?: readonly AgentConfigEntry[]
+  readonly env?: Readonly<Record<string, string>>
+}
+
+/**
+ * Create a durable agent and connect to it after its successful initialization.
+ *
+ * @since 1.6.0
+ * @category clients
+ */
+export const createRemoteAgent = (
+  agentTypeName: string,
+  constructor: SchemaValue,
+  options: CreateRemoteAgentOptions = {},
+): Effect.Effect<RemoteAgentHandle, RemoteCallError, ConnectionRequirements> =>
+  Effect.gen(function* () {
+    const tree = yield* encode(constructor)
+    const agentConfig = yield* encodeConfigs(options.configs ?? [])
+    const host = yield* RpcClient
+    return yield* connected(
+      Effect.map(
+        host.create(agentTypeName, tree, {
+          keyed: options.keyed ?? false,
+          agentConfig,
+          env: Object.entries(options.env ?? {}),
+        }),
+        ({ connection }) => connection,
+      ),
+    )
+  })
+
+/**
+ * Connect to the existing agent with the given ID. It never creates an agent: an unknown ID or
+ * an ID of another agent type fails with a `not-found` cause.
+ *
+ * @since 1.6.0
+ * @category clients
+ */
+export const getRemoteAgentById = (
+  agentTypeName: string,
+  agentId: AgentId,
+): Effect.Effect<RemoteAgentHandle, RemoteCallError, ConnectionRequirements> =>
+  Effect.gen(function* () {
+    const raw = yield* Effect.try({
+      try: () => agentIdToWit(agentId),
+      catch: (cause): RemoteCallError => ({
+        _tag: "InvalidUuidError",
+        value: String(agentId?.uuid),
+        reason: String(cause),
+      }),
     })
+    const host = yield* RpcClient
+    return yield* connected(host.getById(agentTypeName, raw))
   })

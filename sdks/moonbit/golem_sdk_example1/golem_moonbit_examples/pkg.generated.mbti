@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk_example1/golem_moonbit_examples"
 import {
   "golemcloud/golem_sdk/agents",
   "golemcloud/golem_sdk/async-core",
+  "golemcloud/golem_sdk/caller",
   "golemcloud/golem_sdk/config",
   "golemcloud/golem_sdk/http",
   "golemcloud/golem_sdk/interface/golem/agent/common",
@@ -20,59 +21,9 @@ import {
 }
 
 // Values
-pub fn cabi_realloc(Int32, Int32, Int32, Int32) -> Int32
-
 pub fn collect_app_config_overrides(AppConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
 
 pub fn collect_database_config_overrides(DatabaseConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
-
-pub fn wasmExportAsyncInitialize(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncInvokeGolemAgentGuest(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncInvokeGolemToolGuest(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncInvokeToolMiddleware(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncLoad(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportAsyncSave(Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportDiscoverAgentTypes() -> Int32
-
-pub fn wasmExportDiscoverAgentTypesPostReturn(Int32) -> Unit
-
-pub fn wasmExportDiscoverToolMiddlewares() -> Int32
-
-pub fn wasmExportDiscoverToolMiddlewaresPostReturn(Int32) -> Unit
-
-pub fn wasmExportDiscoverTools() -> Int32
-
-pub fn wasmExportDiscoverToolsPostReturn(Int32) -> Unit
-
-pub fn wasmExportGetDefinition() -> Int32
-
-pub fn wasmExportGetDefinitionPostReturn(Int32) -> Unit
-
-pub fn wasmExportGetTool(Int32, Int32) -> Int32
-
-pub fn wasmExportGetToolMiddleware(Int32, Int32) -> Int32
-
-pub fn wasmExportGetToolMiddlewarePostReturn(Int32) -> Unit
-
-pub fn wasmExportGetToolPostReturn(Int32) -> Unit
-
-pub fn wasmExportInitialize(Int32, Int32, Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportInvokeGolemAgentGuest(Int32, Int32, Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportInvokeGolemToolGuest(Int32) -> Int32
-
-pub fn wasmExportInvokeToolMiddleware(Int32) -> Int32
-
-pub fn wasmExportLoad(Int32, Int32, Int32, Int32) -> Int32
-
-pub fn wasmExportSave() -> Int32
 
 // Errors
 
@@ -93,7 +44,7 @@ pub fn AppConfigOverride::empty() -> Self
 pub impl @rpc.AgentConfigOverrides for AppConfigOverride
 
 type AuditLog
-pub fn AuditLog::add_entry(Self, String, @common.Principal) -> Unit
+pub fn AuditLog::add_entry(Self, String, @caller.InvocationContext) -> Unit
 pub fn AuditLog::get_creator(Self) -> String
 pub fn AuditLog::get_entries(Self) -> Array[String]
 
@@ -101,28 +52,27 @@ pub(all) struct AuditLogClient {
   client : @rpc.AgentClient
 }
 pub async fn AuditLogClient::add_entry(Self, String, scope_card? : @permissions.ScopeCard) -> Unit
+pub async fn AuditLogClient::agent_id(Self) -> @schema.AgentId
 pub fn AuditLogClient::bind_self() -> Self raise
+pub async fn AuditLogClient::create(String, keyed? : Bool, env? : Array[(String, String)]) -> Self
 pub fn AuditLogClient::drop(Self) -> Unit
-pub fn AuditLogClient::get(String) -> Self raise @common.AgentError
-pub fn AuditLogClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn AuditLogClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn AuditLogClient::get_creator(Self, scope_card? : @permissions.ScopeCard) -> String
 pub async fn AuditLogClient::get_entries(Self, scope_card? : @permissions.ScopeCard) -> Array[String]
-pub fn AuditLogClient::get_phantom(String, @schema.Uuid) -> Self raise @common.AgentError
-pub fn AuditLogClient::new_phantom(String) -> Self raise @common.AgentError
-pub fn AuditLogClient::phantom_id(Self) -> @schema.Uuid?
 pub fn AuditLogClient::schedule_add_entry(Self, @system-clock.Instant, String) -> Unit raise @common.AgentError
 pub fn AuditLogClient::schedule_cancelable_add_entry(Self, @system-clock.Instant, String) -> @host.CancellationToken raise @common.AgentError
 pub fn AuditLogClient::schedule_cancelable_get_creator(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn AuditLogClient::schedule_cancelable_get_entries(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn AuditLogClient::schedule_get_creator(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn AuditLogClient::schedule_get_entries(Self, @system-clock.Instant) -> Unit raise @common.AgentError
-pub async fn[T] AuditLogClient::scoped(String, async (Self) -> T) -> T
-pub async fn[T] AuditLogClient::scoped_get_phantom(String, @schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] AuditLogClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub async fn[T] AuditLogClient::scoped_create(String, keyed? : Bool, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] AuditLogClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] AuditLogClient::scoped_upsert(String, async (Self) -> T) -> T
 pub fn AuditLogClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn AuditLogClient::trigger_add_entry(Self, String) -> Unit raise @common.AgentError
 pub fn AuditLogClient::trigger_get_creator(Self) -> Unit raise @common.AgentError
 pub fn AuditLogClient::trigger_get_entries(Self) -> Unit raise @common.AgentError
+pub fn AuditLogClient::upsert(String) -> Self raise
 
 pub(all) struct AuditLogConstructor {
   name : String
@@ -285,35 +235,28 @@ pub fn ConfiguredAgent::settings(Self) -> String
 pub(all) struct ConfiguredAgentClient {
   client : @rpc.AgentClient
 }
+pub async fn ConfiguredAgentClient::agent_id(Self) -> @schema.AgentId
 pub fn ConfiguredAgentClient::bind_self() -> Self raise
+pub async fn ConfiguredAgentClient::create(keyed? : Bool, config? : AppConfigOverride, env? : Array[(String, String)]) -> Self
 pub fn ConfiguredAgentClient::drop(Self) -> Unit
-pub fn ConfiguredAgentClient::get() -> Self raise @common.AgentError
-pub fn ConfiguredAgentClient::get_agent_id(Self) -> String raise @common.AgentError
-pub fn ConfiguredAgentClient::get_phantom(@schema.Uuid) -> Self raise @common.AgentError
-pub fn ConfiguredAgentClient::get_phantom_with_config(@schema.Uuid, AppConfigOverride) -> Self raise @common.AgentError
+pub fn ConfiguredAgentClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn ConfiguredAgentClient::get_request_count(Self, scope_card? : @permissions.ScopeCard) -> UInt64
-pub fn ConfiguredAgentClient::get_with_config(AppConfigOverride) -> Self raise @common.AgentError
 pub async fn ConfiguredAgentClient::handle_request(Self, scope_card? : @permissions.ScopeCard) -> Unit
-pub fn ConfiguredAgentClient::new_phantom() -> Self raise @common.AgentError
-pub fn ConfiguredAgentClient::new_phantom_with_config(AppConfigOverride) -> Self raise @common.AgentError
-pub fn ConfiguredAgentClient::phantom_id(Self) -> @schema.Uuid?
 pub fn ConfiguredAgentClient::schedule_cancelable_get_request_count(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn ConfiguredAgentClient::schedule_cancelable_handle_request(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn ConfiguredAgentClient::schedule_cancelable_settings(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn ConfiguredAgentClient::schedule_get_request_count(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn ConfiguredAgentClient::schedule_handle_request(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn ConfiguredAgentClient::schedule_settings(Self, @system-clock.Instant) -> Unit raise @common.AgentError
-pub async fn[T] ConfiguredAgentClient::scoped(async (Self) -> T) -> T
-pub async fn[T] ConfiguredAgentClient::scoped_get_phantom(@schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] ConfiguredAgentClient::scoped_get_phantom_with_config(@schema.Uuid, AppConfigOverride, async (Self) -> T) -> T
-pub async fn[T] ConfiguredAgentClient::scoped_new_phantom(async (Self) -> T) -> T
-pub async fn[T] ConfiguredAgentClient::scoped_new_phantom_with_config(AppConfigOverride, async (Self) -> T) -> T
-pub async fn[T] ConfiguredAgentClient::scoped_with_config(AppConfigOverride, async (Self) -> T) -> T
+pub async fn[T] ConfiguredAgentClient::scoped_create(keyed? : Bool, config? : AppConfigOverride, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] ConfiguredAgentClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] ConfiguredAgentClient::scoped_upsert(async (Self) -> T) -> T
 pub fn ConfiguredAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub async fn ConfiguredAgentClient::settings(Self, scope_card? : @permissions.ScopeCard) -> String
 pub fn ConfiguredAgentClient::trigger_get_request_count(Self) -> Unit raise @common.AgentError
 pub fn ConfiguredAgentClient::trigger_handle_request(Self) -> Unit raise @common.AgentError
 pub fn ConfiguredAgentClient::trigger_settings(Self) -> Unit raise @common.AgentError
+pub fn ConfiguredAgentClient::upsert() -> Self raise
 
 type Counter derive(ToJson, @json.FromJson)
 pub fn Counter::decrement(Self) -> Unit
@@ -323,29 +266,28 @@ pub fn Counter::increment(Self) -> Unit
 pub(all) struct CounterClient {
   client : @rpc.AgentClient
 }
+pub async fn CounterClient::agent_id(Self) -> @schema.AgentId
 pub fn CounterClient::bind_self() -> Self raise
+pub async fn CounterClient::create(String, keyed? : Bool, env? : Array[(String, String)]) -> Self
 pub async fn CounterClient::decrement(Self, scope_card? : @permissions.ScopeCard) -> Unit
 pub fn CounterClient::drop(Self) -> Unit
-pub fn CounterClient::get(String) -> Self raise @common.AgentError
-pub fn CounterClient::get_agent_id(Self) -> String raise @common.AgentError
-pub fn CounterClient::get_phantom(String, @schema.Uuid) -> Self raise @common.AgentError
+pub fn CounterClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn CounterClient::get_value(Self, scope_card? : @permissions.ScopeCard) -> UInt64
 pub async fn CounterClient::increment(Self, scope_card? : @permissions.ScopeCard) -> Unit
-pub fn CounterClient::new_phantom(String) -> Self raise @common.AgentError
-pub fn CounterClient::phantom_id(Self) -> @schema.Uuid?
 pub fn CounterClient::schedule_cancelable_decrement(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn CounterClient::schedule_cancelable_get_value(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn CounterClient::schedule_cancelable_increment(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn CounterClient::schedule_decrement(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn CounterClient::schedule_get_value(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn CounterClient::schedule_increment(Self, @system-clock.Instant) -> Unit raise @common.AgentError
-pub async fn[T] CounterClient::scoped(String, async (Self) -> T) -> T
-pub async fn[T] CounterClient::scoped_get_phantom(String, @schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] CounterClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub async fn[T] CounterClient::scoped_create(String, keyed? : Bool, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] CounterClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] CounterClient::scoped_upsert(String, async (Self) -> T) -> T
 pub fn CounterClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn CounterClient::trigger_decrement(Self) -> Unit raise @common.AgentError
 pub fn CounterClient::trigger_get_value(Self) -> Unit raise @common.AgentError
 pub fn CounterClient::trigger_increment(Self) -> Unit raise @common.AgentError
+pub fn CounterClient::upsert(String) -> Self raise
 
 pub(all) struct DatabaseConfig {
   host : String
@@ -371,21 +313,20 @@ pub async fn FileOwner::update(Self, String) -> Unit
 pub(all) struct FileOwnerClient {
   client : @rpc.AgentClient
 }
+pub async fn FileOwnerClient::agent_id(Self) -> @schema.AgentId
 pub fn FileOwnerClient::bind_self() -> Self raise
+pub async fn FileOwnerClient::create(String, keyed? : Bool, env? : Array[(String, String)]) -> Self
 pub fn FileOwnerClient::drop(Self) -> Unit
-pub fn FileOwnerClient::get(String) -> Self raise @common.AgentError
-pub fn FileOwnerClient::get_agent_id(Self) -> String raise @common.AgentError
-pub fn FileOwnerClient::get_phantom(String, @schema.Uuid) -> Self raise @common.AgentError
-pub fn FileOwnerClient::new_phantom(String) -> Self raise @common.AgentError
-pub fn FileOwnerClient::phantom_id(Self) -> @schema.Uuid?
+pub fn FileOwnerClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub fn FileOwnerClient::schedule_cancelable_update(Self, @system-clock.Instant, String) -> @host.CancellationToken raise @common.AgentError
 pub fn FileOwnerClient::schedule_update(Self, @system-clock.Instant, String) -> Unit raise @common.AgentError
-pub async fn[T] FileOwnerClient::scoped(String, async (Self) -> T) -> T
-pub async fn[T] FileOwnerClient::scoped_get_phantom(String, @schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] FileOwnerClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub async fn[T] FileOwnerClient::scoped_create(String, keyed? : Bool, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] FileOwnerClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] FileOwnerClient::scoped_upsert(String, async (Self) -> T) -> T
 pub fn FileOwnerClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn FileOwnerClient::trigger_update(Self, String) -> Unit raise @common.AgentError
 pub async fn FileOwnerClient::update(Self, String, scope_card? : @permissions.ScopeCard) -> Unit
+pub fn FileOwnerClient::upsert(String) -> Self raise
 
 type MoonBitReflectionTest
 pub fn MoonBitReflectionTest::canonical_values(Int64, UInt64, @schema.Duration, @schema.Quantity[ReflectionMeters], String?) -> String
@@ -405,16 +346,14 @@ pub async fn MoonBitToolReflectionCaller::round_trip(Self) -> String
 pub(all) struct MoonBitToolReflectionCallerClient {
   client : @rpc.AgentClient
 }
+pub async fn MoonBitToolReflectionCallerClient::agent_id(Self) -> @schema.AgentId
 pub async fn MoonBitToolReflectionCallerClient::agent_round_trip(Self, scope_card? : @permissions.ScopeCard) -> String
 pub fn MoonBitToolReflectionCallerClient::bind_self() -> Self raise
 pub async fn MoonBitToolReflectionCallerClient::canonical_round_trip(Self, scope_card? : @permissions.ScopeCard) -> String
+pub async fn MoonBitToolReflectionCallerClient::create(String, keyed? : Bool, env? : Array[(String, String)]) -> Self
 pub fn MoonBitToolReflectionCallerClient::drop(Self) -> Unit
-pub fn MoonBitToolReflectionCallerClient::get(String) -> Self raise @common.AgentError
-pub fn MoonBitToolReflectionCallerClient::get_agent_id(Self) -> String raise @common.AgentError
-pub fn MoonBitToolReflectionCallerClient::get_phantom(String, @schema.Uuid) -> Self raise @common.AgentError
-pub fn MoonBitToolReflectionCallerClient::new_phantom(String) -> Self raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn MoonBitToolReflectionCallerClient::optional_round_trip(Self, scope_card? : @permissions.ScopeCard) -> String
-pub fn MoonBitToolReflectionCallerClient::phantom_id(Self) -> @schema.Uuid?
 pub async fn MoonBitToolReflectionCallerClient::principal_round_trip(Self, scope_card? : @permissions.ScopeCard) -> String
 pub async fn MoonBitToolReflectionCallerClient::round_trip(Self, scope_card? : @permissions.ScopeCard) -> String
 pub fn MoonBitToolReflectionCallerClient::schedule_agent_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
@@ -427,15 +366,16 @@ pub fn MoonBitToolReflectionCallerClient::schedule_canonical_round_trip(Self, @s
 pub fn MoonBitToolReflectionCallerClient::schedule_optional_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_principal_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
-pub async fn[T] MoonBitToolReflectionCallerClient::scoped(String, async (Self) -> T) -> T
-pub async fn[T] MoonBitToolReflectionCallerClient::scoped_get_phantom(String, @schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] MoonBitToolReflectionCallerClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub async fn[T] MoonBitToolReflectionCallerClient::scoped_create(String, keyed? : Bool, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] MoonBitToolReflectionCallerClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] MoonBitToolReflectionCallerClient::scoped_upsert(String, async (Self) -> T) -> T
 pub fn MoonBitToolReflectionCallerClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn MoonBitToolReflectionCallerClient::trigger_agent_round_trip(Self) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::trigger_canonical_round_trip(Self) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::trigger_optional_round_trip(Self) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::trigger_principal_round_trip(Self) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::trigger_round_trip(Self) -> Unit raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::upsert(String) -> Self raise
 
 type MoonBitToolStreamingCaller
 pub async fn MoonBitToolStreamingCaller::marker_before_eof(Self, Bytes) -> UInt64
@@ -443,21 +383,20 @@ pub async fn MoonBitToolStreamingCaller::marker_before_eof(Self, Bytes) -> UInt6
 pub(all) struct MoonBitToolStreamingCallerClient {
   client : @rpc.AgentClient
 }
+pub async fn MoonBitToolStreamingCallerClient::agent_id(Self) -> @schema.AgentId
 pub fn MoonBitToolStreamingCallerClient::bind_self() -> Self raise
+pub async fn MoonBitToolStreamingCallerClient::create(String, keyed? : Bool, env? : Array[(String, String)]) -> Self
 pub fn MoonBitToolStreamingCallerClient::drop(Self) -> Unit
-pub fn MoonBitToolStreamingCallerClient::get(String) -> Self raise @common.AgentError
-pub fn MoonBitToolStreamingCallerClient::get_agent_id(Self) -> String raise @common.AgentError
-pub fn MoonBitToolStreamingCallerClient::get_phantom(String, @schema.Uuid) -> Self raise @common.AgentError
+pub fn MoonBitToolStreamingCallerClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn MoonBitToolStreamingCallerClient::marker_before_eof(Self, Bytes, scope_card? : @permissions.ScopeCard) -> UInt64
-pub fn MoonBitToolStreamingCallerClient::new_phantom(String) -> Self raise @common.AgentError
-pub fn MoonBitToolStreamingCallerClient::phantom_id(Self) -> @schema.Uuid?
 pub fn MoonBitToolStreamingCallerClient::schedule_cancelable_marker_before_eof(Self, @system-clock.Instant, Bytes) -> @host.CancellationToken raise @common.AgentError
 pub fn MoonBitToolStreamingCallerClient::schedule_marker_before_eof(Self, @system-clock.Instant, Bytes) -> Unit raise @common.AgentError
-pub async fn[T] MoonBitToolStreamingCallerClient::scoped(String, async (Self) -> T) -> T
-pub async fn[T] MoonBitToolStreamingCallerClient::scoped_get_phantom(String, @schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] MoonBitToolStreamingCallerClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub async fn[T] MoonBitToolStreamingCallerClient::scoped_create(String, keyed? : Bool, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] MoonBitToolStreamingCallerClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] MoonBitToolStreamingCallerClient::scoped_upsert(String, async (Self) -> T) -> T
 pub fn MoonBitToolStreamingCallerClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn MoonBitToolStreamingCallerClient::trigger_marker_before_eof(Self, Bytes) -> Unit raise @common.AgentError
+pub fn MoonBitToolStreamingCallerClient::upsert(String) -> Self raise
 
 pub(all) struct MoonbitReflectionTestClient {
   client : @tool.ToolClient
@@ -485,25 +424,24 @@ pub fn MultipartIndex::read_index(Self) -> (Int32, Bytes)
 pub(all) struct MultipartIndexClient {
   client : @rpc.AgentClient
 }
+pub async fn MultipartIndexClient::agent_id(Self) -> @schema.AgentId
 pub async fn MultipartIndexClient::append(Self, Bytes, scope_card? : @permissions.ScopeCard) -> Int32
 pub fn MultipartIndexClient::bind_self() -> Self raise
+pub async fn MultipartIndexClient::create(String, keyed? : Bool, env? : Array[(String, String)]) -> Self
 pub fn MultipartIndexClient::drop(Self) -> Unit
-pub fn MultipartIndexClient::get(String) -> Self raise @common.AgentError
-pub fn MultipartIndexClient::get_agent_id(Self) -> String raise @common.AgentError
-pub fn MultipartIndexClient::get_phantom(String, @schema.Uuid) -> Self raise @common.AgentError
-pub fn MultipartIndexClient::new_phantom(String) -> Self raise @common.AgentError
-pub fn MultipartIndexClient::phantom_id(Self) -> @schema.Uuid?
+pub fn MultipartIndexClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn MultipartIndexClient::read_index(Self, scope_card? : @permissions.ScopeCard) -> (Int32, Bytes)
 pub fn MultipartIndexClient::schedule_append(Self, @system-clock.Instant, Bytes) -> Unit raise @common.AgentError
 pub fn MultipartIndexClient::schedule_cancelable_append(Self, @system-clock.Instant, Bytes) -> @host.CancellationToken raise @common.AgentError
 pub fn MultipartIndexClient::schedule_cancelable_read_index(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn MultipartIndexClient::schedule_read_index(Self, @system-clock.Instant) -> Unit raise @common.AgentError
-pub async fn[T] MultipartIndexClient::scoped(String, async (Self) -> T) -> T
-pub async fn[T] MultipartIndexClient::scoped_get_phantom(String, @schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] MultipartIndexClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub async fn[T] MultipartIndexClient::scoped_create(String, keyed? : Bool, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] MultipartIndexClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] MultipartIndexClient::scoped_upsert(String, async (Self) -> T) -> T
 pub fn MultipartIndexClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn MultipartIndexClient::trigger_append(Self, Bytes) -> Unit raise @common.AgentError
 pub fn MultipartIndexClient::trigger_read_index(Self) -> Unit raise @common.AgentError
+pub fn MultipartIndexClient::upsert(String) -> Self raise
 
 pub(all) enum Priority {
   Low
@@ -526,29 +464,28 @@ pub async fn RpcExampleAgent::task_rpc_example(Self) -> UInt64
 pub(all) struct RpcExampleAgentClient {
   client : @rpc.AgentClient
 }
+pub async fn RpcExampleAgentClient::agent_id(Self) -> @schema.AgentId
 pub fn RpcExampleAgentClient::bind_self() -> Self raise
 pub async fn RpcExampleAgentClient::counter_rpc_example(Self, scope_card? : @permissions.ScopeCard) -> UInt64
+pub async fn RpcExampleAgentClient::create(keyed? : Bool, env? : Array[(String, String)]) -> Self
 pub fn RpcExampleAgentClient::drop(Self) -> Unit
-pub fn RpcExampleAgentClient::get() -> Self raise @common.AgentError
-pub fn RpcExampleAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn RpcExampleAgentClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn RpcExampleAgentClient::get_last_value(Self, scope_card? : @permissions.ScopeCard) -> UInt64
-pub fn RpcExampleAgentClient::get_phantom(@schema.Uuid) -> Self raise @common.AgentError
-pub fn RpcExampleAgentClient::new_phantom() -> Self raise @common.AgentError
-pub fn RpcExampleAgentClient::phantom_id(Self) -> @schema.Uuid?
 pub fn RpcExampleAgentClient::schedule_cancelable_counter_rpc_example(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn RpcExampleAgentClient::schedule_cancelable_get_last_value(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn RpcExampleAgentClient::schedule_cancelable_task_rpc_example(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn RpcExampleAgentClient::schedule_counter_rpc_example(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn RpcExampleAgentClient::schedule_get_last_value(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn RpcExampleAgentClient::schedule_task_rpc_example(Self, @system-clock.Instant) -> Unit raise @common.AgentError
-pub async fn[T] RpcExampleAgentClient::scoped(async (Self) -> T) -> T
-pub async fn[T] RpcExampleAgentClient::scoped_get_phantom(@schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] RpcExampleAgentClient::scoped_new_phantom(async (Self) -> T) -> T
+pub async fn[T] RpcExampleAgentClient::scoped_create(keyed? : Bool, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] RpcExampleAgentClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] RpcExampleAgentClient::scoped_upsert(async (Self) -> T) -> T
 pub fn RpcExampleAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub async fn RpcExampleAgentClient::task_rpc_example(Self, scope_card? : @permissions.ScopeCard) -> UInt64
 pub fn RpcExampleAgentClient::trigger_counter_rpc_example(Self) -> Unit raise @common.AgentError
 pub fn RpcExampleAgentClient::trigger_get_last_value(Self) -> Unit raise @common.AgentError
 pub fn RpcExampleAgentClient::trigger_task_rpc_example(Self) -> Unit raise @common.AgentError
+pub fn RpcExampleAgentClient::upsert() -> Self raise
 
 type Site
 pub fn Site::describe(Self) -> String raise @http.OpenApiJsonError
@@ -576,28 +513,27 @@ pub(all) struct TaskManagerClient {
   client : @rpc.AgentClient
 }
 pub async fn TaskManagerClient::add_task(Self, TaskInfo, scope_card? : @permissions.ScopeCard) -> UInt64
+pub async fn TaskManagerClient::agent_id(Self) -> @schema.AgentId
 pub fn TaskManagerClient::bind_self() -> Self raise
+pub async fn TaskManagerClient::create(keyed? : Bool, env? : Array[(String, String)]) -> Self
 pub fn TaskManagerClient::drop(Self) -> Unit
-pub fn TaskManagerClient::get() -> Self raise @common.AgentError
-pub fn TaskManagerClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn TaskManagerClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn TaskManagerClient::get_by_priority(Self, Priority, scope_card? : @permissions.ScopeCard) -> Array[TaskInfo]
-pub fn TaskManagerClient::get_phantom(@schema.Uuid) -> Self raise @common.AgentError
 pub async fn TaskManagerClient::get_tasks(Self, scope_card? : @permissions.ScopeCard) -> Array[TaskInfo]
-pub fn TaskManagerClient::new_phantom() -> Self raise @common.AgentError
-pub fn TaskManagerClient::phantom_id(Self) -> @schema.Uuid?
 pub fn TaskManagerClient::schedule_add_task(Self, @system-clock.Instant, TaskInfo) -> Unit raise @common.AgentError
 pub fn TaskManagerClient::schedule_cancelable_add_task(Self, @system-clock.Instant, TaskInfo) -> @host.CancellationToken raise @common.AgentError
 pub fn TaskManagerClient::schedule_cancelable_get_by_priority(Self, @system-clock.Instant, Priority) -> @host.CancellationToken raise @common.AgentError
 pub fn TaskManagerClient::schedule_cancelable_get_tasks(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn TaskManagerClient::schedule_get_by_priority(Self, @system-clock.Instant, Priority) -> Unit raise @common.AgentError
 pub fn TaskManagerClient::schedule_get_tasks(Self, @system-clock.Instant) -> Unit raise @common.AgentError
-pub async fn[T] TaskManagerClient::scoped(async (Self) -> T) -> T
-pub async fn[T] TaskManagerClient::scoped_get_phantom(@schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] TaskManagerClient::scoped_new_phantom(async (Self) -> T) -> T
+pub async fn[T] TaskManagerClient::scoped_create(keyed? : Bool, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] TaskManagerClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] TaskManagerClient::scoped_upsert(async (Self) -> T) -> T
 pub fn TaskManagerClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn TaskManagerClient::trigger_add_task(Self, TaskInfo) -> Unit raise @common.AgentError
 pub fn TaskManagerClient::trigger_get_by_priority(Self, Priority) -> Unit raise @common.AgentError
 pub fn TaskManagerClient::trigger_get_tasks(Self) -> Unit raise @common.AgentError
+pub fn TaskManagerClient::upsert() -> Self raise
 
 pub(all) enum TextOrImage {
   Text(String)
@@ -617,17 +553,15 @@ pub fn VisionAgent::get_count(Self) -> UInt64
 pub(all) struct VisionAgentClient {
   client : @rpc.AgentClient
 }
+pub async fn VisionAgentClient::agent_id(Self) -> @schema.AgentId
 pub async fn VisionAgentClient::analyze(Self, @multimodal.Multimodal[TextOrImage], scope_card? : @permissions.ScopeCard) -> String
 pub fn VisionAgentClient::bind_self() -> Self raise
+pub async fn VisionAgentClient::create(keyed? : Bool, env? : Array[(String, String)]) -> Self
 pub async fn VisionAgentClient::describe(Self, String, @multimodal.Multimodal[TextOrImage], scope_card? : @permissions.ScopeCard) -> String
 pub fn VisionAgentClient::drop(Self) -> Unit
 pub async fn VisionAgentClient::echo(Self, @multimodal.Multimodal[TextOrImage], scope_card? : @permissions.ScopeCard) -> @multimodal.Multimodal[TextOrImage]
-pub fn VisionAgentClient::get() -> Self raise @common.AgentError
-pub fn VisionAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn VisionAgentClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn VisionAgentClient::get_count(Self, scope_card? : @permissions.ScopeCard) -> UInt64
-pub fn VisionAgentClient::get_phantom(@schema.Uuid) -> Self raise @common.AgentError
-pub fn VisionAgentClient::new_phantom() -> Self raise @common.AgentError
-pub fn VisionAgentClient::phantom_id(Self) -> @schema.Uuid?
 pub fn VisionAgentClient::schedule_analyze(Self, @system-clock.Instant, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
 pub fn VisionAgentClient::schedule_cancelable_analyze(Self, @system-clock.Instant, @multimodal.Multimodal[TextOrImage]) -> @host.CancellationToken raise @common.AgentError
 pub fn VisionAgentClient::schedule_cancelable_describe(Self, @system-clock.Instant, String, @multimodal.Multimodal[TextOrImage]) -> @host.CancellationToken raise @common.AgentError
@@ -636,14 +570,15 @@ pub fn VisionAgentClient::schedule_cancelable_get_count(Self, @system-clock.Inst
 pub fn VisionAgentClient::schedule_describe(Self, @system-clock.Instant, String, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
 pub fn VisionAgentClient::schedule_echo(Self, @system-clock.Instant, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
 pub fn VisionAgentClient::schedule_get_count(Self, @system-clock.Instant) -> Unit raise @common.AgentError
-pub async fn[T] VisionAgentClient::scoped(async (Self) -> T) -> T
-pub async fn[T] VisionAgentClient::scoped_get_phantom(@schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] VisionAgentClient::scoped_new_phantom(async (Self) -> T) -> T
+pub async fn[T] VisionAgentClient::scoped_create(keyed? : Bool, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] VisionAgentClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] VisionAgentClient::scoped_upsert(async (Self) -> T) -> T
 pub fn VisionAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn VisionAgentClient::trigger_analyze(Self, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
 pub fn VisionAgentClient::trigger_describe(Self, String, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
 pub fn VisionAgentClient::trigger_echo(Self, @multimodal.Multimodal[TextOrImage]) -> Unit raise @common.AgentError
 pub fn VisionAgentClient::trigger_get_count(Self) -> Unit raise @common.AgentError
+pub fn VisionAgentClient::upsert() -> Self raise
 
 pub(all) struct WeatherAgent {
   city : String
@@ -656,29 +591,28 @@ pub fn WeatherAgent::set_temperature(Self, Double, String) -> String
 pub(all) struct WeatherAgentClient {
   client : @rpc.AgentClient
 }
+pub async fn WeatherAgentClient::agent_id(Self) -> @schema.AgentId
 pub fn WeatherAgentClient::bind_self() -> Self raise
+pub async fn WeatherAgentClient::create(String, keyed? : Bool, env? : Array[(String, String)]) -> Self
 pub fn WeatherAgentClient::drop(Self) -> Unit
-pub fn WeatherAgentClient::get(String) -> Self raise @common.AgentError
-pub fn WeatherAgentClient::get_agent_id(Self) -> String raise @common.AgentError
-pub fn WeatherAgentClient::get_phantom(String, @schema.Uuid) -> Self raise @common.AgentError
+pub fn WeatherAgentClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn WeatherAgentClient::get_report(Self, String, scope_card? : @permissions.ScopeCard) -> Result[@schema.UnstructuredBinary[WeatherReportMimeTypes]?, String]
 pub async fn WeatherAgentClient::get_temperature(Self, String, scope_card? : @permissions.ScopeCard) -> Double
-pub fn WeatherAgentClient::new_phantom(String) -> Self raise @common.AgentError
-pub fn WeatherAgentClient::phantom_id(Self) -> @schema.Uuid?
 pub fn WeatherAgentClient::schedule_cancelable_get_report(Self, @system-clock.Instant, String) -> @host.CancellationToken raise @common.AgentError
 pub fn WeatherAgentClient::schedule_cancelable_get_temperature(Self, @system-clock.Instant, String) -> @host.CancellationToken raise @common.AgentError
 pub fn WeatherAgentClient::schedule_cancelable_set_temperature(Self, @system-clock.Instant, Double, String) -> @host.CancellationToken raise @common.AgentError
 pub fn WeatherAgentClient::schedule_get_report(Self, @system-clock.Instant, String) -> Unit raise @common.AgentError
 pub fn WeatherAgentClient::schedule_get_temperature(Self, @system-clock.Instant, String) -> Unit raise @common.AgentError
 pub fn WeatherAgentClient::schedule_set_temperature(Self, @system-clock.Instant, Double, String) -> Unit raise @common.AgentError
-pub async fn[T] WeatherAgentClient::scoped(String, async (Self) -> T) -> T
-pub async fn[T] WeatherAgentClient::scoped_get_phantom(String, @schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] WeatherAgentClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub async fn[T] WeatherAgentClient::scoped_create(String, keyed? : Bool, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] WeatherAgentClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] WeatherAgentClient::scoped_upsert(String, async (Self) -> T) -> T
 pub fn WeatherAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub async fn WeatherAgentClient::set_temperature(Self, Double, String, scope_card? : @permissions.ScopeCard) -> String
 pub fn WeatherAgentClient::trigger_get_report(Self, String) -> Unit raise @common.AgentError
 pub fn WeatherAgentClient::trigger_get_temperature(Self, String) -> Unit raise @common.AgentError
 pub fn WeatherAgentClient::trigger_set_temperature(Self, Double, String) -> Unit raise @common.AgentError
+pub fn WeatherAgentClient::upsert(String) -> Self raise
 
 pub(all) struct WeatherReportMimeTypes {
 }
@@ -690,24 +624,23 @@ pub async fn WebhookAgent::wait_for_webhook(Self) -> String
 pub(all) struct WebhookAgentClient {
   client : @rpc.AgentClient
 }
+pub async fn WebhookAgentClient::agent_id(Self) -> @schema.AgentId
 pub fn WebhookAgentClient::bind_self() -> Self raise
+pub async fn WebhookAgentClient::create(String, keyed? : Bool, env? : Array[(String, String)]) -> Self
 pub fn WebhookAgentClient::drop(Self) -> Unit
-pub fn WebhookAgentClient::get(String) -> Self raise @common.AgentError
-pub fn WebhookAgentClient::get_agent_id(Self) -> String raise @common.AgentError
+pub fn WebhookAgentClient::get_by_id(@schema.AgentId) -> Self raise @host.RpcError
 pub async fn WebhookAgentClient::get_last_payload(Self, scope_card? : @permissions.ScopeCard) -> String
-pub fn WebhookAgentClient::get_phantom(String, @schema.Uuid) -> Self raise @common.AgentError
-pub fn WebhookAgentClient::new_phantom(String) -> Self raise @common.AgentError
-pub fn WebhookAgentClient::phantom_id(Self) -> @schema.Uuid?
 pub fn WebhookAgentClient::schedule_cancelable_get_last_payload(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn WebhookAgentClient::schedule_cancelable_wait_for_webhook(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn WebhookAgentClient::schedule_get_last_payload(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn WebhookAgentClient::schedule_wait_for_webhook(Self, @system-clock.Instant) -> Unit raise @common.AgentError
-pub async fn[T] WebhookAgentClient::scoped(String, async (Self) -> T) -> T
-pub async fn[T] WebhookAgentClient::scoped_get_phantom(String, @schema.Uuid, async (Self) -> T) -> T
-pub async fn[T] WebhookAgentClient::scoped_new_phantom(String, async (Self) -> T) -> T
+pub async fn[T] WebhookAgentClient::scoped_create(String, keyed? : Bool, env? : Array[(String, String)], async (Self) -> T) -> T
+pub async fn[T] WebhookAgentClient::scoped_get_by_id(@schema.AgentId, async (Self) -> T) -> T
+pub async fn[T] WebhookAgentClient::scoped_upsert(String, async (Self) -> T) -> T
 pub fn WebhookAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
 pub fn WebhookAgentClient::trigger_get_last_payload(Self) -> Unit raise @common.AgentError
 pub fn WebhookAgentClient::trigger_wait_for_webhook(Self) -> Unit raise @common.AgentError
+pub fn WebhookAgentClient::upsert(String) -> Self raise
 pub async fn WebhookAgentClient::wait_for_webhook(Self, scope_card? : @permissions.ScopeCard) -> String
 
 // Type aliases

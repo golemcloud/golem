@@ -21,7 +21,7 @@ import {
   ToolUnderlyingMisuseError,
 } from '../src/internal/tool/middlewareRuntime';
 import { typedSchemaValueToWit } from '../src/internal/schema-model';
-import { sdkPrincipalFromHost } from '../src/principal';
+import { Caller } from '../src/caller';
 import { compileSchema } from '../src/schema/adapter';
 import { s } from '../src/schema/markers';
 import {
@@ -98,7 +98,7 @@ function invocation(
     parameters: wireValue(z.object({}), {}),
     commandPath: ['nested', 'run'],
     input: wireValue(z.string(), 'input'),
-    principal: sdkPrincipalFromHost({ tag: 'anonymous' }),
+    caller: Caller.anonymous(),
     ...overrides,
   };
 }
@@ -147,7 +147,7 @@ describe('universal tool middleware dispatch', () => {
     expect(universalSource('universal-audit')).not.toHaveProperty('expected');
   });
 
-  it('forwards raw metadata, carriers, principal, stdin, result, and stdout semantically unchanged', async () => {
+  it('forwards raw metadata, carriers, caller, stdin, result, and stdout semantically unchanged', async () => {
     let observed: UniversalToolMiddlewareInvocation | undefined;
     universalToolMiddleware({
       name: 'raw-forward',
@@ -177,7 +177,7 @@ describe('universal tool middleware dispatch', () => {
     expect(observed?.toolMetadata).toBe(request.toolMetadata);
     expect(observed?.commandPath).toBe(request.commandPath);
     expect(observed?.input).toBe(request.input);
-    expect(observed?.principal).toBe(request.principal);
+    expect(observed?.caller).toBe(request.caller);
     expect(result.result).toBe(request.input);
     expect(result.stdout).toBeDefined();
     expect(stdin.close).not.toHaveBeenCalled();

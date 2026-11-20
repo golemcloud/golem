@@ -449,12 +449,14 @@ fn registered_tool(
         release_id,
         definition: Tool {
             requires_filesystem: false,
+            http_mount: None,
             version: "1.0.0".to_string(),
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),
                     aliases: Vec::new(),
                     doc: Doc::default(),
+                    http: None,
                     globals: Globals::default(),
                     subcommands: Vec::new(),
                     body: None,

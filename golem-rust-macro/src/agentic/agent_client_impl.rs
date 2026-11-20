@@ -170,7 +170,7 @@ fn expand(
     {
         let mut data_defs = Vec::new();
         let mut data_idents = Vec::new();
-        let mut config_defs = Vec::new();
+        let mut config_types = Vec::new();
         let mut config_idents = Vec::new();
         for input in &constructor.sig.inputs {
             let FnArg::Typed(input) = input else {
@@ -187,13 +187,13 @@ fn expand(
             };
             let ident = pattern.ident.clone();
             let ty = input.ty.as_ref();
-            let is_principal = matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "Principal"));
+            let is_invocation_context = matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "InvocationContext"));
             if has_agent_config_attr(input) {
-                config_defs.push(quote! {
-                    #ident: <<#ty as ::golem_rust::agentic::InnerTypeHelper>::Type as ::golem_rust::agentic::ConfigSchema>::RpcType
+                config_types.push(quote! {
+                    <<#ty as ::golem_rust::agentic::InnerTypeHelper>::Type as ::golem_rust::agentic::ConfigSchema>::RpcType
                 });
                 config_idents.push(ident);
-            } else if !is_principal {
+            } else if !is_invocation_context {
                 data_defs.push(quote! { #ident: #ty });
                 data_idents.push(ident);
             }
@@ -214,7 +214,7 @@ fn expand(
             &remote_type_name.value(),
             &data_defs,
             &data_idents,
-            &config_defs,
+            &config_types,
             &config_idents,
             &[],
             args.agent_is_durable,
@@ -233,7 +233,8 @@ fn expand(
         .collect::<HashSet<_>>();
     for reserved in [
         "client_definition",
-        "bind",
+        "get_by_id",
+        "agent_id",
         "typed_client",
         "with_scope_card",
         "set_default_scope_card",
@@ -485,13 +486,20 @@ fn expand(
                 Ok(builder.build())
             }
 
-            pub fn bind(agent_id: &#golem_rust::ParsedAgentId)
+            /// Connects to the existing agent with the given ID, whatever its type. Never
+            /// creates the agent.
+            pub fn get_by_id(agent_id: &#golem_rust::AgentId)
                 -> Result<Self, #golem_rust::GolemReflectError>
             {
                 Ok(Self {
-                    inner: Self::client_definition()?.bind(agent_id)?,
+                    inner: Self::client_definition()?.get_by_id(agent_id)?,
                     __golem_default_scope_card: ::core::default::Default::default(),
                 })
+            }
+
+            /// The ID of the agent this client connects to.
+            pub async fn agent_id(&self) -> Result<#golem_rust::AgentId, #golem_rust::GolemReflectError> {
+                self.inner.agent_id().await
             }
 
             pub fn typed_client(&self) -> &#golem_rust::TypedAgentClient {

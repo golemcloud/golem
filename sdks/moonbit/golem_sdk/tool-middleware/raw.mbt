@@ -328,7 +328,7 @@ pub struct RawToolInvocation {
   priv stdin : MiddlewareStdin?
   priv mut stdout : @toolStreams.ToolOutputWriter?
   priv mut stderr : @toolStreams.ToolOutputWriter?
-  priv principal : @agentCommon.Principal
+  priv invocation_context : @caller.InvocationContext
 }
 
 ///|
@@ -345,7 +345,7 @@ pub fn RawToolInvocation::from_wit(
   ]?,
   stdout : @toolStreams.ToolOutputWriter?,
   stderr : @toolStreams.ToolOutputWriter?,
-  principal : @agentCommon.Principal,
+  invocation_context : @caller.InvocationContext,
 ) -> RawToolInvocation {
   {
     context,
@@ -357,7 +357,7 @@ pub fn RawToolInvocation::from_wit(
     stdin: stdin.map(stream => context.own_wire_stdin(stream)),
     stdout,
     stderr,
-    principal,
+    invocation_context,
   }
 }
 
@@ -437,10 +437,10 @@ pub fn RawToolInvocation::take_host_stderr(
 }
 
 ///|
-pub fn RawToolInvocation::principal(
+pub fn RawToolInvocation::invocation_context(
   self : RawToolInvocation,
-) -> @agentCommon.Principal {
-  self.principal
+) -> @caller.InvocationContext {
+  self.invocation_context
 }
 
 ///|

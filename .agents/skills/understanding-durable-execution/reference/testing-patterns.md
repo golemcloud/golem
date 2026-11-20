@@ -818,9 +818,9 @@ admitted batch error while preserving the first error. Keep Linux seed
 synchronization and explicit guest flush behavior unchanged. These are correctness checks,
 not performance or workload-suitability claims.
 
-The `build-apfs-test-bin` CI job compiles the executor library test binary on macOS. It selects
-that executable from Cargo JSON output and uploads it for the same workflow run. The `apfs-tests`
-job runs its `:tag:native_apfs` cases on macOS. The host script creates and attaches one 32MiB HFS+
+The `main-validation-apfs` task, run by the `apfs` job of the Main validation workflow, compiles
+the executor library test binary on macOS, selects that executable from Cargo JSON output, and runs
+its `:tag:native_apfs` cases. The host script creates and attaches one 32MiB HFS+
 image outside the test binary, then uses `--include-ignored` to run the constructor-refusal case.
 The other native cases use the runner's existing volume. The script detaches and removes the
 fixture after the run. A failed detach retains the fixture and fails the job. Worker tests spawn

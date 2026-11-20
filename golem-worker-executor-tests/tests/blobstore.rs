@@ -18,7 +18,7 @@ use golem_common::config::DbSqliteConfig;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -60,7 +60,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "blob-store-service-1");
+    let agent_id = agent_key!("BlobStore", "blob-store-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -110,7 +110,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "blob-store-service-1");
+    let agent_id = agent_key!("BlobStore", "blob-store-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -147,7 +147,7 @@ async fn blobstore_rejects_root_container_names_without_retrying(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "root-container-contract");
+    let agent_id = agent_key!("BlobStore", "root-container-contract");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -199,7 +199,7 @@ async fn blobstore_rejects_root_object_names_without_hiding_the_container(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "root-object-contract");
+    let agent_id = agent_key!("BlobStore", "root-object-contract");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -356,7 +356,7 @@ async fn blobstore_missing_copy_and_move_return_without_retrying(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "missing-copy-contract");
+    let agent_id = agent_key!("BlobStore", "missing-copy-contract");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -406,7 +406,7 @@ async fn blobstore_writes_an_object_below_an_object_and_over_a_container_without
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "object-below-object");
+    let agent_id = agent_key!("BlobStore", "object-below-object");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -481,7 +481,7 @@ async fn blobstore_write_increments_storage_bytes_written_metric(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "blob-store-metrics-write-1");
+    let agent_id = agent_key!("BlobStore", "blob-store-metrics-write-1");
 
     let container_name = format!("{}-metrics-write-container", component.id);
     let data: Vec<u8> = vec![1u8; 128];
@@ -557,7 +557,7 @@ async fn blobstore_delete_increments_storage_objects_deleted_metric(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "blob-store-metrics-delete-1");
+    let agent_id = agent_key!("BlobStore", "blob-store-metrics-delete-1");
 
     let container_name = format!("{}-metrics-delete-container", component.id);
     let data: Vec<u8> = vec![42u8; 64];
@@ -627,7 +627,7 @@ async fn blobstore_get_data_outside_the_object_gives_the_guest_an_error(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "blob-store-range-1");
+    let agent_id = agent_key!("BlobStore", "blob-store-range-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -808,7 +808,7 @@ async fn check_the_root_container_names(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "blob-store-root-name-1");
+    let agent_id = agent_key!("BlobStore", "blob-store-root-name-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;

@@ -2,20 +2,17 @@
 /// Typed RPC client for a remote agent. All payloads are carried as
 /// `@types.SchemaValueTree` (the flat schema value carrier): the constructor
 /// input and each method input/output are value trees whose root encodes the
-/// parameter list (a record, one field per declared parameter). Generated client
-/// code (Phase 4) builds these trees from `@schema` and decodes results back.
+/// parameter list (a record, one field per declared parameter). Generated
+/// client code builds these trees from `@schema` and decodes results back.
 pub(all) struct AgentClient {
   agent_type_name : String
-  constructor_input : @types.SchemaValueTree
-  phantom_id : @schema.Uuid?
   rpc : @agentHost.WasmRpc
   priv mut default_scope_card : @permissions.ScopeCard?
-  priv bound_agent_id : String?
 }
 
 ///|
 pub(all) struct InvocationMetadata {
-  agent_id : String
+  agent_id : @schema.AgentId
   invocation_id : InvocationId
 }
 
@@ -24,7 +21,7 @@ fn invocation_metadata(
   metadata : @agentHost.InvocationMetadata,
 ) -> InvocationMetadata {
   {
-    agent_id: metadata.agent_id,
+    agent_id: @schema.AgentId::from_wit(metadata.agent_id),
     invocation_id: InvocationId::from_host(metadata),
   }
 }
@@ -48,8 +45,8 @@ pub(all) struct CancelableScheduledInvocationReceipt {
 
 ///|
 /// Converts a typed configuration override carrier into the leaf values sent
-/// when constructing an agent client. The agent code generator implements this
-/// trait for generated `*Override` types.
+/// when creating an agent. The agent code generator implements this trait for
+/// generated `*Override` types.
 pub(open) trait AgentConfigOverrides {
   fn typed_values(Self) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
 }
@@ -57,30 +54,17 @@ pub(open) trait AgentConfigOverrides {
 ///|
 fn make_client(
   agent_type_name : String,
-  constructor_input : @types.SchemaValueTree,
-  phantom_id : @schema.Uuid?,
-  agent_config : Array[@common.TypedAgentConfigValue],
+  rpc : @agentHost.WasmRpc,
 ) -> AgentClient {
-  let prepared = @identity.Constructor::from_wire(
-    agent_type_name, constructor_input, phantom_id,
-  )
-  let rpc = prepared.connect(agent_config)
-  {
-    agent_type_name,
-    constructor_input,
-    phantom_id,
-    rpc,
-    default_scope_card: None,
-    bound_agent_id: None,
-  }
+  { agent_type_name, rpc, default_scope_card: None, }
 }
 
 ///|
 /// Binds the current durable incarnation without creating it or waiting for initialization.
 ///
-/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// Use this to schedule work on self from inside the constructor. `upsert` reuses
 /// an initialized agent without rerunning its constructor, but waits for an unfinished
-/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+/// constructor. Calling `upsert` on self from that constructor would therefore deadlock.
 ///
 /// Scheduled work runs after construction finishes. This does not make awaited
 /// self-calls reentrant or bypass method permissions. A different client type raises
@@ -88,124 +72,86 @@ fn make_client(
 pub fn AgentClient::bind_self(agent_type_name : String) -> AgentClient raise {
   let (id, rpc) = match @agentHost.WasmRpc::bind_self() {
     Ok(bound) => bound
-    Err(@agentHost.RpcError::RemoteAgentError(error)) => raise error
     Err(error) => raise error
   }
   errdefer rpc.drop()
-  let parsed = @identity.parse(id)
-  if parsed.type_name != agent_type_name {
+  let bound_type = match @agentHost.get_agent_type_by_agent_id(id) {
+    Some(registered) => registered.agent_type.type_name
+    None =>
+      raise @common.AgentError::InvalidAgentId(
+        "self binding returned an agent ID of no deployed agent type: \{@schema.AgentId::from_wit(id)}",
+      )
+  }
+  if bound_type != agent_type_name {
     raise @common.AgentError::InvalidType(
-      "self binding expects \{agent_type_name}, identity is \{parsed.type_name}",
+      "self binding expects \{agent_type_name}, identity is \{bound_type}",
     )
   }
-  {
-    agent_type_name: parsed.type_name,
-    constructor_input: parsed.input.value,
-    phantom_id: parsed.phantom_id,
-    rpc,
-    default_scope_card: None,
-    bound_agent_id: Some(id),
+  make_client(agent_type_name, rpc)
+}
+
+///|
+/// Connects to the agent of the given type that the constructor parameters
+/// key. For a durable type the host creates the agent when it is missing and
+/// reuses it otherwise; for an ephemeral type every invocation runs on a new
+/// one-shot instance.
+pub fn AgentClient::upsert(
+  agent_type_name : String,
+  constructor_input : @types.SchemaValueTree,
+) -> AgentClient raise @agentHost.RpcError {
+  match @agentHost.WasmRpc::upsert(agent_type_name, constructor_input) {
+    Ok(rpc) => make_client(agent_type_name, rpc)
+    Err(error) => raise error
   }
 }
 
 ///|
-pub fn AgentClient::get(
+/// Connects to the existing agent with the given ID. Never creates an agent:
+/// an unknown ID, or the ID of an agent of another type, raises
+/// `RpcError::NotFound`.
+pub fn AgentClient::get_by_id(
   agent_type_name : String,
-  constructor_input : @types.SchemaValueTree,
-) -> AgentClient {
-  make_client(agent_type_name, constructor_input, None, [])
-}
-
-///|
-pub fn AgentClient::get_with_config(
-  agent_type_name : String,
-  constructor_input : @types.SchemaValueTree,
-  agent_config : Array[@common.TypedAgentConfigValue],
-) -> AgentClient {
-  make_client(agent_type_name, constructor_input, None, agent_config)
-}
-
-///|
-pub fn AgentClient::new_phantom(
-  agent_type_name : String,
-  constructor_input : @types.SchemaValueTree,
-) -> AgentClient {
-  let phantom_id = @identity.new_phantom_id()
-  AgentClient::get_phantom(agent_type_name, constructor_input, phantom_id)
-}
-
-///|
-pub fn AgentClient::new_phantom_with_config(
-  agent_type_name : String,
-  constructor_input : @types.SchemaValueTree,
-  agent_config : Array[@common.TypedAgentConfigValue],
-) -> AgentClient {
-  let phantom_id = @identity.new_phantom_id()
-  AgentClient::get_phantom_with_config(
-    agent_type_name, constructor_input, phantom_id, agent_config,
-  )
-}
-
-///|
-/// Creates a logical ephemeral proxy. The host assigns a fresh final phantom
-/// identity independently for every invocation.
-pub fn AgentClient::ephemeral(
-  agent_type_name : String,
-  constructor_input : @types.SchemaValueTree,
-) -> AgentClient {
-  make_client(agent_type_name, constructor_input, None, [])
-}
-
-///|
-pub fn AgentClient::ephemeral_with_config(
-  agent_type_name : String,
-  constructor_input : @types.SchemaValueTree,
-  agent_config : Array[@common.TypedAgentConfigValue],
-) -> AgentClient {
-  make_client(agent_type_name, constructor_input, None, agent_config)
-}
-
-///|
-pub fn AgentClient::get_phantom(
-  agent_type_name : String,
-  constructor_input : @types.SchemaValueTree,
-  phantom_id : @schema.Uuid,
-) -> AgentClient {
-  make_client(agent_type_name, constructor_input, Some(phantom_id), [])
-}
-
-///|
-pub fn AgentClient::get_phantom_with_config(
-  agent_type_name : String,
-  constructor_input : @types.SchemaValueTree,
-  phantom_id : @schema.Uuid,
-  agent_config : Array[@common.TypedAgentConfigValue],
-) -> AgentClient {
-  make_client(
-    agent_type_name,
-    constructor_input,
-    Some(phantom_id),
-    agent_config,
-  )
-}
-
-///|
-pub fn AgentClient::get_agent_id(
-  self : AgentClient,
-) -> String raise @common.AgentError {
-  if self.bound_agent_id is Some(id) {
-    return id
+  agent_id : @schema.AgentId,
+) -> AgentClient raise @agentHost.RpcError {
+  match @agentHost.WasmRpc::get_by_id(agent_type_name, agent_id.to_wit()) {
+    Ok(rpc) => make_client(agent_type_name, rpc)
+    Err(error) => raise error
   }
-  @identity.Constructor::from_wire(
-    self.agent_type_name,
-    self.constructor_input,
-    self.phantom_id,
-  ).agent_id()
 }
 
 ///|
-pub fn AgentClient::phantom_id(self : AgentClient) -> @schema.Uuid? {
-  self.phantom_id
+/// Creates a new durable agent and returns after its initialization.
+///
+/// With `keyed`, the new agent is the keyed agent of the constructor
+/// parameters, and the creation raises `RpcError::Conflict` when that agent
+/// already exists. Otherwise the new agent has no key and a new ID.
+/// `config` overrides values of the agent type's local configuration, and
+/// `env` adds environment variables to the ones the manifest defines; the
+/// caller's own environment is never copied.
+pub async fn AgentClient::create(
+  agent_type_name : String,
+  constructor_input : @types.SchemaValueTree,
+  keyed~ : Bool = false,
+  config~ : Array[@common.TypedAgentConfigValue] = [],
+  env~ : Array[(String, String)] = [],
+) -> AgentClient {
+  let options : @agentHost.CreateOptions = { keyed, agent_config: config, env, }
+  match
+    @agentHost.WasmRpc::create(agent_type_name, constructor_input, options) {
+    Ok(created) => make_client(agent_type_name, created.client)
+    Err(error) => raise error
+  }
+}
+
+///|
+/// The ID of the agent this client connects to. On a client of `upsert`, the
+/// host creates the agent when it is missing, without invoking a method. A
+/// client of an ephemeral agent type has no agent ID and raises an error.
+pub async fn AgentClient::agent_id(self : AgentClient) -> @schema.AgentId {
+  match self.rpc.agent_id() {
+    Ok(id) => @schema.AgentId::from_wit(id)
+    Err(error) => raise error
+  }
 }
 
 ///|
@@ -338,6 +284,7 @@ fn[T] panic_on_rpc_error(e : @agentHost.RpcError) -> T {
       abort("RPC remote internal error: " + msg)
     @agentHost.RpcError::RemoteAgentError(e) =>
       abort("RPC remote agent error: \{Repr(e)}")
+    @agentHost.RpcError::Conflict(msg) => abort("RPC conflict: " + msg)
   }
 }
 

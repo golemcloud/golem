@@ -12,10 +12,7 @@ import {
   dispatchLoadSnapshot,
   dispatchSaveSnapshot,
 } from "../src/Agent.js"
-import {
-  __resetParseAgentIdImpl as __resetParseAgentIdForTest,
-  __setParseAgentIdImpl as __setParseAgentIdForTest,
-} from "./mocks/golem-agent-host.js"
+import {} from "./mocks/golem-agent-host.js"
 import {
   __resetSqliteExtensions,
   __setIsAutocommitDatabaseSync as __setIsAutocommitDatabaseSyncForTest,
@@ -34,14 +31,11 @@ import { DatabaseSync } from "node:sqlite"
 import { schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v, type SchemaValue } from "../src/internal/schema-model/model.js"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
+import { userPrincipal } from "./callers.js"
 
-const oidcZoe = {
-  tag: "oidc",
-  val: { sub: "zoe", issuer: "https://example.test", claims: "{}" },
-} as const
+const oidcZoe = userPrincipal("zoe")
 
 const wire = (...fields: Array<SchemaValue>) => schemaValueToWit(v.record(fields))
-const typed = (value: ReturnType<typeof wire>) => ({ value }) as never
 
 vi.mock("node:fs", async (original) => ({
   ...(await original<typeof import("node:fs")>()),
@@ -112,7 +106,6 @@ describe("snapshot + sqlite databases", () => {
 
   afterEach(() => {
     __resetGetEnvironmentForTest()
-    __resetParseAgentIdForTest()
     __resetSqliteExtensions()
     vi.mocked(existsSync).mockReturnValue(true)
   })
@@ -154,10 +147,9 @@ describe("snapshot + sqlite databases", () => {
     expect(captured).toHaveLength(1)
 
     await __resetAgents()
-    __setEnvironment([["GOLEM_AGENT_ID", "SqliteCounterTest:zoe"]])
-    __setParseAgentIdForTest(() => ["SqliteCounterTest", typed(wire(xWv)), undefined])
+    __setEnvironment([["GOLEM_AGENT_TYPE", "SqliteCounterTest"]])
 
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire(xWv))
     expect(restoreCalled).not.toBeNull()
     expect(new TextDecoder().decode(restoreCalled!.bytes)).toBe("SQLITE-DB#1")
   })
@@ -192,16 +184,17 @@ describe("snapshot + sqlite databases", () => {
     // the multipart body. Simpler: build via encodeMultipartJsonEnvelope
     // directly (re-importing for the test).
     const { encodeMultipartJsonEnvelope } = await import("../src/internal/snapshotEnvelope.js")
-    const tampered = encodeMultipartJsonEnvelope({ tag: "anonymous" }, { note: "zoe" }, [
+    const tampered = encodeMultipartJsonEnvelope({ note: "zoe" }, [
       { name: "counters", bytes: new Uint8Array([1]) },
       { name: "bogus", bytes: new Uint8Array([2]) },
     ])
 
     await __resetAgents()
-    __setEnvironment([["GOLEM_AGENT_ID", "SqliteCounterTest:zoe"]])
-    __setParseAgentIdForTest(() => ["SqliteCounterTest", typed(wire(xWv)), undefined])
+    __setEnvironment([["GOLEM_AGENT_TYPE", "SqliteCounterTest"]])
     void snap
-    await expect(dispatchLoadSnapshot(tampered)).rejects.toThrow(/SnapshotDatabaseUnknownPartError/)
+    await expect(dispatchLoadSnapshot(tampered, wire(xWv))).rejects.toThrow(
+      /SnapshotDatabaseUnknownPartError/,
+    )
   })
 
   it("rejects a missing 'db:<name>' part on load", async () => {
@@ -210,10 +203,11 @@ describe("snapshot + sqlite databases", () => {
     __setIsAutocommitDatabaseSyncForTest(() => true)
     __setRestoreDatabaseSyncForTest(() => {})
     const { encodeMultipartJsonEnvelope } = await import("../src/internal/snapshotEnvelope.js")
-    const tampered = encodeMultipartJsonEnvelope({ tag: "anonymous" }, { note: "zoe" }, [])
-    __setEnvironment([["GOLEM_AGENT_ID", "SqliteCounterTest:zoe"]])
-    __setParseAgentIdForTest(() => ["SqliteCounterTest", typed(wire(xWv)), undefined])
-    await expect(dispatchLoadSnapshot(tampered)).rejects.toThrow(/SnapshotDatabaseMissingPartError/)
+    const tampered = encodeMultipartJsonEnvelope({ note: "zoe" }, [])
+    __setEnvironment([["GOLEM_AGENT_TYPE", "SqliteCounterTest"]])
+    await expect(dispatchLoadSnapshot(tampered, wire(xWv))).rejects.toThrow(
+      /SnapshotDatabaseMissingPartError/,
+    )
   })
 })
 
@@ -238,8 +232,8 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
       databases: names,
     }
     const restoration = {
-      restore: (_saved: unknown, context: Snapshot.SnapshotRestorationContext) => {
-        restored(context.principal)
+      restore: (_saved: unknown) => {
+        restored()
         return open()
       },
       databases: (state: Record<string, Snapshot.AttachableDatabase>) => state,
@@ -271,15 +265,13 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
       })
     }
     const select = () => {
-      __setEnvironment([["GOLEM_AGENT_ID", name]])
-      __setParseAgentIdForTest(() => [name, typed(wire()), undefined])
+      __setEnvironment([["GOLEM_AGENT_TYPE", name]])
     }
     const envelope = (
       images: Array<{ name: string; bytes: Uint8Array }>,
       files: Record<string, string> = {},
     ) =>
       encodeMultipartJsonEnvelope(
-        oidcZoe,
         { note: "saved" },
         images,
         mode === "multipart" ? parts : new Map(),
@@ -293,7 +285,6 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
   })
   afterEach(() => {
     __resetGetEnvironmentForTest()
-    __resetParseAgentIdForTest()
     __resetSqliteExtensions()
     vi.mocked(existsSync).mockReturnValue(true)
   })
@@ -341,7 +332,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         )
         await withCaller(oidcZoe, () => guest.initialize(agent.name, wire()))
         const snapshot = await dispatchSaveSnapshot()
-        const decoded = decodeEnvelope(snapshot, oidcZoe)
+        const decoded = decodeEnvelope(snapshot)
         if (decoded.kind !== "multipart") throw new Error("expected multipart")
         expect(decoded.databases.map((db) => db.name)).toEqual(
           names.filter((_, i) => locations[i] !== "/data/app.db"),
@@ -353,16 +344,15 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         await __resetAgents()
         serialized.length = 0
         agent.select()
-        await dispatchLoadSnapshot(snapshot)
-        expect(agent.restored).toHaveBeenCalledWith(oidcZoe)
+        await dispatchLoadSnapshot(snapshot, wire())
+        expect(agent.restored).toHaveBeenCalledWith()
         expect(hydrated).toEqual(handles.filter((db) => db.location() === null))
         expect(warmed).toEqual(handles)
         // This read is discarded cache warming, not a saved file image.
         expect(serialized).toEqual(handles.filter((db) => db.location() !== null))
         expect(agent.methods).toHaveBeenCalledTimes(2)
-        const savedAgain = decodeEnvelope(await dispatchSaveSnapshot(), oidcZoe)
+        const savedAgain = decodeEnvelope(await dispatchSaveSnapshot())
         if (savedAgain.kind !== "multipart") throw new Error("expected multipart")
-        expect(savedAgain.principal).toEqual(oidcZoe)
         expect(savedAgain.parts).toEqual(mode === "multipart" ? parts : new Map())
         await __resetAgents()
       }
@@ -396,10 +386,10 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         ...raw.slice(1),
       ])
       await expect(
-        dispatchLoadSnapshot({
-          payload: encoded.data,
-          mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
-        }),
+        dispatchLoadSnapshot(
+          { payload: encoded.data, mimeType: `multipart/mixed; boundary=${encoded.boundary}` },
+          wire(),
+        ),
       ).rejects.toBeDefined()
     }
     expect(agent.restored).not.toHaveBeenCalled()
@@ -413,7 +403,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
     agent.select()
     vi.mocked(existsSync).mockReturnValue(false)
     await expect(
-      dispatchLoadSnapshot(agent.envelope([], { file: "/data/app.db" })),
+      dispatchLoadSnapshot(agent.envelope([], { file: "/data/app.db" }), wire()),
     ).rejects.toBeDefined()
     expect(agent.restored).not.toHaveBeenCalled()
   })
@@ -461,7 +451,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         })
       agent.select()
       await expect(
-        dispatchLoadSnapshot(agent.envelope([{ name: "mem", bytes: userBytes }])),
+        dispatchLoadSnapshot(agent.envelope([{ name: "mem", bytes: userBytes }]), wire()),
       ).rejects.toBeDefined()
       expect(handle!.isOpen).toBe(false)
       expect(agent.methods).not.toHaveBeenCalled()
@@ -518,6 +508,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
     await expect(
       dispatchLoadSnapshot(
         agent.envelope([{ name: "mem", bytes: userBytes }], { file: "/data/app.db" }),
+        wire(),
       ),
     ).rejects.toBeDefined()
     expect(hydrated).not.toHaveBeenCalled()
@@ -563,7 +554,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         expect(serialized).toHaveBeenCalledTimes(shouldRead ? 1 : 0)
       })
       agent.select()
-      await dispatchLoadSnapshot(agent.envelope([], { file: "/data/app.db" }))
+      await dispatchLoadSnapshot(agent.envelope([], { file: "/data/app.db" }), wire())
     },
   )
 
@@ -573,8 +564,8 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
     )
     agent.select()
     const snapshot = agent.envelope([], Object.fromEntries([["__proto__", "/data/app.db"]]))
-    await dispatchLoadSnapshot(snapshot)
-    const decoded = decodeEnvelope(await dispatchSaveSnapshot(), oidcZoe)
+    await dispatchLoadSnapshot(snapshot, wire())
+    const decoded = decodeEnvelope(await dispatchSaveSnapshot())
     if (decoded.kind !== "multipart") throw new Error("expected multipart")
     expect(Object.entries(decoded.fileDatabases!)).toEqual([["__proto__", "/data/app.db"]])
     await __resetAgents()
@@ -584,6 +575,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
           [{ name: "__proto__", bytes: userBytes }],
           Object.fromEntries([["__proto__", "/data/app.db"]]),
         ),
+        wire(),
       ),
     ).rejects.toBeDefined()
   })

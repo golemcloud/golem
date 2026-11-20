@@ -7,7 +7,6 @@
 //     http://license.golem.cloud/LICENSE
 
 use super::*;
-use golem_common::model::AgentId;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -88,7 +87,7 @@ async fn sdk_templates_dispatch_child_processes_to_bound_tools(
             )),
         );
 
-        let agent_id = agent_id!(agent_type, format!("child-process-{language}"));
+        let agent_id = agent_key!(agent_type, format!("child-process-{language}"));
         let observation: String = executor
             .invoke_and_await_agent(
                 &caller,
@@ -119,10 +118,7 @@ async fn sdk_templates_dispatch_child_processes_to_bound_tools(
                 "echo=0:ping;overflow=ERR_CHILD_PROCESS_STDIO_MAXBUFFER;\
                  abort=error:AbortError,exit:null:SIGTERM;disabled=error"
             );
-            let worker = AgentId {
-                component_id: caller.id,
-                agent_id: agent_id.to_string(),
-            };
+            let worker = crate::agent::keyed_agent_id(caller.environment_id, &agent_id);
             let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
             for (level, expected) in [
                 (LogLevel::Stdout, "stdout:¢€😀�"),

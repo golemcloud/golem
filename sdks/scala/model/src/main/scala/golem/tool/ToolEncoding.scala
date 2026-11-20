@@ -40,7 +40,7 @@ private[tool] object ToolEncoding {
           }
         val encoder = new GraphEncoder(defs)
         val nodes   = tool.commands.map(encodeNode(_, encoder))
-        Right(WitTool(tool.version, tool.requiresFilesystem, WitCommandTree(nodes), encoder.finish()))
+        Right(WitTool(tool.version, tool.requiresFilesystem, WitCommandTree(nodes), encoder.finish(), tool.httpMount))
       } catch {
         case ToolBuildException(error) => Left(error)
         case e: SchemaEncodeError      => Left(ToolBuildError.EncodeError(e.getMessage))
@@ -77,7 +77,8 @@ private[tool] object ToolEncoding {
       doc = node.doc,
       globals = encodeGlobals(node.globals, encoder),
       subcommands = node.subcommands,
-      body = node.body.map(encodeBody(_, encoder))
+      body = node.body.map(encodeBody(_, encoder)),
+      http = node.http
     )
 
   private def encodeGlobals(globals: ExtendedGlobals, encoder: GraphEncoder): WitGlobals =

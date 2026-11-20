@@ -82,8 +82,7 @@ fn monthly_policy_outage_preserves_its_reason_in_ephemeral_suspend_failure() {
         TrapType::Error {
             error: AgentError::EphemeralCannotSuspend(EphemeralCannotSuspendError { reason }),
             retry_from: anchor,
-            semantic_trap_retry_override: None,
-        } if reason.contains("Monthly enforcement unavailable") && *anchor == retry_from));
+            semantic_trap_retry_override: None, .. } if reason.contains("Monthly enforcement unavailable") && *anchor == retry_from));
     assert!(
         crate::durable_host::ephemeral_suspend_trap(AgentMode::Ephemeral, &converted, retry_from)
             .is_none(),

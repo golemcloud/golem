@@ -226,12 +226,14 @@ impl CursorTx<'_> {
                     continue;
                 }
                 if abandoned.is_some() && self.st.starts.get_retained(start_index).is_some() {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "AgentInvocationFinished",
-                        format!(
+                    return Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
+                        oplog_index: read_idx,
+                        expected: ReplayStep::described(format!(
                             "CompletionDelivered at {read_idx} references unclaimed durable call Start at {start_index} — the recorded guest received this completion but replay reached the invocation boundary without claiming it"
-                        ),
-                    ));
+                        )),
+                        actual: ReplayStep::invocation_end(),
+                        mismatched: Vec::new(),
+                    }));
                 }
 
                 // This is a reserved guest-delivery boundary. Leave it at the cursor head for the
@@ -336,14 +338,16 @@ impl CursorTx<'_> {
                 // The invocation-boundary reader reached a replay-side-effecting `Start` nobody
                 // claimed. Its commit effects must not fire from the boundary drain, and the
                 // replayed guest can no longer claim it (see `AbandonedStarts::can_drain`).
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "AgentInvocationFinished",
-                    format!(
+                return Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
+                    oplog_index: read_idx,
+                    expected: ReplayStep::described(format!(
                         "unclaimed {function_name:?} Start at {read_idx} — a \
                          replay-side-effecting record cannot be tolerated as \
                          abandoned at the invocation boundary"
-                    ),
-                ));
+                    )),
+                    actual: ReplayStep::invocation_end(),
+                    mismatched: Vec::new(),
+                }));
             }
 
             if condition(&entry) {
@@ -405,12 +409,14 @@ impl CursorTx<'_> {
             (_, HeadOwner::Unattributed | HeadOwner::ParentStart(_))
             | (PositionalReader::Ordinary, HeadOwner::Agent) => return Ok(()),
             (PositionalReader::InvocationBoundary, _) => {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "AgentInvocationFinished",
-                    format!(
+                return Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
+                    oplog_index: *head_idx,
+                    expected: ReplayStep::described(format!(
                         "{head:?} at {head_idx} was recorded by an entity body that replay reached the invocation boundary without reconstructing"
-                    ),
-                ));
+                    )),
+                    actual: ReplayStep::invocation_end(),
+                    mismatched: Vec::new(),
+                }));
             }
             (PositionalReader::Ordinary, HeadOwner::EntityBody(owner)) => owner,
         };
@@ -424,10 +430,11 @@ impl CursorTx<'_> {
             Ok(())
         } else {
             Err(WorkerExecutorError::unexpected_oplog_entry(
-                "an entry recorded by this Store",
+                *head_idx,
                 format!(
                     "{head:?} at {head_idx} was recorded by the entity body started at {owner}, which is neither retained, claimed nor replaying"
                 ),
+                "an entry recorded by this Store",
             ))
         }
     }
@@ -464,7 +471,7 @@ impl CursorState {
                 && !self.skipped_regions.is_in_deleted_region(terminal)
                 && boundary.last_required.is_none_or(|index| index > owner && index < terminal
                     && !self.skipped_regions.is_in_deleted_region(index)))
-            .ok_or_else(|| WorkerExecutorError::unexpected_oplog_entry(
+            .ok_or_else(|| WorkerExecutorError::unexpected_oplog_entry(terminal,
                 "folded entity replay boundary matching the disposal terminal and replay horizon",
                 format!("entity {owner}, terminal {terminal}, horizon {}", cursor.replay_target()),
             ))?;
@@ -576,15 +583,16 @@ impl ReplayState {
     /// The error returned when a positional oplog reader expects a next entry but the cursor is
     /// at end-of-replay.
     fn end_of_replay_error(&self) -> WorkerExecutorError {
-        WorkerExecutorError::unexpected_oplog_entry(
-            "next oplog entry to replay",
-            format!(
-                "end of replay for {} at index {}; replay target = {}",
+        WorkerExecutorError::replay_divergence(ReplayDivergence {
+            oplog_index: self.cursor.last_replayed_index().next(),
+            expected: ReplayStep::end_of_history(),
+            actual: ReplayStep::described(format!(
+                "a read of the next oplog entry to replay for {}; replay target = {}",
                 self.cursor.owned_agent_id,
-                self.cursor.last_replayed_index(),
                 self.cursor.replay_target(),
-            ),
-        )
+            )),
+            mismatched: Vec::new(),
+        })
     }
 
     /// Reports whether the replay-visible owner oplog contains a terminal for `start_index`.
@@ -1134,6 +1142,7 @@ impl ReplayState {
                                 crate::services::oplog::OplogPayloadDownloadError::Corrupt(
                                     error,
                                 ) => WorkerExecutorError::unexpected_oplog_entry(
+                                    oplog_index,
                                     "valid agent invocation payload",
                                     format!("{error:#}"),
                                 ),
@@ -1153,8 +1162,9 @@ impl ReplayState {
                     entry if entry.is_hint() => {}
                     _ => {
                         break Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "AgentInvocationStarted",
+                            oplog_index,
                             format!("{oplog_entry:?}"),
+                            "AgentInvocationStarted",
                         ));
                     }
                 }
@@ -1189,9 +1199,10 @@ impl ReplayState {
                 Ok(Some((index, result)))
             }
             None => Ok(None),
-            Some((_, entry)) => Err(WorkerExecutorError::unexpected_oplog_entry(
-                "AgentInvocationFinished",
+            Some((index, entry)) => Err(WorkerExecutorError::unexpected_oplog_entry(
+                index,
                 format!("{entry:?}"),
+                "AgentInvocationFinished",
             )),
         }
     }
@@ -1222,9 +1233,10 @@ impl ReplayState {
                 Ok(Some(index))
             }
             None => Ok(None),
-            Some((_, entry)) => Err(WorkerExecutorError::unexpected_oplog_entry(
-                format!("invocation-local error {error:?} for {anchor} with parent {parent:?}"),
+            Some((index, entry)) => Err(WorkerExecutorError::unexpected_oplog_entry(
+                index,
                 format!("{entry:?}"),
+                format!("invocation-local error {error:?} for {anchor} with parent {parent:?}"),
             )),
         }
     }
@@ -1258,8 +1270,9 @@ impl ReplayState {
                         );
                         if !matches_invocation {
                             break Err(WorkerExecutorError::unexpected_oplog_entry(
-                                format!("invocation terminal for invocation {invocation_id}"),
+                                index,
                                 format!("{entry:?}"),
+                                format!("invocation terminal for invocation {invocation_id}"),
                             ));
                         }
                         std::mem::take(&mut abandoned).finish(&self.cursor.owned_agent_id)?;
@@ -1267,10 +1280,12 @@ impl ReplayState {
                     }
                     entry if entry.is_hint() => {}
                     _ => {
-                        break Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "AgentInvocationFinished",
-                            format!("{oplog_entry:?}"),
-                        ));
+                        break Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
+                            oplog_index: index,
+                            expected: ReplayStep::described(format!("{oplog_entry:?}")),
+                            actual: ReplayStep::invocation_end(),
+                            mismatched: Vec::new(),
+                        }));
                     }
                 }
             } else {

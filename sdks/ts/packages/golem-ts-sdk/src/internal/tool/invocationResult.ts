@@ -27,6 +27,7 @@ import {
   v,
 } from '../schema-model';
 import { withCapabilityAdoptionTransaction } from '../schema-model/capabilityTransaction';
+import { assertNotLiveValue } from '../../liveValues';
 import type { ExtendedErrorCase } from './model';
 import { schemaValueConforms } from './validation';
 
@@ -45,11 +46,21 @@ export function isDeclaredToolError(value: unknown): value is DeclaredToolError 
   );
 }
 
+/** A Principal, a Caller and a TokenProvenance are live values and never a tool result. */
+function assertNoLiveValue(value: unknown, position: string): void {
+  try {
+    assertNotLiveValue(value);
+  } catch (error) {
+    throw invalidToolResult(`${position}: ${errorMessage(error)}`);
+  }
+}
+
 export function encodeToolValue(
   codec: SchemaCodec,
   value: unknown,
   position: string,
 ): TypedSchemaValue {
+  assertNoLiveValue(value, position);
   if (codec.direct) {
     try {
       return directTypedSchemaValueToWit(codec, value);
@@ -78,6 +89,7 @@ export async function encodeToolValueAsync(
   value: unknown,
   position: string,
 ): Promise<TypedSchemaValue> {
+  assertNoLiveValue(value, position);
   if (codec.direct) return encodeToolValue(codec, value, position);
   let encoded: SchemaValue | undefined;
   try {

@@ -37,7 +37,7 @@ impl AgentSnapshots {
         Self(std::sync::Arc::new(
             BlobStorageNamespace::FilesystemSnapshots {
                 environment_id: agent.environment_id,
-                agent_id: agent.agent_id.clone(),
+                agent_id: agent.agent_id,
                 fingerprint,
             },
         ))

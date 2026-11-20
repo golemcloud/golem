@@ -32,6 +32,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|    aliases: [],
       #|    version: None,
       #|    requires_filesystem: false,
+      #|    http_mount: None,
       #|    description: "HTTP API tool.",
       #|    examples: [],
       #|    commands: [
@@ -56,6 +57,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|        examples: [],
       #|        description: "",
       #|        is_root: false,
+      #|        http: None,
       #|      },
       #|      {
       #|        source_name: "list_items",
@@ -78,6 +80,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|        examples: [],
       #|        description: "",
       #|        is_root: false,
+      #|        http: None,
       #|      },
       #|    ],
       #|    root_command: None,
@@ -88,6 +91,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|    aliases: [],
       #|    version: Some("2.0.0"),
       #|    requires_filesystem: true,
+      #|    http_mount: None,
       #|    description: "",
       #|    examples: [],
       #|    commands: [],
@@ -99,6 +103,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|    aliases: [],
       #|    version: None,
       #|    requires_filesystem: false,
+      #|    http_mount: None,
       #|    description: "",
       #|    examples: [],
       #|    commands: [],
@@ -125,7 +130,7 @@ test "tool metadata, hidden types, result, and constraints" {
         #|#derive.tool("tool")
         #|struct Tool {}
         #|
-        #|pub fn Tool::execute(path : String, principal : @common.Principal, input : @asyncCore.Stream[Byte], output : @tool.ProviderOutput) -> String { ... }
+        #|pub fn Tool::execute(path : String, context : @tool.InvocationContext, input : @asyncCore.Stream[Byte], output : @tool.ProviderOutput) -> String { ... }
         #|
       ),
     ),
@@ -140,7 +145,7 @@ test "tool metadata, hidden types, result, and constraints" {
     content=(
       #|[
       #|  ("path", Public(Simple("String"))),
-      #|  ("principal", Hidden(Principal)),
+      #|  ("context", Hidden(InvocationContext)),
       #|  ("input", Hidden(InputStream)),
       #|  ("output", Hidden(OutputStream)),
       #|]
@@ -278,9 +283,9 @@ test "strict tool parser diagnostics" {
   )
   inspect(
     parse_error(
-      "#derive.tool\nstruct Bad {}\npub fn Bad::run(p : Principal) -> Unit {}\n",
+      "#derive.tool\nstruct Bad {}\npub fn Bad::run(p : InvocationContext) -> Unit {}\n",
     ),
-    content="Hidden SDK type 'Principal' must use its exact qualified name",
+    content="Hidden SDK type 'InvocationContext' must use its exact qualified name",
   )
 }
 
@@ -422,4 +427,101 @@ test "root command invariants are rejected while parsing" {
     ),
     content="Command 'Runner::run' cannot override itself into the tool root",
   )
+}
+
+///|
+test "a tool signature refuses live values" {
+  for ty in ["@common.Principal", "Caller", "Array[TokenProvenance]"] {
+    inspect(
+      parse_error(
+        "#derive.tool\nstruct Bad {}\npub fn Bad::run(p : \{ty}) -> Unit {}\n",
+      ),
+      content=live_value_message,
+    )
+    inspect(
+      parse_error(
+        "#derive.tool\nstruct Bad {}\npub fn Bad::run() -> \{ty} { abort(\"x\") }\n",
+      ),
+      content=live_value_message,
+    )
+  }
+}
+
+///|
+test "tools reject agent-only HTTP options and orphan endpoint options" {
+  for
+    mount in [
+      "#derive.mount(\"/tools\", phantom_agent=\"true\")", "#derive.mount_auth(\"required\")",
+      "#derive.mount_cors(\"*\")", "#derive.mount_phantom_agent(\"true\")",
+    ] {
+    assert_true(
+      parse_error("#derive.tool\n" + mount + "\nstruct Runner {}") != "NO ERROR",
+    )
+  }
+  for
+    annotation in [
+      "#derive.endpoint(post=\"/run\")\n#derive.endpoint_auth(\"required\")", "#derive.endpoint(post=\"/run\")\n#derive.endpoint_cors(\"*\")",
+      "#derive.endpoint(route_id=\"orphan\")", "#derive.endpoint_response_header(\"X-Result\", \"orphan\")",
+      "#derive.endpoint(prefix=\"/run\")\n#derive.durable_streams(max_concurrent_readers_per_stream=\"7\")",
+    ] {
+    let source = "#derive.tool\nstruct Runner {}\n" +
+      annotation +
+      "\npub fn Runner::run() -> Unit { () }"
+    assert_true(parse_error(source) != "NO ERROR")
+  }
+}
+
+///|
+test "HTTP report authoring matches shared declarations" {
+  let source = @fs.read_file_to_string(
+    "../golem_sdk/tool-http-authoring-test/authoring.mbt",
+  )
+  let tools = @lib.parse_tools([("authoring.mbt", source)])
+  let report = tools.iter().find_first(tool => tool.name == "report").unwrap()
+  fn walk(tool : @lib.ToolInfo, ancestors : Array[String]) -> Array[Json] {
+    let result : Array[Json] = []
+    for command in tool.commands {
+      if command.is_root {
+        continue
+      }
+      let names = ancestors.copy()
+      names.push(command.name)
+      match command.http {
+        Some(@lib.ToolHttpInfo::Prefix(path)) =>
+          result.push({
+            "command": names.join(".").to_json(),
+            "prefix": path.to_json(),
+          })
+        Some(@lib.ToolHttpInfo::Endpoint(endpoint, _, _)) => {
+          guard endpoint.http_method is @lib.HttpMethodMatcher::Concrete(method) else {
+            abort("expected concrete method")
+          }
+          result.push({
+            "command": names.join(".").to_json(),
+            "method": method.to_upper().to_json(),
+            "suffix": endpoint.path.to_json(),
+          })
+        }
+        None => ()
+      }
+      if command.subtree is Some(target) {
+        let child = tools
+          .iter()
+          .find_first(tool => tool.source_name == target)
+          .unwrap()
+        for declaration in walk(child, names) {
+          result.push(declaration)
+        }
+      }
+    }
+    result
+  }
+  let actual : Json = {
+    "mount": report.http_mount.unwrap().to_json(),
+    "commands": walk(report, []).to_json(),
+  }
+  let expected = @json.parse(
+    @fs.read_file_to_string("../../../test-data/tool-http-report.json"),
+  )
+  assert_eq(actual, expected)
 }

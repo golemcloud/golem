@@ -18,7 +18,7 @@
 //! inside the shared `agent-sdk-rust` component to avoid spinning up yet
 //! another build target.
 
-use golem_rust::agentic::Principal;
+use golem_rust::agentic::InvocationContext;
 use golem_rust::{
     agent_definition, agent_implementation, create_promise, description, endpoint, read_only,
 };
@@ -52,7 +52,7 @@ pub trait ReadonlyAgent {
     async fn slow_increment(&mut self, ms: u64) -> u64;
 
     // -- read-only reads -----------------------------------------------------
-    /// Default cache policy (`until_write`) and `uses_principal = false`.
+    /// Default cache policy (`until_write`); the method never reads the caller.
     #[read_only]
     #[endpoint(get = "/count")]
     #[description("Returns the current counter value (read-only)")]
@@ -65,14 +65,18 @@ pub trait ReadonlyAgent {
     #[read_only]
     async fn slow_read(&self, ms: u64) -> u64;
 
-    /// Principal-aware read; `uses_principal` is auto-derived from the
-    /// presence of the `Principal` parameter in the signature. Exposed over
-    /// HTTP so the HTTP integration tests can assert that
-    /// `uses_principal = true` produces `Cache-Control: private, ...` and a
-    /// `Vary` header that includes the principal-carrying request header.
+    /// Receives the invocation context but never uses the caller for its
+    /// result, so it behaves like any other method that does not read the
+    /// caller. Exposed over HTTP so the HTTP integration tests can assert the
+    /// cache directives of a read-only method.
     #[read_only]
     #[endpoint(get = "/count-for")]
-    fn get_count_for(&self, _principal: Principal) -> u64;
+    fn get_count_for(&self, _ctx: InvocationContext) -> u64;
+
+    /// Read-only method whose result depends on the caller: the kind of the
+    /// original principal (`user`, `account`, `agent`, `tool` or `anonymous`).
+    #[read_only]
+    fn caller_kind(&self, ctx: InvocationContext) -> String;
 
     /// TTL-based cache policy. Exposed over HTTP so H5 can assert
     /// `Cache-Control: ..., max-age=2`.
@@ -129,8 +133,12 @@ impl ReadonlyAgent for ReadonlyAgentImpl {
         self.count
     }
 
-    fn get_count_for(&self, _principal: Principal) -> u64 {
+    fn get_count_for(&self, _ctx: InvocationContext) -> u64 {
         self.count
+    }
+
+    fn caller_kind(&self, ctx: InvocationContext) -> String {
+        ctx.caller().original().kind().to_string()
     }
 
     fn read_only_with_ttl(&self) -> u64 {

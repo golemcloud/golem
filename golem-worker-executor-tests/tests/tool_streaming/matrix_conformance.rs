@@ -11,6 +11,7 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_service_base::model::agent_secret::AgentSecret;
+use golem_worker_executor_test_utils::callers;
 use test_r::{test, timeout};
 
 #[derive(Debug, FromSchema)]
@@ -35,26 +36,15 @@ struct MatrixFixture<'a> {
     method: &'static str,
 }
 
-fn oidc_matrix_principal(subject: &str) -> Principal {
-    Principal::Oidc(OidcPrincipal {
-        sub: subject.to_string(),
-        issuer: "https://matrix-conformance.test".to_string(),
-        email: None,
-        name: None,
-        email_verified: None,
-        given_name: None,
-        family_name: None,
-        picture: None,
-        preferred_username: None,
-        claims: "{}".to_string(),
-    })
+fn oidc_matrix_principal(subject: &str) -> golem_common::model::caller::Caller {
+    callers::user_with_claims("https://matrix-conformance.test", subject, "{}")
 }
 
 fn assert_matrix_observation(
     observation: &MatrixObservation,
     caller: &str,
     provider: &str,
-    principal: &str,
+    expected_caller: &str,
     owner_agent_id: &str,
 ) {
     let path = format!("matrix[{caller}->{provider}]");
@@ -69,7 +59,7 @@ fn assert_matrix_observation(
         observation.label_summary, "south|east|north",
         "{path}.labelSummary"
     );
-    assert_eq!(observation.principal, principal, "{path}.principal");
+    assert_eq!(observation.principal, expected_caller, "{path}.principal");
     assert_eq!(
         observation.owner_agent_id, owner_agent_id,
         "{path}.ownerAgentId"
@@ -258,16 +248,19 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
                 )),
             );
 
-            let agent_id = agent_id!(
+            let agent_id = agent_key!(
                 caller.agent_type,
                 format!("matrix-{}-{}", caller.language, provider.language)
             );
-            let owner_agent_id = agent_id.to_string();
+            let owner_agent_id =
+                crate::agent::keyed_agent_id(caller_component.environment_id, &agent_id)
+                    .agent_id
+                    .to_string();
             let observation: MatrixObservation = executor
-                .invoke_and_await_agent_as_principal(
+                .invoke_and_await_agent_as_caller(
                     caller_component,
                     &agent_id,
-                    oidc_matrix_principal("matrix-principal-a"),
+                    oidc_matrix_principal("matrix-caller-a"),
                     caller.method,
                     data_value!(),
                 )
@@ -277,16 +270,16 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
                 &observation,
                 caller.language,
                 provider.language,
-                "oidc:matrix-principal-a",
+                &callers::user_text("https://matrix-conformance.test", "matrix-caller-a"),
                 &owner_agent_id,
             );
 
             if provider_index == (caller_index + 1) % providers.len() {
                 let second_observation: MatrixObservation = executor
-                    .invoke_and_await_agent_as_principal(
+                    .invoke_and_await_agent_as_caller(
                         caller_component,
                         &agent_id,
-                        oidc_matrix_principal("matrix-principal-b"),
+                        oidc_matrix_principal("matrix-caller-b"),
                         caller.method,
                         data_value!(),
                     )
@@ -296,7 +289,7 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
                     &second_observation,
                     caller.language,
                     provider.language,
-                    "oidc:matrix-principal-b",
+                    &callers::user_text("https://matrix-conformance.test", "matrix-caller-b"),
                     &owner_agent_id,
                 );
                 assert_ne!(
@@ -306,7 +299,7 @@ async fn generated_clients_invoke_every_sdk_provider_and_preserve_runtime_identi
                 );
                 assert_eq!(
                     observation.owner_agent_id, second_observation.owner_agent_id,
-                    "matrix[{}->{}].ownerAgentId must not follow the runtime principal",
+                    "matrix[{}->{}].ownerAgentId must not follow the runtime caller",
                     caller.language, provider.language
                 );
             }
@@ -373,7 +366,7 @@ async fn go_caller_closes_the_stdin_a_tool_does_not_read(
         )),
     );
 
-    let agent_id = agent_id!("GoToolStreamingCaller", "stdin-released");
+    let agent_id = agent_key!("GoToolStreamingCaller", "stdin-released");
     let released: bool = executor
         .invoke_and_await_agent(&caller, &agent_id, "stdin_released", data_value!())
         .await?

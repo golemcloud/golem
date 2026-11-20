@@ -23,7 +23,9 @@ mod tests {
         AgentStream, AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         SnapshotData, UnstructuredBinary, UnstructuredText,
     };
-    use golem_rust::agentic::{HttpRequest, HttpResponse, HttpRouter, Principal, create_webhook};
+    use golem_rust::agentic::{
+        HttpRequest, HttpResponse, HttpRouter, InvocationContext, Principal, create_webhook,
+    };
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, AgentTypeKind,
         CachePolicy, Snapshotting, SnapshottingConfig,
@@ -81,14 +83,14 @@ mod tests {
         }
     }
 
-    type CallerPrincipal = Principal;
+    type CallerContext = InvocationContext;
 
     #[agent_definition]
     trait DirectDispatch {
-        fn new(seed: WireOnlyValue, caller: CallerPrincipal) -> Self;
+        fn new(seed: WireOnlyValue, ctx: CallerContext) -> Self;
         fn run(
             &mut self,
-            caller: CallerPrincipal,
+            ctx: CallerContext,
             first: WireOnlyValue,
             second: Vec<Option<Result<u32, String>>>,
         ) -> WireOnlyValue;
@@ -102,8 +104,8 @@ mod tests {
 
     #[agent_implementation]
     impl DirectDispatch for DirectDispatchImpl {
-        fn new(seed: WireOnlyValue, caller: CallerPrincipal) -> Self {
-            assert!(matches!(caller, Principal::Anonymous));
+        fn new(seed: WireOnlyValue, ctx: CallerContext) -> Self {
+            assert!(matches!(ctx.caller().immediate(), Principal::Anonymous));
             Self {
                 calls: seed.0 as usize,
             }
@@ -111,11 +113,11 @@ mod tests {
 
         fn run(
             &mut self,
-            caller: CallerPrincipal,
+            ctx: CallerContext,
             first: WireOnlyValue,
             second: Vec<Option<Result<u32, String>>>,
         ) -> WireOnlyValue {
-            assert!(matches!(caller, Principal::Anonymous));
+            assert!(matches!(ctx.caller().immediate(), Principal::Anonymous));
             self.calls += 1;
             WireOnlyValue(
                 first.0
@@ -139,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_agent_descriptor_uses_wire_schema_and_preserves_principal_alias() {
+    fn generated_agent_descriptor_uses_wire_schema_and_omits_the_context_alias() {
         use golem_rust::golem_agentic::golem::agent::common::{FieldSource, InputSchema};
         use golem_rust::schema::wit::wire::SchemaTypeBody;
         let descriptor = golem_rust::agentic::get_agent_type_by_name(&AgentTypeName(
@@ -152,21 +154,25 @@ mod tests {
                 .iter()
                 .map(|field| field.name.as_str())
                 .collect::<Vec<_>>(),
-            ["seed", "caller"]
+            ["seed"]
         );
         assert!(matches!(
             descriptor.schema.type_nodes[fields[0].schema as usize].body,
             SchemaTypeBody::U32Type(None)
         ));
-        assert!(matches!(fields[1].source, FieldSource::AutoInjected(_)));
-        let reflected = golem_rust::agentic::get_enriched_agent_type_by_name(&AgentTypeName(
-            "DirectDispatch".to_string(),
-        ))
-        .unwrap();
-        assert!(
-            reflected
-                .principal_params_in_constructor()
-                .contains("caller")
+        assert!(matches!(fields[0].source, FieldSource::UserSupplied));
+        let method = descriptor
+            .methods
+            .iter()
+            .find(|method| method.name == "run")
+            .unwrap();
+        let InputSchema::Parameters(method_fields) = &method.input_schema;
+        assert_eq!(
+            method_fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second"]
         );
     }
 
@@ -186,9 +192,9 @@ mod tests {
             })
             .unwrap()
         };
-        let mut agent = DirectDispatchImpl::new(WireOnlyValue(0), Principal::Anonymous);
+        let mut agent = DirectDispatchImpl::new(WireOnlyValue(0), InvocationContext::anonymous());
         let output = agent
-            .invoke("run".to_string(), input(), Principal::Anonymous)
+            .invoke("run".to_string(), input(), InvocationContext::anonymous())
             .await
             .unwrap();
         assert_eq!(direct::decode::<u32>(output.value.unwrap()).unwrap(), 34);
@@ -215,7 +221,7 @@ mod tests {
             }
             assert!(
                 agent
-                    .invoke("run".to_string(), bad, Principal::Anonymous)
+                    .invoke("run".to_string(), bad, InvocationContext::anonymous())
                     .await
                     .is_err()
             );
@@ -228,7 +234,7 @@ mod tests {
             .invoke(
                 "sync_unit".to_string(),
                 direct::encode(&NoArguments {}).unwrap(),
-                Principal::Anonymous,
+                InvocationContext::anonymous(),
             )
             .await
             .unwrap();
@@ -241,7 +247,7 @@ mod tests {
             .invoke(
                 "async_boxed_unit".to_string(),
                 direct::encode(&NoArguments {}).unwrap(),
-                Principal::Anonymous,
+                InvocationContext::anonymous(),
             )
             .await
             .unwrap();
@@ -266,7 +272,11 @@ mod tests {
         let input = || direct::encode(&Arguments { seed: 19 }).unwrap();
         assert!(
             with_agent_initiator(
-                |initiator| async move { initiator.initiate(input(), Principal::Anonymous).await },
+                |initiator| async move {
+                    initiator
+                        .initiate(input(), InvocationContext::anonymous())
+                        .await
+                },
                 &name
             )
             .await
@@ -295,7 +305,11 @@ mod tests {
             }
             assert!(
                 with_agent_initiator(
-                    |initiator| async move { initiator.initiate(bad, Principal::Anonymous).await },
+                    |initiator| async move {
+                        initiator
+                            .initiate(bad, InvocationContext::anonymous())
+                            .await
+                    },
                     &name
                 )
                 .await
@@ -603,7 +617,7 @@ mod tests {
         }
 
         fn get_id(&self) -> String {
-            self.get_agent_id()
+            self.get_agent_id().uuid.to_string()
         }
 
         fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()> {
@@ -804,7 +818,7 @@ mod tests {
         }
 
         async fn get_id(&self) -> String {
-            self.get_agent_id()
+            self.get_agent_id().uuid.to_string()
         }
 
         async fn echo_result(&self, result: Result<(), ()>) -> Result<(), ()> {
@@ -846,17 +860,17 @@ mod tests {
         }
 
         async fn rpc_call(&self, string: String) -> String {
-            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
+            let client = EchoClient::upsert(self.id.clone(), self.llm_config.clone());
             client.echo(string).await
         }
 
         fn rpc_call_trigger(&self, string: String) {
-            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
+            let client = EchoClient::upsert(self.id.clone(), self.llm_config.clone());
             client.trigger_echo(string);
         }
 
         fn rpc_call_schedule(&self, string: String) {
-            let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
+            let client = EchoClient::upsert(self.id.clone(), self.llm_config.clone());
             client
                 .schedule_echo(
                     string,
@@ -873,9 +887,9 @@ mod tests {
     trait AgentWithReservedMethods {
         fn new(init: String) -> Self;
 
-        fn get(&self) -> String;
+        fn upsert(&self) -> String;
 
-        async fn remote_get(&mut self) -> String;
+        async fn remote_upsert(&mut self) -> String;
     }
 
     struct AgentWithGetFunctionImpl {}
@@ -886,14 +900,14 @@ mod tests {
             AgentWithGetFunctionImpl {}
         }
 
-        fn get(&self) -> String {
+        fn upsert(&self) -> String {
             "foo".to_string()
         }
 
-        async fn remote_get(&mut self) -> String {
-            let client = AgentWithReservedMethodsClient::get_("increment".to_string());
+        async fn remote_upsert(&mut self) -> String {
+            let client = AgentWithReservedMethodsClient::upsert1("increment".to_string());
 
-            client.get().await
+            client.upsert().await
         }
     }
 
@@ -1015,7 +1029,7 @@ mod tests {
             .invoke(
                 "echo_multimodal_advanced".to_string(),
                 wire_input(vec![input]),
-                Principal::Anonymous,
+                InvocationContext::anonymous(),
             )
             .await
             .unwrap()
@@ -1056,7 +1070,7 @@ mod tests {
                     SchemaValue::String("hello".to_string()),
                     SchemaValue::String("extra".to_string()),
                 ]),
-                Principal::Anonymous,
+                InvocationContext::anonymous(),
             )
             .await;
 
@@ -1109,10 +1123,7 @@ mod tests {
         }
 
         let golem_rust::agentic::StructuredSchema::Default(graph) =
-            <AgentStream<Element> as Schema>::get_type()
-        else {
-            panic!("expected value schema")
-        };
+            <AgentStream<Element> as Schema>::get_type();
         assert!(matches!(
             graph.root,
             SchemaType::Stream { inner: Some(_), .. }
@@ -1144,7 +1155,11 @@ mod tests {
         let scalar = wire_input(vec![SchemaValue::String("p".to_string())]);
         assert!(
             agent
-                .invoke("combine".to_string(), scalar, Principal::Anonymous)
+                .invoke(
+                    "combine".to_string(),
+                    scalar,
+                    InvocationContext::anonymous()
+                )
                 .await
                 .is_err()
         );
@@ -1161,7 +1176,7 @@ mod tests {
             root: 0,
         };
         let output = agent
-            .invoke("forward".to_string(), input, Principal::Anonymous)
+            .invoke("forward".to_string(), input, InvocationContext::anonymous())
             .await
             .unwrap()
             .value
@@ -1238,7 +1253,7 @@ mod tests {
             .invoke(
                 "echo".to_string(),
                 wire_input(vec![SchemaValue::String("payload".to_string())]),
-                Principal::Anonymous,
+                InvocationContext::anonymous(),
             )
             .await
             .expect("a scalar parameter name must not affect native stream validation");
@@ -1306,6 +1321,28 @@ mod tests {
         fn new(#[agent_config] _config: golem_rust::agentic::Config<ConfigAgentConfig>) -> Self {
             Self
         }
+    }
+
+    #[allow(dead_code)]
+    async fn generated_clients_create_with_config_and_env(
+        agent_id: &golem_rust::AgentId,
+    ) -> Result<(), golem_rust::GolemReflectError> {
+        let created = ConfigAgentClient::create(golem_rust::CreateOptions {
+            keyed: true,
+            config: ConfigAgentConfigRpc {
+                url: Some("http://localhost".to_string()),
+                port: Some(8080),
+                nested: Default::default(),
+            },
+            env: vec![("MODE".to_string(), "test".to_string())],
+        })
+        .await?;
+        let _: golem_rust::AgentId = created.agent_id().await?;
+        let _ = ConfigAgentClient::create(Default::default()).await?;
+        let _ = ConfigAgentClient::get_by_id(agent_id)?;
+        let _ = ConfigAgentClient::upsert();
+        let _ = ConfigAgentClient::bind_self()?;
+        Ok(())
     }
 
     #[test]
@@ -1633,79 +1670,79 @@ mod tests {
         }
     }
 
-    // Auto Injected Principal Compilation Tests
-    // Principal last parameter
+    // Injected InvocationContext compilation tests
+    // InvocationContext last parameter
     #[agent_definition]
-    pub trait AgentWithPrincipalAutoInjection1 {
-        fn new(name: String, principal: Principal) -> Self;
+    pub trait AgentWithContextInjection1 {
+        fn new(name: String, ctx: InvocationContext) -> Self;
 
-        fn foo(&self, name: String, principal: Principal) -> String;
+        fn foo(&self, name: String, ctx: InvocationContext) -> String;
     }
 
-    pub struct AgentWithPrincipalAutoInjection1Impl;
+    pub struct AgentWithContextInjection1Impl;
 
     #[agent_implementation]
-    impl AgentWithPrincipalAutoInjection1 for AgentWithPrincipalAutoInjection1Impl {
-        fn new(_name: String, _principal: Principal) -> Self {
+    impl AgentWithContextInjection1 for AgentWithContextInjection1Impl {
+        fn new(_name: String, _ctx: InvocationContext) -> Self {
             Self
         }
 
-        fn foo(&self, name: String, _principal: Principal) -> String {
+        fn foo(&self, name: String, _ctx: InvocationContext) -> String {
             name
         }
     }
 
-    // Auto Injected Principal Compilation Tests
+    // Injected InvocationContext compilation tests
     #[agent_definition]
-    pub trait AgentWithPrincipalAutoInjection2 {
-        fn new(name: String, text1: u64, principal: Principal, text: String) -> Self;
+    pub trait AgentWithContextInjection2 {
+        fn new(name: String, text1: u64, ctx: InvocationContext, text: String) -> Self;
 
-        fn foo(&self, name: String, num: u64, principal: Principal, text: String) -> String;
+        fn foo(&self, name: String, num: u64, ctx: InvocationContext, text: String) -> String;
     }
 
-    pub struct AgentWithPrincipalAutoInjection2Impl;
+    pub struct AgentWithContextInjection2Impl;
 
     #[agent_implementation]
-    impl AgentWithPrincipalAutoInjection2 for AgentWithPrincipalAutoInjection2Impl {
-        fn new(_name: String, _text1: u64, _principal: Principal, _text: String) -> Self {
+    impl AgentWithContextInjection2 for AgentWithContextInjection2Impl {
+        fn new(_name: String, _text1: u64, _ctx: InvocationContext, _text: String) -> Self {
             Self
         }
 
-        fn foo(&self, name: String, _num: u64, _principal: Principal, _text: String) -> String {
+        fn foo(&self, name: String, _num: u64, _ctx: InvocationContext, _text: String) -> String {
             name
         }
     }
 
     #[agent_definition]
-    pub trait AgentWithPrincipalAutoInjection3 {
-        fn new(name: String, text1: u64, principal: Principal, text: Option<String>) -> Self;
+    pub trait AgentWithContextInjection3 {
+        fn new(name: String, text1: u64, ctx: InvocationContext, text: Option<String>) -> Self;
 
         fn foo(
             &self,
             name: String,
             text1: u64,
-            principal: Principal,
+            ctx: InvocationContext,
             text: Option<String>,
         ) -> String;
 
-        fn foo_without_principal_1(&self, name: String, num: u64) -> String;
-        fn foo_without_principal_2(&self, name: String, num: u64, text: String) -> String;
-        fn foo_without_principal_3(&self, name: String, num: u64, text: Option<String>) -> String;
-        fn foo_without_principal_4(
+        fn foo_without_context_1(&self, name: String, num: u64) -> String;
+        fn foo_without_context_2(&self, name: String, num: u64, text: String) -> String;
+        fn foo_without_context_3(&self, name: String, num: u64, text: Option<String>) -> String;
+        fn foo_without_context_4(
             &self,
             name: String,
             num: u64,
             text1: Option<String>,
             text2: Option<String>,
         ) -> String;
-        fn foo_without_principal_5(&self, name: String, num: u64, text: Option<String>) -> String;
+        fn foo_without_context_5(&self, name: String, num: u64, text: Option<String>) -> String;
     }
 
-    pub struct AgentWithPrincipalAutoInjection5Impl;
+    pub struct AgentWithContextInjection5Impl;
 
     #[agent_implementation]
-    impl AgentWithPrincipalAutoInjection3 for AgentWithPrincipalAutoInjection5Impl {
-        fn new(_name: String, _text1: u64, _principal: Principal, _text: Option<String>) -> Self {
+    impl AgentWithContextInjection3 for AgentWithContextInjection5Impl {
+        fn new(_name: String, _text1: u64, _ctx: InvocationContext, _text: Option<String>) -> Self {
             Self
         }
 
@@ -1713,30 +1750,25 @@ mod tests {
             &self,
             name: String,
             _text1: u64,
-            _principal: Principal,
+            _ctx: InvocationContext,
             _text: Option<String>,
         ) -> String {
             name
         }
 
-        fn foo_without_principal_1(&self, name: String, _num: u64) -> String {
+        fn foo_without_context_1(&self, name: String, _num: u64) -> String {
             name
         }
 
-        fn foo_without_principal_2(&self, name: String, _num: u64, _text: String) -> String {
+        fn foo_without_context_2(&self, name: String, _num: u64, _text: String) -> String {
             name
         }
 
-        fn foo_without_principal_3(
-            &self,
-            name: String,
-            _num: u64,
-            _text: Option<String>,
-        ) -> String {
+        fn foo_without_context_3(&self, name: String, _num: u64, _text: Option<String>) -> String {
             name
         }
 
-        fn foo_without_principal_4(
+        fn foo_without_context_4(
             &self,
             name: String,
             _num: u64,
@@ -1746,40 +1778,35 @@ mod tests {
             name
         }
 
-        fn foo_without_principal_5(
-            &self,
-            name: String,
-            _num: u64,
-            _text: Option<String>,
-        ) -> String {
+        fn foo_without_context_5(&self, name: String, _num: u64, _text: Option<String>) -> String {
             name
         }
     }
 
     #[agent_definition]
-    pub trait RemoteAgentWithPrincipal {
-        fn new(name: String, principal: Principal) -> Self;
+    pub trait RemoteAgentWithContext {
+        fn new(name: String, ctx: InvocationContext) -> Self;
         async fn foo(&self, name: String) -> String;
     }
 
-    pub struct RemoteAgentWithPrincipalImpl;
+    pub struct RemoteAgentWithContextImpl;
 
     #[agent_implementation]
-    impl RemoteAgentWithPrincipal for RemoteAgentWithPrincipalImpl {
-        fn new(_name: String, _principal: Principal) -> Self {
+    impl RemoteAgentWithContext for RemoteAgentWithContextImpl {
+        fn new(_name: String, _ctx: InvocationContext) -> Self {
             Self
         }
 
         async fn foo(&self, name: String) -> String {
-            AgentWithPrincipalAutoInjection1Client::get(name.clone())
+            AgentWithPrincipalAutoInjection1Client::upsert(name.clone())
                 .foo(name.clone())
                 .await;
 
-            AgentWithPrincipalAutoInjection2Client::get(name.clone(), 1, "required".into())
+            AgentWithPrincipalAutoInjection2Client::upsert(name.clone(), 1, "required".into())
                 .foo(name.clone(), 1, "required".into())
                 .await;
 
-            AgentWithPrincipalAutoInjection3Client::get(
+            AgentWithPrincipalAutoInjection3Client::upsert(
                 name.clone(),
                 1,
                 Some("not-undefined".into()),
@@ -2038,9 +2065,11 @@ mod tests {
     trait CustomSnapshotAgent {
         fn new(data: String) -> Self;
         fn get_data(&self) -> String;
+        fn get_constructor(&self) -> String;
     }
 
     struct CustomSnapshotAgentImpl {
+        constructor: String,
         data: String,
     }
 
@@ -2048,18 +2077,29 @@ mod tests {
     impl CustomSnapshotAgent for CustomSnapshotAgentImpl {
         fn new(data: String) -> Self {
             CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
-            Self { data }
+            Self {
+                constructor: data.clone(),
+                data,
+            }
         }
         fn get_data(&self) -> String {
             self.data.clone()
         }
+        fn get_constructor(&self) -> String {
+            self.constructor.clone()
+        }
 
         async fn load_snapshot(
             bytes: Vec<u8>,
-            _context: golem_rust::agentic::SnapshotRestoreContext,
+            context: golem_rust::agentic::SnapshotRestoreContext,
         ) -> Result<Self, String> {
             CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.fetch_add(1, Ordering::SeqCst);
+            let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+                .map_err(|e| e.to_string())?;
+            let constructor = parameters.take::<String>().map_err(|e| e.to_string())?;
+            parameters.finish().map_err(|e| e.to_string())?;
             Ok(Self {
+                constructor,
                 data: String::from_utf8(bytes).map_err(|e| e.to_string())?,
             })
         }
@@ -2107,7 +2147,7 @@ mod tests {
                 initiator
                     .initiate(
                         wire_input(vec![SchemaValue::String("created".to_string())]),
-                        Principal::Anonymous,
+                        InvocationContext::anonymous(),
                     )
                     .await
             },
@@ -2120,10 +2160,9 @@ mod tests {
 
         SERIALIZABLE_AGENT_CONSTRUCTIONS.store(0, Ordering::SeqCst);
         let context = SnapshotRestoreContext {
-            principal: Principal::Anonymous,
             agent_type: agent_type.0.clone(),
             parameters: wire_input(vec![SchemaValue::String("created".to_string())]),
-            phantom_id: None,
+            agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
         let restored = with_agent_initiator(
             |initiator| async move {
@@ -2174,11 +2213,12 @@ mod tests {
     #[allow(clippy::await_holding_refcell_ref)]
     async fn test_custom_snapshot_agent_uses_custom_methods() {
         use golem_rust::agentic::{
-            BaseAgent, SnapshotRestoreContext, get_principal, get_resolved_agent,
-            with_agent_initiator,
+            BaseAgent, SnapshotRestoreContext, get_resolved_agent, with_agent_initiator,
         };
+        use golem_rust::schema::wit::direct;
 
         let agent = CustomSnapshotAgentImpl {
+            constructor: "hello".to_string(),
             data: "hello-world".to_string(),
         };
 
@@ -2195,10 +2235,9 @@ mod tests {
         CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.store(0, Ordering::SeqCst);
         let agent_type = AgentTypeName("CustomSnapshotAgent".to_string());
         let context = || SnapshotRestoreContext {
-            principal: Principal::Anonymous,
             agent_type: agent_type.0.clone(),
             parameters: wire_input(vec![SchemaValue::String("original".to_string())]),
-            phantom_id: None,
+            agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
 
         let failed_context = context();
@@ -2213,7 +2252,6 @@ mod tests {
         )
         .await;
         assert!(failed.is_err());
-        assert!(get_principal().is_none());
         assert!(get_resolved_agent().is_none());
         assert_eq!(
             CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.load(Ordering::SeqCst),
@@ -2240,6 +2278,23 @@ mod tests {
             panic!("expected bytes");
         };
         assert_eq!(saved, b"new-data");
+
+        #[derive(IntoWire)]
+        struct NoArguments {}
+        let constructor = restored
+            .agent
+            .borrow_mut()
+            .invoke(
+                "get_constructor".to_string(),
+                direct::encode(&NoArguments {}).unwrap(),
+                Principal::Anonymous,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            direct::decode::<String>(constructor.value.unwrap()).unwrap(),
+            "original"
+        );
     }
 
     #[test]
@@ -2406,7 +2461,7 @@ mod tests {
         fn get_value_ttl(&self) -> u32;
 
         #[read_only]
-        fn get_for_user(&self, _principal: Principal) -> u32;
+        fn get_for_user(&self, _ctx: InvocationContext) -> u32;
 
         fn increment(&mut self) -> u32;
     }
@@ -2430,7 +2485,7 @@ mod tests {
         fn get_value_ttl(&self) -> u32 {
             0
         }
-        fn get_for_user(&self, _principal: Principal) -> u32 {
+        fn get_for_user(&self, _ctx: InvocationContext) -> u32 {
             0
         }
         fn increment(&mut self) -> u32 {
@@ -2440,6 +2495,7 @@ mod tests {
 
     #[test]
     fn test_read_only_marker() {
+        use golem_rust::golem_agentic::golem::agent::common::InputSchema;
         ReadOnlyAgentImpl::__register_agent_type();
         let agent_name = AgentTypeName("ReadOnlyAgent".to_string());
         let agent =
@@ -2457,16 +2513,14 @@ mod tests {
         let m_no_cache = find("get_value_no_cache");
         let m_explicit_until_write = find("get_value_explicit_until_write");
         let m_ttl = find("get_value_ttl");
-        let m_principal = find("get_for_user");
+        let m_context = find("get_for_user");
         let m_increment = find("increment");
 
         let ro_default = m_default.read_only.as_ref().expect("read_only expected");
         assert!(matches!(ro_default.cache_policy, CachePolicy::UntilWrite));
-        assert!(!ro_default.uses_principal);
 
         let ro_no_cache = m_no_cache.read_only.as_ref().expect("read_only expected");
         assert!(matches!(ro_no_cache.cache_policy, CachePolicy::NoCache));
-        assert!(!ro_no_cache.uses_principal);
 
         let ro_explicit_until_write = m_explicit_until_write
             .read_only
@@ -2476,20 +2530,19 @@ mod tests {
             ro_explicit_until_write.cache_policy,
             CachePolicy::UntilWrite
         ));
-        assert!(!ro_explicit_until_write.uses_principal);
 
         let ro_ttl = m_ttl.read_only.as_ref().expect("read_only expected");
         match ro_ttl.cache_policy {
             CachePolicy::Ttl(nanos) => assert_eq!(nanos, 30_000_000_000),
             _ => panic!("expected Ttl policy"),
         }
-        assert!(!ro_ttl.uses_principal);
 
-        let ro_principal = m_principal.read_only.as_ref().expect("read_only expected");
-        assert!(matches!(ro_principal.cache_policy, CachePolicy::UntilWrite));
+        let ro_context = m_context.read_only.as_ref().expect("read_only expected");
+        assert!(matches!(ro_context.cache_policy, CachePolicy::UntilWrite));
+        let InputSchema::Parameters(context_fields) = &m_context.input_schema;
         assert!(
-            ro_principal.uses_principal,
-            "uses_principal should be derived from the Principal parameter"
+            context_fields.is_empty(),
+            "an InvocationContext parameter is not part of the input schema"
         );
 
         assert!(
@@ -3187,7 +3240,7 @@ mod tests {
         })
         .unwrap();
         let output = agent
-            .invoke(method.to_string(), input, Principal::Anonymous)
+            .invoke(method.to_string(), input, InvocationContext::anonymous())
             .await
             .unwrap();
         let output = golem_rust::decode_schema_value(output.value.expect("raw output")).unwrap();
@@ -3478,10 +3531,9 @@ mod tests {
 
         async fn load_snapshot_parts(
             snapshot: golem_rust::agentic::MultipartSnapshot,
-            context: golem_rust::agentic::SnapshotRestoreContext,
+            _context: golem_rust::agentic::SnapshotRestoreContext,
         ) -> Result<Self, String> {
             PARTS_RESTORATIONS.fetch_add(1, Ordering::SeqCst);
-            assert!(matches!(context.principal, Principal::Anonymous));
             let saved: PartsSavedState = snapshot.decode_state()?;
             let index = snapshot
                 .require_part("index", "application/octet-stream")?
@@ -3509,10 +3561,9 @@ mod tests {
         assert!(matches!(&saved, SnapshotData::Multipart { .. }));
         let agent_type = AgentTypeName("MultipartIndexAgent".to_string());
         let context = || SnapshotRestoreContext {
-            principal: Principal::Anonymous,
             agent_type: agent_type.0.clone(),
             parameters: wire_input(vec![SchemaValue::U32(0)]),
-            phantom_id: None,
+            agent_id: golem_rust::AgentId::new(golem_rust::Uuid::nil()),
         };
         for wrong in [
             SnapshotData::Json(b"null".to_vec()),

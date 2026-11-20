@@ -34,7 +34,7 @@ import {
   toolDefinition,
   universalToolMiddleware,
   type ImplementedToolMiddleware,
-  type Principal,
+  type Caller,
   type ToolClient,
   type ToolClientErrors,
   type ToolErr,
@@ -520,7 +520,7 @@ type OptionalStreamContext = Parameters<
   ToolImplementation<typeof optionalStreamDef>['optional-stream']
 >[1];
 const contextWithoutOptionalStdin: OptionalStreamContext = {
-  principal: undefined as never,
+  caller: undefined as never,
 };
 void contextWithoutOptionalStdin;
 
@@ -864,9 +864,9 @@ nonTransitiveClient['non-transitive-middle']['non-transitive-leaf']({ tenant: 'r
 
 const grepMiddlewareImplementation: ToolMiddlewareImplementation<typeof grepDef> = {
   grep: async (args, context) => {
-    const principal: Principal = context.principal;
+    const caller: Caller = context.caller;
     const stdin: AsyncIterable<number> | undefined = context.stdin;
-    void principal;
+    void caller;
     // @ts-expect-error middleware stdout is returned by the caller-side projection
     void context.stdout;
     // @ts-expect-error output-bearing underlying commands must use start
@@ -931,7 +931,7 @@ type OptionalMiddlewareContext = Parameters<
   ToolMiddlewareImplementation<typeof optionalStreamDef>['optional-stream']
 >[1];
 const optionalMiddlewareContextWithoutStdin: OptionalMiddlewareContext = {
-  principal: undefined as never,
+  caller: undefined as never,
   underlying: undefined as never,
   parameters: {},
 };
@@ -1037,8 +1037,8 @@ void expectedUnderlyingError;
 void invalidExpectedUnderlyingError;
 expectedUnderlying['expected-adapter']({
   path: '/tmp',
-  // @ts-expect-error principal is bound by the runtime and cannot be replaced
-  principal: undefined as never,
+  // @ts-expect-error caller is bound by the runtime and cannot be replaced
+  caller: undefined as never,
 });
 
 const mappedAdapterError = ToolInvokeError.tool(err('backend-failed', { code: 1 })).mapTool(() =>
@@ -1090,15 +1090,12 @@ const universalMiddleware = universalToolMiddleware({
   name: 'universal-audit',
   aliases: ['audit-all'],
   doc: 'Audit every raw invocation',
-  invoke: async (
-    { toolName, toolMetadata, commandPath, input, stdin, principal },
-    { underlying },
-  ) => {
+  invoke: async ({ toolName, toolMetadata, commandPath, input, stdin, caller }, { underlying }) => {
     const name: string = toolName;
     const version: string = toolMetadata.version;
     const path: readonly string[] = commandPath;
     const stream: AsyncIterable<number> | undefined = stdin;
-    const sdkPrincipal: Principal = principal;
+    const sdkCaller: Caller = caller;
     const wireTool: WireTool = toolMetadata;
     const wireInput: WireTypedSchemaValue = input;
     const started = await underlying.invoke(commandPath, wireInput, stdin);
@@ -1117,13 +1114,13 @@ const universalMiddleware = universalToolMiddleware({
     void version;
     void path;
     void stream;
-    void sdkPrincipal;
+    void sdkCaller;
     void wireTool;
     void wireStdout;
     void awaitedWireResult;
     void (undefined as unknown as UniversalUnderlyingErrors);
-    // @ts-expect-error the underlying resource does not accept a replacement principal
-    void underlying.invoke(commandPath, input, stdin, principal);
+    // @ts-expect-error the underlying resource does not accept a replacement caller
+    void underlying.invoke(commandPath, input, stdin, caller);
     return wireResult;
   },
 });

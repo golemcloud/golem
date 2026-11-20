@@ -105,6 +105,9 @@ impl From<golem_api_1_x::host::AgentStatus> for golem_common::model::AgentStatus
             }
             golem_api_1_x::host::AgentStatus::Failed => golem_common::model::AgentStatus::Failed,
             golem_api_1_x::host::AgentStatus::Exited => golem_common::model::AgentStatus::Exited,
+            golem_api_1_x::host::AgentStatus::Sandboxed => {
+                golem_common::model::AgentStatus::Sandboxed
+            }
         }
     }
 }
@@ -125,6 +128,9 @@ impl From<golem_common::model::AgentStatus> for golem_api_1_x::host::AgentStatus
             }
             golem_common::model::AgentStatus::Failed => golem_api_1_x::host::AgentStatus::Failed,
             golem_common::model::AgentStatus::Exited => golem_api_1_x::host::AgentStatus::Exited,
+            golem_common::model::AgentStatus::Sandboxed => {
+                golem_api_1_x::host::AgentStatus::Sandboxed
+            }
         }
     }
 }
@@ -134,8 +140,8 @@ impl TryFrom<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::
 
     fn try_from(filter: golem_api_1_x::host::AgentPropertyFilter) -> Result<Self, Self::Error> {
         let converted = match filter {
-            golem_api_1_x::host::AgentPropertyFilter::Name(filter) => {
-                golem_common::model::AgentFilter::new_name(filter.comparator.into(), filter.value)
+            golem_api_1_x::host::AgentPropertyFilter::Key(filter) => {
+                golem_common::model::AgentFilter::new_key(filter.comparator.into(), filter.value)
             }
             golem_api_1_x::host::AgentPropertyFilter::Version(filter) => {
                 golem_common::model::AgentFilter::new_revision(
@@ -202,6 +208,8 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
     fn from(value: AgentMetadataForGuests) -> Self {
         Self {
             agent_id: value.agent_id.into(),
+            agent_type_name: value.agent_type_name.map(|name| name.0),
+            fingerprint: value.fingerprint.0.into(),
             args: vec![],
             env: value.env,
             config: value.config.into_iter().collect(),
@@ -210,5 +218,96 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
             retry_count: 0,
             environment_id: value.environment_id.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::golem_api_1_x;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::{AgentMode, OwnerKind};
+    use golem_common::model::caller::Caller;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::oplog::types::AgentMetadataForGuests;
+    use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
+    use golem_common::model::{
+        AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
+        FilterComparator, Timestamp,
+    };
+    use test_r::test;
+
+    fn metadata(never_live: bool, status: AgentStatus) -> AgentMetadata {
+        let component_id = ComponentId::new();
+        AgentMetadata {
+            component_id,
+            agent_type_name: None,
+            canonical_key: None,
+            agent_id: AgentId::from_parts(7, 1),
+            owner_kind: OwnerKind::ComponentAgent,
+            env: vec![],
+            environment_id: EnvironmentId::new(),
+            created_by: AccountId::new(),
+            created_by_email: AccountEmail::new("test@golem"),
+            config: vec![],
+            created_at: Timestamp::now_utc(),
+            parent: None,
+            last_known_status: AgentStatusRecord {
+                status,
+                never_live,
+                ..AgentStatusRecord::default()
+            },
+            constructor_parameters: None,
+            fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
+            agent_mode: AgentMode::Durable,
+            create_request: CreateRequest::new(
+                CreateRequestKind::Fork,
+                None,
+                Caller::anonymous(),
+                &InvocationContextStack::fresh(),
+            ),
+        }
+    }
+
+    /// The guest's metadata and enumeration results both pass through `AgentMetadataForGuests`;
+    /// a guest sees `sandboxed` for a marked agent whose folded status is `Running`.
+    #[test]
+    fn guest_metadata_of_a_marked_agent_is_sandboxed() {
+        let marked = metadata(true, AgentStatus::Running);
+        let guest =
+            golem_api_1_x::host::AgentMetadata::from(AgentMetadataForGuests::from(marked.clone()));
+        assert_eq!(guest.status, golem_api_1_x::host::AgentStatus::Sandboxed);
+        assert_eq!(marked.last_known_status.status, AgentStatus::Running);
+
+        let unmarked = golem_api_1_x::host::AgentMetadata::from(AgentMetadataForGuests::from(
+            metadata(false, AgentStatus::Running),
+        ));
+        assert_eq!(unmarked.status, golem_api_1_x::host::AgentStatus::Running);
+    }
+
+    #[test]
+    fn sandboxed_status_converts_both_ways_and_filters() {
+        assert_eq!(
+            golem_api_1_x::host::AgentStatus::from(AgentStatus::Sandboxed),
+            golem_api_1_x::host::AgentStatus::Sandboxed
+        );
+        assert_eq!(
+            AgentStatus::from(golem_api_1_x::host::AgentStatus::Sandboxed),
+            AgentStatus::Sandboxed
+        );
+        let filter = AgentFilter::try_from(golem_api_1_x::host::AgentPropertyFilter::Status(
+            golem_api_1_x::host::AgentStatusFilter {
+                comparator: golem_api_1_x::host::FilterComparator::Equal,
+                value: golem_api_1_x::host::AgentStatus::Sandboxed,
+            },
+        ))
+        .unwrap();
+        assert_eq!(
+            filter,
+            AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Sandboxed)
+        );
+        assert!(filter.matches(&metadata(true, AgentStatus::Interrupted)));
+        assert!(!filter.matches(&metadata(false, AgentStatus::Interrupted)));
     }
 }

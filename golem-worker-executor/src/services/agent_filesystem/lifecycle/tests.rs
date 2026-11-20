@@ -17,11 +17,11 @@ use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::close_window;
 use futures::FutureExt;
+use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::{AgentFilePath, AgentFilePermissions, ComponentId};
+use golem_common::model::component::{AgentFilePath, AgentFilePermissions};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, OwnedAgentId};
 use golem_common::widen_infallible;
 use golem_service_base::replayable_stream::ReplayableStream as _;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
@@ -104,17 +104,14 @@ impl FilesystemWriteRecoveryAuthority for BlockingWriteRecovery {
 }
 
 fn agent_id() -> OwnedAgentId {
-    OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId::from_agent_name_string(ComponentId::new(), "lifecycle").unwrap(),
-    )
+    OwnedAgentId::new(EnvironmentId::new(), &crate::test_agent_id("lifecycle"))
 }
 
 pub(super) async fn native_resident(parent: &Path) -> (ResidentFilesystem, PathBuf) {
     let id = agent_id();
     let root = parent
         .join(id.environment_id.to_string())
-        .join(id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", id.agent_id.type_tag()))
         .join(agent_path_segment(&id.agent_id));
     let created = create_fresh(
         sandbox_provisioning(&FilesystemStorageConfig {
@@ -6579,7 +6576,7 @@ async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
     let root = parent
         .path()
         .join(id.environment_id.to_string())
-        .join(id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", id.agent_id.type_tag()))
         .join(agent_path_segment(&id.agent_id));
 
     let provisioning = sandbox_provisioning(&profile).unwrap();
@@ -6597,48 +6594,6 @@ async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
 }
 
 #[test]
-async fn an_agent_name_of_500_bytes_gets_a_sandbox() {
-    // A file name can have 255 bytes. The agent name has 500 bytes and holds `/` and `..`
-    // segments, so the name of the sandbox directory is the path segment of the agent.
-    let parent = tempfile::tempdir().unwrap();
-    let profile = FilesystemStorageConfig {
-        mode: FilesystemStorageMode::Directory {
-            root: parent.path().into(),
-        },
-        ..FilesystemStorageConfig::default()
-    };
-    let id = OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: format!("counter(\"{}\")", "../".repeat(163)),
-        },
-    );
-    let root = parent
-        .path()
-        .join(id.environment_id.to_string())
-        .join(id.agent_id.component_id.to_string())
-        .join(agent_path_segment(&id.agent_id));
-    let name_bytes = id.agent_id.agent_id.len();
-
-    let created = create_fresh(
-        sandbox_provisioning(&profile).unwrap(),
-        scratch_directory().await,
-        id,
-        ResolvedStorageLimits::Unlimited,
-    )
-    .await
-    .unwrap();
-    let created_root = root.is_dir();
-    delete_created(created).await.unwrap();
-
-    assert_eq!(
-        (name_bytes, created_root, root.exists()),
-        (500, true, false)
-    );
-}
-
-#[test]
 async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent_deletion() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
@@ -6653,12 +6608,12 @@ async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent
     let first_root = parent
         .path()
         .join(first_id.environment_id.to_string())
-        .join(first_id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", first_id.agent_id.type_tag()))
         .join(agent_path_segment(&first_id.agent_id));
     let second_root = parent
         .path()
         .join(second_id.environment_id.to_string())
-        .join(second_id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", second_id.agent_id.type_tag()))
         .join(agent_path_segment(&second_id.agent_id));
 
     let first = create_fresh(
@@ -6700,7 +6655,7 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
     let root = parent
         .path()
         .join(id.environment_id.to_string())
-        .join(id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", id.agent_id.type_tag()))
         .join(agent_path_segment(&id.agent_id));
     let service = Arc::new(InitialAgentFilesService::new(Arc::new(
         InMemoryBlobStorage::new(),
@@ -6913,7 +6868,7 @@ async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read
     let root = parent
         .path()
         .join(id.environment_id.to_string())
-        .join(id.agent_id.component_id.to_string())
+        .join(format!("{:08x}", id.agent_id.type_tag()))
         .join(agent_path_segment(&id.agent_id));
     let service = Arc::new(InitialAgentFilesService::new(Arc::new(
         InMemoryBlobStorage::new(),

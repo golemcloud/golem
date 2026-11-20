@@ -113,9 +113,10 @@ object ToolReflection {
         node.doc,
         ExtendedGlobals(node.globals.options.map(option), node.globals.flags),
         node.subcommands,
-        body
+        body,
+        node.http
       )
     }
-    ExtendedToolType(tool.version, commands, tool.requiresFilesystem)
+    ExtendedToolType(tool.version, commands, tool.requiresFilesystem, tool.httpMount)
   }
 }

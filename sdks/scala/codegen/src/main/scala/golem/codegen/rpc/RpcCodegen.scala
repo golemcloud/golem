@@ -27,9 +27,9 @@ import scala.meta.parsers._
  *
  * Given agent surface metadata, generates client objects with:
  *   - `XRemote` trait with per-method wrapper classes for natural call syntax
- *   - Mode-aware constructors: durable agents get `get`/`getWithConfig` plus
- *     `getPhantom`/`newPhantom`/`getPhantomWithConfig`/`newPhantomWithConfig`;
- *     ephemeral agents get only the phantom variants
+ *   - Mode-aware constructors: durable agents get `upsert`, `create` (keyed or
+ *     not, with config and env overrides) and `getById`; ephemeral agents get
+ *     only `upsert`, whose every invocation runs on a new one-shot instance
  *
  * Call syntax on the returned `XRemote`:
  *   - `remote.process(1, "hello")` — await the result via `apply`
@@ -40,6 +40,7 @@ import scala.meta.parsers._
  *     `ProcessRemoteMethod#GolemScopeCardCall` class
  *   - `remote.withDefaultScopeCard(card)` — a client whose awaited calls carry
  *     `card`
+ *   - `remote.agentId()` — the ID of a durable target agent
  *
  * Generated clients extend `golem.AgentCompanionBase[Trait]` so the existing
  * macro infrastructure can locate the trait type parameter.
@@ -62,7 +63,7 @@ object RpcCodegen {
    * Members of the generated remote trait; an agent method cannot use these
    * names.
    */
-  val ReservedRemoteMemberNames: Set[String] = Set("withDefaultScopeCard", "withoutDefaultScopeCard")
+  val ReservedRemoteMemberNames: Set[String] = Set("withDefaultScopeCard", "withoutDefaultScopeCard", "agentId")
 
   /**
    * The nested scoped-call class of every generated method class. A bare type
@@ -115,7 +116,7 @@ object RpcCodegen {
       } else if (reserved.nonEmpty) {
         errors += Error(
           s"Agent ${agent.traitFqn} declares method(s) ${reserved.mkString(", ")}, which the generated RPC client " +
-            "reserves for its scope-card API. Rename the method(s)."
+            "reserves for its client API. Rename the method(s)."
         )
       } else if (shadowed.nonEmpty) {
         errors += Error(
@@ -136,13 +137,13 @@ object RpcCodegen {
     Result(files = files.result(), warnings = warnings.result(), errors = errors.result())
   }
 
-  /** Methods that get a generated wrapper: those with valid principalParams. */
+  /** Methods that get a generated wrapper: those with valid contextParams. */
   private def generatedMethods(agent: AgentSurface): List[MethodSurface] =
-    agent.methods.filter(m => m.principalParams.length == m.params.length)
+    agent.methods.filter(m => m.contextParams.length == m.params.length)
 
-  /** Filter out Principal parameters from a method surface. */
+  /** Filter out InvocationContext parameters from a method surface. */
   private def remoteParams(method: MethodSurface): List[ParamSurface] =
-    method.params.zip(method.principalParams).collect { case (p, false) =>
+    method.params.zip(method.contextParams).collect { case (p, false) =>
       p
     }
 
@@ -279,7 +280,12 @@ object RpcCodegen {
     sb.append("    /** A client whose awaited calls borrow `card` as the scope card unless a call sets its own. */\n")
     sb.append(s"    def withDefaultScopeCard(card: $ScopeCardType): $remoteName\n\n")
     sb.append("    /** A client whose awaited calls carry no default scope card. */\n")
-    sb.append(s"    def withoutDefaultScopeCard: $remoteName\n")
+    sb.append(s"    def withoutDefaultScopeCard: $remoteName\n\n")
+    sb.append("    /**\n")
+    sb.append("     * The ID of the target agent. On a client of `upsert` the host creates a missing\n")
+    sb.append("     * durable agent. Fails with `AgentRpcException`.\n")
+    sb.append("     */\n")
+    sb.append(s"    def agentId(): $FutureType[$AgentIdType]\n")
     sb.append(s"  }\n\n")
 
     // Private bindRemote
@@ -295,15 +301,17 @@ object RpcCodegen {
     sb.append("        bindRemote(resolved.withScopeCard(card))\n")
     sb.append(s"      def withoutDefaultScopeCard: $remoteName =\n")
     sb.append("        bindRemote(resolved.withoutScopeCard)\n")
+    sb.append(s"      def agentId(): $FutureType[$AgentIdType] =\n")
+    sb.append("        resolved.agentId()\n")
     sb.append(s"    }\n\n")
 
     if (agent.metadata.mode != "ephemeral") {
       sb.append("  /**\n")
       sb.append("   * Bind the current durable incarnation without creating it or waiting for initialization.\n")
       sb.append("   *\n")
-      sb.append("   * Use this to schedule work on self from inside the constructor. Normal `get` reuses\n")
+      sb.append("   * Use this to schedule work on self from inside the constructor. Normal `upsert` reuses\n")
       sb.append("   * an initialized agent without rerunning its constructor, but waits for an unfinished\n")
-      sb.append("   * constructor. Calling `get` on self from that constructor would therefore deadlock.\n")
+      sb.append("   * constructor. Calling `upsert` on self from that constructor would therefore deadlock.\n")
       sb.append("   *\n")
       sb.append("   * Scheduled work runs after construction finishes. This does not make awaited\n")
       sb.append("   * self-calls reentrant or bypass method permissions. A different client type returns\n")
@@ -415,6 +423,10 @@ object RpcCodegen {
   }
 
   private val ScopeCardType = "_root_.golem.host.PermissionsApi.ScopeCard"
+  private val FutureType    = "_root_.scala.concurrent.Future"
+  private val AgentIdType   = "_root_.golem.AgentId"
+  private val RuntimeRef    = "_root_.golem.runtime.rpc.AgentClientRuntime"
+  private val JsQueue       = "_root_.scala.scalajs.concurrent.JSExecutionContext.Implicits.queue"
 
   /**
    * Build the packed constructor input expression from unpacked param names.
@@ -444,122 +456,70 @@ object RpcCodegen {
   ): Unit = {
     val traitRef     = traitReference(agent)
     val ctorParams   = agent.constructor.params
-    val mode         = agent.metadata.mode
     val configFields = agent.configFields
 
     val paramDecls = ctorParams.map(p => s"${p.name}: ${p.typeExpr}").mkString(", ")
     val packExpr   = constructorPackExpr(ctorParams)
 
-    def resolveCall(phantom: Option[String], config: Option[String]): String = {
-      val ph  = phantom.fold("_root_.scala.None")(p => s"_root_.scala.Some($p)")
-      val cfg = config.getOrElse("_root_.scala.Nil")
-      s"_root_.golem.runtime.rpc.AgentClientRuntime.resolveWire[$traitRef, Id](agentType, $packExpr, $ph, $cfg)"
-    }
+    def params(parts: String*): String = parts.filter(_.nonEmpty).mkString(", ")
 
-    def emitConstructor(
-      name: String,
-      extraParamsBefore: String,
-      extraParamsAfter: String,
-      phantom: Option[String],
-      config: Option[String]
-    ): Unit = {
-      val allParams = Seq(extraParamsBefore, paramDecls, extraParamsAfter).filter(_.nonEmpty).mkString(", ")
-      sb.append(s"  def $name($allParams): $remoteName =\n")
-      sb.append(s"    ${resolveCall(phantom, config)} match {\n")
-      sb.append(s"      case _root_.scala.Right(resolved) => bindRemote(resolved)\n")
-      sb.append(s"      case _root_.scala.Left(err) => throw _root_.scala.scalajs.js.JavaScriptException(err)\n")
-      sb.append(s"    }\n\n")
-    }
+    sb.append("  /**\n")
+    sb.append("   * A client of the keyed agent of the constructor parameters.")
+    if (agent.metadata.mode == "ephemeral")
+      sb.append(" Every invocation runs on a\n   * new one-shot instance.\n")
+    else
+      sb.append(" The agent is created\n   * when it is missing.\n")
+    sb.append("   * Throws `AgentRpcException` when the host rejects the client.\n")
+    sb.append("   */\n")
+    sb.append(s"  def upsert($paramDecls): $remoteName =\n")
+    sb.append(s"    $RuntimeRef.upsertWire[$traitRef, Id](agentType, $packExpr) match {\n")
+    sb.append(s"      case _root_.scala.Right(resolved) => bindRemote(resolved)\n")
+    sb.append(s"      case _root_.scala.Left(err) => throw _root_.golem.runtime.rpc.AgentRpcException(err)\n")
+    sb.append(s"    }\n\n")
 
-    /** Generate the config override parameters as `Option[T] = None` */
-    def configParamDecls: String =
-      configFields.map { cf =>
-        val pName = configParamName(cf.path)
-        s"$pName: _root_.scala.Option[${cf.typeExpr}] = _root_.scala.None"
-      }.mkString(", ")
+    if (agent.metadata.mode == "ephemeral") return
 
-    /**
-     * Generate the body that builds a List[ConfigOverride] from non-None params
-     */
-    def configOverrideListExpr: String = {
-      val builders = configFields.map { cf =>
-        val pName   = configParamName(cf.path)
-        val pathLit = cf.path.map(p => s""""$p"""").mkString(", ")
-        s"$pName.map(v => _root_.golem.config.ConfigOverride[${cf.typeExpr}](_root_.scala.List($pathLit), v))"
+    val configParamDecls = configFields.map { cf =>
+      s"${configParamName(cf.path)}: _root_.scala.Option[${cf.typeExpr}] = _root_.scala.None"
+    }.mkString(", ")
+    val overridesExpr =
+      if (configFields.isEmpty) "_root_.scala.Nil"
+      else {
+        val builders = configFields.map { cf =>
+          val pathLit = cf.path.map(p => s""""$p"""").mkString(", ")
+          s"${configParamName(cf.path)}.map(v => _root_.golem.config.ConfigOverride[${cf.typeExpr}](_root_.scala.List($pathLit), v))"
+        }
+        "_root_.scala.List(" + builders.mkString(", ") + ").flatten"
       }
-      "_root_.scala.List(" + builders.mkString(", ") + ").flatten"
-    }
 
-    def emitWithConfigConstructor(
-      name: String,
-      extraParamsBefore: String,
-      extraParamsAfter: String,
-      phantom: Option[String]
-    ): Unit = {
-      val configParams  = configParamDecls
-      val allExtra      = Seq(extraParamsAfter, configParams).filter(_.nonEmpty).mkString(", ")
-      val allParams     = Seq(extraParamsBefore, paramDecls, allExtra).filter(_.nonEmpty).mkString(", ")
-      val overridesExpr = configOverrideListExpr
-      val resolveExpr   = resolveCall(phantom, Some(overridesExpr))
-      sb.append(s"  def $name($allParams): $remoteName =\n")
-      sb.append(s"    $resolveExpr match {\n")
-      sb.append(s"      case _root_.scala.Right(resolved) => bindRemote(resolved)\n")
-      sb.append(s"      case _root_.scala.Left(err) => throw _root_.scala.scalajs.js.JavaScriptException(err)\n")
-      sb.append(s"    }\n\n")
-    }
+    sb.append("  /**\n")
+    sb.append("   * Creates the agent. With `keyed`, it is the keyed agent of the constructor parameters,\n")
+    sb.append("   * and an existing one fails with `AgentRpcError.Conflict`; otherwise the new agent has no\n")
+    sb.append("   * key and a new ID. `env` is added to the environment the manifest defines.\n")
+    sb.append("   * Fails with `AgentRpcException`.\n")
+    sb.append("   */\n")
+    sb.append(
+      s"  def create(${params(
+          paramDecls,
+          "keyed: _root_.scala.Boolean = false",
+          configParamDecls,
+          "env: _root_.scala.Predef.Map[_root_.scala.Predef.String, _root_.scala.Predef.String] = _root_.scala.Predef.Map.empty"
+        )}): $FutureType[$remoteName] =\n"
+    )
+    sb.append(s"    $RuntimeRef\n")
+    sb.append(s"      .createWire[$traitRef, Id](\n")
+    sb.append(s"        agentType,\n")
+    sb.append(s"        $packExpr,\n")
+    sb.append(s"        _root_.golem.runtime.rpc.CreateOptions(keyed, $overridesExpr, env)\n")
+    sb.append(s"      )\n")
+    sb.append(s"      .map(bindRemote)($JsQueue)\n\n")
 
-    // Durable agents get: get, getPhantom, newPhantom
-    // Ephemeral agents get: getPhantom, newPhantom
-    // WithConfig variants only generated when configFields is non-empty
-    if (mode == "durable" || mode == "") {
-      emitConstructor("get", "", "", phantom = None, config = None)
-      if (configFields.nonEmpty) {
-        emitWithConfigConstructor("getWithConfig", "", "", phantom = None)
-      }
-    }
-
-    if (mode == "ephemeral") {
-      emitConstructor("newPhantom", "", "", phantom = None, config = None)
-      if (configFields.nonEmpty) emitWithConfigConstructor("newPhantomWithConfig", "", "", phantom = None)
-      emitConstructor("getPhantom", "", "phantom: _root_.java.util.UUID", phantom = Some("phantom"), config = None)
-      if (configFields.nonEmpty)
-        emitWithConfigConstructor(
-          "getPhantomWithConfig",
-          "",
-          "phantom: _root_.java.util.UUID",
-          phantom = Some("phantom")
-        )
-      return
-    }
-
-    // Durable phantom constructors retain their existing behavior.
-    emitConstructor("getPhantom", "", "phantom: _root_.java.util.UUID", phantom = Some("phantom"), config = None)
-    val ctorRefs         = if (ctorParams.isEmpty) "" else ctorParams.map(_.name).mkString(", ") + ", "
-    val newPhantomParams = if (paramDecls.isEmpty) "" else paramDecls
-    sb.append(s"  def newPhantom($newPhantomParams): $remoteName =\n")
-    sb.append(s"    getPhantom(${ctorRefs}_root_.golem.HostApi.generateIdempotencyKey())\n\n")
-    if (configFields.nonEmpty) {
-      emitWithConfigConstructor("getPhantomWithConfig", "", "phantom: _root_.java.util.UUID", phantom = Some("phantom"))
-      val newPhantomWithConfigParams = {
-        val configParams = configParamDecls
-        val extra        =
-          Seq("phantom: _root_.java.util.UUID" +: Nil, configParams +: Nil).flatten.filter(_.nonEmpty).mkString(", ")
-        Seq(paramDecls, extra).filter(_.nonEmpty).mkString(", ")
-      }
-      // newPhantomWithConfig delegates, need to forward config params
-      val configParamNames = configFields.map(cf => configParamName(cf.path))
-      val forwardArgs      = configParamNames.map(n => s"$n = $n").mkString(", ")
-      val phantomAndConfig = s"_root_.golem.HostApi.generateIdempotencyKey(), $forwardArgs"
-      val delegateArgs     =
-        if (ctorParams.isEmpty) phantomAndConfig
-        else ctorParams.map(_.name).mkString(", ") + ", " + phantomAndConfig
-      val npcParams = {
-        val configParams = configParamDecls
-        Seq(paramDecls, configParams).filter(_.nonEmpty).mkString(", ")
-      }
-      sb.append(s"  def newPhantomWithConfig($npcParams): $remoteName =\n")
-      sb.append(s"    getPhantomWithConfig($delegateArgs)\n\n")
-    }
+    sb.append("  /**\n")
+    sb.append("   * A client of the existing agent with the given ID. Never creates the agent. An unknown\n")
+    sb.append("   * ID, or the ID of an agent of another type, fails with `AgentRpcError.NotFound`.\n")
+    sb.append("   */\n")
+    sb.append(s"  def getById(agentId: $AgentIdType): $FutureType[$remoteName] =\n")
+    sb.append(s"    $RuntimeRef.getByIdWire[$traitRef](agentType, agentId).map(bindRemote)($JsQueue)\n\n")
   }
 
   private def constructorTypeExpr(ctor: ConstructorSurface): String =

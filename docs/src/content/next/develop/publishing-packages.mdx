@@ -1,0 +1,61 @@
+# Publishing packages
+
+Give the package a name and an exact version in the root `golem.yaml`:
+
+```yaml
+package:
+  name: my-package
+  version: 1.0.0
+```
+
+Use a SemVer version without build metadata. The name and version are part of
+the digest-covered package config. Repack any archive made before the package
+config included this identity.
+
+Build your application before you pack it. The package commands use the built
+WebAssembly components and the declarations for the selected manifest environment
+and preset. They do not deploy the application or log in to a server.
+
+```shell
+golem build
+golem package pack --output my-package.tar
+golem publish --dry-run
+```
+
+`golem package pack` writes an OCI image layout in a tar archive and prints its
+SHA-256 manifest digest. The default filename is `golem-package.tar`.
+`golem publish --dry-run` validates the same package and prints the same digest
+without writing an archive or contacting a server. Initial files must resolve
+inside the application root. Download any initial file with an HTTP or HTTPS
+source and declare it as a local file before packing. A typed `File` default is
+a path relative to the manifest that supplies it and must resolve inside the
+application root. Packing embeds its contents. Ordinary string defaults stay
+literal, even if they look like paths. To package a directory, point to a
+dedicated input directory, not the application root. Keep build outputs and the
+package archive outside that directory. File defaults are supported for
+component and agent config, not tool or middleware provisions.
+
+**Everything in a package is visible to anyone with `read` access.** This includes
+the WebAssembly, initial files, `File` contents, extracted metadata, config defaults, environment
+values, plugin parameters, and initial cards. Environment templates are stored
+as written, including variable names; packing does not substitute their values.
+Anyone you give the tar file to can also read its contents. Do not put
+credentials in any of these inputs. Package defaults cannot name a secret or use
+a `$config` reference, even inside a record or list.
+
+## Install a file package
+
+From the application that will use the package, run `golem install ./my-package.tar`.
+Install verifies the archive without running its components. It records the file
+source, exact version, and digest in `packages:` in the root `golem.yaml` and
+in `golem.lock`. Commit both files. Put the archive inside the application to
+record a portable path, and make the archive available on other machines that
+need to build it.
+
+Build uses a verified archive from the per-user cache or reads the source on a
+cache miss. It unpacks under `golem-temp` and uses the publisher's metadata
+instead of running the installed components. Build and deploy do not change
+`golem.lock`. If a pin is missing or differs, run `golem install` with the
+intended archive to repair it.
+
+Registry publishing is not available through these commands.

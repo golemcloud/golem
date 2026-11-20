@@ -17,6 +17,11 @@ name = "agent"
 harness = false
 
 [[test]]
+name = "caller"
+harness = false
+required-features = ["export_golem_agentic"]
+
+[[test]]
 name = "http_router"
 harness = false
 required-features = ["export_golem_agentic"]
