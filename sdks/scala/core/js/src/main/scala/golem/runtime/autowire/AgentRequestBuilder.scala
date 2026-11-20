@@ -91,7 +91,9 @@ private[golem] object AgentRequestBuilder {
           },
           c.path.toJSArray,
           c.schema,
-          c.defaultValue.orUndefined
+          c.defaultValue
+            .map(v => SchemaWireInterop.valueTreeToJs(golem.schema.wire.SchemaWire.schemaValueToWit(v)))
+            .orUndefined
         )
       }.toJSArray,
       metadata.httpMount.map(encodeHttpMount).orUndefined

@@ -24837,7 +24837,9 @@ components:
           $ref: '#/components/schemas/SchemaType'
         default_value:
           nullable: true
-          type: string
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
       required:
       - source
       - path
