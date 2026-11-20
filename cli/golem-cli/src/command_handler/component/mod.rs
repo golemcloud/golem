@@ -34,11 +34,13 @@ use crate::model::app_raw;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{
-    AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
-    ComponentRevisionSelection, ComponentView, PendingRemoteInitialFile, RemoteToolDeploymentPlan,
-    ResolvedManifestComponentsAndTools, SelectedComponents, ToolManifestDeploymentConfig,
-    ToolManifestProvisionConfig, component_initial_permission_recipient_context,
-    initial_permission_from_manifest_card, initial_permission_recipient_context,
+    AGENT_ID_ENV_VAR, AGENT_ID_READ_GRANT, AgentTypeManifestProvisionConfig,
+    ComponentDeployProperties, ComponentNameMatchKind, ComponentRevisionSelection, ComponentView,
+    PendingRemoteInitialFile, RemoteToolDeploymentPlan, ResolvedManifestComponentsAndTools,
+    SelectedComponents, ToolManifestDeploymentConfig, ToolManifestProvisionConfig,
+    agent_type_reads_agent_id_from_env, component_initial_permission_recipient_context,
+    initial_permission_allows_agent_id_read, initial_permission_from_manifest_card,
+    initial_permission_recipient_context,
 };
 use crate::model::component::{ComponentGetView, ComponentListView, ComponentManifestTraceView};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
@@ -135,9 +137,10 @@ impl ComponentCommandHandler {
                     self.cmd_redeploy_agents(component_name.component_name)
                         .await
                 }
-                ComponentSubcommand::ManifestTrace { component_name } => {
-                    self.cmd_manifest_trace(component_name).await
-                }
+                ComponentSubcommand::ManifestTrace {
+                    component_name,
+                    build,
+                } => self.cmd_manifest_trace(component_name, build).await,
             }
         })
     }
@@ -336,14 +339,33 @@ impl ComponentCommandHandler {
 
     async fn cmd_manifest_trace(
         &self,
-        _component_names: OptionalComponentNames,
+        component_names: OptionalComponentNames,
+        build: bool,
     ) -> anyhow::Result<()> {
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
+        if build {
+            self.ctx
+                .app_handler()
+                .build(
+                    &BuildConfig::new(),
+                    component_names.component_name.clone(),
+                    &ApplicationComponentSelectMode::All,
+                )
+                .await?;
+        }
+        self.ctx
+            .app_handler()
+            .must_select_components(
+                component_names.component_name,
+                &ApplicationComponentSelectMode::All,
+            )
+            .await?;
+
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let app_ctx = app_ctx.some_or_err_mut()?;
 
         let component_names = app_ctx
-            .application()
-            .component_names()
+            .selected_component_names()
+            .iter()
             .cloned()
             .collect::<Vec<_>>();
         for component_name in component_names {
@@ -355,6 +377,45 @@ impl ComponentCommandHandler {
                 ),
             );
             let _indent = self.ctx.log_handler().decorated_indent_primary();
+
+            let agents = if app_ctx
+                .application()
+                .component(&component_name)
+                .wasm()
+                .exists()
+            {
+                let agent_types = extract_and_store_component_metadata(
+                    &BuildContext::new(app_ctx, &BuildConfig::new()),
+                    &component_name,
+                )
+                .await?
+                .agent_types;
+                let mapping = agent_types
+                    .iter()
+                    .map(|agent_type| (agent_type.type_name.clone(), component_name.clone()))
+                    .collect::<BTreeMap<_, _>>();
+                let resolved_agents = app_ctx.application().resolve_agents(&mapping)?;
+                mapping
+                    .into_keys()
+                    .filter_map(|agent_type_name| {
+                        let properties = resolved_agents
+                            .agent(&agent_type_name)?
+                            .layer_properties()
+                            .with_compacted_traces();
+                        Some((agent_type_name, properties))
+                    })
+                    .collect()
+            } else {
+                log_warn_action(
+                    "Skipping",
+                    format!(
+                        "the agent traces of {}, because the component is not built; build it or pass --build to see them",
+                        component_name.as_str().log_color_highlight()
+                    ),
+                );
+                BTreeMap::new()
+            };
+
             self.ctx
                 .log_handler()
                 .log_output(ComponentManifestTraceView {
@@ -364,6 +425,7 @@ impl ComponentCommandHandler {
                         .component(&component_name)
                         .layer_properties()
                         .with_compacted_traces(),
+                    agents,
                 })?
         }
 
@@ -865,6 +927,11 @@ impl ComponentCommandHandler {
         let mut components = BTreeMap::<ComponentName, ComponentDeployProperties>::new();
         for component_name in component_names {
             let properties = self.component_deploy_properties(&component_name).await?;
+            warn_about_initial_cards_without_agent_id_read(
+                environment,
+                &component_name,
+                &properties,
+            );
             components.insert(component_name, properties);
         }
 
@@ -3702,6 +3769,47 @@ fn collect_unused_agent_config_paths(
     .collect::<Vec<_>>();
     unused.sort();
     unused
+}
+
+/// Warns about each agent type whose explicit initial card does not let the agent read
+/// [`AGENT_ID_ENV_VAR`]. The card replaces the default card, and the Golem SDKs make the agent
+/// fail without that read.
+fn warn_about_initial_cards_without_agent_id_read(
+    environment: &ResolvedEnvironmentIdentity,
+    component_name: &ComponentName,
+    properties: &ComponentDeployProperties,
+) {
+    let warning = format!(
+        "the initialCard does not allow the agent to read {AGENT_ID_ENV_VAR}, which the Golem SDKs \
+         need, so the agent fails at its first call or at snapshot load. Grant \
+         {AGENT_ID_READ_GRANT} in the card, and do not exclude it in the upper bound."
+    );
+
+    for agent_type in &properties.agent_types {
+        let Some(config) = properties.agent_type_configs.get(&agent_type.type_name) else {
+            continue;
+        };
+        if config.initial_card.is_none() || !agent_type_reads_agent_id_from_env(agent_type) {
+            continue;
+        }
+        let context = initial_permission_recipient_context(
+            environment,
+            component_name,
+            &agent_type.type_name,
+        );
+        if !initial_permission_allows_agent_id_read(
+            &config.to_initial_permission(&context),
+            &context,
+        ) {
+            log_warn_action(
+                "Agent type",
+                format!(
+                    "{}: {warning}",
+                    agent_type.type_name.0.log_color_highlight()
+                ),
+            );
+        }
+    }
 }
 
 #[cfg(test)]

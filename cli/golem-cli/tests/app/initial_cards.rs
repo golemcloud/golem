@@ -1,0 +1,252 @@
+use crate::Tracing;
+use crate::app::{Output, TestContext, cmd, flag};
+use golem_cli::fs;
+use golem_cli::model::invoke_result_view::InvokeResultView;
+use test_r::{inherit_test_dep, test, timeout};
+
+inherit_test_dep!(Tracing);
+
+const AGENT_ID_WARNING: &str = "the initialCard does not allow the agent to read GOLEM_AGENT_ID, which the Golem SDKs need, so the agent fails at its first call or at snapshot load. Grant env(?agent) @ ?agent : read : GOLEM_AGENT_ID in the card, and do not exclude it in the upper bound.";
+/// The 1.6.x SDKs fail with their own text when `GOLEM_AGENT_ID` is not visible: the Rust SDK with
+/// "GOLEM_AGENT_ID environment variable must be set" and the TypeScript SDK with
+/// "GOLEM_AGENT_ID is not set". Both name the variable.
+const AGENT_ID_NOT_READABLE: &str = "GOLEM_AGENT_ID";
+const FILESYSTEM_READ: &str = "filesystem(?agent) @ ?agent : read : /**";
+const AGENT_ID_READ: &str = "env(?agent) @ ?agent : read : GOLEM_AGENT_ID";
+
+#[test]
+#[timeout("20 minutes")]
+async fn rust_initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_call(
+    _tracing: &Tracing,
+) {
+    initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_call(
+        "rust",
+        "Rust syntax",
+    )
+    .await;
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn typescript_initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_call(
+    _tracing: &Tracing,
+) {
+    initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_call(
+        "ts",
+        "TypeScript syntax",
+    )
+    .await;
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn component_initial_card_without_agent_id_read_warns_for_the_agents_that_inherit_it(
+    _tracing: &Tracing,
+) {
+    let mut ctx = TestContext::new();
+    let app_name = "initial-card-component";
+    ctx.start_server().await;
+
+    let output = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(output.success_or_dump());
+    ctx.cd(app_name);
+    let manifest = fs::read_to_string(ctx.cwd_path_join("golem.yaml")).unwrap();
+
+    write_component_card(&ctx, &manifest, &[FILESYSTEM_READ]);
+    let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deploy.success_or_dump());
+    assert!(
+        contains(
+            &deploy,
+            &format!("Agent type CounterAgent: {AGENT_ID_WARNING}")
+        ),
+        "deploy did not warn about the component card that CounterAgent inherits"
+    );
+
+    write_component_card(&ctx, &manifest, &[FILESYSTEM_READ, AGENT_ID_READ]);
+    let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deploy.success_or_dump());
+    assert!(
+        !contains(&deploy, AGENT_ID_WARNING),
+        "deploy warned about a component card that has the grant"
+    );
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn manifest_trace_with_build_shows_the_component_initial_card_of_the_agents_that_inherit_it(
+    _tracing: &Tracing,
+) {
+    let mut ctx = TestContext::new();
+    let app_name = "initial-card-trace";
+    let component_name = format!("{app_name}:rust-main");
+
+    let output = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(output.success_or_dump());
+    ctx.cd(app_name);
+    let manifest = fs::read_to_string(ctx.cwd_path_join("golem.yaml")).unwrap();
+    write_component_card(&ctx, &manifest, &[FILESYSTEM_READ, AGENT_ID_READ]);
+
+    let trace = manifest_trace(&ctx, &component_name, false).await;
+    assert!(
+        trace["agents"]
+            .as_object()
+            .is_none_or(|agents| agents.is_empty()),
+        "the trace of a component that is not built has agents: {trace}"
+    );
+
+    let trace = manifest_trace(&ctx, &component_name, true).await;
+    let card = &trace["agents"]["CounterAgent"]["initialCard"];
+    assert_eq!(
+        card["value"]["lowerBound"]["positive"],
+        serde_json::json!([FILESYSTEM_READ, AGENT_ID_READ]),
+        "CounterAgent does not have the component card: {trace}"
+    );
+    assert_eq!(
+        card["trace"][0]["id"],
+        serde_json::json!({ "component": component_name }),
+        "the trace does not name the component as the source of the card: {trace}"
+    );
+}
+
+/// Returns the JSON manifest trace of the component.
+async fn manifest_trace(ctx: &TestContext, component_name: &str, build: bool) -> serde_json::Value {
+    let mut args = vec![
+        flag::YES,
+        "component",
+        "manifest-trace",
+        component_name,
+        flag::FORMAT,
+        "json",
+    ];
+    if build {
+        args.push("--build");
+    }
+    let output = ctx.cli(args).await;
+    assert!(output.success_or_dump());
+    output
+        .stdout_json::<serde_json::Value>()
+        .into_iter()
+        .find(|trace| trace["componentName"] == component_name)
+        .unwrap_or_else(|| panic!("missing manifest trace for {component_name}"))
+}
+
+async fn initial_card_without_agent_id_read_warns_on_deploy_and_fails_at_first_call(
+    template: &str,
+    result_format: &str,
+) {
+    let mut ctx = TestContext::new();
+    let app_name = format!("initial-card-{template}");
+    ctx.start_server().await;
+
+    let output = ctx
+        .cli([flag::YES, cmd::NEW, &app_name, flag::TEMPLATE, template])
+        .await;
+    assert!(output.success_or_dump());
+    ctx.cd(&app_name);
+    let manifest = fs::read_to_string(ctx.cwd_path_join("golem.yaml")).unwrap();
+    assert!(
+        !manifest.lines().any(|line| line.starts_with("agents:")),
+        "the template manifest already declares agents"
+    );
+
+    write_counter_agent_card(&ctx, &manifest, &[FILESYSTEM_READ]);
+    let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deploy.success_or_dump());
+    assert!(
+        contains(
+            &deploy,
+            &format!("Agent type CounterAgent: {AGENT_ID_WARNING}")
+        ),
+        "deploy did not warn about the card of CounterAgent"
+    );
+
+    let hidden = "CounterAgent(\"hidden\")";
+    let invoke = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, hidden, "increment"])
+        .await;
+    assert!(!invoke.success(), "the first call succeeded");
+    assert!(
+        contains(&invoke, AGENT_ID_NOT_READABLE),
+        "the call error does not name GOLEM_AGENT_ID"
+    );
+    let agent = ctx.cli([cmd::AGENT, cmd::GET, hidden]).await;
+    assert!(agent.success_or_dump());
+    assert!(
+        contains(&agent, AGENT_ID_NOT_READABLE),
+        "the agent error does not name GOLEM_AGENT_ID"
+    );
+
+    write_counter_agent_card(&ctx, &manifest, &[FILESYSTEM_READ, AGENT_ID_READ]);
+    let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deploy.success_or_dump());
+    assert!(
+        !contains(&deploy, AGENT_ID_WARNING),
+        "deploy warned about a card that has the grant"
+    );
+
+    let shown = "CounterAgent(\"shown\")";
+    let invoke = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            shown,
+            "increment",
+            "--no-stream",
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(invoke.success_or_dump());
+    let results: Vec<InvokeResultView> = invoke.stdout_json();
+    assert_eq!(results.len(), 1, "expected one invocation result");
+    assert_eq!(results[0].result.as_deref(), Some("1"));
+    assert_eq!(results[0].result_format.as_deref(), Some(result_format));
+}
+
+fn write_counter_agent_card(ctx: &TestContext, manifest: &str, grants: &[&str]) {
+    let grants = grants
+        .iter()
+        .map(|grant| format!("          - \"{grant}\"\n"))
+        .collect::<String>();
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        format!(
+            "{manifest}\nagents:\n  CounterAgent:\n    initialCard:\n      lowerBound:\n        positive:\n{grants}"
+        ),
+    )
+    .unwrap();
+}
+
+/// Writes the card into the component of the generated manifest, after its `templates` line.
+fn write_component_card(ctx: &TestContext, manifest: &str, grants: &[&str]) {
+    let grants = grants
+        .iter()
+        .map(|grant| format!("          - \"{grant}\"\n"))
+        .collect::<String>();
+    let card = format!("    initialCard:\n      lowerBound:\n        positive:\n{grants}");
+    let mut written = String::new();
+    let mut inserted = false;
+    for line in manifest.lines() {
+        written.push_str(line);
+        written.push('\n');
+        if !inserted && line.starts_with("    templates: ") {
+            written.push_str(&card);
+            inserted = true;
+        }
+    }
+    assert!(
+        inserted,
+        "the template manifest has no component templates line"
+    );
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), written).unwrap();
+}
+
+fn contains(output: &Output, text: &str) -> bool {
+    output.stdout_contains(text) || output.stderr_contains(text)
+}

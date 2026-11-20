@@ -16,10 +16,13 @@ use crate::agent_id_display::SourceLanguage;
 use crate::agent_id_display::render_type_for_language;
 use crate::log::LogColorize;
 use crate::model::agent::RawAgentId;
-use crate::model::app::{ComponentLayerId, ComponentLayerProperties, InitialComponentFile};
+use crate::model::app::{
+    AgentLayerProperties, ComponentLayerId, ComponentLayerProperties, InitialComponentFile,
+};
 use crate::model::app_raw;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::environment::ResolvedEnvironmentIdentity;
+use crate::model::language::GuestLanguage;
 use crate::model::masking::{
     Masked, MaskingConfig, is_sensitive_key, mask_secret, mask_sensitive_map,
     mask_typed_agent_config_entries,
@@ -31,12 +34,15 @@ use colored::control::SHOULD_COLORIZE;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{AgentConfigSource, AgentFileContentHash, AgentTypeName};
+use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::recipient::{
     RecipientMonomorphizationContext, RecipientOwnerContext, RecipientPattern,
 };
 use golem_common::model::card::{
-    PolymorphicCard, PolymorphicManifestPermissionPattern,
-    parse_polymorphic_manifest_permission_grant, parse_polymorphic_permission,
+    AgentPermissionMonomorphizationContext, ClassPermissionTarget, EnvResourcePattern, EnvVarName,
+    EnvVerb, PermissionTarget, PolymorphicCard, PolymorphicManifestPermissionPattern, StoredCard,
+    agent_effective_surface_from_wallet, parse_polymorphic_manifest_permission_grant,
+    parse_polymorphic_permission,
 };
 use golem_common::model::component::{
     AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision,
@@ -56,6 +62,7 @@ use golem_common::schema::agent::{
 };
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
+use golem_common::schema::{ParsedAgentId, SchemaType, SchemaValue, TypedSchemaValue};
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
 use serde::Serializer;
@@ -65,6 +72,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedInitialPermissionCard {
@@ -415,6 +423,91 @@ pub fn initial_permission_from_manifest_card(
     .map_err(anyhow::Error::msg)
 }
 
+/// The environment variable that holds the ID of the running agent.
+pub const AGENT_ID_ENV_VAR: &str = "GOLEM_AGENT_ID";
+
+/// The least grant that lets an agent read its own [`AGENT_ID_ENV_VAR`].
+pub const AGENT_ID_READ_GRANT: &str = "env(?agent) @ ?agent : read : GOLEM_AGENT_ID";
+
+/// Returns whether the initial permissions let their holder read its own [`AGENT_ID_ENV_VAR`].
+///
+/// The check evaluates the initial card alone, with the same card algebra the executor uses to
+/// filter the environment of the agent, for each of the [`representative_agent_names`] of the
+/// type. It reports access only when every one of them can read the variable.
+///
+/// The result is an approximation in both directions. Another card in the wallet of the agent can
+/// grant the read, so the check can report no access for an agent that has it. A scope card or an
+/// inherited card can also remove the read, so the check can report access for an agent that does
+/// not have it.
+pub fn initial_permission_allows_agent_id_read(
+    permissions: &AgentTypeInitialPermissions,
+    context: &RecipientMonomorphizationContext,
+) -> bool {
+    let agent_type = match &context.owner {
+        RecipientOwnerContext::AgentType(agent_type) => agent_type.clone(),
+        RecipientOwnerContext::ComponentExternalToolOwner => {
+            AgentTypeName(context.component.0.clone())
+        }
+    };
+    let card = StoredCard::Polymorphic(permissions.to_polymorphic_card());
+    representative_agent_names(&agent_type)
+        .into_iter()
+        .all(|agent_name| card_allows_agent_id_read_for(&card, context, agent_name))
+}
+
+/// The names of the agents of a type that [`initial_permission_allows_agent_id_read`] evaluates:
+/// the agent with no constructor arguments, and the same agent with a phantom ID. Ephemeral
+/// agents, forked agents and agents served through a phantom mount have a phantom ID in their
+/// name, and a card pattern can match one of the two names and not the other.
+fn representative_agent_names(agent_type: &AgentTypeName) -> Vec<String> {
+    [None, Some(Uuid::nil())]
+        .into_iter()
+        .map(|phantom_id| {
+            let no_parameters = TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                SchemaValue::Record { fields: Vec::new() },
+            );
+            ParsedAgentId::new(agent_type.clone(), no_parameters, phantom_id).to_string()
+        })
+        .collect()
+}
+
+/// Returns whether the card lets the agent with the given name read its own [`AGENT_ID_ENV_VAR`].
+fn card_allows_agent_id_read_for(
+    card: &StoredCard,
+    context: &RecipientMonomorphizationContext,
+    agent_name: String,
+) -> bool {
+    let agent_context = AgentPermissionMonomorphizationContext {
+        account: context.account.clone(),
+        application: context.application.clone(),
+        environment: context.environment.clone(),
+        component: context.component.clone(),
+        agent_name: agent_name.clone(),
+        owner: context.owner.clone(),
+    };
+    let read = PermissionTarget::Env(ClassPermissionTarget {
+        verb: Some(EnvVerb::Read),
+        owner: AgentOwnerPattern::Agent {
+            account: context.account.clone(),
+            application: context.application.clone(),
+            environment: context.environment.clone(),
+            component: context.component.clone(),
+            agent: AgentOwnerLeafPattern::Agent(agent_name),
+        },
+        resource: EnvResourcePattern::VarName(EnvVarName(AGENT_ID_ENV_VAR.to_string())),
+    });
+    agent_effective_surface_from_wallet(&agent_context, [card])
+        .authorize(&read)
+        .unwrap_or(false)
+}
+
+/// Returns whether the SDK of the agent type reads [`AGENT_ID_ENV_VAR`] from the environment.
+/// The Scala SDK reads the metadata of the agent instead; an unknown language counts as reading it.
+pub fn agent_type_reads_agent_id_from_env(agent_type: &AgentTypeSchema) -> bool {
+    GuestLanguage::from_string(&agent_type.source_language) != Some(GuestLanguage::Scala)
+}
+
 #[derive(Debug)]
 pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
@@ -684,7 +777,9 @@ pub fn agent_interface_name(component: &ComponentDto, agent_type_name: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentTypeManifestProvisionConfig, ParsedInitialPermissionCard, app_raw,
+        AGENT_ID_READ_GRANT, AgentTypeManifestProvisionConfig, ParsedInitialPermissionCard,
+        agent_type_reads_agent_id_from_env, app_raw, card_allows_agent_id_read_for,
+        initial_permission_allows_agent_id_read, representative_agent_names,
         resolve_initial_permission, show_exported_agent_constructors,
     };
     use golem_common::model::Empty;
@@ -698,6 +793,7 @@ mod tests {
     };
     use golem_common::model::card::{
         AgentMethodName, AgentResourcePattern, AgentVerb, PolymorphicManifestPermissionPattern,
+        StoredCard,
     };
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
     use golem_common::model::environment::EnvironmentName;
@@ -954,6 +1050,206 @@ mod tests {
                 "filesystem(?agent) @ account@example.com/shop/prod/cart-svc/Cart : delete : /assets/**",
             ]
         );
+    }
+
+    const FILESYSTEM_READ: &str = "filesystem(?agent) @ ?agent : read : /**";
+    const NETWORK_CONNECT: &str = "network() @ ?agent : connect : api.openai.com:443";
+    const ENV_READ_ANY: &str = "env(?agent) @ ?agent : read : *";
+
+    fn parsed_card(
+        lower_positive: &[&str],
+        lower_negative: &[&str],
+        upper_positive: &[&str],
+        upper_negative: &[&str],
+    ) -> ParsedInitialPermissionCard {
+        let grants = |grants: &[&str]| grants.iter().map(|grant| grant.to_string()).collect();
+        ParsedInitialPermissionCard::from_grant_strings(
+            grants(lower_positive),
+            grants(lower_negative),
+            grants(upper_positive),
+            grants(upper_negative),
+        )
+        .unwrap()
+    }
+
+    fn agent_card_allows_agent_id_read(
+        lower_positive: &[&str],
+        lower_negative: &[&str],
+        upper_positive: &[&str],
+        upper_negative: &[&str],
+    ) -> bool {
+        let context = test_context();
+        let card = parsed_card(
+            lower_positive,
+            lower_negative,
+            upper_positive,
+            upper_negative,
+        );
+        let permissions = resolve_initial_permission(Some(card), &[], &context);
+        initial_permission_allows_agent_id_read(&permissions, &context)
+    }
+
+    #[test]
+    fn card_without_env_grant_does_not_allow_agent_id_read() {
+        assert!(!agent_card_allows_agent_id_read(
+            &[FILESYSTEM_READ, NETWORK_CONNECT],
+            &[],
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn card_with_agent_id_read_grant_allows_agent_id_read() {
+        assert!(agent_card_allows_agent_id_read(
+            &[FILESYSTEM_READ, AGENT_ID_READ_GRANT],
+            &[],
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn card_with_env_read_of_any_variable_allows_agent_id_read() {
+        assert!(agent_card_allows_agent_id_read(
+            &[FILESYSTEM_READ, ENV_READ_ANY],
+            &[],
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn card_with_any_env_verb_and_variable_allows_agent_id_read() {
+        assert!(agent_card_allows_agent_id_read(
+            &["env(?agent) @ ?agent : * : *"],
+            &[],
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn card_with_env_grant_on_every_agent_of_the_type_allows_agent_id_read_with_a_phantom_id() {
+        assert!(agent_card_allows_agent_id_read(
+            &["env(?component/Cart(*)) @ ?agent : read : GOLEM_AGENT_ID"],
+            &[],
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn representative_agent_names_are_the_agent_with_and_without_a_phantom_id() {
+        assert_eq!(
+            representative_agent_names(&AgentTypeName("Cart".to_string())),
+            vec![
+                "Cart()".to_string(),
+                "Cart()[00000000-0000-0000-0000-000000000000]".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn agent_id_read_grant_allows_the_agent_with_and_without_a_phantom_id() {
+        let context = test_context();
+        let card = parsed_card(&[AGENT_ID_READ_GRANT], &[], &[], &[]);
+        let permissions = resolve_initial_permission(Some(card), &[], &context);
+        let card = StoredCard::Polymorphic(permissions.to_polymorphic_card());
+
+        for agent_name in representative_agent_names(&AgentTypeName("Cart".to_string())) {
+            assert!(
+                card_allows_agent_id_read_for(&card, &context, agent_name.clone()),
+                "{agent_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn card_with_env_grant_for_another_variable_does_not_allow_agent_id_read() {
+        assert!(!agent_card_allows_agent_id_read(
+            &["env(?agent) @ ?agent : read : GOLEM_COMPONENT_ID"],
+            &[],
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn card_with_env_grant_on_another_owner_does_not_allow_agent_id_read() {
+        assert!(!agent_card_allows_agent_id_read(
+            &["env(?env/other-svc/Other(*)) @ ?agent : read : *"],
+            &[],
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn card_with_env_grant_for_another_recipient_does_not_allow_agent_id_read() {
+        assert!(!agent_card_allows_agent_id_read(
+            &["env(?agent) @ ?component/Other : read : *"],
+            &[],
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn lower_bound_negative_grant_excludes_agent_id_read() {
+        assert!(!agent_card_allows_agent_id_read(
+            &[ENV_READ_ANY],
+            &[AGENT_ID_READ_GRANT],
+            &[],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn upper_bound_negative_grant_excludes_agent_id_read() {
+        assert!(!agent_card_allows_agent_id_read(
+            &[ENV_READ_ANY],
+            &[],
+            &[],
+            &[AGENT_ID_READ_GRANT]
+        ));
+    }
+
+    #[test]
+    fn upper_bound_without_env_grant_excludes_agent_id_read() {
+        assert!(!agent_card_allows_agent_id_read(
+            &[ENV_READ_ANY],
+            &[],
+            &[FILESYSTEM_READ],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn default_card_allows_agent_id_read() {
+        let context = test_context();
+        let permissions = resolve_initial_permission(None, &[], &context);
+
+        assert!(initial_permission_allows_agent_id_read(
+            &permissions,
+            &context
+        ));
+    }
+
+    #[test]
+    fn only_scala_agent_types_do_not_read_agent_id_from_env() {
+        let with_language = |language: &str| AgentTypeSchema {
+            source_language: language.to_string(),
+            ..agent_type(AgentTypeKind::Regular, "Cart")
+        };
+
+        for language in ["rust", "typescript", "go", "moonbit", "", "unknown"] {
+            assert!(
+                agent_type_reads_agent_id_from_env(&with_language(language)),
+                "{language}"
+            );
+        }
+        assert!(!agent_type_reads_agent_id_from_env(&with_language("scala")));
     }
 
     fn test_context() -> RecipientMonomorphizationContext {
@@ -1265,6 +1561,10 @@ impl StructuredOutput for ComponentGetView {
 pub struct ComponentManifestTraceView {
     pub component_name: ComponentName,
     pub properties: ComponentLayerProperties,
+    /// The resolved layers of each agent type of the component. Empty when the component is not
+    /// built, because the agent types come from the built component.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<AgentTypeName, AgentLayerProperties>,
 }
 
 impl StructuredOutput for ComponentManifestTraceView {
@@ -1283,6 +1583,10 @@ impl StructuredOutput for ComponentManifestTraceView {
 impl TextOutput for ComponentManifestTraceView {
     fn log(&self) {
         log_manifest_trace_properties(&self.properties);
+        for (agent_type_name, properties) in &self.agents {
+            log_manifest_trace_agent_header(agent_type_name);
+            log_manifest_trace_properties(properties);
+        }
     }
 
     fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
@@ -1292,6 +1596,12 @@ impl TextOutput for ComponentManifestTraceView {
             let mut properties = serde_json::to_value(&self.properties)?;
             mask_component_layer_properties(&mut properties);
             log_manifest_trace_value(&properties);
+            for (agent_type_name, properties) in &self.agents {
+                let mut properties = serde_json::to_value(properties)?;
+                mask_component_layer_properties(&mut properties);
+                log_manifest_trace_agent_header(agent_type_name);
+                log_manifest_trace_value(&properties);
+            }
         }
         Ok(())
     }
@@ -1301,17 +1611,30 @@ impl ComponentManifestTraceView {
     fn to_masked_value(&self, config: MaskingConfig) -> anyhow::Result<Value> {
         let mut value = serde_json::to_value(self)?;
         if !config.show_secrets
-            && let Some(properties) = value
-                .as_object_mut()
-                .and_then(|object| object.get_mut("properties"))
+            && let Some(object) = value.as_object_mut()
         {
-            mask_component_layer_properties(properties);
+            if let Some(properties) = object.get_mut("properties") {
+                mask_component_layer_properties(properties);
+            }
+            if let Some(agents) = object.get_mut("agents").and_then(Value::as_object_mut) {
+                for properties in agents.values_mut() {
+                    mask_component_layer_properties(properties);
+                }
+            }
         }
         Ok(value)
     }
 }
 
-fn log_manifest_trace_properties(properties: &ComponentLayerProperties) {
+fn log_manifest_trace_agent_header(agent_type_name: &AgentTypeName) {
+    logln("");
+    logln(format!(
+        "Agent type {}:",
+        agent_type_name.0.log_color_highlight()
+    ));
+}
+
+fn log_manifest_trace_properties(properties: &impl Serialize) {
     let rendered = if SHOULD_COLORIZE.should_colorize() {
         to_colored_json(properties)
     } else {

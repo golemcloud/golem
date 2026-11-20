@@ -146,6 +146,46 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
         ),
         ("acme/shop/prod/cart/*", "acme/shop/prod/other/agent", false),
         ("acme/*/*/*/*", "other/shop/prod/cart/agent", false),
+        (
+            "acme/shop/prod/cart/Cart(*)",
+            "acme/shop/prod/cart/Cart(\"a\")[550e8400-e29b-41d4-a716-446655440000]",
+            true,
+        ),
+        (
+            "acme/shop/prod/cart/Cart(*)",
+            "acme/shop/prod/cart/Cart()[550e8400-e29b-41d4-a716-446655440000]",
+            true,
+        ),
+        (
+            "acme/shop/prod/cart/Cart(*)",
+            "acme/shop/prod/cart/CartX(\"a\")",
+            false,
+        ),
+        (
+            "acme/shop/prod/cart/Cart(*)",
+            "acme/shop/prod/cart/CartX(\"a\")[550e8400-e29b-41d4-a716-446655440000]",
+            false,
+        ),
+        (
+            "acme/shop/prod/cart/Cart(*)",
+            "acme/shop/prod/cart/Cart(\"a\")[not-a-uuid]",
+            false,
+        ),
+        (
+            "acme/shop/prod/cart/Cart(*)",
+            "acme/shop/prod/cart/Cart(\"a\")[550e8400-e29b-41d4-a716-446655440000]x",
+            false,
+        ),
+        (
+            "acme/shop/prod/cart/Cart(*)",
+            "acme/shop/prod/cart/Cart(\"a\")[550e8400-e29b-41d4-a716-446655440000][550e8400-e29b-41d4-a716-446655440000]",
+            false,
+        ),
+        (
+            "acme/shop/prod/cart/Cart(*)",
+            "acme/shop/prod/cart/Cart[550e8400-e29b-41d4-a716-446655440000]",
+            false,
+        ),
     ];
 
     for (left, right, expected) in cases {
@@ -169,6 +209,102 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
                 assert_eq!(left.subsumes(&right), expected);
             }
         );
+    }
+}
+
+/// The names of agents of one type: one with a key, and the agents whose name has a phantom ID
+/// (created without a key, ephemeral, forked).
+fn agents_of_type(agent_type: &str) -> Vec<String> {
+    let keyed = format!("{agent_type}(\"a\")");
+    vec![
+        keyed.clone(),
+        format!("{agent_type}()[{}]", Uuid::new_v4()),
+        format!(
+            "{agent_type}(\"a\")[{}]",
+            Uuid::new_v5(&Uuid::NAMESPACE_OID, b"ephemeral-invocation")
+        ),
+        format!("{keyed}[{}]", Uuid::new_v4()),
+    ]
+}
+
+#[test]
+fn type_wildcard_grants_cover_every_agent_of_the_type_in_every_agent_owned_class() {
+    let holder = RecipientPattern::parse("acme/shop/prod/cart/Caller").unwrap();
+    let classes = [
+        ("agent", "invoke", "add-item"),
+        ("env", "read", "GOLEM_AGENT_ID"),
+        ("filesystem", "read", "/data/a.txt"),
+        ("oplog", "read", "*"),
+        ("config", "read", "model.retry-count"),
+    ];
+
+    for (class, verb, resource) in classes {
+        let grant = |owner: &str| {
+            parse_permission(&format!(
+                "{class}(acme/shop/prod/cart/{owner}) @ * : {verb} : {resource}"
+            ))
+            .unwrap()
+        };
+        let surface =
+            EffectiveSurface::from_grants(&[grant("Cart(*)")], &[], &[], &[], &holder).unwrap();
+
+        for agent in agents_of_type("Cart") {
+            assert!(
+                surface.authorize(&grant(&agent).to_target()).unwrap(),
+                "{class} grant on Cart(*) must cover {agent}"
+            );
+        }
+        for agent in agents_of_type("CartX") {
+            assert!(
+                !surface.authorize(&grant(&agent).to_target()).unwrap(),
+                "{class} grant on Cart(*) must not cover {agent}"
+            );
+        }
+    }
+}
+
+#[test]
+fn type_wildcard_denials_cover_every_agent_of_the_type() {
+    let holder = RecipientPattern::parse("acme/shop/prod/cart/Caller").unwrap();
+    let grant = |owner: &str| {
+        parse_permission(&format!(
+            "agent(acme/shop/prod/cart/{owner}) @ * : invoke : add-item"
+        ))
+        .unwrap()
+    };
+    let all_agents = grant("*");
+    let denied_type = grant("Cart(*)");
+
+    let with_upper_denial = EffectiveSurface::from_grants(
+        std::slice::from_ref(&all_agents),
+        &[],
+        &[],
+        std::slice::from_ref(&denied_type),
+        &holder,
+    )
+    .unwrap();
+    let with_lower_denial = EffectiveSurface::from_grants(
+        std::slice::from_ref(&all_agents),
+        std::slice::from_ref(&denied_type),
+        &[],
+        &[],
+        &holder,
+    )
+    .unwrap();
+
+    for surface in [with_upper_denial, with_lower_denial] {
+        for agent in agents_of_type("Cart") {
+            assert!(
+                !surface.authorize(&grant(&agent).to_target()).unwrap(),
+                "a denial on Cart(*) must deny {agent}"
+            );
+        }
+        for agent in agents_of_type("CartX") {
+            assert!(
+                surface.authorize(&grant(&agent).to_target()).unwrap(),
+                "a denial on Cart(*) must not deny {agent}"
+            );
+        }
     }
 }
 
@@ -853,7 +989,7 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
         "acme/shop/prod/cart/agent",
         fs_path(vec![fs_lit("other"), fs_lit("file.txt")]),
     );
-    let parent = card(Vec::new(), vec![parent_upper]);
+    let parent = card(Vec::new(), vec![parent_upper.clone()]);
     let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
 
     assert!(
@@ -872,7 +1008,7 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
     );
     assert_matches!(
         parent_surface.validate_attenuation(&[], &[], &[], &[]),
-        Err(CardAlgebraError::UpperBoundTooBroad { grant: None })
+        Err(CardAlgebraError::UpperCeilingNotKept { ceiling }) if *ceiling == parent_upper
     );
 }
 
@@ -894,7 +1030,7 @@ fn attenuation_rejects_upper_positive_for_disjoint_recipient() {
 
     assert_matches!(
         parent_surface.validate_attenuation(&[], &[], std::slice::from_ref(&child_upper), &[],),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::UpperCeilingNotKept { .. })
     );
 }
 
@@ -934,7 +1070,7 @@ fn attenuation_rejects_narrowing_upper_positive_recipient() {
     let delegation_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent_ceiling));
     assert_matches!(
         delegation_surface.validate_attenuation(&[], &[], std::slice::from_ref(&child_upper), &[],),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::UpperCeilingNotKept { .. })
     );
 }
 
@@ -1032,7 +1168,7 @@ fn attenuation_rejects_dropped_positive_ceiling_when_child_has_lower_grant() {
             &[],
             &[],
         ),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::UpperCeilingNotKept { .. })
     );
 }
 
@@ -1076,7 +1212,7 @@ fn attenuation_preserves_parent_denials_and_accepts_additions_on_both_bounds() {
             &[],
             &[],
         ),
-        Err(CardAlgebraError::LowerBoundTooBroad { .. })
+        Err(CardAlgebraError::LowerDenialNotKept { .. })
     );
     assert_matches!(
         parent_surface.validate_attenuation(
@@ -1085,7 +1221,7 @@ fn attenuation_preserves_parent_denials_and_accepts_additions_on_both_bounds() {
             std::slice::from_ref(&child_grant),
             std::slice::from_ref(&resulting_negative[1]),
         ),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::UpperDenialNotKept { .. })
     );
 
     let witness = parent_surface
@@ -1178,7 +1314,7 @@ fn attenuation_does_not_preserve_a_parent_denial_with_an_unrelated_recipient() {
             &[],
             &[],
         ),
-        Err(CardAlgebraError::LowerBoundTooBroad { .. })
+        Err(CardAlgebraError::LowerDenialNotKept { .. })
     );
     assert_matches!(
         parent_delegation_surface.validate_attenuation(
@@ -1187,7 +1323,7 @@ fn attenuation_does_not_preserve_a_parent_denial_with_an_unrelated_recipient() {
             std::slice::from_ref(&child_grant),
             std::slice::from_ref(&unrelated_recipient_negative),
         ),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::UpperDenialNotKept { .. })
     );
 }
 
@@ -1263,7 +1399,7 @@ fn attenuation_rejects_narrowing_an_inherited_upper_denial_recipient() {
             std::slice::from_ref(&parent_grant),
             std::slice::from_ref(&narrowed_negative),
         ),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::UpperDenialNotKept { .. })
     );
 }
 
@@ -1287,7 +1423,7 @@ fn attenuation_rejects_omitting_selected_parent_denials_for_other_recipients() {
 
     assert_matches!(
         parent_surface.validate_attenuation(std::slice::from_ref(&parent_grant), &[], &[], &[],),
-        Err(CardAlgebraError::LowerBoundTooBroad { .. })
+        Err(CardAlgebraError::LowerDenialNotKept { .. })
     );
 }
 
@@ -1348,7 +1484,7 @@ fn attenuation_rejects_upper_denial_scoped_away_from_lower_recipient() {
             std::slice::from_ref(&child_upper),
             std::slice::from_ref(&child_negative),
         ),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::UpperDenialNotKept { .. })
     );
 }
 
@@ -1409,7 +1545,7 @@ fn attenuation_rejects_negative_only_child_ceiling_that_drops_parent_positive_ce
             &[],
             std::slice::from_ref(&deny_parent_upper),
         ),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::UpperCeilingNotKept { .. })
     );
 }
 
@@ -1438,7 +1574,7 @@ fn attenuation_requires_retaining_positive_ceiling_even_when_negative_denies_it(
             &[],
             std::slice::from_ref(&deny_everything),
         ),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::UpperCeilingNotKept { .. })
     );
 
     let witness = parent_surface
@@ -1758,7 +1894,7 @@ fn attenuation_rejects_negative_only_ceiling_retained_for_another_recipient() {
             &[],
             std::slice::from_ref(&mismatched_negative),
         ),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::UpperDenialNotKept { .. })
     );
 }
 
@@ -1857,6 +1993,236 @@ fn wallet_derivation_parent_selection_preserves_combined_attenuation_failure() {
     );
 }
 
+fn data_grant(segments: &[&str]) -> PermissionPattern {
+    let holder = "acme/shop/prod/cart/agent";
+    let mut path: Vec<_> = segments.iter().map(|segment| fs_lit(segment)).collect();
+    path.push(FilesystemPathSegmentPattern::GlobStar);
+    fs(holder, holder, fs_path(path))
+}
+
+#[test]
+fn attenuation_failures_name_what_the_child_drops_from_the_parent() {
+    let all_data = data_grant(&["data"]);
+    let public = data_grant(&["data", "public"]);
+    let secret = data_grant(&["data", "secret"]);
+    let mut parent = card(vec![all_data.clone()], vec![all_data.clone()]);
+    parent.lower_negative = vec![secret.clone()];
+    parent.upper_negative = vec![secret.clone()];
+    let surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
+    let keep = std::slice::from_ref(&secret);
+
+    assert_matches!(
+        surface.validate_attenuation(std::slice::from_ref(&public), &[], std::slice::from_ref(&public), keep),
+        Err(CardAlgebraError::LowerDenialNotKept { grant, denial })
+            if *grant == public && *denial == secret
+    );
+    assert_matches!(
+        surface.validate_attenuation(std::slice::from_ref(&public), keep, std::slice::from_ref(&public), &[]),
+        Err(CardAlgebraError::UpperDenialNotKept { denial }) if *denial == secret
+    );
+    assert_matches!(
+        surface.validate_attenuation(std::slice::from_ref(&public), keep, &[], keep),
+        Err(CardAlgebraError::UpperCeilingNotKept { ceiling }) if *ceiling == all_data
+    );
+    let other_recipient = fs(
+        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/other",
+        fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
+    );
+    assert_matches!(
+        surface.validate_attenuation(
+            std::slice::from_ref(&public),
+            keep,
+            std::slice::from_ref(&other_recipient),
+            keep
+        ),
+        Err(CardAlgebraError::UpperCeilingNotKept { ceiling }) if *ceiling == all_data
+    );
+    let outside = data_grant(&["other"]);
+    assert_matches!(
+        surface.validate_attenuation(
+            std::slice::from_ref(&public),
+            keep,
+            &[public.clone(), outside.clone()],
+            keep
+        ),
+        Err(CardAlgebraError::UpperBoundTooBroad { grant }) if *grant == outside
+    );
+    assert_matches!(
+        surface.validate_attenuation(std::slice::from_ref(&outside), keep, std::slice::from_ref(&public), keep),
+        Err(CardAlgebraError::LowerBoundTooBroad { grant }) if *grant == outside
+    );
+    assert!(
+        surface
+            .validate_attenuation(
+                std::slice::from_ref(&public),
+                keep,
+                std::slice::from_ref(&public),
+                keep
+            )
+            .is_ok()
+    );
+
+    let rendered_secret = secret.render().unwrap();
+    let upper_denial = CardAlgebraError::UpperDenialNotKept {
+        denial: Box::new(secret.clone()),
+    };
+    assert_eq!(
+        upper_denial.to_string(),
+        format!("the child card must keep the parent's upper-bound denial `{rendered_secret}`")
+    );
+    assert_eq!(
+        upper_denial.wallet_derivation_message(),
+        format!(
+            "the child card must keep the parent's upper-bound denial `{rendered_secret}`; derive-from-wallet takes complete bounds, so restate this denial in the upper-negative grants of the request"
+        )
+    );
+    let ceiling = CardAlgebraError::UpperCeilingNotKept {
+        ceiling: Box::new(all_data.clone()),
+    };
+    assert_eq!(
+        ceiling.to_string(),
+        format!(
+            "the parent card has the upper-bound ceiling `{}`, which the child card does not keep; an empty upper-positive list means no ceiling",
+            all_data.render().unwrap()
+        )
+    );
+    assert!(ceiling.wallet_derivation_message().ends_with(
+        "restate this ceiling or a narrower one in the upper-positive grants of the request"
+    ));
+    let lower_denial = CardAlgebraError::LowerDenialNotKept {
+        grant: Box::new(public.clone()),
+        denial: Box::new(secret.clone()),
+    };
+    assert!(
+        lower_denial
+            .to_string()
+            .contains(&format!("lower-bound denial `{rendered_secret}`"))
+    );
+    assert!(
+        lower_denial
+            .wallet_derivation_message()
+            .ends_with("restate this denial in the lower-negative grants of the request")
+    );
+    let not_granted = CardAlgebraError::LowerBoundTooBroad {
+        grant: Box::new(outside.clone()),
+    };
+    assert_eq!(
+        not_granted.wallet_derivation_message(),
+        not_granted.to_string()
+    );
+}
+
+/// A wallet card that grants everything under `/data` and denies `/data/<denied>` in its upper
+/// bound.
+fn wallet_card_denying(card_id: u128, denied: &str) -> Card {
+    let mut wallet_card = card(vec![data_grant(&["data"])], Vec::new());
+    wallet_card.card_id = CardId(Uuid::from_u128(card_id));
+    wallet_card.upper_negative = vec![data_grant(&["data", denied])];
+    wallet_card
+}
+
+#[test]
+fn wallet_derivation_parent_selection_reports_the_only_card_reason() {
+    let surface = DelegationSurface::from_cards(&[wallet_card_denying(1, "secret")]);
+
+    assert_matches!(
+        surface.select_wallet_derivation_parent(&[data_grant(&["data"])], &[], &[], &[]),
+        Err(CardAlgebraError::UpperDenialNotKept { denial })
+            if *denial == data_grant(&["data", "secret"])
+    );
+}
+
+#[test]
+fn wallet_derivation_parent_selection_lists_the_reason_of_every_card() {
+    let request = [data_grant(&["data"])];
+    let cards = [
+        wallet_card_denying(2, "private"),
+        wallet_card_denying(1, "secret"),
+    ];
+    let surface = DelegationSurface::from_cards(&cards);
+
+    let error = surface
+        .select_wallet_derivation_parent(&request, &[], &[], &[])
+        .unwrap_err();
+    let CardAlgebraError::NoWalletCardFits {
+        combined,
+        cards: failures,
+    } = &error
+    else {
+        panic!("expected a failure per wallet card, got {error:?}");
+    };
+    assert_matches!(**combined, CardAlgebraError::UpperDenialNotKept { .. });
+    assert_eq!(
+        failures
+            .iter()
+            .map(|failure| failure.card_id)
+            .collect::<Vec<_>>(),
+        vec![CardId(Uuid::from_u128(1)), CardId(Uuid::from_u128(2))]
+    );
+    let message = error.to_string();
+    let first = format!(
+        "card {}: the child card must keep the parent's upper-bound denial `{}`",
+        Uuid::from_u128(1),
+        data_grant(&["data", "secret"]).render().unwrap()
+    );
+    let second = format!(
+        "card {}: the child card must keep the parent's upper-bound denial `{}`",
+        Uuid::from_u128(2),
+        data_grant(&["data", "private"]).render().unwrap()
+    );
+    assert_eq!(
+        message,
+        format!("no wallet card permits the requested derivation: {first}; {second}")
+    );
+
+    let many: Vec<_> = (1..=5)
+        .map(|card_id| wallet_card_denying(card_id, &format!("denied-{card_id}")))
+        .collect();
+    let message = DelegationSurface::from_cards(&many)
+        .select_wallet_derivation_parent(&request, &[], &[], &[])
+        .unwrap_err()
+        .to_string();
+    assert!(message.contains(&format!("card {}:", Uuid::from_u128(3))));
+    assert!(!message.contains(&format!("card {}:", Uuid::from_u128(4))));
+    assert!(message.ends_with("; +2 more"), "{message}");
+}
+
+#[test]
+fn wallet_derivation_parent_selection_keeps_choosing_a_card_whose_bounds_the_request_restates() {
+    let cards = [
+        wallet_card_denying(1, "secret"),
+        wallet_card_denying(2, "private"),
+    ];
+    let surface = DelegationSurface::from_cards(&cards);
+
+    assert_eq!(
+        surface
+            .select_wallet_derivation_parent(
+                &[data_grant(&["data"])],
+                &[],
+                &[],
+                &[data_grant(&["data", "secret"])],
+            )
+            .unwrap(),
+        WalletDerivationParent::Single(CardId(Uuid::from_u128(1)))
+    );
+    assert_eq!(
+        surface
+            .select_wallet_derivation_parent(
+                &[data_grant(&["data"])],
+                &[],
+                &[],
+                &[
+                    data_grant(&["data", "secret"]),
+                    data_grant(&["data", "private"])
+                ],
+            )
+            .unwrap(),
+        WalletDerivationParent::Single(CardId(Uuid::from_u128(2)))
+    );
+}
+
 #[test]
 fn wallet_derivation_parent_selection_applies_upper_intersection_after_lower_union() {
     let holder = "acme/shop/prod/cart/agent";
@@ -1892,7 +2258,8 @@ fn wallet_derivation_parent_selection_applies_upper_intersection_after_lower_uni
             std::slice::from_ref(&broad_upper),
             &[],
         ),
-        Err(CardAlgebraError::UpperBoundTooBroad { .. })
+        Err(CardAlgebraError::NoWalletCardFits { combined, .. })
+            if matches!(*combined, CardAlgebraError::UpperBoundTooBroad { .. })
     );
 }
 

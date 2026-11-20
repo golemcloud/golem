@@ -1575,6 +1575,10 @@ pub mod component {
         ManifestTrace {
             #[command(flatten)]
             component_name: OptionalComponentNames,
+            /// Build the selected components first, so that the trace includes the agent types of
+            /// every component. Up-to-date components are not rebuilt.
+            #[clap(long, default_value = "false")]
+            build: bool,
         },
     }
 }

@@ -467,7 +467,10 @@ pub const COMPONENT_MANIFEST_TRACE: &str = "Examples:
   # Show component manifest properties together with which manifest file/line
   # each value originates from (useful for debugging multi-file manifests)
   golem-cli component manifest-trace
-  golem-cli component manifest-trace my-component";
+  golem-cli component manifest-trace my-component
+
+  # Build the component first, so that the trace includes its agent types
+  golem-cli component manifest-trace my-component --build";
 
 // Environment commands -----------------------------------------------------------------------------
 
