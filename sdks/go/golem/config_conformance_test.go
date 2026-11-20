@@ -102,7 +102,13 @@ func TestStaticConfigCorpus(t *testing.T) {
 				t.Fatalf("%v: default presence differs", decl.Path)
 			}
 			if want[i].DefaultValue != nil {
-				assertConfigJSON(t, []byte(decl.DefaultValue.Some()), []byte(*want[i].DefaultValue))
+				value, err := witschema.ValueToCore(decl.DefaultValue.Some())
+				if err != nil { t.Fatal(err) }
+				ref, err := graph.Ref(decl.ValueType)
+				if err != nil { t.Fatal(err) }
+				json, err := ref.UnpackJSONBytes(value)
+				if err != nil { t.Fatal(err) }
+				assertConfigJSON(t, json, []byte(*want[i].DefaultValue))
 			}
 		}
 		for _, tc := range corpus.StaticCases {
@@ -198,22 +204,7 @@ func TestStaticConfigRecursiveDefault(t *testing.T) {
 			!reflect.DeepEqual(at.Config[1].Path, []string{"apiKey"}) || !reflect.DeepEqual(at.Config[2].Path, []string{"maxChars"}) {
 			t.Fatalf("records or canonical names changed: %+v", at.Config)
 		}
-		graph, err := witschema.GraphToCore(at.Schema)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ref, err := graph.Ref(at.Config[0].ValueType)
-		if err != nil {
-			t.Fatal(err)
-		}
-		value, err := ref.PackJSONBytes([]byte(at.Config[0].DefaultValue.Some()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		tree, err := witschema.ValueToWit(value)
-		if err != nil {
-			t.Fatal(err)
-		}
+		tree := at.Config[0].DefaultValue.Some()
 		got, err := decodeConfigValue[staticNode](d, []string{"tree"}, tree)
 		if err != nil {
 			t.Fatal(err)

@@ -359,7 +359,11 @@ impl From<AgentConfigDeclarationSchema> for proto::AgentConfigDeclarationSchema 
                 as i32,
             path: value.path,
             value_type: Some(value.value_type.into()),
-            default_value: value.default_value,
+            default_value: value.default_value.map(|value| {
+                value
+                    .try_into()
+                    .expect("declaration defaults cannot contain live streams")
+            }),
         }
     }
 }
@@ -378,7 +382,7 @@ impl TryFrom<proto::AgentConfigDeclarationSchema> for AgentConfigDeclarationSche
                     "Missing field: AgentConfigDeclarationSchema.value_type".to_string()
                 })?
                 .try_into()?,
-            default_value: value.default_value,
+            default_value: value.default_value.map(TryInto::try_into).transpose()?,
         })
     }
 }

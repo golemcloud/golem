@@ -127,7 +127,7 @@ func (d *definitions) discover() ([]common.AgentType, []engine.DefError) {
 			errs = append(errs, engine.DefError{Agent: name, Detail: reason})
 		}
 		if len(invalids) == 0 {
-			if err := prepareConfigMetadata(&at); err != nil {
+			if err := prepareConfigMetadata(&at, e.configs); err != nil {
 				errs = append(errs, engine.DefError{Agent: name, Detail: err.Error()})
 			}
 		}

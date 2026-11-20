@@ -91,7 +91,7 @@ type configDecl struct {
 	path         []string
 	typ          reflect.Type
 	restrict     *engine.Restriction
-	defaultValue witTypes.Option[string]
+	defaultJSON witTypes.Option[string]
 }
 
 // NoConfig is the empty config type used by an agent that declares no config. It
@@ -145,7 +145,7 @@ type configLeaf struct {
 	index  []int
 	// tag is the field's golem restriction tag, if it has one.
 	tag          string
-	defaultValue witTypes.Option[string]
+	defaultJSON witTypes.Option[string]
 }
 
 var secretishType = reflect.TypeOf((*secretish)(nil)).Elem()
@@ -172,14 +172,14 @@ func configLeaves(cfgType reflect.Type) ([]configLeaf, error) {
 			index := append(append([]int(nil), idx...), i)
 			lf := configLeaf{source: common.AgentConfigSourceLocal, path: path, typ: f.Type, index: index, tag: f.Tag.Get("golem")}
 			if value, ok := f.Tag.Lookup("golemDefault"); ok {
-				lf.defaultValue = witTypes.Some(value)
+				lf.defaultJSON = witTypes.Some(value)
 			}
 			switch grouping := f.Tag.Get("golemConfig"); grouping {
 			case "nested":
 				if f.Type.Kind() != reflect.Struct || isSecretType(f.Type) {
 					return fmt.Errorf("config %v: nested config must be a struct", path)
 				}
-				if lf.defaultValue.IsSome() || lf.tag != "" {
+				if lf.defaultJSON.IsSome() || lf.tag != "" {
 					return fmt.Errorf("config %v: declare defaults and restrictions on the nested fields", path)
 				}
 				if err := walk(path, index, f.Type); err != nil {
@@ -192,7 +192,7 @@ func configLeaves(cfgType reflect.Type) ([]configLeaf, error) {
 			}
 			if isSecretType(f.Type) {
 				lf.source = common.AgentConfigSourceSecret
-				if lf.defaultValue.IsSome() {
+				if lf.defaultJSON.IsSome() {
 					return fmt.Errorf("config %v: Secret fields cannot declare code defaults", path)
 				}
 			}
@@ -228,7 +228,7 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 			}
 			e.configs[len(e.configs)-1].restrict = r
 		}
-		e.configs[len(e.configs)-1].defaultValue = lf.defaultValue
+		e.configs[len(e.configs)-1].defaultJSON = lf.defaultJSON
 	}
 }
 
@@ -352,15 +352,14 @@ func (d *definitions) buildConfigDecls(g *engine.GraphBuilder, cds []configDecl)
 			Source:       cd.source,
 			Path:         cd.path,
 			ValueType:    g.RestrictedNode(d.Compile(cd.typ), cd.restrict),
-			DefaultValue: cd.defaultValue,
 		})
 	}
 	return out
 }
 
-// prepareConfigMetadata validates static data and renders defaults through the
+// prepareConfigMetadata validates static data and decodes source defaults through the
 // owning schema. It never supplies a runtime value: the host resolves defaults.
-func prepareConfigMetadata(at *common.AgentType) error {
+func prepareConfigMetadata(at *common.AgentType, sources []configDecl) error {
 	if len(at.Config) == 0 {
 		return nil
 	}
@@ -377,19 +376,19 @@ func prepareConfigMetadata(at *common.AgentType) error {
 		if decl.Source == common.AgentConfigSourceLocal && ref.ContainsHandle() {
 			return fmt.Errorf("config %v: static data cannot contain Secret or other host-managed handles", decl.Path)
 		}
-		if decl.DefaultValue.IsSome() {
+		if sources[i].defaultJSON.IsSome() {
 			if decl.Source != common.AgentConfigSourceLocal {
 				return fmt.Errorf("config %v: only static data can declare code defaults", decl.Path)
 			}
-			value, err := ref.PackJSONBytes([]byte(decl.DefaultValue.Some()))
+			value, err := ref.PackJSONBytes([]byte(sources[i].defaultJSON.Some()))
 			if err != nil {
 				return fmt.Errorf("config %v: invalid code default: %w", decl.Path, err)
 			}
-			canonical, err := ref.UnpackJSONBytes(value)
+			tree, err := witschema.ValueToWit(value)
 			if err != nil {
 				return fmt.Errorf("config %v: invalid code default: %w", decl.Path, err)
 			}
-			decl.DefaultValue = witTypes.Some(string(canonical))
+			decl.DefaultValue = witTypes.Some(tree)
 		}
 	}
 	return nil
