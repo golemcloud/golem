@@ -4017,8 +4017,8 @@ fn public_entry_shows_the_original_claims_text_everywhere() {
     }
 }
 
-/// A reader decodes an entry from its JSON text, also through the internally tagged enums that
-/// buffer the claims before they are read.
+/// A reader decodes an entry from its JSON text, through the internally tagged enums that hold
+/// the claims.
 #[test]
 fn public_entry_with_claims_decodes_from_json_text() {
     let user = Principal::User(UserPrincipal {
