@@ -909,6 +909,39 @@ impl ProcessExit for ProcessExitImpl {
     }
 }
 
+struct MiddlewareProcessExit;
+
+impl MiddlewareProcessExit {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[golem_rust::tool_middleware(name = "middleware-process-exit", constructor = MiddlewareProcessExit::new)]
+impl ProcessExitMiddleware for MiddlewareProcessExit {
+    async fn process_exit(
+        &self,
+        _underlying: &ProcessExitUnderlying,
+        _cwd: String,
+        args: Vec<String>,
+        mut stdout: OutputStream,
+        _stderr: OutputStream,
+    ) -> Result<
+        golem_rust::tool::ProcessExitStatus,
+        golem_rust::tool::ToolInvokeError<ProcessExitError>,
+    > {
+        let code = args
+            .first()
+            .and_then(|code| code.parse::<i32>().ok())
+            .unwrap_or(1);
+        stdout
+            .write(b"middleware-out".to_vec())
+            .await
+            .expect("write stdout");
+        std::process::exit(code)
+    }
+}
+
 #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct EnvironmentProbeEvidence {
     pub marker: String,

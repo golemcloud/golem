@@ -7376,6 +7376,126 @@ async fn tool_body_exit_becomes_its_process_exit_status(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn typed_middleware_exit_keeps_lifecycle_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        &agent_type.0,
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    let definition = metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "middleware-process-exit")
+        .unwrap();
+    assert!(matches!(
+        definition.scope,
+        ToolMiddlewareScope::Monomorphic(_)
+    ));
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &ToolName::try_from("process-exit").unwrap(),
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        &metadata.tool_middlewares,
+        vec![(
+            definition.name.as_str(),
+            empty_middleware_parameters(definition),
+        )],
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let worker_id = executor
+        .start_agent(
+            &caller_component.id,
+            agent_key!("ToolStreamingCaller", "middleware-exit"),
+        )
+        .await?;
+
+    let failure = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "middleware-exit",
+        "process-exit",
+        "/",
+        vec!["4", "out-4", "err-4"],
+    )
+    .await
+    .expect_err("an exit in middleware must not become a process exit status");
+    assert!(
+        failure.to_string().contains("Process exited"),
+        "{failure:?}"
+    );
+    assert_eq!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Exited
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let returned_statuses = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(params) => params.response.as_ref(),
+            _ => None,
+        })
+        .filter_map(|response| SerializableToolOperationTerminal::from_value(response.value()).ok())
+        .filter(|terminal| terminal.result.is_ok())
+        .count();
+    assert_eq!(returned_statuses, 0, "{oplog:#?}");
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn guest_trap_preserves_a_blocked_same_tool_sibling_and_drains_cleanup(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

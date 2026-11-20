@@ -96,7 +96,7 @@ fn process_exit_status(
 async fn finish_process_exit<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
     status: golem_common::schema::TypedSchemaValue,
-    writers: Option<[Option<(AttachmentWriter, AttachmentController)>; 2]>,
+    writers: [Option<(AttachmentWriter, AttachmentController)>; 2],
     output_contract: &ToolOutputContract,
 ) -> wasmtime::Result<HostResponseEntityInvocation> {
     use golem_common::model::oplog::host_functions::GolemToolOutputFinish;
@@ -109,7 +109,7 @@ async fn finish_process_exit<Ctx: WorkerCtx>(
         .as_context_mut()
         .run_concurrent(async move |accessor| {
             let accessor = accessor.with_getter::<Writers<Ctx>>(|ctx| ctx.durable_ctx_mut());
-            for (writer, controller) in writers.into_iter().flatten().flatten() {
+            for (writer, controller) in writers.into_iter().flatten() {
                 // A writer the guest dropped keeps the terminal its disposal selected. One it
                 // still holds finishes; finish reports an earlier terminal as closed.
                 if !controller.producer_active() {
@@ -543,7 +543,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     }
     let attribution = store.data().durable_ctx().attribution.clone();
     let invocation_key = store.data().durable_ctx().invocation_key();
-    let exit_writers = match position.layer() {
+    let tool_body_writers = match position.layer() {
         golem_common::model::entity::EntityInvocationPlanLayer::Tool { .. } => Some(output_writers),
         _ => None,
     };
@@ -709,6 +709,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         return Ok(EntityBodyOutcome::Cancelled);
     }
     if matches!(deadline, SettlementDeadline::RootReturned)
+        && let Some(writers) = tool_body_writers
         && let Some(status) = process_exit_status(&result, &output_contract)
         && store
             .data()
@@ -719,8 +720,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             .is_none()
         && !operation.has_pending_live_admission_rejection().await
     {
-        result = match finish_process_exit(&mut store, status, exit_writers, &output_contract).await
-        {
+        result = match finish_process_exit(&mut store, status, writers, &output_contract).await {
             Ok(response) => Ok(Ok(response)),
             Err(error) => Err(GuestCallSettlementError::Trap(error)),
         };
