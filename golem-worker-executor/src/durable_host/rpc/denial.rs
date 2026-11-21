@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::EphemeralRpcTarget;
 use super::{
     FutureInvokeResultEntry, FutureInvokeResultState, RpcCallTarget, WasmRpcEntry,
     WasmRpcEntryPayload, embedded_invocation_span_builder, restore_embedded_span,
@@ -35,7 +36,6 @@ use crate::workerctx::WorkerCtx;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
-use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostPayloadPair;
@@ -247,7 +247,7 @@ pub(super) async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     connection_span_id: &SpanId,
     logical_remote_agent_id: &OwnedAgentId,
-    ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
+    ephemeral: Option<&EphemeralRpcTarget>,
     method_name: &str,
     error: InternalRpcError,
 ) -> anyhow::Result<AsyncInvocationWithMetadata> {
@@ -259,7 +259,7 @@ pub(super) async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
     let call_target = RpcCallTarget::new(
         begun.idempotency_key_position(ctx),
         logical_remote_agent_id,
-        ephemeral_logical_agent_id,
+        ephemeral,
         method_name,
     );
     let serializable_error: SerializableRpcError = error.clone().into();
@@ -360,22 +360,19 @@ pub(super) async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
     error: RpcError,
 ) -> anyhow::Result<AsyncInvocationWithMetadata> {
     let details = rpc_denied_details(error);
-    let (ephemeral_logical_agent_id, connection_span_id) = {
+    let (ephemeral, connection_span_id) = {
         let payload = ctx
             .table()
             .get(resource)?
             .payload
             .downcast_ref::<WasmRpcEntryPayload>()
             .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?;
-        (
-            payload.ephemeral_logical_agent_id.clone(),
-            payload.span_id.clone(),
-        )
+        (payload.ephemeral.clone(), payload.span_id.clone())
     };
     let call_target = RpcCallTarget::new(
         begun.idempotency_key_position(ctx),
         &logical_remote_agent_id,
-        ephemeral_logical_agent_id.as_ref(),
+        ephemeral.as_ref(),
         &method_name,
     );
     let span_started = embedded_invocation_span_builder(ctx, &connection_span_id, &method_name)?;

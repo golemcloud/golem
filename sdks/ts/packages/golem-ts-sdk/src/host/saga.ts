@@ -256,8 +256,8 @@ export async function infallibleSaga<Out>(
       }
       if (e instanceof SagaRetryFailure) return Result.err(e);
       try {
-        const id = getSelfMetadata().agentId;
-        const noun = `urn:worker:${id.componentId}/${id.agentId}`;
+        const metadata = getSelfMetadata();
+        const noun = `urn:agent:${metadata.environmentId}/${metadata.agentId}`;
         const properties: [string, PredicateValue][] = [
           ['attempt', { tag: 'integer', val: ++attempt }],
           [

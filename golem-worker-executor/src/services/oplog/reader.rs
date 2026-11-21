@@ -158,7 +158,7 @@ pub struct UnreadableOplog {
 impl UnreadableOplog {
     pub fn new(agent_id: &AgentId, error: OplogReadError) -> Self {
         Self {
-            agent_id: agent_id.clone(),
+            agent_id: *agent_id,
             error,
         }
     }
@@ -435,10 +435,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_oplog_names_the_agent_and_the_read_error() {
-        let agent_id = golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "unreadable".to_string(),
-        };
+        let agent_id = golem_common::model::AgentId::from_parts(7, 1);
         let error = UnreadableOplog::new(
             &agent_id,
             OplogReadError::corruption(OplogReadSource::Archive(1), "bad chunk"),
@@ -454,10 +451,7 @@ mod tests {
     /// agent for good.
     #[test]
     fn only_an_unavailable_source_is_a_recovery() {
-        let agent_id = golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "unreadable".to_string(),
-        };
+        let agent_id = golem_common::model::AgentId::from_parts(7, 2);
         let unavailable = UnreadableOplog::new(
             &agent_id,
             OplogReadError::of_archive(

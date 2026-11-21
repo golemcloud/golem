@@ -17,12 +17,12 @@ describe('agentIdsFromAgentListJson', () => {
       agentIdsFromAgentListJson({
         $type: 'agent.list',
         agents: [
-          { componentName: 'app:counter', agentId: 'CounterAgent("a")' },
-          { componentName: 'app:counter', agentId: 'CounterAgent("b")' },
+          { componentName: 'app:counter', agentId: '00000007-0000-8000-8000-00000000000a' },
+          { componentName: 'app:counter', agentId: '00000007-0000-8000-8000-00000000000b' },
         ],
         cursors: {},
       }),
-    ).toEqual(['CounterAgent("a")', 'CounterAgent("b")']);
+    ).toEqual(['00000007-0000-8000-8000-00000000000a', '00000007-0000-8000-8000-00000000000b']);
   });
 
   it('returns no agent ids for other output types', () => {

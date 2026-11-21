@@ -1,0 +1,208 @@
+{
+  "tier": "pr",
+  "description": "xargs conformance: GNU findutils 4.10 xargs in the oracle is the reference for status, stdout and\nstderr. Commands must exist as programs in the oracle too, so cases use echo, printf, cat, grep, wc,\njq, true and false rather than shell functions.",
+  "cases": [
+    {
+      "name": "xargs: default command is echo",
+      "script": "printf 'a b\\nc\\n' | xargs",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: max args",
+      "script": "printf '1 2 3 4 5\\n' | xargs -n 2 echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: quotes and backslashes",
+      "script": "printf \"'a b' \\\"c d\\\" e\\\\\\\\ f\\n\" | xargs -n1 echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: unmatched quote",
+      "script": "printf \"it's\\n\" | xargs echo; echo status=$?; printf 'a \"b' | xargs echo; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: null delimiter",
+      "script": "printf 'a b\\0\\0c\\0' | xargs -0 -n1 echo x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: custom delimiter keeps empty items",
+      "script": "printf 'a:b::c' | xargs -d: -n1 echo x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: delimiter escapes",
+      "script": "printf 'a\\tb' | xargs -d '\\t' -n1 echo; printf 'aAb' | xargs -d '\\x41' echo; printf 'a b' | xargs -d '\\040' -n1 echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: replace string",
+      "script": "printf 'one\\ntwo\\n' | xargs -I{} echo 'item-{}-{}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: replace takes whole lines",
+      "script": "printf '  a b  \\n\\n c \\n' | xargs -I{} echo '[{}]'; printf 'x\\n' | xargs -i echo {} y",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: max lines",
+      "script": "printf 'a b\\nc d \\ne\\nf\\n' | xargs -L 2 echo; printf 'a\\nb\\n' | xargs -l echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: empty input",
+      "script": "printf '' | xargs echo hi; printf '\\n\\n' | xargs echo x; printf '' | xargs -r echo hi; echo status=$?; printf '' | xargs -I{} echo {}; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: verbose",
+      "script": "printf 'a b c\\n' | xargs -t -n2 echo; printf '' | xargs -t echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: verbose quoting",
+      "script": "printf 'a b\\0it'\\''s\\0x=y\\0\\0a\\tb\\0plain\\0' | xargs -0 -t true",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: eof string",
+      "script": "printf 'a b EOF c\\n' | xargs -E EOF echo; printf 'a b _ c\\n' | xargs -e_ echo; printf 'a b\\n' | xargs -E '' echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: arg file",
+      "script": "printf 'x\\ny\\n' > /tmp/args; xargs -a /tmp/args echo; xargs --arg-file=/tmp/nope echo; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: max chars",
+      "script": "printf 'a b c d e' | xargs -s 10 echo; printf 'abcdefghijk' | xargs -s 10 echo; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: exit on size",
+      "script": "printf 'a b c' | xargs -x -n 3 -s 9 echo; echo status=$?; printf 'a b c' | xargs -n 3 -s 9 echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: failing command gives 123",
+      "script": "printf 'x\\n' > /tmp/x1; printf 'y\\n' > /tmp/y1; printf '/tmp/x1\\n/tmp/y1\\n/tmp/x1\\n' | xargs -n1 grep -q x; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: status 255 aborts",
+      "script": "printf 'a\\nb\\n' | xargs -n1 jq -n '\"x\\n\" | halt_error(255)'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: command not found",
+      "script": "echo a | xargs nosuchcmd; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: directory as command",
+      "script": "echo a | xargs /tmp; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: option errors",
+      "script": "xargs -Z; echo $?; xargs --bogus; echo $?; xargs -n; echo $?; xargs -n 0; echo $?; xargs -n 1x; echo $?; xargs -P x; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: delimiter errors",
+      "script": "xargs -d ab; echo $?; xargs -d '\\q'; echo $?; xargs -d ''; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: mutually exclusive options",
+      "script": "printf 'a b\\n' | xargs -L1 -n1 echo; printf 'a b\\nc\\n' | xargs -n1 -L1 echo; printf 'a\\n' | xargs -n1 -I{} echo {}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: parallel is accepted",
+      "script": "printf 'a\\nb\\n' | xargs -P 4 -n1 echo | sort; printf 'a\\n' | xargs --max-procs=0 echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: long options",
+      "script": "printf 'a b\\n' | xargs --max-args=1 --verbose echo; printf 'a:b' | xargs --delimiter=: --no-run-if-empty echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: double dash and passthrough",
+      "script": "printf 'a\\n' | xargs -- echo x; printf 'a\\n' | xargs echo -n; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: child stdin is empty",
+      "script": "printf 'a\\nb\\n' | xargs -I{} cat; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: find pipeline",
+      "script": "mkdir -p /tmp/x/s && printf 'ab\\n' > '/tmp/x/a b' && printf 'c\\n' > /tmp/x/s/c && find /tmp/x -type f -print0 | xargs -0 wc -c | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: endless producer with replace",
+      "script": "while :; do echo x; done | xargs -I{} echo {} | head -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: endless producer default batching",
+      "script": "while :; do echo x; done | xargs | head -c 10; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: refuses prompt",
+      "script": "printf 'a\\n' | xargs -p echo; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\n"
+        },
+        "stderr": {
+          "text": "xargs: -p is unsupported in bash-tool\n"
+        },
+        "reason": "the oracle cannot prompt without a terminal; bash-tool refuses -p up front"
+      }
+    }
+  ]
+}

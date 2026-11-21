@@ -32,21 +32,13 @@ use golem_common::model::component::{
     AgentFilePermissions, ComponentRevision, PluginInstallationAction,
 };
 use golem_common::model::filesystem::{FileReadError, FileReadHead};
-use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
+use golem_common::model::oplog::{OplogCursor, OplogScan, PublicOplogPageEntry};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, OplogIndex, ScanCursor};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct WorkerCreationResponse {
-    pub agent_id: AgentId,
-    pub component_revision: ComponentRevision,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -97,11 +89,10 @@ pub struct DeactivatePluginResponse {}
 pub struct RevertWorkerResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-pub struct ForkWorkerResponse {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-pub struct CancelInvocationResponse {
-    pub canceled: bool,
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ForkWorkerResponse {
+    pub agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
@@ -112,6 +103,8 @@ pub struct GetOplogResponse {
     pub next: Option<OplogCursor>,
     pub first_index_in_chunk: u64,
     pub last_index: u64,
+    // The scan accounting of a range read, which names `to`; absent for other reads.
+    pub scan: Option<OplogScan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
@@ -136,7 +129,6 @@ pub struct UpdateWorkerRequest {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ForkWorkerRequest {
-    pub target_agent_id: AgentId,
     pub oplog_index_cutoff: OplogIndex,
 }
 

@@ -409,8 +409,9 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
         .cli([
             flag::YES,
             cmd::AGENT,
-            cmd::NEW,
+            cmd::CREATE,
             "IfsProbeAgent(\"readonly-directory\")",
+            "--keyed",
         ])
         .await;
     assert!(outputs.success_or_dump());

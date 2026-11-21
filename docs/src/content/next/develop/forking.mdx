@@ -19,12 +19,12 @@ declare module 'golem:api/host@1.5.0' {
    * Details about the fork result
    */
   export type ForkDetails = {
-    forkedPhantomId: Uuid;
+    forkedAgentId: AgentId;
   };
 
   /**
    * Indicates which agent the code is running on after `fork`.
-   * The parameter contains details about the fork result, such as the phantom-ID of the newly
+   * The parameter contains details about the fork result, such as the ID of the newly
    * created agent.
    */
   export type ForkResult =
@@ -35,8 +35,8 @@ declare module 'golem:api/host@1.5.0' {
 
   /**
    * Forks the current agent at the current execution point.
-   * The new agent gets the same base agent ID but with a new unique phantom ID.
-   * The phantom ID of the forked agent is returned in `fork-result` on both sides.
+   * The new agent has the same agent type, a new agent ID that Golem issues, and no key.
+   * The agent ID of the forked agent is returned in `fork-result` on both sides.
    * The newly created agent continues running from the same point,
    * but the return value is going to be different in this agent and the forked agent.
    */
@@ -62,11 +62,11 @@ type ForkResult = Agents.ForkResult
 ```rust
 /// Details about the fork result
 pub struct ForkDetails {
-    pub forked_phantom_id: Uuid,
+    pub forked_agent_id: AgentId,
 }
 
 /// Indicates which agent the code is running on after `fork`.
-/// The parameter contains details about the fork result, such as the phantom-ID of the newly
+/// The parameter contains details about the fork result, such as the ID of the newly
 /// created agent.
 pub enum ForkResult {
     Original(ForkDetails),
@@ -74,8 +74,8 @@ pub enum ForkResult {
 }
 
 /// Forks the current agent at the current execution point.
-/// The new agent gets the same base agent ID but with a new unique phantom ID.
-/// The phantom ID of the forked agent is returned in `fork-result` on both sides.
+/// The new agent has the same agent type, a new agent ID that Golem issues, and no key.
+/// The agent ID of the forked agent is returned in `fork-result` on both sides.
 /// The newly created agent continues running from the same point, but the return value is going to be different
 /// in this agent and the forked agent.
 pub fn fork() -> Result<ForkResult, AgentOperationError>;
@@ -86,16 +86,15 @@ pub fn fork() -> Result<ForkResult, AgentOperationError>;
 `fork` and `ForkResult` are available via `golem.HostApi`
 
 ```scala
-import golem.HostApi
-import java.util.UUID
+import golem.{AgentId, HostApi}
 
 sealed trait ForkResult {
-  def forkedPhantomId: UUID
+  def forkedAgentId: AgentId
 }
 
 object ForkResult {
-  final case class Original(forkedPhantomId: UUID) extends ForkResult
-  final case class Forked(forkedPhantomId: UUID)   extends ForkResult
+  final case class Original(forkedAgentId: AgentId) extends ForkResult
+  final case class Forked(forkedAgentId: AgentId)   extends ForkResult
 }
 
 def fork(): ForkResult = HostApi.fork()
@@ -108,11 +107,11 @@ Assuming `golemcloud/golem_sdk/api` is imported as `@api` and `golemcloud/golem_
 ```moonbit
 /// Details about the fork result
 pub(all) struct ForkDetails {
-  forked_phantom_id : @rpcTypes.Uuid
+  forked_agent_id : @rpcTypes.AgentId
 } derive(Debug, Eq)
 
 /// Indicates which agent the code is running on after `fork`.
-/// The parameter contains details about the fork result, such as the phantom-ID of the newly
+/// The parameter contains details about the fork result, such as the ID of the newly
 /// created agent.
 pub(all) enum ForkResult {
   Original(ForkDetails)
@@ -120,8 +119,8 @@ pub(all) enum ForkResult {
 } derive(Debug, Eq)
 
 /// Forks the current agent at the current execution point.
-/// The new agent gets the same base agent ID but with a new unique phantom ID.
-/// The phantom ID of the forked agent is returned in `fork-result` on both sides.
+/// The new agent has the same agent type, a new agent ID that Golem issues, and no key.
+/// The agent ID of the forked agent is returned in `fork-result` on both sides.
 /// The newly created agent continues running from the same point,
 /// but the return value is going to be different in this agent and the forked agent.
 pub fn fork() -> ForkResult
@@ -134,12 +133,13 @@ pub fn fork() -> ForkResult
 ```go
 import "github.com/golemcloud/golem/sdks/go/golem"
 
-// ForkSelf copies the running agent under a new phantom id. Both copies continue
-// from here: forked tells them apart, and phantomID is the copy's id in both.
-func ForkSelf() (forked bool, phantomID golem.UUID, err error)
+// ForkSelf copies the running agent into a new agent of the same type, with a
+// new ID that Golem issues and no key. Both copies continue from here: forked
+// tells them apart, and forkedID is the copy's ID in both.
+func ForkSelf() (forked bool, forkedID golem.AgentID, err error)
 
 // MustForkSelf is ForkSelf, panicking on failure.
-func MustForkSelf() (forked bool, phantomID golem.UUID)
+func MustForkSelf() (forked bool, forkedID golem.AgentID)
 ```
 </Tabs.Tab>
 </Tabs>

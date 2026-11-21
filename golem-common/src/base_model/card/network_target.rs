@@ -37,6 +37,16 @@ pub fn network_target(
     }))
 }
 
+/// The permission target of an address lookup of `host`. A grant of the host matches it with
+/// any ports; see [`NetworkResourcePattern::Lookup`].
+pub fn lookup_target(host: &str) -> Result<PermissionTarget, NetworkTargetError> {
+    Ok(PermissionTarget::Network(ClassPermissionTarget {
+        verb: Some(NetworkVerb::Connect),
+        owner: EmptyOwnerPattern,
+        resource: NetworkResourcePattern::lookup(normalize_host(host)?),
+    }))
+}
+
 /// The permission target of a raw socket connect or outgoing datagram to `address`;
 /// `this_host` tells whether the address is an address of the executor host, and `hostnames` are
 /// the hostnames that the agent's recorded lookups linked to the address.

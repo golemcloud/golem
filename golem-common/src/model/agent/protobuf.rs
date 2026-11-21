@@ -943,6 +943,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetad
         Ok(Self {
             agent_id: value.agent_id.ok_or("Missing agent_id")?.try_into()?,
             owner_kind: crate::model::agent::OwnerKind::try_from(value.owner_kind)?,
+            agent_type_name: value
+                .agent_type_name
+                .map(crate::model::agent::AgentTypeName),
+            canonical_key: value.canonical_key,
+            constructor_parameters: value.constructor_parameters,
             environment_id: value
                 .environment_id
                 .ok_or("Missing environment_id")?
@@ -1028,6 +1033,10 @@ impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMe
         Ok(Self {
             agent_id: Some(value.agent_id.into()),
             owner_kind: value.owner_kind.into(),
+            agent_type_name: value.agent_type_name.map(|name| name.0),
+            canonical_key: value.canonical_key,
+            constructor_parameters: value.constructor_parameters,
+            component_id: None,
             environment_id: Some(value.environment_id.into()),
             created_by: Some(value.created_by.into()),
             env: value.env,
@@ -1365,6 +1374,88 @@ impl TryFrom<TypedAgentConfigEntry>
         Ok(Self {
             path: value.path,
             value: Some(value.value.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentKey> for super::ParsedAgentKey {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentKey,
+    ) -> Result<Self, Self::Error> {
+        let parameters = value
+            .parameters
+            .ok_or_else(|| "Missing field: AgentKey.parameters".to_string())?
+            .try_into()?;
+        Self::try_new(super::AgentTypeName(value.agent_type_name), parameters)
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentKey> for super::AgentKey {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentKey,
+    ) -> Result<Self, Self::Error> {
+        let constructor = super::ParsedAgentKey::try_from(value)?;
+        Self::new(constructor.agent_type, constructor.parameters).map_err(|err| err.to_string())
+    }
+}
+
+impl TryFrom<super::ParsedAgentKey> for golem_api_grpc::proto::golem::worker::AgentKey {
+    type Error = String;
+
+    fn try_from(value: super::ParsedAgentKey) -> Result<Self, Self::Error> {
+        Ok(Self {
+            agent_type_name: value.agent_type.0,
+            parameters: Some(value.parameters.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<super::AgentKey> for golem_api_grpc::proto::golem::worker::AgentKey {
+    type Error = String;
+
+    fn try_from(value: super::AgentKey) -> Result<Self, Self::Error> {
+        let (agent_type, parameters) = value.into_parts();
+        Ok(Self {
+            agent_type_name: agent_type.0,
+            parameters: Some(parameters.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentTarget> for super::AgentTarget {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentTarget,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::agent_target::Target;
+
+        match value
+            .target
+            .ok_or_else(|| "Missing field: AgentTarget.target".to_string())?
+        {
+            Target::Key(key) => Ok(Self::Key(key.try_into()?)),
+            Target::Id(id) => Ok(Self::Id(id.try_into()?)),
+        }
+    }
+}
+
+impl TryFrom<super::AgentTarget> for golem_api_grpc::proto::golem::worker::AgentTarget {
+    type Error = String;
+
+    fn try_from(value: super::AgentTarget) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::agent_target::Target;
+
+        let target = match value {
+            super::AgentTarget::Key(key) => Target::Key(key.try_into()?),
+            super::AgentTarget::Id(id) => Target::Id(id.into()),
+        };
+        Ok(Self {
+            target: Some(target),
         })
     }
 }

@@ -14,7 +14,7 @@
 
 use crate::Tracing;
 use golem_common::model::RetryConfig;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::{HttpClientConfig, HttpClientEnabledConfig};
 use golem_worker_executor_test_utils::{
@@ -73,7 +73,7 @@ async fn run_response_body_pool_limit_control(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;

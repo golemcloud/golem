@@ -251,22 +251,18 @@ func init() {
 		return snap
 	}
 
-	loadExports.Exports.Load = func(snap apihost.Snapshot) witTypes.Result[witTypes.Unit, string] {
+	loadExports.Exports.Load = func(snap apihost.Snapshot, constructor types.SchemaValueTree) witTypes.Result[witTypes.Unit, string] {
 		// Snapshot recovery runs on a FRESH instance: the host does not call
 		// initialize first, it hands us the snapshot and expects the agent to
-		// come back on its own, without its constructor running again. The agent's identity comes from GOLEM_AGENT_ID;
-		// parsing it through the host yields the type name and constructor
-		// parameters, which is exactly what initialize needs.
+		// come back on its own, without its constructor running again. The
+		// agent type comes from GOLEM_AGENT_TYPE, and the host passes the
+		// constructor parameters that initialize received.
 		if active != nil {
 			return witTypes.Err[witTypes.Unit]("agent already initialized")
 		}
-		agentID := selfAgentID()
-		if agentID == "" {
-			return witTypes.Err[witTypes.Unit](agentIDNotReadable)
-		}
-		agentType, ctorParams, err := parseRestoreIdentity(agentID)
-		if err != nil {
-			return witTypes.Err[witTypes.Unit]("parsing " + agentIDEnvVar + ": " + err.Error())
+		agentType := selfEnv(agentTypeEnvVar)
+		if agentType == "" {
+			return witTypes.Err[witTypes.Unit](envVarNotReadable(agentTypeEnvVar))
 		}
 		state, err := splitSnapshot(snap)
 		if err != nil {
@@ -274,7 +270,7 @@ func init() {
 		}
 		caller, end := lazyCaller()
 		defer end(false)
-		if err := restoreAgent(agentType, ctorParams, caller, state); err != nil {
+		if err := restoreAgent(agentType, constructor, caller, state); err != nil {
 			return witTypes.Err[witTypes.Unit](err.Error())
 		}
 		return witTypes.Ok[witTypes.Unit, string](witTypes.Unit{})

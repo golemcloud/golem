@@ -326,10 +326,9 @@ mod saga_host {
     }
     pub fn noun() -> Result<String, String> {
         let metadata = crate::get_self_metadata().map_err(|e| format!("{e:?}"))?;
-        let id = metadata.agent_id;
         Ok(format!(
-            "urn:worker:{}/{}",
-            id.component_id.uuid, id.agent_id
+            "urn:agent:{}/{}",
+            metadata.environment_id.uuid, metadata.agent_id.uuid
         ))
     }
 }

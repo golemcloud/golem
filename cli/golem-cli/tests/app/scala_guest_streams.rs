@@ -171,8 +171,8 @@ async fn deployed_scala_streams_context() -> TestContext {
               case Some(value) => collect(input).map(value :: _)
             }
           def run(): Future[String] = {
-            val first = StreamProviderClient.get(name + "-first")
-            val second = StreamProviderClient.get(name + "-second")
+            val first = StreamProviderClient.upsert(name + "-first")
+            val second = StreamProviderClient.upsert(name + "-second")
             val item = Item("root", List(Item("child", Nil)))
             for {
               echoed <- first.exchange(stream(List(item)))
@@ -196,7 +196,7 @@ async fn deployed_scala_streams_context() -> TestContext {
             }
           }
           def nested(): Future[String] = {
-            val provider = StreamProviderClient.get(name + "-nested")
+            val provider = StreamProviderClient.upsert(name + "-nested")
             val item = Item("nested", List(Item("child", Nil)))
             for {
               outer <- provider.nested(stream(List(stream(List(item)))))
@@ -211,7 +211,7 @@ async fn deployed_scala_streams_context() -> TestContext {
             }
           }
           def cancel(): Future[String] = {
-            val provider = StreamProviderClient.get(name + "-cancel")
+            val provider = StreamProviderClient.upsert(name + "-cancel")
             val (result, token) = provider.hold.cancelable(stream(List(Item("cancel", Nil))))
             token.cancel()
             result.map(_ => false).recover { case _ => true }.map { cancelled =>
@@ -220,7 +220,7 @@ async fn deployed_scala_streams_context() -> TestContext {
             }
           }
           def recoverable(): Future[String] = {
-            val provider = StreamProviderClient.get(name + "-recoverable")
+            val provider = StreamProviderClient.upsert(name + "-recoverable")
             for {
               input <- provider.applicationError()
               values <- collect(input)
@@ -232,7 +232,7 @@ async fn deployed_scala_streams_context() -> TestContext {
             }
           }
           def fatal(): Future[String] = {
-            val provider = StreamProviderClient.get(name + "-fatal")
+            val provider = StreamProviderClient.upsert(name + "-fatal")
             for {
               sibling <- provider.produce()
               input <- provider.declaredFailure()

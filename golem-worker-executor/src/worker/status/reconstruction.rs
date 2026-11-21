@@ -750,7 +750,7 @@ pub(crate) async fn skipped_regions_at(
 ) -> Result<DeletedRegions, StatusError> {
     let reader = StatusOplogReader::new(this, owned_agent_id, AgentMode::Durable, None, horizon);
     // A manual update invocation changes only the manual admissions, which no skipped region
-    // depends on, so the read does not decode the invocation payloads.
+    // depends on, so the read leaves them out.
     let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024, false)
         .await?
         .ok_or("Missing fork source history")?;
@@ -786,8 +786,8 @@ pub(super) async fn read_region_entries(
             ) || manual_admissions
                 && matches!(
                     entry,
-                    OplogEntry::PendingAgentInvocation { payload, .. }
-                        if manual_update_target_revision_of(payload).is_some()
+                    OplogEntry::PendingAgentInvocation { operation, .. }
+                        if operation.manual_update_target().is_some()
                 )
         }));
     }

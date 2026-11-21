@@ -71,9 +71,10 @@ Pure initialization does not implicitly read self metadata. Keep metadata reads 
 of an untrusted evaluator rather than granting self-view for bootstrap. Declare no
 tools or secrets and admit only the host operations the evaluator needs.
 
-Agent invocation and snapshot restoration read `GOLEM_AGENT_ID` from the environment.
-`agentic::get_agent_id()` reads `GOLEM_AGENT_ID` and `GOLEM_COMPONENT_ID` through WASI.
-These paths need the corresponding environment-read permissions, not self-view.
+Snapshot restoration reads `GOLEM_AGENT_ID` and `GOLEM_AGENT_TYPE` from the environment.
+`agentic::get_agent_id()` reads `GOLEM_AGENT_ID` through WASI, and a generated client's
+`bind_self` reads `GOLEM_AGENT_TYPE`. These paths need the corresponding environment-read
+permissions, not self-view.
 
 Self metadata includes stored environment and configuration fields without the
 per-key permission filtering used by WASI environment/configuration reads. An empty

@@ -62,7 +62,9 @@ use crate::base_model::agent::AgentTypeName;
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::{AgentId, InvocationId, OplogIndex};
-use crate::model::card::owner::{AgentOwnerPattern, EnvironmentOwnerPattern};
+use crate::model::card::owner::{
+    AgentOwnerLeafPattern, AgentOwnerPattern, EnvironmentOwnerPattern,
+};
 use crate::model::card::recipient::RecipientPattern;
 use RecipientPattern as AccountRecipientPattern;
 use RecipientPattern as AgentRecipientPattern;
@@ -130,10 +132,7 @@ fn runtime_derived_provenance_preserves_existing_managed_by_encoding() {
 fn runtime_derived_card_provenance_binary_roundtrip() {
     let provenance = CardManagedBy::RuntimeDerived(CardManagedByRuntimeDerived {
         environment_id: EnvironmentId(uuid!("00112233-4455-6677-8899-aabbccddeeff")),
-        agent_id: AgentId {
-            component_id: ComponentId(uuid!("ffeeddcc-bbaa-9988-7766-554433221100")),
-            agent_id: "cart/primary".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 1),
         invocation_key: InvocationId(uuid!("01234567-89ab-cdef-fedc-ba9876543210")),
         oplog_index: OplogIndex::from_u64(42),
     });
@@ -147,7 +146,6 @@ fn runtime_derived_card_provenance_binary_roundtrip() {
 #[test]
 fn card_holder_wallet_identity_has_stable_canonical_encoding() {
     let wallet_uuid = uuid!("00112233-4455-6677-8899-aabbccddeeff");
-    let component_uuid = uuid!("ffeeddcc-bbaa-9988-7766-554433221100");
 
     let account = CardHolder::Account(AccountCardHolder {
         account_id: wallet_uuid,
@@ -156,16 +154,14 @@ fn card_holder_wallet_identity_has_stable_canonical_encoding() {
         application_id: wallet_uuid,
     });
     let agent = CardHolder::Agent(AgentCardHolder {
-        agent_id: AgentId {
-            component_id: ComponentId(component_uuid),
-            agent_id: "cart/primary".to_string(),
-        },
+        environment_id: EnvironmentId(uuid!("ffeeddcc-bbaa-4988-8776-655443322110")),
+        agent_id: AgentId::from_parts(7, 2),
     });
 
     assert_eq!(
         account.canonical_wallet_id_bytes(),
         [
-            b"golem:permissions:wallet-id:v1\0".as_slice(),
+            b"golem:permissions:wallet-id:v2\0".as_slice(),
             &[0],
             wallet_uuid.as_bytes(),
         ]
@@ -174,7 +170,7 @@ fn card_holder_wallet_identity_has_stable_canonical_encoding() {
     assert_eq!(
         application.canonical_wallet_id_bytes(),
         [
-            b"golem:permissions:wallet-id:v1\0".as_slice(),
+            b"golem:permissions:wallet-id:v2\0".as_slice(),
             &[1],
             wallet_uuid.as_bytes(),
         ]
@@ -183,11 +179,10 @@ fn card_holder_wallet_identity_has_stable_canonical_encoding() {
     assert_eq!(
         agent.canonical_wallet_id_bytes(),
         [
-            b"golem:permissions:wallet-id:v1\0".as_slice(),
+            b"golem:permissions:wallet-id:v2\0".as_slice(),
             &[2],
-            component_uuid.as_bytes(),
-            &12_u64.to_be_bytes(),
-            b"cart/primary".as_slice(),
+            uuid!("ffeeddcc-bbaa-4988-8776-655443322110").as_bytes(),
+            uuid!("00000007-0000-8000-8000-000000000002").as_bytes(),
         ]
         .concat()
     );
@@ -196,7 +191,6 @@ fn card_holder_wallet_identity_has_stable_canonical_encoding() {
 #[test]
 fn card_holder_wallet_id_hash_has_golden_vectors() {
     let wallet_uuid = uuid!("00112233-4455-6677-8899-aabbccddeeff");
-    let component_uuid = uuid!("ffeeddcc-bbaa-9988-7766-554433221100");
 
     let account = CardHolder::Account(AccountCardHolder {
         account_id: wallet_uuid,
@@ -205,27 +199,25 @@ fn card_holder_wallet_id_hash_has_golden_vectors() {
         application_id: wallet_uuid,
     });
     let agent = CardHolder::Agent(AgentCardHolder {
-        agent_id: AgentId {
-            component_id: ComponentId(component_uuid),
-            agent_id: "cart/primary".to_string(),
-        },
+        environment_id: EnvironmentId(uuid!("ffeeddcc-bbaa-4988-8776-655443322110")),
+        agent_id: AgentId::from_parts(7, 2),
     });
 
     assert_eq!(
         account.wallet_id_hash(),
-        *blake3::Hash::from_hex("56e13114d62d58ac0cb1ecdd8848b0394a16b90ba3031d4d3b36bfd58b6c52cd")
+        *blake3::Hash::from_hex("18c16764e50881c125d9e4cff1ba00f6ef3eb869e58b3e907c888d8200a803bb")
             .unwrap()
             .as_bytes()
     );
     assert_eq!(
         application.wallet_id_hash(),
-        *blake3::Hash::from_hex("b89907b4b6404484d37b5eca9875eb7e46d8091d0aecb6f9b7301ba2c56b705f")
+        *blake3::Hash::from_hex("f354dc05ef022b933b689de37def42a4b03af5eb9b5bef7f902bd7146a5c20b2")
             .unwrap()
             .as_bytes()
     );
     assert_eq!(
         agent.wallet_id_hash(),
-        *blake3::Hash::from_hex("870da9d5773f7bd02afe111d0a8546316bbf8e645209949cdfa879edf9804ac4")
+        *blake3::Hash::from_hex("2e9e7a24ed79b13705d40d5d49d81f1c0274f3cbcbf1bc6783a98dc4c0aadb89")
             .unwrap()
             .as_bytes()
     );
@@ -323,7 +315,7 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
     let holder = "acme/shop/prod/cart/agent";
     let recipient = RecipientPattern::parse(holder).unwrap();
     let read_all = fs(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000001",
         "acme/shop/prod/cart/agent",
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
@@ -333,7 +325,7 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
         }),
     );
     let read_secret_target = fs_target(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000001",
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
                 FilesystemPathSegmentPattern::Literal("data".to_string()),
@@ -342,7 +334,7 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
         }),
     );
     let read_public = fs(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000001",
         "acme/shop/prod/cart/agent",
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
@@ -352,7 +344,7 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
         }),
     );
     let read_public_target = fs_target(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000001",
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
                 FilesystemPathSegmentPattern::Literal("data".to_string()),
@@ -378,9 +370,10 @@ fn effective_surface_requires_lower_and_all_upper_bounds() {
 #[test]
 fn upper_negative_without_positive_is_unrestricted_except_denials() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000001";
     let recipient = RecipientPattern::parse(holder).unwrap();
     let read_tmp = fs(
-        holder,
+        owner,
         holder,
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
@@ -390,7 +383,7 @@ fn upper_negative_without_positive_is_unrestricted_except_denials() {
         }),
     );
     let read_tmp_target = fs_target(
-        holder,
+        owner,
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
                 FilesystemPathSegmentPattern::Literal("tmp".to_string()),
@@ -438,9 +431,10 @@ fn upper_negative_without_positive_is_unrestricted_except_denials() {
 #[test]
 fn lower_negative_is_scoped_to_its_card() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000001";
     let recipient = RecipientPattern::parse(holder).unwrap();
     let read_all = fs(
-        holder,
+        owner,
         holder,
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
@@ -450,7 +444,7 @@ fn lower_negative_is_scoped_to_its_card() {
         }),
     );
     let read_secret = fs(
-        holder,
+        owner,
         holder,
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
@@ -460,7 +454,7 @@ fn lower_negative_is_scoped_to_its_card() {
         }),
     );
     let read_secret_target = fs_target(
-        holder,
+        owner,
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
                 FilesystemPathSegmentPattern::Literal("data".to_string()),
@@ -486,8 +480,9 @@ fn lower_negative_is_scoped_to_its_card() {
 #[test]
 fn derivation_upper_bound_uses_parent_ceiling_intersection() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000001";
     let read_all = fs(
-        holder,
+        owner,
         holder,
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
@@ -497,7 +492,7 @@ fn derivation_upper_bound_uses_parent_ceiling_intersection() {
         }),
     );
     let read_secret = fs(
-        holder,
+        owner,
         holder,
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
@@ -535,8 +530,9 @@ fn derivation_upper_bound_uses_parent_ceiling_intersection() {
 #[test]
 fn derivation_witness_excludes_unrelated_parent() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000001";
     let read_tmp = fs(
-        holder,
+        owner,
         holder,
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
@@ -562,8 +558,9 @@ fn derivation_witness_excludes_unrelated_parent() {
 #[test]
 fn derivation_witness_includes_multiple_needed_parents() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000001";
     let read_tmp = fs(
-        holder,
+        owner,
         holder,
         FilesystemResourcePattern::Path(FilesystemPathPattern {
             segments: vec![
@@ -585,4 +582,61 @@ fn derivation_witness_includes_multiple_needed_parents() {
         .unwrap();
 
     assert_eq!(witness, vec![filesystem_parent_id, secret_parent_id]);
+}
+
+#[test]
+fn a_type_wildcard_denial_applies_to_an_agent_without_its_type_name() {
+    let holder = "acme/shop/prod/cart/Cart";
+    let recipient = RecipientPattern::parse(holder).unwrap();
+    let data = || {
+        FilesystemResourcePattern::Path(FilesystemPathPattern {
+            segments: vec![FilesystemPathSegmentPattern::Literal("data".to_string())],
+        })
+    };
+    let target = |agent: &str, agent_type: Option<&str>| {
+        let mut target = fs_target(&format!("acme/shop/prod/cart/{agent}"), data());
+        if let PermissionTarget::Filesystem(target) = &mut target
+            && let AgentOwnerPattern::Agent {
+                agent: AgentOwnerLeafPattern::Agent(leaf),
+                ..
+            } = &mut target.owner
+        {
+            leaf.agent_type = agent_type.map(|name| AgentTypeName(name.to_string()));
+        }
+        target
+    };
+    let typed_agent = "00000007-0000-8000-8000-000000000001";
+    let reserved_owner = "00000000-0000-8000-8000-000000000001";
+
+    let deny_carts = card_with_bounds(
+        vec![fs("acme/shop/prod/cart/*", holder, data())],
+        vec![fs("acme/shop/prod/cart/Cart(*)", holder, data())],
+        Vec::new(),
+        Vec::new(),
+    );
+    let surface = EffectiveSurface::from_cards(&[deny_carts], &recipient).unwrap();
+    assert!(
+        !surface
+            .authorize(&target(typed_agent, Some("Cart")))
+            .unwrap()
+    );
+    assert!(!surface.authorize(&target(typed_agent, None)).unwrap());
+    assert!(
+        surface
+            .authorize(&target(typed_agent, Some("Order")))
+            .unwrap()
+    );
+    assert!(surface.authorize(&target(reserved_owner, None)).unwrap());
+
+    let grant_carts = card(
+        vec![fs("acme/shop/prod/cart/Cart(*)", holder, data())],
+        Vec::new(),
+    );
+    let surface = EffectiveSurface::from_cards(&[grant_carts], &recipient).unwrap();
+    assert!(
+        surface
+            .authorize(&target(typed_agent, Some("Cart")))
+            .unwrap()
+    );
+    assert!(!surface.authorize(&target(typed_agent, None)).unwrap());
 }

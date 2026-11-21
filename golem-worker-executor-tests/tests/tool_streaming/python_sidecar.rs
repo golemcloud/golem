@@ -97,7 +97,7 @@ async fn exercise_python_sidecar(
     let worker_id = executor
         .start_agent(
             &caller_component.id,
-            agent_id!("ToolStreamingCaller", "python-files"),
+            agent_key!("ToolStreamingCaller", "python-files"),
         )
         .await?;
     let setup = invoke_cli_tool(
@@ -203,7 +203,7 @@ async fn exercise_python_session(
         PythonSession::Interrupt => "python-interrupt",
     };
     let worker_id = executor
-        .start_agent(&caller.id, agent_id!("ToolStreamingCaller", name))
+        .start_agent(&caller.id, agent_key!("ToolStreamingCaller", name))
         .await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
     let source = "import sys; sys.stdout.buffer.write(b'ready:'); sys.stdout.flush(); data = sys.stdin.buffer.read(); sys.stdout.buffer.write(data); sys.stderr.buffer.write(b'error:\\x00\\xff'); sys.exit(23)";
@@ -237,7 +237,7 @@ async fn exercise_python_session(
     sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(worker_id.clone().into()),
+                target: Some(crate::agent::id_target(&worker_id)),
                 idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
                 caller: Some(callers::account(context.account_id).into()),
@@ -308,7 +308,7 @@ async fn exercise_python_session(
     assert_eq!(output, b"ready:");
     if matches!(mode, PythonSession::Interrupt) {
         executor.interrupt(&worker_id).await?;
-        let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let owner = worker_id.clone();
         if let Some(active) = executor.active_entity_metadata(&owner).await {
             assert!(active.tool_operations.operations.is_empty());
             assert!(active.lane.holder.is_none());

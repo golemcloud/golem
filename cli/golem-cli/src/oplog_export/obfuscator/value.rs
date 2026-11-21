@@ -33,7 +33,8 @@ use golem_common::model::oplog::types::{
     SerializableP3HttpClientSendResult, SerializableP3IpNameLookupError,
     SerializableP3SocketErrorCode, SerializablePermissionError, SerializableRdbmsError,
     SerializableResponseHeaders, SerializableRpcError, SerializableSocketError,
-    SerializableStreamError, SerializableToolRpcError, SerializableWebsocketError,
+    SerializableStreamError, SerializableTcpStreamError, SerializableToolRpcError,
+    SerializableWebsocketError,
 };
 use golem_common::schema::{
     FromSchema, IntoSchema, NamedFieldType, RegisteredAgentTypeSchema, ResultSpec,
@@ -95,6 +96,7 @@ pub(super) static KNOWN_IDS: LazyLock<KnownIds> = LazyLock::new(|| KnownIds {
         <SerializableP3IpNameLookupError as IntoSchema>::type_id(),
         <SerializableDnsError as IntoSchema>::type_id(),
         <SerializableStreamError as IntoSchema>::type_id(),
+        <SerializableTcpStreamError as IntoSchema>::type_id(),
         <SerializableWebsocketError as IntoSchema>::type_id(),
         <SerializableRdbmsError as IntoSchema>::type_id(),
         <SecretRevealError as IntoSchema>::type_id(),

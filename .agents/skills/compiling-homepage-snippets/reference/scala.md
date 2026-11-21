@@ -259,7 +259,7 @@ Scala 3 `enum ... derives Schema` and `Map[String, Label]` results,
 `golem.Principal` / `Principal.Oidc` (`sub`, `issuer`) method injection,
 `golem.schema.AgentStream.fromPull` (synchronous `AgentStream[String]`
 returns), `HostApi.createWebhook()` with `.url` and
-`.await().map(_.json[A]())`, generated clients `XClient.get(...)`, awaited
+`.await().map(_.json[A]())`, generated clients `XClient.upsert(...)`, awaited
 calls, `.trigger(...)`, `.scheduleCancelableAt(when)`
 (→ `CancellationToken.cancel()`), `golem.Datetime.afterSeconds`,
 `golem.reflection.Reflection.getAllAgentTypes()` (`name`, `methods.map(_.name)`)
@@ -315,7 +315,7 @@ New in the 7 + 7 + 7 round:
   (router), `:297-304` (`HttpHeader.ascii`), `:736-741` (calling an
   agent's generated client from a router and mapping its result).
   The router-to-agent call is the codegen-generated
-  `AnalystAgentClient.get(chat).exportCsv(id)` returning
+  `AnalystAgentClient.upsert(chat).exportCsv(id)` returning
   `Future[AgentStream[Array[Byte]]]`, passed through as the response body.
 - **Per-user agent from the URL** (artifacts/peruser): `mount =
   "/dashboards/{user}"` bound to `class Id(val user: String)` with

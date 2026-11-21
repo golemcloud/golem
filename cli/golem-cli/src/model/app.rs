@@ -70,7 +70,7 @@ use std::str::FromStr;
 use strum::IntoEnumIterator;
 use url::Url;
 
-const TEMP_DIR: &str = "golem-temp";
+pub(crate) const TEMP_DIR: &str = "golem-temp";
 const APP_ENV_PRESET_PREFIX: &str = "app-env:";
 
 #[derive(Clone, Debug, Default)]
@@ -138,6 +138,7 @@ pub struct ApplicationConfig {
 #[derive(Debug, Clone)]
 pub struct LoadedRawApps {
     pub app_root_dir: PathBuf,
+    pub root_manifest: PathBuf,
     pub calling_working_dir: PathBuf,
     pub raw_apps: Vec<app_raw::ApplicationWithSource>,
 }

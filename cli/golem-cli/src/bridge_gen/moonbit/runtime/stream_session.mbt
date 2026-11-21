@@ -167,7 +167,9 @@ let stable_connection_ms : Ref[Int32] = { val: 5000, }
 /// progress.
 priv struct ReconnectClock {
   policy : ReconnectPolicy
-  endpoint : String
+  /// The server base URL until the environment ID is resolved, then the
+  /// session endpoint.
+  mut endpoint : String
   /// When the call last made progress: its start, or when it lost a stable
   /// connection.
   mut progress_at : Int64
@@ -373,30 +375,83 @@ fn renew_provisional_refs(
 }
 
 ///|
+/// The session endpoint of the configured environment, which also becomes the
+/// endpoint of `clock`. A cached environment ID needs no lookup; otherwise the
+/// lookup must answer within `timeout_ms`. `Err` is a failed lookup worth
+/// another attempt: a connection error, an answer that cannot be read in full,
+/// no answer in time, or an answer with HTTP 429 or 5xx. Any other failure,
+/// such as an environment missing from the account of the token, is raised.
+async fn session_url(
+  clock : ReconnectClock,
+  configuration : Configuration,
+  timeout_ms : Int32,
+) -> Result[String, String] {
+  try {
+    guard @async.with_timeout_opt(timeout_ms, () => {
+        resolve_environment_id(configuration)
+      })
+      is Some(environment) else {
+      return Err("no answer to the environment lookup within \{timeout_ms} ms")
+    }
+    let url = configuration.server
+      .url()
+      .replace(old="http://", new="ws://")
+      .replace(old="https://", new="wss://") +
+      "/v1/runtime/envs/\{environment}/invoke-agent-session"
+    clock.endpoint = url
+    Ok(url)
+  } catch {
+    EnvironmentUnavailable(message) => Err(message)
+    EnvironmentNotAnswered(error) =>
+      Err("no complete answer to the environment lookup: \{error}")
+    error => raise error
+  }
+}
+
+///|
 /// Sends the start until the server answers it: the same frozen start again
 /// after a lost connection, and a new attempt with new provisional references
-/// after a retryable rejection. Returns the socket, the acceptance and the
-/// accepted attempt.
+/// after a retryable rejection. Each attempt first resolves the session
+/// endpoint until it is known. Returns the socket, the acceptance, the
+/// accepted attempt and the session endpoint.
 async fn start_invocation(
   clock : ReconnectClock,
-  url : String,
+  configuration : Configuration,
   headers : @http.Headers,
   inputs : Array[InputRegistration],
   method_parameters : Json,
   freeze : (String, Json) -> String,
-) -> (@websocket.Conn, Map[String, Json], String) {
+) -> (@websocket.Conn, Map[String, Json], String, String) {
   let mut attempt_id = fresh_id()
   let mut parameters = method_parameters
   let mut frozen_start = freeze(attempt_id, parameters)
+  let mut session_endpoint : String? = None
   for ;; {
     let timeout_ms = clock.next_attempt()
-    match attach_attempt(clock, url, headers, frozen_start, timeout_ms) {
+    let attempt_start = @async.now()
+    let url = match session_endpoint {
+      Some(url) => url
+      None =>
+        match session_url(clock, configuration, timeout_ms) {
+          Ok(url) => {
+            session_endpoint = Some(url)
+            url
+          }
+          Err(cause) => {
+            clock.failed(cause)
+            continue
+          }
+        }
+    }
+    let left_ms = timeout_ms - (@async.now() - attempt_start).to_int()
+    let connect_ms = if left_ms > 0 { left_ms } else { 1 }
+    match attach_attempt(clock, url, headers, frozen_start, connect_ms) {
       Err(cause) => clock.failed(cause)
       Ok((socket, response)) =>
         match expect_string(get_field(response, "type")) {
           "invocationAccepted" => {
             clock.accepted()
-            return (socket, response, attempt_id)
+            return (socket, response, attempt_id, url)
           }
           "invocationRejected" => {
             socket.close()
@@ -781,11 +836,8 @@ fn validate_acceptance_identity(
   if expect_string(get_field(accepted, "attemptId")) != attempt_id {
     raise BridgeError("attempt-conflict: acceptance attempt does not match")
   }
-  let owner = get_field(accepted, "agentId")
-  validate_object_fields(expect_object(owner), ["componentId", "agentId"], [])
-  let agent_id = AgentId::from_json(owner)
-  if agent_id.component_id == "" || agent_id.agent_id == "" {
-    raise BridgeError("malformed-message: invalid accepted agent identity")
+  let agent_id = AgentId::from_json(get_field(accepted, "agentId")) catch {
+    _ => raise BridgeError("malformed-message: invalid accepted agent identity")
   }
   let key = expect_string(get_field(accepted, "idempotencyKey"))
   ignore(Uuid::parse_canonical(key))
@@ -2193,11 +2245,6 @@ pub async fn invoke_streaming_agent(
   method_parameters : SchemaValue,
 ) -> AgentInvocationResult {
   let server = resolved.configuration.server
-  let url = server
-    .url()
-    .replace(old="http://", new="ws://")
-    .replace(old="https://", new="wss://") +
-    "/v1/agents/invoke-agent-session"
   let headers : @http.Headers = {
     "Authorization": "Bearer " + server.token(),
     "Sec-WebSocket-Protocol": STREAM_SUBPROTOCOL,
@@ -2210,30 +2257,25 @@ pub async fn invoke_streaming_agent(
       (input.cancel)()
     }
   })
+  let constructor_parameters = resolved.keyed_parameters()
   let idempotency_key = fresh_id()
   let selector : Array[(String, Json)] = [
     ("agentType", Json::string(resolved.agent_type_name)),
     ("application", Json::string(resolved.configuration.app_name)),
-    ("constructorParameters", constructor_codec.encode(resolved.parameters)),
+    ("constructorParameters", constructor_codec.encode(constructor_parameters)),
     ("environment", Json::string(resolved.configuration.env_name)),
     ("method", Json::string(method_name)),
   ]
-  match resolved.phantom_id {
-    Some(id) => selector.push(("phantomId", Json::string(id.to_string())))
-    None => ()
-  }
-  let config = Json::array(
-    resolved.config.map(entry => {
-      obj([
-        ("path", Json::array(entry.path.map(Json::string))),
-        ("value", entry.value),
-      ])
-    }),
+  // The selector names the keyed agent of the constructor parameters, which
+  // carries its own configuration, so a session never overrides it.
+  let config = Json::array([])
+  let clock = ReconnectClock::new(
+    resolved.configuration.reconnect,
+    server.url(),
   )
-  let clock = ReconnectClock::new(resolved.configuration.reconnect, url)
-  let (socket, accepted, attempt_id) = start_invocation(
+  let (socket, accepted, attempt_id, url) = start_invocation(
     clock,
-    url,
+    resolved.configuration,
     headers,
     inputs,
     input_codec.encode(method_parameters),

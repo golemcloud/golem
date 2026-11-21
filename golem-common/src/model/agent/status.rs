@@ -20,7 +20,6 @@ use desert_rust::{
     SerializationContext,
 };
 use im::{OrdMap, Vector};
-use uuid::Uuid;
 
 use super::{AgentMode, OwnedAgentId, PendingInvocationRef};
 use crate::model::account::{AccountEmail, AccountId};
@@ -35,9 +34,9 @@ use crate::model::oplog::{
 use crate::model::regions::{DeletedRegions, OplogRegion};
 use crate::model::{
     AgentAndFilter, AgentConfigVarsFilter, AgentCreatedAtFilter, AgentEnvFilter, AgentFilter,
-    AgentFingerprint, AgentId, AgentModeFilter, AgentNameFilter, AgentNotFilter, AgentOrFilter,
-    AgentResourceDescription, AgentRevisionFilter, AgentStatus, AgentStatusFilter, InvocationId,
-    RetryConfig, RetryPolicyState, Timestamp,
+    AgentFingerprint, AgentId, AgentIdFilter, AgentKeyFilter, AgentModeFilter, AgentNotFilter,
+    AgentOrFilter, AgentResourceDescription, AgentRevisionFilter, AgentStatus, AgentStatusFilter,
+    InvocationId, RetryConfig, RetryPolicyState, Timestamp,
 };
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -45,6 +44,8 @@ pub struct AgentMetadata {
     pub component_id: crate::model::component::ComponentId,
     pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
     pub canonical_key: Option<String>,
+    /// The canonical constructor parameter text of a component agent, without its type name.
+    pub constructor_parameters: Option<String>,
     pub agent_id: AgentId,
     pub owner_kind: crate::model::agent::OwnerKind,
     pub env: Vec<(String, String)>,
@@ -55,7 +56,6 @@ pub struct AgentMetadata {
     pub created_at: Timestamp,
     pub parent: Option<AgentId>,
     pub last_known_status: AgentStatusRecord,
-    pub original_phantom_id: Option<Uuid>,
     pub fingerprint: AgentFingerprint,
     pub agent_mode: AgentMode,
     pub create_request: oplog::CreateRequest,
@@ -66,7 +66,7 @@ impl AgentMetadata {
         OwnedAgentId::new(self.environment_id, &self.agent_id)
     }
 
-    /// Resolves the persisted type and decodes constructor parameters from the current-format ID.
+    /// Resolves the persisted type and decodes the persisted constructor parameters.
     pub fn parse_agent_id(
         &self,
         metadata: &crate::model::component_metadata::ComponentMetadata,
@@ -75,18 +75,26 @@ impl AgentMetadata {
             .agent_type_name
             .as_ref()
             .ok_or_else(|| "Owner has no agent type".to_string())?;
+        let parameters = self
+            .constructor_parameters
+            .as_deref()
+            .ok_or_else(|| "Owner has no constructor parameters".to_string())?;
         let agent_type = metadata
             .find_agent_type_by_name_ref(name)
             .ok_or_else(|| format!("Agent type not found: {name}"))?;
-        super::ParsedAgentKey::parse(&self.agent_id.agent_id, agent_type)
+        super::ParsedAgentKey::parse_parameters(name, parameters, agent_type)
     }
 }
 
 impl AgentFilter {
     pub fn matches(&self, metadata: &AgentMetadata) -> bool {
         match self.clone() {
-            AgentFilter::Name(AgentNameFilter { comparator, value }) => {
-                comparator.matches(&metadata.agent_id.agent_id, &value)
+            AgentFilter::Key(AgentKeyFilter { comparator, value }) => metadata
+                .canonical_key
+                .as_ref()
+                .is_some_and(|key| comparator.matches(key, &value)),
+            AgentFilter::Id(AgentIdFilter { comparator, value }) => {
+                comparator.matches(&metadata.agent_id, &value)
             }
             AgentFilter::Revision(AgentRevisionFilter { comparator, value }) => {
                 let revision: ComponentRevision = metadata.last_known_status.component_revision;
@@ -228,15 +236,110 @@ impl Default for InvocationResultBloom {
 // switches; neither correctness nor the eventual memory bound depends on exact allocator sizing.
 const INVOCATION_RESULT_MAP_ENTRY_OVERHEAD_BYTES: usize = 64;
 
-/// Where an invocation result lies in the oplog.
+pub use golem_schema::schema::tool::MAX_INVOCATION_OPERATION_BYTES;
+
+/// What an invocation runs, from its accepted request.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec)]
+pub enum InvocationOperation {
+    /// An agent method, named by its method name.
+    Method(String),
+    /// The agent's constructor.
+    Constructor,
+    /// An agent-hosted tool, named `tool:<tool>/<command path>`.
+    Tool(String),
+    /// Work of the executor itself, such as a snapshot or oplog processing. It is not listed.
+    Internal,
+}
+
+impl InvocationOperation {
+    /// The operation of a tool invocation of `command_path` on `tool_name`.
+    pub fn tool(tool_name: &impl std::fmt::Display, command_path: &[String]) -> Self {
+        Self::Tool(Self::tool_operation(tool_name, command_path))
+    }
+
+    /// The operation string that keyed invocation IDs of a tool invocation are derived from.
+    pub fn tool_operation(tool_name: &impl std::fmt::Display, command_path: &[String]) -> String {
+        golem_schema::schema::tool::tool_operation(tool_name, command_path)
+    }
+
+    /// The operation that keyed invocation IDs are derived from: the method name or the tool
+    /// operation. The constructor and internal work have none.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Method(name) | Self::Tool(name) => Some(name),
+            Self::Constructor | Self::Internal => None,
+        }
+    }
+
+    pub fn is_listed(&self) -> bool {
+        !matches!(self, Self::Internal)
+    }
+
+    fn kept_bytes(operation: &Option<Self>) -> usize {
+        operation.as_ref().and_then(Self::name).map_or(0, str::len)
+    }
+}
+
+/// How an invocation ended, from the entry that holds its result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+pub enum InvocationEnd {
+    /// `AgentInvocationFinished`: the method returned its result, which can be a declared error.
+    Completed,
+    /// `AgentInvocationFailed`, `Exited`, or the rejection `Error` of a request.
+    Failed,
+    /// `CancelPendingInvocation`: the invocation was withdrawn before it started.
+    Cancelled,
+    /// A retry marker `Error` of the running invocation. It stays its result only when the
+    /// retries are exhausted.
+    Retrying,
+}
+
+/// Where an invocation result lies in the oplog, and what lists the invocation without reading
+/// the oplog.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
 pub struct InvocationResultPosition {
-    /// The entry that holds the result.
+    /// The entry that holds the result. It is the last change of the invocation.
     pub terminal: OplogIndex,
     /// The `AgentInvocationStarted` or `PendingAgentInvocation` entry that holds the accepted
     /// request, so a duplicate request is compared with it without searching the oplog. `None`
     /// when the fold that found the result did not see the request.
     pub request: Option<OplogIndex>,
+    pub end: InvocationEnd,
+    /// `None` for a manual update, or a request the fold did not see. Deployment bounds the
+    /// operation by [`MAX_INVOCATION_OPERATION_BYTES`].
+    pub operation: Option<InvocationOperation>,
+    /// The timestamp of the acceptance entry, when the fold saw it.
+    pub accepted_at: Option<Timestamp>,
+    /// The timestamp of `terminal`.
+    pub changed_at: Timestamp,
+}
+
+/// The accepted request of an invocation that has no result yet.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct InvocationRequestRef {
+    /// The `AgentInvocationStarted` entry of a running invocation, or the
+    /// `PendingAgentInvocation` entry of a pending one.
+    pub index: OplogIndex,
+    /// The timestamp of the `PendingAgentInvocation` entry, or of the `AgentInvocationStarted`
+    /// entry when the fold did not see the pending one.
+    pub accepted_at: Timestamp,
+    /// `None` for a manual update.
+    pub operation: Option<InvocationOperation>,
+}
+
+/// The invocation that runs now.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct RunningInvocation {
+    pub key: InvocationId,
+    /// `index` is the `AgentInvocationStarted` entry.
+    pub request: InvocationRequestRef,
+    /// The last entry that changed the invocation's state: its start, a retry, an interruption
+    /// or a suspension.
+    pub last_change: OplogIndex,
+    pub last_change_at: Timestamp,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -302,10 +405,10 @@ impl InvocationResultMembership {
         self.change_generation = self.change_generation.wrapping_add(1);
         match &mut self.state {
             InvocationResultMembershipState::Exact { by_key, key_bytes } => {
-                if !by_key.contains_key(&key) {
-                    *key_bytes = key_bytes.saturating_add(size_of::<InvocationId>());
+                *key_bytes = key_bytes.saturating_add(Self::entry_bytes(&position));
+                if let Some(previous) = by_key.insert(key, position) {
+                    *key_bytes = key_bytes.saturating_sub(Self::entry_bytes(&previous));
                 }
-                by_key.insert(key, position);
                 self.promote_if_needed();
             }
             InvocationResultMembershipState::Indexed {
@@ -317,8 +420,8 @@ impl InvocationResultMembership {
                 if let Some(previous) = recent_by_key.remove(&key) {
                     recent_by_index.remove(&previous.terminal);
                 }
-                recent_by_key.insert(key, position);
                 recent_by_index.insert(position.terminal, key);
+                recent_by_key.insert(key, position);
                 Self::truncate_recent(self.capacity, recent_by_key, recent_by_index);
             }
         }
@@ -392,7 +495,7 @@ impl InvocationResultMembership {
         let position = match &mut self.state {
             InvocationResultMembershipState::Exact { by_key, key_bytes } => {
                 let position = by_key.remove(key)?;
-                *key_bytes = key_bytes.saturating_sub(size_of::<InvocationId>());
+                *key_bytes = key_bytes.saturating_sub(Self::entry_bytes(&position));
                 position
             }
             InvocationResultMembershipState::Indexed {
@@ -407,6 +510,11 @@ impl InvocationResultMembership {
         };
         self.change_generation = self.change_generation.wrapping_add(1);
         Some(position)
+    }
+
+    /// The bytes of an exact entry beyond the fixed overhead: its key and its operation.
+    fn entry_bytes(position: &InvocationResultPosition) -> usize {
+        size_of::<InvocationId>() + InvocationOperation::kept_bytes(&position.operation)
     }
 
     fn promote_if_needed(&mut self) {
@@ -436,15 +544,15 @@ impl InvocationResultMembership {
             .iter()
             .map(|(key, position)| {
                 bloom.insert(key);
-                (*position, *key)
+                (position.clone(), *key)
             })
             .collect();
         by_index.sort_unstable_by_key(|(position, _)| position.terminal);
         let mut recent_by_key = OrdMap::new();
         let mut recent_by_index = OrdMap::new();
         for (position, key) in by_index.into_iter().rev().take(self.capacity) {
-            recent_by_key.insert(key, position);
             recent_by_index.insert(position.terminal, key);
+            recent_by_key.insert(key, position);
         }
         self.state = InvocationResultMembershipState::Indexed {
             recent_by_key,
@@ -606,9 +714,10 @@ pub struct AgentStatusRecord {
         (crate::model::durable_stream::StreamRecordReference, u64),
         Vec<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
     >,
-    pub current_idempotency_key: Option<InvocationId>,
-    /// The `AgentInvocationStarted` entry of `current_idempotency_key`.
-    pub current_invocation_started_at: Option<OplogIndex>,
+    pub running: Option<RunningInvocation>,
+    /// The last invocation cancelled again while it was neither pending nor running. A rejection
+    /// `Error` that follows it in a later fold does not replace its earlier cancellation.
+    pub withdrawn_again: Option<InvocationId>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
@@ -681,8 +790,8 @@ impl Default for AgentStatusRecord {
             ephemeral_execution_begun: false,
             never_live: false,
             pending_durable_stream_cancellations: HashMap::new(),
-            current_idempotency_key: None,
-            current_invocation_started_at: None,
+            running: None,
+            withdrawn_again: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,
@@ -1326,6 +1435,11 @@ impl AgentStatusRecord {
     /// The folded status underneath a reported `Sandboxed` status, and `None` otherwise.
     pub fn underlying_status(&self) -> Option<AgentStatus> {
         self.never_live.then_some(self.status)
+    }
+
+    /// The idempotency key of the running invocation.
+    pub fn current_idempotency_key(&self) -> Option<&InvocationId> {
+        self.running.as_ref().map(|running| &running.key)
     }
 
     pub fn has_pending_work(&self, now: Timestamp) -> bool {

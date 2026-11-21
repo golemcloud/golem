@@ -22,7 +22,7 @@ use axum::extract::Query;
 use axum::routing::get;
 use golem_common::model::AgentStatus;
 use golem_common::model::oplog::{LogLevel, OplogIndex, PublicOplogEntry};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -62,7 +62,7 @@ async fn go_counter_survives_restart(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("CounterAgent", "go-restart-1");
+    let agent_id = agent_key!("CounterAgent", "go-restart-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -109,7 +109,7 @@ async fn go_wall_clock_replayed_after_restart(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("ClockAgent", "go-clock-1");
+    let agent_id = agent_key!("ClockAgent", "go-clock-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -186,7 +186,7 @@ async fn go_outgoing_http_replayed_without_network(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpAgent", "go-durability-1");
+    let agent_id = agent_key!("HttpAgent", "go-durability-1");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
@@ -264,7 +264,7 @@ async fn go_custom_durable_op_replayed_after_restart(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurAgent", "go-customdur-1");
+    let agent_id = agent_key!("CustomDurAgent", "go-customdur-1");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
@@ -313,7 +313,7 @@ async fn go_custom_durable_op_panic_traps_despite_recover(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurAgent", "go-customdur-panic-1");
+    let agent_id = agent_key!("CustomDurAgent", "go-customdur-panic-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

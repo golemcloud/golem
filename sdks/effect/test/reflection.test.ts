@@ -3,17 +3,22 @@ import { Effect, Fiber, Layer, Result } from "effect"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import { parse } from "../src/AgentIdentity.js"
+import * as Client from "../src/Client.js"
 import { bind as bindDynamic } from "../src/DynamicClient.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
-import { DurabilityModeClient } from "../src/host/DurabilityModeClient.js"
-import { RpcClient, type RpcConnection } from "../src/host/RpcClient.js"
+import { RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
 import { getAgentType, getAgentTypeByAgentId, getAllAgentTypes } from "../src/Reflection.js"
 import { SchemaRef } from "../src/SchemaRef.js"
 import { emptyMetadata, field, t, type SchemaGraph } from "../src/internal/schema-model/model.js"
 import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
 import { createScopeCard } from "../src/internal/scopeCard.js"
-import { hostInvocationMetadata, sdkInvocationMetadata } from "./invocation-metadata.js"
+import {
+  agentIdFor,
+  hostAgentIdFor,
+  hostInvocationMetadata,
+  sdkInvocationMetadata,
+} from "./invocation-metadata.js"
+import { rpcLayer } from "./rpc-fake.js"
 
 const metadata = emptyMetadata()
 const recursive: SchemaGraph = {
@@ -34,7 +39,6 @@ const registration = (): AgentHost.RegisteredAgentType => {
   const stringIndex = schema.typeNodes.length
   schema.typeNodes.push({ body: { tag: "string-type" }, metadata })
   return {
-    implementedBy: { uuid: { highBits: 1n, lowBits: 2n } },
     agentType: {
       typeName: "Recursive",
       kind: "regular",
@@ -77,11 +81,6 @@ const hostLayer = (registered?: AgentHost.RegisteredAgentType) =>
       getAgentType: () => registered,
       getAgentTypeByAgentId: () => registered,
       getAllAgentTypes: () => (registered === undefined ? [] : [registered]),
-      parseAgentId: (_encoded: string) => [
-        "Recursive",
-        { value: { root: 0, valueNodes: [] } },
-        undefined,
-      ],
     } as never),
   )
 
@@ -105,7 +104,7 @@ describe("reflection", () => {
     Effect.gen(function* () {
       expect(yield* getAgentType("missing")).toBeUndefined()
       const found = yield* getAgentType("Recursive").pipe(Effect.provide(hostLayer(registration())))
-      expect(found?.implementedBy.uuid.highBits).toBe(1n)
+      expect(found?.name).toBe("Recursive")
       expect(
         found?.method("walk")?.input.validateJson({ node: { label: "x", next: null } }),
       ).toMatchObject({ success: true })
@@ -136,20 +135,18 @@ describe("reflection", () => {
     }),
   )
 
-  it.effect("discovers by identity and enumerates types without opening RPC connections", () =>
+  it.effect("discovers by agent ID and enumerates types without opening RPC connections", () =>
     Effect.gen(function* () {
-      const missing = yield* parse("missing")
-      expect(yield* getAgentTypeByAgentId(missing)).toBeUndefined()
+      expect(yield* getAgentTypeByAgentId(agentIdFor("missing"))).toBeUndefined()
       expect(yield* getAllAgentTypes).toEqual([])
       const host = Layer.succeed(AgentHostClient, {
-        getAgentTypeByAgentId: (id: string) => {
-          expect(id).toBe('Recursive("instance")')
+        getAgentTypeByAgentId: (id: CoreTypes.AgentId) => {
+          expect(id).toEqual(hostAgentIdFor("instance"))
           return registration()
         },
         getAllAgentTypes: () => [registration()],
       } as never)
-      const identity = yield* parse('Recursive("instance")')
-      const found = yield* getAgentTypeByAgentId(identity).pipe(Effect.provide(host))
+      const found = yield* getAgentTypeByAgentId(agentIdFor("instance")).pipe(Effect.provide(host))
       expect(found?.name).toBe("Recursive")
       expect(found?.method("walk")?.name).toBe("walk")
       const all = yield* getAllAgentTypes.pipe(Effect.provide(host))
@@ -158,67 +155,109 @@ describe("reflection", () => {
     }).pipe(Effect.provide(hostLayer())),
   )
 
-  it.effect("uses lifecycle factories without manufacturing ephemeral identities", () => {
+  it.effect("maps lifecycle factories to upsert, create and getById by mode", () => {
     const raw = registration()
     raw.agentType.mode = "ephemeral"
-    const connections: Array<CoreTypes.Uuid | undefined> = []
+    const opens: Array<readonly [string, string, unknown]> = []
     let dropped = 0
-    const rpc = Layer.succeed(
-      RpcClient,
-      RpcClient.of({
-        bindSelf: () => Effect.die("unexpected self binding"),
-        connect: (name, input, phantom) =>
-          Effect.sync(() => {
-            expect(name).toBe("Recursive")
-            expect(input.valueNodes).toContainEqual({ tag: "string-value", val: "unique" })
-            connections.push(phantom)
-            return {
-              drop: () => {
-                dropped++
-              },
-            } as RpcConnection
-          }),
-      }),
-    )
-    const durability = Layer.succeed(DurabilityModeClient, {
-      generateIdempotencyKey: () => ({ highBits: 1n, lowBits: 7n }),
-    } as never)
+    const connection = (id: CoreTypes.AgentId) =>
+      ({
+        agentId: () => Promise.resolve(id),
+        drop: () => {
+          dropped++
+        },
+      }) as unknown as RpcConnection
+    const rpc = rpcLayer({
+      upsert: (name, input) =>
+        Effect.sync(() => {
+          expect(input.valueNodes).toContainEqual({ tag: "string-value", val: "unique" })
+          opens.push(["upsert", name, undefined])
+          return connection(hostAgentIdFor("upserted"))
+        }),
+      create: (name, input, options) =>
+        Effect.sync(() => {
+          expect(input.valueNodes).toContainEqual({ tag: "string-value", val: "unique" })
+          opens.push(["create", name, options])
+          return {
+            connection: connection(hostAgentIdFor("created")),
+            agentId: hostAgentIdFor("created"),
+          }
+        }),
+      getById: (name, id) =>
+        Effect.sync(() => {
+          opens.push(["getById", name, id])
+          return connection(id)
+        }),
+    })
     const host = Layer.succeed(AgentHostClient, {
       getAgentType: () => raw,
-      makeAgentId: () => "durable-phantom",
     } as never)
     return Effect.gen(function* () {
       const ephemeral = (yield* getAgentType("Recursive"))!
       if (ephemeral.mode !== "ephemeral") throw new Error("expected ephemeral mode")
-      expect("get" in ephemeral.client).toBe(false)
-      expect("getPhantom" in ephemeral.client).toBe(true)
+      expect(Object.keys(ephemeral.client).sort()).toEqual(["upsert", "upsertValue"])
       yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* ephemeral.client.getPhantom(
-            { name: "unique" },
-            "12345678-1234-1234-1234-1234567890ab",
-          )
-          const client = yield* ephemeral.client.newPhantom({ name: "unique" })
+          const client = yield* ephemeral.client.upsert({ name: "unique" })
           expect("agentId" in client).toBe(false)
         }),
       )
+      expect(
+        yield* Client.bind(agentIdFor("ephemeral"), ephemeral).pipe(Effect.scoped, Effect.result),
+      ).toMatchObject({ _tag: "Failure", failure: { _tag: "ClientBindingError" } })
+
       raw.agentType.mode = "durable"
       const durable = (yield* getAgentType("Recursive"))!
       if (durable.mode !== "durable") throw new Error("expected durable mode")
-      yield* Effect.scoped(
+      const ids = yield* Effect.scoped(
         Effect.gen(function* () {
-          const phantom = yield* durable.client.newPhantom({ name: "unique" })
-          expect(phantom.agentId.encoded).toBe("durable-phantom")
-          expect(phantom.phantomId).toBe("00000000-0000-0001-0000-000000000007")
+          const upserted = yield* durable.client.upsert({ name: "unique" })
+          const created = yield* durable.client.create({ name: "unique" })
+          const keyed = yield* durable.client.create(
+            { name: "unique" },
+            { keyed: true, env: { MODE: "test" } },
+          )
+          const found = yield* durable.client.getById(agentIdFor("existing"))
+          const bound = yield* Client.bind(agentIdFor("bound"), durable)
+          return yield* Effect.all([
+            upserted.agentId,
+            created.agentId,
+            keyed.agentId,
+            found.agentId,
+            bound.agentId,
+          ])
         }),
       )
-      expect(connections).toEqual([
-        { highBits: 1311768465173123636n, lowBits: 1311693407469998251n },
-        undefined,
-        { highBits: 1n, lowBits: 7n },
+      expect(ids).toEqual([
+        agentIdFor("upserted"),
+        agentIdFor("created"),
+        agentIdFor("created"),
+        agentIdFor("existing"),
+        agentIdFor("bound"),
       ])
-      expect(dropped).toBe(3)
-    }).pipe(Effect.provide(Layer.mergeAll(host, rpc, durability)))
+      expect(opens).toEqual([
+        ["upsert", "Recursive", undefined],
+        ["upsert", "Recursive", undefined],
+        ["create", "Recursive", { keyed: false, agentConfig: [], env: [] }],
+        ["create", "Recursive", { keyed: true, agentConfig: [], env: [["MODE", "test"]] }],
+        ["getById", "Recursive", hostAgentIdFor("existing")],
+        ["getById", "Recursive", hostAgentIdFor("bound")],
+      ])
+      expect(dropped).toBe(6)
+
+      const conflict = { tag: "conflict", val: "the key is current" } as const
+      expect(
+        yield* durable.client.create({ name: "unique" }, { keyed: true }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            rpcLayer({
+              create: () => Effect.fail(new RpcHostError(conflict, "WasmRpc.create")),
+            }),
+          ),
+          Effect.result,
+        ),
+      ).toMatchObject({ _tag: "Failure", failure: { _tag: "RpcCallError", cause: conflict } })
+    }).pipe(Effect.provide(Layer.mergeAll(host, rpc)))
   })
 
   it.effect("validates reflected config before opening a scoped RPC connection", () => {
@@ -229,63 +268,52 @@ describe("reflection", () => {
       { path: ["apiKey"], source: "secret", valueType },
     ]
     const connections: ReadonlyArray<AgentCommon.TypedAgentConfigValue>[] = []
-    const rpc = Layer.succeed(
-      RpcClient,
-      RpcClient.of({
-        bindSelf: () => Effect.die("unexpected self binding"),
-        connect: (_name, _input, _phantom, config) =>
-          Effect.sync(() => {
-            connections.push(config)
-            return { drop: () => undefined } as RpcConnection
-          }),
-      }),
-    )
+    const rpc = rpcLayer({
+      create: (_name, _input, options) =>
+        Effect.sync(() => {
+          connections.push(options.agentConfig)
+          return {
+            connection: { drop: () => undefined } as RpcConnection,
+            agentId: hostAgentIdFor("created"),
+          }
+        }),
+    })
     const host = Layer.succeed(AgentHostClient, {
       getAgentType: () => raw,
-      makeAgentId: () => 'Recursive("one")',
     } as never)
     return Effect.gen(function* () {
       const reflected = (yield* getAgentType("Recursive"))!
       if (reflected.mode !== "durable") throw new Error("expected durable mode")
       expect(reflected.config[0]?.schema.graph.root).toBe(reflected.config[0]?.schema.root)
-      expect(
-        yield* Effect.scoped(
-          reflected.client
-            .get({ name: "one" }, [{ path: ["unknown"], value: "x" }])
-            .pipe(Effect.result),
-        ),
-      ).toMatchObject({ _tag: "Failure" })
-      expect(
-        yield* Effect.scoped(
-          reflected.client
-            .get({ name: "one" }, [{ path: ["apiKey"], value: "x" }])
-            .pipe(Effect.result),
-        ),
-      ).toMatchObject({ _tag: "Failure" })
-      expect(
-        yield* Effect.scoped(
-          reflected.client
-            .get({ name: "one" }, [{ path: ["greeting"], value: 42 }])
-            .pipe(Effect.result),
-        ),
-      ).toMatchObject({ _tag: "Failure" })
+      for (const config of [
+        [{ path: ["unknown"], value: "x" }],
+        [{ path: ["apiKey"], value: "x" }],
+        [{ path: ["greeting"], value: 42 }],
+      ])
+        expect(
+          yield* Effect.scoped(
+            reflected.client.create({ name: "one" }, { config }).pipe(Effect.result),
+          ),
+        ).toMatchObject({ _tag: "Failure" })
       expect(connections).toHaveLength(0)
 
       yield* Effect.scoped(
-        reflected.client.get({ name: "one" }, [{ path: ["greeting"], value: "hello" }]),
+        reflected.client.create(
+          { name: "one" },
+          { config: [{ path: ["greeting"], value: "hello" }] },
+        ),
       )
       yield* Effect.scoped(
-        reflected.client.getValue(reflected.constructorInput.packJson({ name: "two" }), [
-          { path: ["greeting"], value: reflected.config[0]!.schema.packJson("hello") },
-        ]),
+        reflected.client.createValue(reflected.constructorInput.packJson({ name: "two" }), {
+          keyed: true,
+          config: [{ path: ["greeting"], value: reflected.config[0]!.schema.packJson("hello") }],
+        }),
       )
       expect(connections).toHaveLength(2)
-      expect(connections[0]?.[0]?.path).toEqual(["greeting"])
-      const identity = yield* reflected.agentId({ name: "one" })
-      yield* Effect.scoped(
-        reflected.bindWithJsonConfig(identity, [{ path: ["greeting"], value: "bound" }]),
-      )
-      expect(connections).toHaveLength(3)
+      expect(connections.map((entries) => entries.map((entry) => entry.path))).toEqual([
+        [["greeting"]],
+        [["greeting"]],
+      ])
     }).pipe(Effect.provide(Layer.merge(host, rpc)))
   })
 
@@ -301,6 +329,7 @@ describe("reflection", () => {
         }
         const invocationMetadata = hostInvocationMetadata("actual-id")
         const connection: RpcConnection = {
+          agentId: () => Promise.resolve(hostAgentIdFor("actual-id")),
           invokeAndAwait: () => {
             throw new Error("must use interruptible async call")
           },
@@ -334,19 +363,19 @@ describe("reflection", () => {
             events.push("connection-drop")
           },
         }
-        const rpc = Layer.succeed(RpcClient, {
-          bindSelf: () => Effect.die("unexpected self binding"),
-          connect: () => Effect.succeed(connection),
+        const rpc = rpcLayer({
+          upsert: () => Effect.succeed(connection),
+          getById: () => Effect.succeed(connection),
         })
         const host = Layer.succeed(AgentHostClient, {
           getAgentType: () => registration(),
-          parseAgentId: () => ["Recursive", { value: { root: 0, valueNodes: [] } }, undefined],
+          getAgentTypeByAgentId: () => registration(),
         } as never)
         yield* Effect.scoped(
           Effect.gen(function* () {
             const type = (yield* getAgentType("Recursive"))!
             if (type.mode !== "durable") throw new Error("expected durable mode")
-            const client = yield* type.client.get({ name: "unique" })
+            const client = yield* type.client.upsert({ name: "unique" })
             const method = yield* client.method("walk")
             expect(Result.isFailure(yield* Effect.result(method.invoke({ node: {} })))).toBe(true)
             expect(events).toEqual([])
@@ -370,8 +399,7 @@ describe("reflection", () => {
         pending = true
         const fiber = yield* Effect.scoped(
           Effect.gen(function* () {
-            const identity = yield* parse("opaque-id")
-            const client = yield* bindDynamic(identity)
+            const client = yield* bindDynamic(agentIdFor("opaque-id"))
             return yield* client.method("walk").invoke({ root: 0, valueNodes: [] })
           }),
         ).pipe(Effect.provide(Layer.mergeAll(host, rpc)), Effect.forkChild)
@@ -401,19 +429,15 @@ describe("reflection", () => {
         invoke: () => invocationMetadata,
         drop: () => {},
       } as unknown as RpcConnection
-      const rpc = Layer.succeed(RpcClient, {
-        bindSelf: () => Effect.die("unexpected self binding"),
-        connect: () => Effect.succeed(connection),
-      })
+      const rpc = rpcLayer({ upsert: () => Effect.succeed(connection) })
       const host = Layer.succeed(AgentHostClient, {
         getAgentType: () => registration(),
-        makeAgentId: () => 'Recursive("unique")',
       } as never)
       yield* Effect.scoped(
         Effect.gen(function* () {
           const type = (yield* getAgentType("Recursive"))!
           if (type.mode !== "durable") throw new Error("expected durable mode")
-          const client = yield* type.client.get({ name: "unique" })
+          const client = yield* type.client.upsert({ name: "unique" })
           const method = yield* client.method("walk")
           const node = { node: { label: "first", next: null } }
           yield* method.invoke(node, { scopeCard: scope })

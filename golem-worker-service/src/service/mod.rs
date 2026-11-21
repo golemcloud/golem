@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod agent_resolution_cache;
+pub mod agent_types;
 pub mod auth;
 pub mod component;
 pub mod limit;

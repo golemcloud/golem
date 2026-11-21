@@ -61,52 +61,112 @@ test "direct requests preserve configuration and optional members" {
       value: @json.parse("{\"$float\":\"ordinary\",\"x\":null,\"z\":-0}"),
     },
   ]
-  for optional in [None, Some(Uuid::from_bits(1UL, 2UL))] {
+  let env = [("A", "1"), ("B", "é")]
+  for keyed in [false, true] {
     @debug.assert_eq(
-      @json.parse(
-        render_create_agent_request(
-          "app", "env", "type", parameters, optional, config,
-        ),
-      ),
-      encode_create_agent_request(
-        "app", "env", "type", parameters, optional, config,
-      ),
+      @json.parse(render_create_agent_request(parameters, config, env, keyed)),
+      encode_create_agent_request(parameters, config, env, keyed),
     )
+  }
+  @debug.assert_eq(
+    @json.parse(render_agent_key_request(parameters)),
+    obj([("parameters", schema_value_to_json(parameters))]),
+  )
+  let agent_id = AgentId::parse("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d")
+  let targets : Array[(AgentId?, SchemaValue?, String?)] = [
+    (None, Some(parameters), None),
+    (Some(agent_id), None, None),
+    (Some(agent_id), None, Some("1a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d")),
+  ]
+  for target in targets {
+    let (id, keyed_parameters, fingerprint) = target
     for schedule in [None, Some("later")] {
-      for key in [None, Some("key")] {
-        @debug.assert_eq(
-          @json.parse(
-            render_agent_invocation_request(
-              "app",
-              "env",
-              "type",
-              parameters,
-              optional,
-              config,
-              "method",
-              ListValue([U8Value(251)]),
-              "await",
-              schedule,
-              key,
-            ),
-          ),
-          encode_agent_invocation_request(
-            "app",
-            "env",
-            "type",
-            parameters,
-            optional,
-            config,
+      @debug.assert_eq(
+        @json.parse(
+          render_agent_invocation_request(
+            id,
+            keyed_parameters,
             "method",
             ListValue([U8Value(251)]),
             "await",
             schedule,
-            key,
+            fingerprint,
           ),
-        )
-      }
+        ),
+        encode_agent_invocation_request(
+          id,
+          keyed_parameters,
+          "method",
+          ListValue([U8Value(251)]),
+          "await",
+          schedule,
+          fingerprint,
+        ),
+      )
     }
   }
+  for target in [(None, None), (Some(agent_id), Some(parameters))] {
+    assert_true(
+      raises(() => {
+        ignore(
+          render_agent_invocation_request(
+            target.0,
+            target.1,
+            "method",
+            RecordValue([]),
+            "await",
+            None,
+            None,
+          ),
+        )
+      }),
+    )
+  }
+}
+
+///|
+test "agent references and environments decode from the server shapes" {
+  let reference = decode_agent_reference(
+    @json.parse(
+      "{\"agentId\":\"0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d\",\"agentFingerprint\":\"f\"}",
+    ),
+  )
+  assert_eq(reference.agent_id.to_string(), "0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d")
+  assert_eq(reference.agent_fingerprint, "f")
+  assert_true(
+    raises(() => {
+      ignore(
+        decode_agent_reference(
+          @json.parse("{\"agentId\":\"agent\",\"agentFingerprint\":\"f\"}"),
+        ),
+      )
+    }),
+  )
+  @debug.assert_eq(
+    decode_agent_metadata(
+      @json.parse("{\"agentTypeName\":\"Counter\",\"fingerprint\":\"f\"}"),
+    ),
+    (Some("Counter"), "f"),
+  )
+  let page = @json.parse(
+    (
+      #|{"values":[
+      #|{"account":{"id":"other"},"application":{"name":"app"},"environment":{"id":"e1","name":"env"}},
+      #|{"account":{"id":"me"},"application":{"name":"app"},"environment":{"id":"e2","name":"other"}},
+      #|{"account":{"id":"me"},"application":{"name":"app"},"environment":{"id":"e3","name":"env"}}
+      #|]}
+    ),
+  )
+  @debug.assert_eq(
+    decode_visible_environment_id(page, "me", "app", "env"),
+    Some("e3"),
+  )
+  @debug.assert_eq(
+    decode_visible_environment_id(page, "nobody", "app", "env"),
+    None,
+  )
+  assert_eq(decode_token_account_id(@json.parse("{\"accountId\":\"me\"}")), "me")
+  assert_eq(url_component("a b/é~"), "a%20b%2F%C3%A9~")
 }
 
 ///|
@@ -212,7 +272,7 @@ test "native codec rejects noncanonical and loose representations" {
 ///|
 test "REST results validate the returned graph before the local expected schema" {
   let response = @json.parse(
-    "{\"agentId\":{\"componentId\":\"component\",\"agentId\":\"agent\"},\"idempotencyKey\":\"key\",\"result\":{\"graph\":{\"root\":{\"kind\":\"u32\",\"value\":{}}},\"value\":{\"kind\":\"u32\",\"value\":5}}}",
+    "{\"agentId\":\"0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d\",\"idempotencyKey\":\"key\",\"result\":{\"graph\":{\"root\":{\"kind\":\"u32\",\"value\":{}}},\"value\":{\"kind\":\"u32\",\"value\":5}}}",
   )
   let decoded = decode_agent_invocation_result(response).result.unwrap()
   assert_eq(decoded, U32Value(5U))
@@ -388,61 +448,49 @@ test "schema resolution observes changed definitions and diagnoses aliases afres
 
 ///|
 fn encode_create_agent_request(
-  app_name : String,
-  env_name : String,
-  agent_type_name : String,
   parameters : SchemaValue,
-  phantom_id : Uuid?,
   config : Array[AgentConfigEntry],
+  env : Array[(String, String)],
+  keyed : Bool,
 ) -> Json raise {
-  let fields : Array[(String, Json)] = [
-    ("appName", Json::string(app_name)),
-    ("envName", Json::string(env_name)),
-    ("agentTypeName", Json::string(agent_type_name)),
+  obj([
     ("parameters", schema_value_to_json(parameters)),
-  ]
-  match phantom_id {
-    Some(id) => fields.push(("phantomId", Json::string(id.to_string())))
-    None => ()
-  }
-  fields.push(("config", Json::array(config.map(encode_config_entry))))
-  obj(fields)
+    ("config", Json::array(config.map(encode_config_entry))),
+    ("env", obj(env.map(entry => (entry.0, Json::string(entry.1))))),
+    ("keyed", Json::boolean(keyed)),
+  ])
 }
 
 ///|
 fn encode_agent_invocation_request(
-  app_name : String,
-  env_name : String,
-  agent_type_name : String,
-  parameters : SchemaValue,
-  phantom_id : Uuid?,
-  config : Array[AgentConfigEntry],
+  agent_id : AgentId?,
+  parameters : SchemaValue?,
   method_name : String,
   method_parameters : SchemaValue,
   mode : String,
   schedule_at : String?,
-  idempotency_key : String?,
+  expected_fingerprint : String?,
 ) -> Json raise {
   let fields : Array[(String, Json)] = [
-    ("appName", Json::string(app_name)),
-    ("envName", Json::string(env_name)),
-    ("agentTypeName", Json::string(agent_type_name)),
-    ("parameters", schema_value_to_json(parameters)),
-    ("config", Json::array(config.map(encode_config_entry))),
-    ("methodName", Json::string(method_name)),
+    ("method", Json::string(method_name)),
     ("methodParameters", schema_value_to_json(method_parameters)),
     ("mode", Json::string(mode)),
   ]
-  match phantom_id {
-    Some(id) => fields.push(("phantomId", Json::string(id.to_string())))
+  match agent_id {
+    Some(id) => fields.push(("agentId", Json::string(id.to_string())))
+    None => ()
+  }
+  match parameters {
+    Some(parameters) =>
+      fields.push(("parameters", schema_value_to_json(parameters)))
     None => ()
   }
   match schedule_at {
     Some(at) => fields.push(("scheduleAt", Json::string(at)))
     None => ()
   }
-  match idempotency_key {
-    Some(k) => fields.push(("idempotencyKey", Json::string(k)))
+  match expected_fingerprint {
+    Some(f) => fields.push(("expectedFingerprint", Json::string(f)))
     None => ()
   }
   obj(fields)
@@ -471,17 +519,13 @@ test "encoders reject unpaired surrogates and non-scalar chars" {
       v => ignore(schema_value_render(v)),
       v => ignore(schema_value_to_json(v)),
       v => {
-        ignore(render_create_agent_request("app", "env", "Agent", v, None, []))
+        ignore(render_create_agent_request(v, [], [], false))
       },
       v => {
         ignore(
           render_agent_invocation_request(
-            "app",
-            "env",
-            "Agent",
-            RecordValue([]),
             None,
-            [],
+            Some(RecordValue([])),
             "method",
             v,
             "await",

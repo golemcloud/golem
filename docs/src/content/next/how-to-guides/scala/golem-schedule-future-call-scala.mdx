@@ -11,13 +11,13 @@ For stream-free methods, `.scheduleAt(when)` enqueues the call for the given tim
 ```scala
 import golem.Datetime
 
-val counter = CounterAgentClient.get("my-counter")
+val counter = CounterAgentClient.upsert("my-counter")
 
 // Schedule increment to run 5 seconds from now
 counter.increment.scheduleAt(Datetime.afterSeconds(5))
 
 // Schedule with arguments — method params first, then when
-val reporter = ReportAgentClient.get("daily")
+val reporter = ReportAgentClient.upsert("daily")
 reporter.generateReport.scheduleAt(
   "summary",
   when = Datetime.afterSeconds(3600) // 1 hour from now

@@ -205,28 +205,34 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
       agent <- Reflection
                  .getAgentType("ScalaPrincipalIdentity")
                  .flatMap(_.toRight(GolemReflectError.Discovery("ScalaPrincipalIdentity was not found")))
-      reflected       <- agent.client.get(Json.Object("name" -> Json.String(identityName)))
+      reflected       <- agent.client.upsert(Json.Object("name" -> Json.String(identityName)))
       reflectedMethod <- reflected.method("who")
-      id              <- full.agentId(identityName)
-      parts           <- id.parts
-      _               <- Either.cond(
-             parts.constructorValue == SchemaValue.RecordValue(List(SchemaValue.StringValue(identityName))),
-             (),
-             GolemReflectError.Identity("principal appeared in the agent ID")
-           )
-      fullyBound  <- full.bind(id)
-      methodBound <- methodOnly.bind(id)
-    } yield (reflectedMethod, fullyBound, methodBound)
+      upserted        <- full.client.upsert(identityName)
+    } yield (reflected, reflectedMethod, upserted)
+
+    def await[A](result: Future[Either[GolemReflectError, A]]): Future[A] =
+      result.flatMap {
+        case Left(error)  => Future.failed(new RuntimeException(s"error:$error"))
+        case Right(value) => Future.successful(value)
+      }
 
     prepared match {
-      case Left(error)                                       => Future.successful(s"error:$error")
-      case Right((reflectedMethod, fullyBound, methodBound)) =>
-        for {
+      case Left(error)                                   => Future.successful(s"error:$error")
+      case Right((reflected, reflectedMethod, upserted)) =>
+        (for {
+          id         <- await(reflected.agentId())
+          upsertedId <- await(upserted.agentId())
+          _          <- if (upsertedId == id) Future.unit
+               else Future.failed(new RuntimeException(s"error:upsert gave $upsertedId, not $id"))
+          fullyBound     <- await(full.getById(id))
+          methodBound    <- await(methodOnly.getById(id))
           reflectedCall  <- reflectedMethod.invokeJson(Json.Object())
           fullCall       <- fullyBound.method(who).invoke(())
           methodOnlyCall <- methodBound.method(who).invoke(())
-          generatedCall  <- ScalaPrincipalIdentityClient.get(identityName).who()
-        } yield s"$reflectedCall|$fullCall|$methodOnlyCall|$generatedCall"
+          generatedCall  <- ScalaPrincipalIdentityClient.upsert(identityName).who()
+        } yield s"$reflectedCall|$fullCall|$methodOnlyCall|$generatedCall").recover { case error =>
+          error.getMessage
+        }
     }
   }
 
@@ -385,14 +391,14 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
                        .parse("""{"initialCount":0}""")
                        .left
                        .map(error => GolemReflectError.Validation(error.toString))
-      client    <- agent.client.get(constructor)
+      client    <- agent.client.upsert(constructor)
       current   <- client.method("current")
       increment <- client.method("increment")
-    } yield (current, increment)
+    } yield (agent, current, increment)
 
     prepared match {
-      case Left(error)                 => Future.successful(s"error:$error")
-      case Right((current, increment)) =>
+      case Left(error)                        => Future.successful(s"error:$error")
+      case Right((agent, current, increment)) =>
         val empty = SchemaValue.RecordValue(Nil)
         for {
           first     <- current.invokeJson(Json.Object())
@@ -402,7 +408,7 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
           dynamic   <- first match {
                        case Left(error)       => Future.successful(Left(error))
                        case Right(invocation) =>
-                         DynamicAgentClient.fromAgentId(invocation.metadata.agentId) match {
+                         DynamicAgentClient.getById(invocation.metadata.agentId).flatMap {
                            case Left(error)   => Future.successful(Left(error))
                            case Right(client) => client.method("current").invokeValue(empty)
                          }
@@ -414,11 +420,10 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
             increasedCall <- increased
             secondCall    <- second
             dynamicCall   <- dynamic
-            parts         <- firstCall.metadata.agentId.parts
             discovered    <- Reflection
                             .getAgentTypeFor(firstCall.metadata.agentId)
                             .flatMap(_.toRight(GolemReflectError.Discovery("StatefulCounter ID was not found")))
-          } yield s"${parts.typeName}|${discovered.name}|${firstCall.value}|${nativeCall.value}|${increasedCall.value}|${secondCall.value}|${dynamicCall.value}"
+          } yield s"${agent.name}|${discovered.name}|${firstCall.value}|${nativeCall.value}|${increasedCall.value}|${secondCall.value}|${dynamicCall.value}"
           result.fold(error => s"error:$error", identity)
         }
     }

@@ -8,26 +8,32 @@
 package identity
 
 import (
-	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
+const offWasm = "golem: identity operations are only available on the wasm target"
+
 var platform = operations{
-	bindSelf: func() witTypes.Result[witTypes.Tuple2[string, *host.WasmRpc], host.RpcError] {
-		panic("golem: identity operations are only available on the wasm target")
+	upsert: func(string, types.SchemaValueTree) witTypes.Result[*host.WasmRpc, host.RpcError] {
+		panic(offWasm)
 	},
-	drop: func(*host.WasmRpc) {
-		panic("golem: identity operations are only available on the wasm target")
+	getByID: func(string, types.AgentId) witTypes.Result[*host.WasmRpc, host.RpcError] {
+		panic(offWasm)
 	},
-	parse: func(string) witTypes.Result[witTypes.Tuple3[string, types.TypedSchemaValue, witTypes.Option[types.Uuid]], common.AgentError] {
-		panic("golem: identity operations are only available on the wasm target")
+	create: func(string, types.SchemaValueTree, host.CreateOptions) witTypes.Result[host.Created, host.RpcError] {
+		panic(offWasm)
 	},
-	construct: func(string, types.SchemaValueTree, witTypes.Option[types.Uuid]) witTypes.Result[string, common.AgentError] {
-		panic("golem: identity operations are only available on the wasm target")
+	lookup: func(string, types.SchemaValueTree) witTypes.Result[witTypes.Option[types.AgentId], host.RpcError] {
+		panic(offWasm)
 	},
-	connect: func(string, types.SchemaValueTree, witTypes.Option[types.Uuid], []common.TypedAgentConfigValue) witTypes.Result[*host.WasmRpc, host.RpcError] {
-		panic("golem: identity operations are only available on the wasm target")
+	bindSelf: func() witTypes.Result[witTypes.Tuple2[types.AgentId, *host.WasmRpc], host.RpcError] {
+		panic(offWasm)
 	},
+	agentID: func(*host.WasmRpc) witTypes.Result[types.AgentId, host.RpcError] {
+		panic(offWasm)
+	},
+	typeOf: func(types.AgentId) witTypes.Option[string] { panic(offWasm) },
+	drop:   func(*host.WasmRpc) { panic(offWasm) },
 }

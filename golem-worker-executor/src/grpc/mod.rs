@@ -19,11 +19,11 @@ pub(crate) mod stream_slots;
 pub(crate) use invocation::{CanStartWorker, from_proto_invocation_context};
 pub(crate) use invocation_session::{build_durable_streaming_request, decode_invocation_input};
 
-use crate::durable_host::agent_monomorphization_context;
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     PublicOplogPageLimits, check_oplog_cursor_query, get_public_oplog_entry, get_public_oplog_page,
-    oplog_page_cursor, oplog_page_start, search_public_oplog_page,
+    get_public_oplog_range_page, oplog_page_cursor, oplog_page_start, oplog_range_allowance,
+    search_public_oplog_page,
 };
 use crate::model::{LastError, LookupResult};
 use crate::services::rpc::DurableStreamRemoteError;
@@ -33,10 +33,11 @@ use crate::services::worker_activator::{
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasOplog, HasOplogService,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    All, HasActiveAgents, HasAgentTypesService, HasAll, HasComponentService, HasConfig, HasOplog,
+    HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService,
+    HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
+use crate::worker::target::ResolvedTarget;
 use crate::worker::{
     ExportStreamControlResult as DomainExportResult, RetirementReason, Worker, WorkerUpdateMode,
     retired_by_assignment,
@@ -78,12 +79,12 @@ use golem_common::metrics::api::{
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentMetadataDto, AgentTarget, ResolvedRevert, TypedAgentConfigEntry,
+    AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, TypedAgentConfigEntry,
 };
 use golem_common::model::agent::{AgentMode, InvocationFreshnessDisposition, ParsedAgentKey};
 use golem_common::model::caller::Caller;
-use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
-use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
+use golem_common::model::card::{CardId, StoredCard};
+use golem_common::model::component::{CanonicalFilePath, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::oplog::types::AgentMetadataForGuests;
@@ -245,35 +246,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.shard_service().check_admission(agent_id.as_ref())
     }
 
-    async fn canonicalize_agent_target(
+    /// Resolves the target of a request to the agent it reaches and the owner it may create.
+    /// See [`crate::worker::target::resolve_target`].
+    async fn resolve_request_target<Req: invocation::CanStartWorker>(
         &self,
-        environment_id: EnvironmentId,
-        target: &AgentTarget,
-    ) -> Result<OwnedAgentId, WorkerExecutorError> {
-        match target {
-            AgentTarget::Current(agent_id) => {
-                self.canonicalize_owned_agent_id(&OwnedAgentId::new(environment_id, agent_id))
-                    .await
-            }
-        }
-    }
-
-    /// Rewrites the `OwnedAgentId` so that `environment_id` comes from the
-    /// target component's metadata rather than from the caller-supplied
-    /// request data. This ensures that shard routing, auth checks, and all
-    /// downstream code use the component-authoritative environment.
-    async fn canonicalize_owned_agent_id(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> Result<OwnedAgentId, WorkerExecutorError> {
-        let component = self
-            .component_service()
-            .get_metadata(owned_agent_id.component_id(), None)
-            .await?;
-        Ok(OwnedAgentId::new(
-            component.environment_id,
-            &owned_agent_id.agent_id,
-        ))
+        request: &Req,
+    ) -> Result<ResolvedTarget, WorkerExecutorError> {
+        crate::worker::target::resolve_target(
+            self.component_service().as_ref(),
+            self.agent_types().as_ref(),
+            request.environment_id()?,
+            request.agent_target()?,
+            request.constructor()?,
+            request.component_id()?,
+        )
+        .await
     }
 
     /// Validate that the request carries a well-formed `auth_ctx` field.
@@ -330,10 +317,7 @@ fn extract_owned_agent_id<T>(
         .as_ref()
         .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
 
-    AgentId::validate_length(&agent_id.name).map_err(WorkerExecutorError::invalid_request)?;
-
-    let agent_id = agent_id
-        .clone()
+    let agent_id = (*agent_id)
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
 
@@ -356,6 +340,7 @@ mod cards;
 mod durable_stream;
 mod events;
 mod filesystem;
+mod invocations;
 mod metadata;
 mod oplog;
 mod plugins;

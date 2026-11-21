@@ -17,6 +17,11 @@ runs:
         wasm-rquickjs-version: '0.5.3'
         install-cargo-component: 'true'
     - uses: oven-sh/setup-bun@v2
+    - name: Install validation tooling for selected and control sources
+      shell: bash
+      run: |
+        npm ci --ignore-scripts --prefix .github/main-validation
+        npm ci --ignore-scripts --prefix .validation-control/.github/main-validation
     - uses: actions/setup-java@v5
       with:
         distribution: temurin

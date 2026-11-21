@@ -197,7 +197,7 @@ must not assume ownership returns when an RPC fails after transfer.
 ```typescript
 const parentToken = yield* Quota.acquireQuotaToken("api-calls", 400n);
 const childToken = yield* Quota.split(parentToken, 200n);
-const summarizer = yield* SummarizerAgent.client.get({ name: "sum-1" });
+const summarizer = yield* SummarizerAgent.client.upsert({ name: "sum-1" });
 const { summary, token: returnedToken } = yield* summarizer.summarize({
   text,
   token: childToken,

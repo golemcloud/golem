@@ -9,11 +9,11 @@ use super::prep::PrepManifest;
 use super::{PromiseRuntime, PromiseTopology, PromiseWaiterPresence};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use golem_common::base_model::{AgentId, PromiseId};
-use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{AgentKey, OwnedAgentId, ParsedAgentKey};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentStatus, RoutingTable};
 use golem_common::schema::{FromSchema, SchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::{
     BenchmarkRecorder, BenchmarkResult, BenchmarkRunResult, ResultKey, RunConfig,
 };
@@ -67,7 +67,7 @@ impl CellConfig {
 }
 
 struct PromiseWork {
-    agent: AgentId,
+    agent: OwnedAgentId,
     parsed_agent: ParsedAgentKey,
     completer: Option<ParsedAgentKey>,
     promise: PromiseId,
@@ -158,7 +158,7 @@ async fn create_work_pool(
 ) -> anyhow::Result<(
     mpsc::Sender<anyhow::Result<PromiseWork>>,
     mpsc::Receiver<anyhow::Result<PromiseWork>>,
-    Vec<AgentId>,
+    Vec<OwnedAgentId>,
 )> {
     let (ready_sender, ready_receiver) = mpsc::channel(READY_WORK_CAPACITY);
     let routing_table = match config.topology {
@@ -182,30 +182,17 @@ async fn create_work_pool(
             let routing_table = routing_table.clone();
             async move {
                 let name = format!("{}-{index}", config.cell_name());
-                let parsed_agent = agent_id!(PROMISE_AGENT_TYPE, name);
-                let completer = routing_table
-                    .as_ref()
-                    .map(|routing_table| {
-                        select_remote_completer(
-                            component.id,
-                            &parsed_agent,
-                            routing_table,
-                            config.cell_name(),
-                            index,
-                        )
-                    })
-                    .transpose()?;
+                let parsed_agent = agent_key!(PROMISE_AGENT_TYPE, name);
                 let agent = user
                     .start_agent(&component.id, parsed_agent.clone())
                     .await?;
-                let completer_worker = completer
+                let (completer, completer_worker) = routing_table
                     .as_ref()
-                    .map(|completer| {
-                        AgentId::from_agent_id(component.id, completer).map_err(|error| {
-                            anyhow::anyhow!("invalid promise completer agent id: {error}")
-                        })
+                    .map(|routing_table| {
+                        select_remote_completer(&agent, routing_table, config.cell_name(), index)
                     })
-                    .transpose()?;
+                    .transpose()?
+                    .unzip();
                 let (work, _) = stage_work(
                     &user,
                     &component,
@@ -228,7 +215,7 @@ async fn create_work_pool(
             }
         })
         .buffer_unordered(SETUP_CONCURRENCY)
-        .try_collect::<Vec<Vec<AgentId>>>()
+        .try_collect::<Vec<Vec<OwnedAgentId>>>()
         .await
         .map(|workers| {
             (
@@ -241,7 +228,7 @@ async fn create_work_pool(
 
 async fn cleanup_pool(
     user: &TestUserContext<BenchmarkTestDependencies>,
-    workers: Vec<AgentId>,
+    workers: Vec<OwnedAgentId>,
     recorder: &BenchmarkRecorder,
 ) -> anyhow::Result<()> {
     crate::benchmarks::delete_workers(user, &workers, recorder).await;
@@ -267,7 +254,7 @@ async fn cleanup_pool(
 async fn stage_work(
     user: &TestUserContext<BenchmarkTestDependencies>,
     component: &ComponentDto,
-    agent: AgentId,
+    agent: OwnedAgentId,
     parsed_agent: ParsedAgentKey,
     completer: Option<ParsedAgentKey>,
     wait: bool,
@@ -485,35 +472,44 @@ async fn complete_promise(
         )
         .await?;
     } else {
-        user.complete_promise(&work.promise, payload).await?;
+        user.complete_promise(&work.agent.environment_id, &work.promise, payload)
+            .await?;
     }
     Ok(())
 }
 
+/// A keyed completer agent on another executor pod than `waiter`, with the ID that it gets when
+/// it is first invoked. The completer has the waiter's agent type, so its ID derives from the
+/// type ID in the waiter's ID.
 fn select_remote_completer(
-    component_id: golem_common::model::component::ComponentId,
-    waiter: &ParsedAgentKey,
+    waiter: &OwnedAgentId,
     routing_table: &RoutingTable,
     cell_name: String,
     index: usize,
-) -> anyhow::Result<ParsedAgentKey> {
-    let waiter = AgentId::from_agent_id(component_id, waiter)
-        .map_err(|error| anyhow::anyhow!("invalid promise waiter agent id: {error}"))?;
+) -> anyhow::Result<(ParsedAgentKey, OwnedAgentId)> {
+    let type_id = waiter
+        .agent_id
+        .type_id()
+        .ok_or_else(|| anyhow::anyhow!("promise waiter agent id has no type id"))?;
     let waiter_pod = routing_table
-        .lookup(&waiter)
+        .lookup(&waiter.agent_id)
         .ok_or_else(|| anyhow::anyhow!("promise waiter has no assigned executor pod"))?;
     for candidate in 0..PROMISE_POOL_SIZE {
-        let completer = agent_id!(
+        let completer = agent_key!(
             PROMISE_AGENT_TYPE,
             format!("{cell_name}-completer-{index}-{candidate}")
         );
-        let completer_id = AgentId::from_agent_id(component_id, &completer)
-            .map_err(|error| anyhow::anyhow!("invalid promise completer agent id: {error}"))?;
+        let key = AgentKey::new(completer.agent_type.clone(), completer.parameters.clone())
+            .map_err(|error| anyhow::anyhow!("invalid promise completer agent key: {error}"))?;
+        let completer_id = AgentId::keyed(waiter.environment_id, type_id, &key);
         if routing_table
             .lookup(&completer_id)
             .is_some_and(|pod| pod != waiter_pod)
         {
-            return Ok(completer);
+            return Ok((
+                completer,
+                OwnedAgentId::new(waiter.environment_id, &completer_id),
+            ));
         }
     }
     anyhow::bail!("could not find a promise completer on a different executor pod")

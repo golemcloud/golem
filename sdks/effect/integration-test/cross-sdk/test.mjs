@@ -1,5 +1,13 @@
 import { execFileSync, spawn } from "node:child_process"
-import { mkdtempSync, rmSync, openSync, closeSync, mkdirSync } from "node:fs"
+import {
+  mkdtempSync,
+  rmSync,
+  openSync,
+  closeSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { once } from "node:events"
@@ -75,12 +83,9 @@ try {
     if (process.env.RUN_TS_AGENT_REFLECTION_ONLY === "1") {
       const tsCaller = `TsPeer("ts-${stamp}")`
       const tsFirst = invoke(tsCaller, "reflectedEffectAgent")
-      assert.ok(tsFirst.includes("EffectSnapshotFixture|EffectSnapshotFixture|0|0|1|1|1"), tsFirst)
+      assert.ok(tsFirst.includes("true|EffectSnapshotFixture|0|0|1|1|1"), tsFirst)
       const tsSecond = invoke(tsCaller, "reflectedEffectAgent")
-      assert.ok(
-        tsSecond.includes("EffectSnapshotFixture|EffectSnapshotFixture|1|1|2|2|2"),
-        tsSecond,
-      )
+      assert.ok(tsSecond.includes("true|EffectSnapshotFixture|1|1|2|2|2"), tsSecond)
       const principalFirst = invoke(tsCaller, "principalIdentityRoundTrip")
       const tenant = `principal-ts-${stamp}`
       assert.ok(
@@ -120,10 +125,10 @@ try {
       assert.ok(nonfinite.includes("TsPeer:true:true|RustPeer:true:true"), nonfinite)
       const rustCaller = `RustPeer("rust-${stamp}")`
       const rustFirst = invoke(rustCaller, "reflected_ts_agent")
-      assert.ok(rustFirst.includes("TsPeer|TsPeer|0.0|Some(F64(0"), rustFirst)
+      assert.ok(rustFirst.includes("true|TsPeer|0.0|Some(F64(0"), rustFirst)
       assert.ok(rustFirst.includes("|1.0|Some(F64(1"), rustFirst)
       const rustSecond = invoke(rustCaller, "reflected_ts_agent")
-      assert.ok(rustSecond.includes("TsPeer|TsPeer|1.0|Some(F64(1"), rustSecond)
+      assert.ok(rustSecond.includes("true|TsPeer|1.0|Some(F64(1"), rustSecond)
       assert.ok(rustSecond.includes("|2.0|Some(F64(2"), rustSecond)
       const rustPrincipal = invoke(rustCaller, "principal_identity_round_trip")
       const rustTenant = `principal-rust-rust-${stamp}`
@@ -251,7 +256,20 @@ try {
       assert.ok(savedSnapshotValue.includes("12"), savedSnapshotValue)
       const snapshotOplog = run("--local", "agent", "oplog", snapshotTarget)
       assert.match(snapshotOplog, /SNAPSHOT/i)
-      run("deploy", "--yes", "--force-build")
+      const providerPath = new URL("effect-provider/src/main.ts", import.meta.url)
+      const providerSource = readFileSync(providerPath, "utf8")
+      try {
+        writeFileSync(
+          providerPath,
+          providerSource.replace(
+            'name: "EffectSnapshotFixture",',
+            'name: "EffectSnapshotFixture", description: "Snapshot restoration revision",',
+          ),
+        )
+        run("deploy", "--yes", "--force-build")
+      } finally {
+        writeFileSync(providerPath, providerSource)
+      }
       const update = run("--local", "--yes", "agent", "update", "--await", snapshotTarget, "manual")
       const restoredSnapshotValue = invoke(snapshotPeer, "snapshotValue", `"${snapshotTenant}"`)
       assert.ok(restoredSnapshotValue.includes("12"), `${update}\n${restoredSnapshotValue}`)

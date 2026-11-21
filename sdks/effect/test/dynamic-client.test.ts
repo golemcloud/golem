@@ -1,65 +1,78 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer } from "effect"
+import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import { parse } from "../src/AgentIdentity.js"
 import { bind } from "../src/DynamicClient.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
-import { RpcClient, RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
-import { hostInvocationMetadata, sdkInvocationMetadata } from "./invocation-metadata.js"
+import { RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
+import {
+  agentIdFor,
+  hostAgentIdFor,
+  hostInvocationMetadata,
+  sdkInvocationMetadata,
+} from "./invocation-metadata.js"
+import { rpcLayer } from "./rpc-fake.js"
 
 const tree: CoreTypes.SchemaValueTree = { root: 0, valueNodes: [] }
 const metadata = hostInvocationMetadata("agent")
 
-const hostLayer = (parseAgentId: () => unknown = () => ["Agent", { value: tree }, undefined]) =>
-  Layer.succeed(AgentHostClient, { parseAgentId } as never)
+const hostLayer = (mode: AgentCommon.AgentMode | "missing" = "durable") =>
+  Layer.succeed(AgentHostClient, {
+    getAgentTypeByAgentId: () =>
+      mode === "missing" ? undefined : { agentType: { typeName: "Agent", mode } },
+  } as never)
 
 describe("DynamicClient", () => {
-  it.effect("distinguishes identity parsing from remote call errors", () =>
+  it.effect("binds by agent ID and reports unknown IDs, ephemeral types and host errors", () =>
     Effect.gen(function* () {
+      const opened: Array<readonly [string, CoreTypes.AgentId]> = []
+      const connection = {
+        agentId: () => Promise.resolve(hostAgentIdFor("dynamic")),
+        drop: () => undefined,
+      } as unknown as RpcConnection
+      const rpc = rpcLayer({
+        getById: (agentType, id) => {
+          opened.push([agentType, id])
+          return Effect.succeed(connection)
+        },
+      })
+      const client = yield* bind(agentIdFor("dynamic")).pipe(
+        Effect.scoped,
+        Effect.provide(Layer.merge(hostLayer(), rpc)),
+      )
+      expect(client.agentId).toEqual(agentIdFor("dynamic"))
+      expect(opened).toEqual([["Agent", hostAgentIdFor("dynamic")]])
+
+      for (const mode of ["missing", "ephemeral"] as const) {
+        const result = yield* bind(agentIdFor("dynamic")).pipe(
+          Effect.scoped,
+          Effect.provide(Layer.merge(hostLayer(mode), rpc)),
+          Effect.result,
+        )
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure:
+            mode === "missing"
+              ? { _tag: "RpcCallError", cause: { tag: "not-found" } }
+              : { _tag: "ClientBindingError" },
+        })
+      }
+      expect(opened).toHaveLength(1)
+
       const structured = {
         tag: "remote-agent-error" as const,
         val: { tag: "invalid", val: { value: tree } },
       }
-      const identityError = { tag: "invalid-input", val: "malformed agent ID" }
-      const unusedRpc = Layer.succeed(RpcClient, {
-        bindSelf: () => Effect.die("unexpected self binding"),
-        connect: () => Effect.die("parse failure must not connect"),
+      const failing = rpcLayer({
+        getById: () => Effect.fail(new RpcHostError(structured, "WasmRpc.getById")),
       })
-      const parsed = yield* parse("bad").pipe(
-        Effect.provide(
-          Layer.merge(
-            hostLayer(() => {
-              throw identityError
-            }),
-            unusedRpc,
-          ),
-        ),
-        Effect.result,
-      )
-      expect(parsed).toMatchObject({
-        _tag: "Failure",
-        failure: { _tag: "AgentIdentityError", cause: identityError },
-      })
-
-      const rpc = Layer.succeed(RpcClient, {
-        bindSelf: () => Effect.die("unexpected self binding"),
-        connect: () => Effect.fail(new RpcHostError(structured, "WasmRpc.create")),
-      })
-      const identity = yield* parse("valid").pipe(Effect.provide(hostLayer()))
-      const connect = yield* identity
-        .dynamicClient()
-        .pipe(Effect.scoped, Effect.provide(rpc), Effect.result)
-      expect(connect).toMatchObject({
-        _tag: "Failure",
-        failure: { _tag: "RpcCallError", cause: structured },
-      })
-      const copied = { ...identity, constructorValue: identity.constructorValue }
       expect(
-        yield* bind(copied).pipe(Effect.scoped, Effect.provide(unusedRpc), Effect.result),
-      ).toMatchObject({
-        _tag: "Failure",
-        failure: { _tag: "AgentIdentityError" },
-      })
+        yield* bind(agentIdFor("dynamic")).pipe(
+          Effect.scoped,
+          Effect.provide(Layer.merge(hostLayer(), failing)),
+          Effect.result,
+        ),
+      ).toMatchObject({ _tag: "Failure", failure: { _tag: "RpcCallError", cause: structured } })
     }),
   )
 
@@ -83,15 +96,11 @@ describe("DynamicClient", () => {
         }),
         drop: () => undefined,
       } as unknown as RpcConnection
-      const rpc = Layer.succeed(RpcClient, {
-        bindSelf: () => Effect.die("unexpected self binding"),
-        connect: () => Effect.succeed(connection),
-      })
+      const rpc = rpcLayer({ getById: () => Effect.succeed(connection) })
 
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const identity = yield* parse("valid")
-          const client = yield* identity.dynamicClient()
+          const client = yield* bind(agentIdFor("agent"))
           const triggered = yield* client.method("run").trigger(tree)
           expect(triggered).toEqual(sdkInvocationMetadata("agent"))
           expect(triggered).not.toBe(metadata)

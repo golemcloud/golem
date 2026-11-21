@@ -45,6 +45,12 @@ pub enum WorkerServiceError {
     AccountIdNotFound(AccountId),
     #[error("Worker not found: {0}")]
     AgentNotFound(AgentId),
+    #[error("Invocation not found: {0}")]
+    InvocationNotFound(String),
+    /// Each denied request to an agent gets this text, whether the agent exists or not, so a
+    /// denial does not tell a caller whether the agent exists or which component owns it.
+    #[error("Access to agent {0} is denied")]
+    AgentAccessDenied(AgentId),
     #[error("Internal error: {0}")]
     Internal(String),
     #[error("File not found: {0}")]
@@ -65,6 +71,8 @@ impl SafeDisplay for WorkerServiceError {
             Self::ComponentNotFound(_) => self.to_string(),
             Self::AccountIdNotFound(_) => self.to_string(),
             Self::AgentNotFound(_) => self.to_string(),
+            Self::InvocationNotFound(_) => self.to_string(),
+            Self::AgentAccessDenied(_) => self.to_string(),
             Self::Internal(_) => self.to_string(),
             Self::GolemError(inner) => inner.to_safe_string(),
             Self::InternalCallError(inner) => inner.to_safe_string(),
@@ -105,6 +113,10 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
             WorkerServiceError::AgentNotFound(_) => Self::NotFound(ErrorBody {
                 error: error.to_safe_string(),
                 code: api::error_code::AGENT_NOT_FOUND.to_string(),
+            }),
+            WorkerServiceError::InvocationNotFound(_) => Self::NotFound(ErrorBody {
+                error: error.to_safe_string(),
+                code: api::error_code::INVOCATION_NOT_FOUND.to_string(),
             }),
             WorkerServiceError::FileNotFound(_) => Self::NotFound(ErrorBody {
                 error: error.to_safe_string(),
@@ -198,10 +210,12 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
                 Self::InternalError(worker_execution_error.into())
             }
 
-            WorkerServiceError::AuthError(_) => Self::Unauthorized(ErrorBody {
-                error: error.to_safe_string(),
-                code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
-            }),
+            WorkerServiceError::AuthError(_) | WorkerServiceError::AgentAccessDenied(_) => {
+                Self::Unauthorized(ErrorBody {
+                    error: error.to_safe_string(),
+                    code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
+                })
+            }
 
             WorkerServiceError::Internal(_)
             | WorkerServiceError::RegistryServiceError(_)

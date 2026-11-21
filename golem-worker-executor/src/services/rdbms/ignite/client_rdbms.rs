@@ -475,13 +475,9 @@ impl Rdbms<IgniteType> for IgniteRdbms {
                 .entry(key.clone())
                 .or_insert_with(|| (client, HashSet::new()))
                 .1
-                .insert(worker_id.clone());
+                .insert(*worker_id);
         } else {
-            self.clients
-                .get_mut(&key)
-                .unwrap()
-                .1
-                .insert(worker_id.clone());
+            self.clients.get_mut(&key).unwrap().1.insert(*worker_id);
         }
         Ok(key)
     }

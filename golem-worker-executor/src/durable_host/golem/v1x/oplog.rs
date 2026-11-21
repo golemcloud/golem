@@ -59,15 +59,12 @@ async fn oplog_read_denied<Ctx: WorkerCtx>(
     start: OplogIndex,
     page_size: usize,
 ) -> Result<bool, WorkerExecutorError> {
-    let (owner, environment_id) = resolve_agent_owner(
-        ctx,
-        &owned_agent_id.component_id(),
-        Some(&owned_agent_id.agent_id.agent_id),
-    )
-    .await?;
-    if owned_agent_id.environment_id != environment_id {
+    if owned_agent_id.environment_id != ctx.owned_agent_id.environment_id {
         return Ok(true);
     }
+    let Some(owner) = resolve_agent_owner(ctx, &owned_agent_id.agent_id).await? else {
+        return Ok(true);
+    };
     let Some(end) = (page_size as u64)
         .checked_sub(1)
         .and_then(|offset| start.as_u64().checked_add(offset))
@@ -87,15 +84,12 @@ async fn oplog_entries_denied<Ctx: WorkerCtx>(
     owned_agent_id: &OwnedAgentId,
     indexes: &[OplogIndex],
 ) -> Result<bool, WorkerExecutorError> {
-    let (owner, environment_id) = resolve_agent_owner(
-        ctx,
-        &owned_agent_id.component_id(),
-        Some(&owned_agent_id.agent_id.agent_id),
-    )
-    .await?;
-    if owned_agent_id.environment_id != environment_id {
+    if owned_agent_id.environment_id != ctx.owned_agent_id.environment_id {
         return Ok(true);
     }
+    let Some(owner) = resolve_agent_owner(ctx, &owned_agent_id.agent_id).await? else {
+        return Ok(true);
+    };
     let targets = indexes
         .iter()
         .map(|index| oplog_target(owner.clone(), Some((*index).into()), Some((*index).into())))
@@ -149,7 +143,7 @@ async fn oplog_enrichment_denial<Ctx: WorkerCtx>(
     let _ = crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(entries, ctx);
     let request = HostRequestGolemApiOplogEnrich {
         environment_id: owned_agent_id.environment_id,
-        agent_id: owned_agent_id.agent_id.clone(),
+        agent_id: owned_agent_id.agent_id,
         entries: entry_indexes,
         component_revision,
     };

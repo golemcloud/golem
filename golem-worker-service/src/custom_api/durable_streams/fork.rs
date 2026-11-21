@@ -23,7 +23,6 @@ use golem_service_base::model::auth::AuthCtx;
 use http::StatusCode;
 use std::str::FromStr;
 use tokio::io::AsyncReadExt;
-use uuid::Uuid;
 
 impl DurableStreamsHandler {
     pub(super) async fn fork(
@@ -72,19 +71,13 @@ impl DurableStreamsHandler {
             Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
         };
         let source_agent_id = match parsed.source_fork.as_deref() {
-            Some(fork) => super::CallAgentHandler::build_agent_id(
-                route,
-                behaviour.component_id,
-                &behaviour.agent_type,
-                &behaviour.constructor_input,
-                &behaviour.constructor_parameters,
-                Some(fork_phantom_id(
-                    root_agent_id,
-                    &super::route_scope(route),
-                    fork,
-                )),
-            )?,
-            None => root_agent_id.clone(),
+            Some(fork) => AgentId::durable_stream_fork(
+                route.route.environment_id,
+                *root_agent_id,
+                &super::route_scope(route),
+                fork,
+            ),
+            None => *root_agent_id,
         };
         let fork_offset = match header!("stream-fork-offset") {
             None => None,
@@ -138,8 +131,8 @@ impl DurableStreamsHandler {
             .fork_stream_slot(
                 &source_agent_id,
                 ForkStreamSlotRequest {
-                    source_agent_id: Some(source_agent_id.clone().into()),
-                    target_agent_id: Some(target_agent_id.clone().into()),
+                    source_agent_id: Some(source_agent_id.into()),
+                    target_agent_id: Some((*target_agent_id).into()),
                     environment_id: Some(route.route.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
                     route_scope: super::route_scope(route),
@@ -310,17 +303,6 @@ fn canonical_path(path: &str) -> String {
         .map(|segment| urlencoding::encode(segment).into_owned())
         .collect::<Vec<_>>()
         .join("/")
-}
-
-pub(super) fn fork_phantom_id(root: &AgentId, route_scope: &str, fork: &str) -> Uuid {
-    let identity = serde_json::to_vec(&(&root.agent_id, route_scope, fork))
-        .expect("string tuple is serializable");
-    let hash = blake3::hash(&identity);
-    let mut bytes = [0; 16];
-    bytes.copy_from_slice(&hash.as_bytes()[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    Uuid::from_bytes(bytes)
 }
 
 #[cfg(test)]

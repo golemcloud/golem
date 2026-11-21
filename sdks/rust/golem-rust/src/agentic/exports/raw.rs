@@ -154,26 +154,24 @@ unsafe fn absent_save() -> i32 {
     core::arch::wasm32::unreachable()
 }
 
-// Snapshot loading can be requested independently of discovery. Release the
-// two canonical buffers, resolve through task-return, then report EXIT (0).
-unsafe fn absent_load(payload: *mut u8, len: usize, mime: *mut u8, mime_len: usize) -> i32 {
-    #[link(wasm_import_module = "[export]golem:api/load-snapshot@1.5.0")]
-    unsafe extern "C" {
-        #[link_name = "[task-return]load"]
-        fn task_return(tag: i32, error: *const u8, len: usize);
-    }
-    for (ptr, len) in [(payload, len), (mime, mime_len)] {
-        if len != 0 {
-            unsafe {
-                std::alloc::dealloc(ptr, std::alloc::Layout::from_size_align_unchecked(len, 1));
-            }
-        }
-    }
-    let error = "component has no agent snapshot support";
+// Snapshot loading can be requested independently of discovery. The constructor
+// value tree owns nested allocations, so the absent path lifts the arguments
+// through the typed entry point of `Component`, which drops them and resolves
+// with an error. Neither argument holds a resource.
+unsafe fn absent_load(
+    payload: *mut u8,
+    len: usize,
+    mime: *mut u8,
+    mime_len: usize,
+    nodes: *mut u8,
+    nodes_len: usize,
+    root: i32,
+) -> i32 {
     unsafe {
-        task_return(1, error.as_ptr(), error.len());
+        load::_export_load_cabi::<super::Component>(
+            payload, len, mime, mime_len, nodes, nodes_len, root,
+        )
     }
-    0
 }
 
 capability!(agent_exports, [agent::Guest, load::Guest, save::Guest], {
@@ -187,8 +185,8 @@ capability!(agent_exports, [agent::Guest, load::Guest, save::Guest], {
     discover_post(p: *mut u8) -> () = "cabi_post_golem:agent/guest@2.0.0#discover-agent-types", agent::__post_return_discover_agent_types::<T>, post_empty;
     save() -> i32 = "[async-lift]golem:api/save-snapshot@1.5.0#save", save::_export_save_cabi::<T>, absent_save;
     save_callback(a: u32, b: u32, c: u32) -> u32 = "[callback][async-lift]golem:api/save-snapshot@1.5.0#save", save::__callback_save, absent_callback;
-    load(p: *mut u8, n: usize, m: *mut u8, l: usize) -> i32 = "[async-lift]golem:api/load-snapshot@1.5.0#load", load::_export_load_cabi::<T>, absent_load;
-    load_callback(a: u32, b: u32, c: u32) -> u32 = "[callback][async-lift]golem:api/load-snapshot@1.5.0#load", load::__callback_load, absent_callback;
+    load(p: *mut u8, n: usize, m: *mut u8, l: usize, v: *mut u8, w: usize, r: i32) -> i32 = "[async-lift]golem:api/load-snapshot@1.5.0#load", load::_export_load_cabi::<T>, absent_load;
+    load_callback(a: u32, b: u32, c: u32) -> u32 = "[callback][async-lift]golem:api/load-snapshot@1.5.0#load", load::__callback_load, load::__callback_load;
 });
 
 capability!(tool_exports, [tool::Guest], {

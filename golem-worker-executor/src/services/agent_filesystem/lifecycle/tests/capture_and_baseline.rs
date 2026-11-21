@@ -1884,7 +1884,6 @@ struct UnmanagedAgents {
     provisioning: SandboxFilesystemProvisioning,
     scratch: Arc<HostDirectory>,
     store: InitialFileStore,
-    component_id: ComponentId,
 }
 
 impl UnmanagedAgents {
@@ -1905,22 +1904,18 @@ impl UnmanagedAgents {
             provisioning,
             scratch,
             store: InitialFileStore::new().await,
-            component_id: ComponentId::new(),
         }
     }
 
     fn agent(&self, name: &str) -> OwnedAgentId {
-        OwnedAgentId::new(
-            self.store.environment_id,
-            &AgentId::from_agent_name_string(self.component_id, name).unwrap(),
-        )
+        OwnedAgentId::new(self.store.environment_id, &crate::test_agent_id(name))
     }
 
     fn root(&self, agent: &OwnedAgentId) -> PathBuf {
         self.parent
             .path()
             .join(agent.environment_id.to_string())
-            .join(agent.agent_id.component_id.to_string())
+            .join(format!("{:08x}", agent.agent_id.type_tag()))
             .join(agent_path_segment(&agent.agent_id))
     }
 
@@ -2242,7 +2237,6 @@ async fn apfs_agents() -> UnmanagedAgents {
         provisioning,
         scratch: Arc::new(directories.scratch),
         store: InitialFileStore::new().await,
-        component_id: ComponentId::new(),
     }
 }
 

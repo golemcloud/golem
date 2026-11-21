@@ -38,7 +38,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-delete-agent` | Deleting an agent instance |
 | `golem-add-agent-go` | Adding a new Go agent to a Golem component |
 | `golem-annotate-agent-go` | Configuring an agent's definition — name, description, mode, HTTP mount, method descriptions |
-| `golem-multi-instance-agent-go` | Addressing multiple instances of an agent by identity (and phantoms) |
+| `golem-multi-instance-agent-go` | Creating multiple agents with the same constructor parameters as agents without a key |
 | `golem-stateless-agent-go` | Creating ephemeral (stateless) agents |
 | `golem-configure-durability-go` | Choosing durable vs ephemeral agents, and adding periodic snapshots |
 | `golem-custom-snapshot-go` | Snapshot-based recovery and customizing state save/load |
@@ -77,7 +77,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-invoke-agent-go` | Invoking an agent method from the CLI and waiting for the result |
 | `golem-trigger-agent-go` | Triggering a fire-and-forget invocation from the CLI |
 | `golem-schedule-agent-go` | Scheduling a future invocation from the CLI |
-| `golem-create-agent-instance-go` | Creating an agent instance with `golem agent new` |
+| `golem-create-agent-instance-go` | Creating an agent instance with `golem agent create` or `golem agent upsert` |
 | `golem-interactive-repl-go` | Interactive testing/scripting of agents via the REPL |
 | `golem-add-go-module` | Adding a Go module dependency |
 | `golem-unit-test-go` | Unit testing agents and tools natively with `go test` |
@@ -91,15 +91,15 @@ This is a **Golem Application** — a distributed computing project targeting We
 Key concepts:
 - **Component**: A WASM component compiled from Go, defining one or more agent types
 - **Agent type**: A state-free **definition** (`golem.DefineAgent` + `Agent.Method` descriptors) plus an **implementation** (`Agent.Implement` + `impl.Handle`), split across a `<name>` / `impl` package pair
-- **Agent (worker)**: A running instance of an agent type, identified by constructor parameters, with persistent state
+- **Agent (worker)**: A running instance of an agent type, identified by its agent ID (a UUID), with persistent state
 
 ## Agent Fundamentals
 
-- Every agent is uniquely identified by its **constructor parameter values** — two agents with the same parameters are the same agent
+- Every agent is identified by its **agent ID**. A keyed agent also has a **key**, the agent type and its constructor parameter values (`Type(params)`): there is at most one keyed agent per key, and `upsert` returns it. An agent created without a key is reachable only by its ID
 - Agents are **durable by default** — their state persists across invocations, failures, and restarts
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
 - Agents can **spawn other agents** and communicate with them via **RPC** (see the `golem-call-another-agent-go` skill)
-- An agent is created implicitly on first invocation — no separate creation step needed
+- A keyed agent is created implicitly by `upsert` or by the first invocation by key — no separate creation step needed
 - **Async handles cannot outlive invocations** — every async host resource (e.g. an outgoing-HTTP response or an RPC `*golem.Future`) must be consumed within the same invocation; do not store an unresolved response or future in agent state to consume it from a later invocation
 
 ## Durability & Automatic Retries
@@ -193,7 +193,7 @@ Wire names come from the SDK's declarations, not from Go identifiers:
 - Method descriptors must be **package-level vars** in the definition package: the same value drives
   the schema, the implementation binding and cross-agent calls.
 - State is **private to the implementation package** — a caller never sees it. Cross-agent calls go
-  through the definition: `client := ledger.Agent.Get(id)` then `ledger.Record.Call(client, in)`,
+  through the definition: `client := ledger.Agent.Upsert(id)` then `ledger.Record.Call(client, in)`,
   which returns `(Out, error)`, or `ledger.Record.MustCall(client, in)`, which panics on a remote
   failure. The client hangs off the definition and the call off the descriptor, because Go methods
   cannot introduce type parameters.
@@ -205,9 +205,9 @@ Wire names come from the SDK's declarations, not from Go identifiers:
   the impls all blank-imported by `main.go`); a worker is initialized as exactly one of them.
 - **Environment variables** use the standard library — `os.Getenv` / `os.Environ` read the worker's
   environment with no special setup (they route to `wasi:cli/environment` via the toolchain's WASI
-  adapter). Alongside any vars you set (`env:` in `golem.yaml`, or `golem agent new --env`), the runtime
-  injects `GOLEM_AGENT_ID`, `GOLEM_WORKER_NAME`, `GOLEM_COMPONENT_ID`, `GOLEM_COMPONENT_REVISION` and
-  `GOLEM_AGENT_TYPE`. `os.Getenv` keeps the values from when the component started, so a fork's copy
+  adapter). Alongside any vars you set (`env:` in `golem.yaml`, or `golem agent create --env`), the
+  runtime injects `GOLEM_AGENT_ID`, `GOLEM_AGENT_TYPE`, `GOLEM_COMPONENT_REVISION` and, for a keyed
+  agent, `GOLEM_AGENT_KEY`. `os.Getenv` keeps the values from when the component started, so a fork's copy
   still sees the original id there: read the agent's own id with `ctx.AgentID()` (or `ic.AgentID()` in
   the constructor) instead.
 - **Logging** uses the standard library — the SDK installs an `slog` handler on startup that routes
@@ -257,3 +257,4 @@ If you see `This action requires confirmation, but the current shell is non-inte
 - Go docs: https://go.dev/doc/
 - App manifest reference: https://learn.golem.cloud/app-manifest
 <!-- golem-managed:guide:go:end -->
+

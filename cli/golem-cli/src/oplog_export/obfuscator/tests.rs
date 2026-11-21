@@ -31,10 +31,11 @@ use golem_common::model::oplog::types::{
     SerializableResponseHeaders, SerializableRpcError,
 };
 use golem_common::model::oplog::{
-    AgentError, HostPayloadPair, HostRequest, HostRequestGolemApiGetAgents,
-    HostRequestGolemRpcInvoke, HostRequestGolemToolInvoke, HostRequestRandomBytes, HostResponse,
-    HostResponseEntityInvocation, HostResponseFileSystemStat, HostResponseGolemAgentGetConfigValue,
-    HostResponseGolemRpcCreate, HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
+    AgentError, HostPayloadPair, HostRequest, HostRequestGolemRpcInvoke,
+    HostRequestGolemToolInvoke, HostRequestRandomBytes, HostResponse, HostResponseEntityInvocation,
+    HostResponseFileSystemStat, HostResponseGolemAgentGetConfigValue,
+    HostResponseGolemApiComponentId, HostResponseGolemRpcCreate, HostResponseGolemRpcCreated,
+    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
     HostResponseGolemRpcPrepareInvocation, HostResponseKVGet, HostResponseMonotonicClockTimestamp,
     HostResponseP3FileSystemStat, HostResponseP3HttpClientSendResult, OmittedOplogEntry,
     PublicDurableFunctionType, PublicOplogEntry, PublicOplogEntryAttribution,
@@ -77,11 +78,17 @@ fn component_id() -> ComponentId {
     ComponentId(Uuid::parse_str("13a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap())
 }
 
+/// An issued agent ID, a different one for each name.
 fn agent_id(name: &str) -> AgentId {
-    AgentId {
-        component_id: component_id(),
-        agent_id: name.to_string(),
-    }
+    let h = name
+        .bytes()
+        .fold(0u128, |h, b| (h << 8 | u128::from(b)) % (1 << 90));
+    AgentId::from_parts(7, h)
+}
+
+/// The texts of the UUID of an agent ID that a report must not hold.
+fn agent_id_texts(id: &AgentId) -> [String; 2] {
+    [id.0.hyphenated().to_string(), id.0.simple().to_string()]
 }
 
 /// Renders a schema-less value in the customer region.
@@ -356,13 +363,8 @@ fn token_golden_vector() {
         "map:863a964ddc59021402cab6036bbb088c"
     );
     assert_eq!(
-        agent_reference(
-            &ctx,
-            &agent_id("counter(\"a\")[00000000-0000-0000-0000-000000000001]")
-        )
-        .token
-        .0,
-        "agent:b05170b8b32930ed338456095adb0702"
+        agent_reference(&ctx, &AgentId::from_parts(7, 1)).token.0,
+        "agent:b7f9cc693ee3f61ae1a5f876801cd966"
     );
 }
 
@@ -1256,34 +1258,35 @@ fn agent_id_def_becomes_agent_node() {
     );
     let schemaless = render(KeepFlags::default(), &id.to_value());
     assert!(matches!(schemaless, ReportNode::Record(_)));
-    assert_no_marker(&json(&schemaless), "MARKER");
+    for id_text in agent_id_texts(&id) {
+        assert!(!json(&schemaless).contains(&id_text));
+    }
 }
 
 #[test]
 fn agent_reference_rules() {
     let key = key();
     let ctx = ObfuscationContext::new(&key, KeepFlags::default());
-    let plain = agent_id("counter(\"MARKER\")");
-    let phantom = agent_id(&format!("counter(\"MARKER\")[{}]", Uuid::from_u128(1)));
-    let other_component = AgentId {
-        component_id: ComponentId(Uuid::from_u128(2)),
-        agent_id: plain.agent_id.clone(),
-    };
+    let plain = agent_id("counter");
+    let same_type = AgentId::from_parts(plain.type_tag(), 1);
+    let other_type = AgentId::from_parts(plain.type_tag() + 1, 1);
     let a = agent_reference(&ctx, &plain);
-    assert_ne!(a, agent_reference(&ctx, &phantom));
-    assert_ne!(a, agent_reference(&ctx, &other_component));
+    assert_ne!(a, agent_reference(&ctx, &same_type));
+    assert_ne!(
+        agent_reference(&ctx, &same_type),
+        agent_reference(&ctx, &other_type)
+    );
     let output = json(&a);
-    assert_no_marker(&output, "MARKER");
-    assert!(!output.contains("counter"));
-    assert!(!output.contains(&component_id().to_string()));
+    for id_text in agent_id_texts(&plain) {
+        assert!(!output.contains(&id_text));
+    }
+    assert!(!output.contains(&format!("{:08x}", plain.type_tag())));
     assert_eq!(
         serde_json::to_value(&a).unwrap().as_object().unwrap().len(),
         1
     );
     let hex = a.token.hex().to_string();
     assert_eq!(a.pseudonym(), format!("agent:{}…", &hex[..12]));
-    let legacy = agent_reference(&ctx, &agent_id("worker-1"));
-    assert!(legacy.token.0.starts_with("agent:"));
 }
 
 #[test]
@@ -1425,7 +1428,9 @@ fn rpc_generic_agent_id_stays_record() {
     assert!(matches!(input, ReportNode::Record(_)), "{input:?}");
     assert!(!json(input).contains("\"kind\":\"agent\""));
     assert_no_marker(&json(&out.entry), "MARKER");
-    assert!(!json(&out.entry).contains(&component_id().to_string()));
+    for id_text in agent_id_texts(&id) {
+        assert!(!json(&out.entry).contains(&id_text));
+    }
 }
 
 #[test]
@@ -2525,6 +2530,7 @@ fn registered_agent_type_is_described_on_host_paths() {
         response(HostResponse::GolemAgentAgentType(
             golem_common::model::oplog::HostResponseGolemAgentAgentType {
                 result: Ok(Some(registered_agent_type())),
+                type_id: None,
             },
         )),
     );
@@ -2561,7 +2567,10 @@ fn registered_agent_type_is_described_on_host_paths() {
     let none = end(
         4,
         response(HostResponse::GolemAgentAgentType(
-            golem_common::model::oplog::HostResponseGolemAgentAgentType { result: Ok(None) },
+            golem_common::model::oplog::HostResponseGolemAgentAgentType {
+                result: Ok(None),
+                type_id: None,
+            },
         )),
     );
     let out = rendered(
@@ -2704,11 +2713,12 @@ fn allowlist_is_keyed_by_path() {
 #[test]
 fn component_ids_are_tokens() {
     let id = ComponentId(Uuid::from_u128(0xC0FFEE));
-    let entry = start(
+    let entry = end(
         2,
-        fqfn::<host_functions::GolemApiGetAgents>(),
-        request(HostRequest::GolemApiGetAgents(
-            HostRequestGolemApiGetAgents { component_id: id },
+        response(HostResponse::GolemApiComponentId(
+            HostResponseGolemApiComponentId {
+                result: Ok(Some(id)),
+            },
         )),
     );
     for keep in [
@@ -2719,7 +2729,14 @@ fn component_ids_are_tokens() {
             error_text: true,
         },
     ] {
-        let text = json(&rendered(keep, &entry, None).entry);
+        let text = json(
+            &rendered(
+                keep,
+                &entry,
+                Some(fqfn::<host_functions::GolemApiResolveComponentId>()),
+            )
+            .entry,
+        );
         assert!(!text.contains(&id.0.hyphenated().to_string()));
         assert!(!text.contains(&id.0.simple().to_string()));
     }
@@ -2749,6 +2766,16 @@ fn fingerprints_in_clear_on_trusted_paths() {
             target_environment_id: EnvironmentId(environment),
         })),
     );
+    let created_agent = agent_id("created");
+    let created = end(
+        4,
+        response(HostResponse::GolemRpcCreated(HostResponseGolemRpcCreated {
+            result: Ok((created_agent, AgentFingerprint(fingerprint))),
+            agent_type: None,
+            type_id: None,
+            target_environment_id: EnvironmentId(environment),
+        })),
+    );
     let bind_self = start(
         3,
         fqfn::<host_functions::GolemRpcWasmRpcBindSelf>(),
@@ -2765,7 +2792,9 @@ fn fingerprints_in_clear_on_trusted_paths() {
             &prepare,
             fqfn::<host_functions::GolemRpcWasmRpcPrepareInvocation>(),
         ),
-        (&create, fqfn::<host_functions::GolemRpcWasmRpcNew>()),
+        (&create, fqfn::<host_functions::GolemRpcWasmRpcUpsert>()),
+        (&created, fqfn::<host_functions::GolemRpcWasmRpcGetById>()),
+        (&created, fqfn::<host_functions::GolemRpcWasmRpcCreate>()),
         (
             &bind_self,
             fqfn::<host_functions::GolemRpcWasmRpcBindSelf>(),
@@ -2777,6 +2806,9 @@ fn fingerprints_in_clear_on_trusted_paths() {
         assert!(!out.provenance_unknown, "{output}");
         assert!(has_clear_fingerprint(&output, fingerprint), "{output}");
         assert!(!output.contains(&environment.to_string()), "{output}");
+        for id_text in agent_id_texts(&created_agent) {
+            assert!(!output.contains(&id_text), "{output}");
+        }
         assert!(
             !output.contains(&environment.simple().to_string()),
             "{output}"
@@ -2796,7 +2828,7 @@ fn fingerprints_in_clear_on_trusted_paths() {
     );
 
     // Without the function of the `Start`, the response is customer data.
-    for entry in [&prepare, &create] {
+    for entry in [&prepare, &create, &created] {
         let out = rendered(KeepFlags::default(), entry, None);
         let output = json(&out.entry);
         assert!(out.provenance_unknown);
@@ -3642,14 +3674,15 @@ fn holders() -> Vec<golem_common::model::card::PublicCardHolder> {
             application_id: secret_uuid(3),
         }),
         CardHolder::Agent(AgentCardHolder {
+            environment_id: EnvironmentId(secret_uuid(13)),
             agent_id: agent_id("holder(\"MARKER\")"),
         }),
     ]
 }
 
 /// One entry of each public entry case (and of each invocation, result, update and card event
-/// case), with `MARKER` in every customer string, a secret UUID in every ID and the component
-/// ID of `component_id()` in every agent ID. Kept metadata uses plain lower-case names.
+/// case), with `MARKER` in every customer string and agent type name, and a secret UUID in every
+/// ID. Kept metadata uses plain lower-case names.
 fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
     use golem_common::model::oplog::*;
     let ts = || Timestamp::from(TS);
@@ -3749,14 +3782,15 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
     let mut entries = vec![
         PublicOplogEntry::Create(CreateParams {
             timestamp: ts(),
-            agent_id: marker_agent.clone(),
+            agent_id: marker_agent,
+            agent_type_name: Some(golem_common::model::agent::AgentTypeName("MARKER".into())),
             owner_kind: Default::default(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
             component_revision: revision(1),
             env: [("MY_ENV".to_string(), "MARKER".to_string())].into(),
             created_by: golem_common::model::account::AccountId(secret_uuid(6)),
             environment_id: EnvironmentId(secret_uuid(7)),
-            parent: Some(marker_agent.clone()),
+            parent: Some(marker_agent),
             component_size: 10,
             initial_total_linear_memory_size: 20,
             initial_active_plugins: std::collections::BTreeSet::from([marker_plugin()]),
@@ -3764,7 +3798,6 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
                 path: vec!["cfg".into()],
                 value: marker_value(),
             }],
-            original_phantom_id: Some(secret_uuid(8)),
             instance_id: Uuid::from_u128(0xF1F2),
             never_live: false,
         }),
@@ -3953,7 +3986,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
         PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
             timestamp: ts(),
             plugin: marker_plugin(),
-            target_agent_id: marker_agent.clone(),
+            target_agent_id: marker_agent,
             confirmed_up_to: OplogIndex::from_u64(20),
             sending_up_to: OplogIndex::from_u64(21),
             last_batch_start: OplogIndex::from_u64(19),
@@ -4207,6 +4240,13 @@ fn every_entry_kind_secrets() -> Vec<String> {
         // The scheduled start of a pending invocation.
         "2027-01-15".to_string(),
     ];
+    for name in [
+        "counter(\"MARKER\")",
+        "holder(\"MARKER\")",
+        "callee(\"MARKERID\")",
+    ] {
+        secrets.extend(agent_id_texts(&agent_id(name)));
+    }
     for n in 0..120 {
         secrets.push(secret_uuid(n).hyphenated().to_string());
         secrets.push(secret_uuid(n).simple().to_string());

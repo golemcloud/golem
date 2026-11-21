@@ -17,7 +17,6 @@ use crate::config::WebSocketTransportLimits;
 use crate::transport_test_support::server;
 use futures::{SinkExt, StreamExt};
 use golem_common::model::AgentId;
-use golem_common::model::component::ComponentId;
 use golem_common::tracing::TraceOrigin;
 use poem::web::Data;
 use poem::web::websocket::WebSocket;
@@ -54,10 +53,7 @@ async fn connect(
         .on_upgrade(|socket| async move {
             let (sink, stream) = socket.split();
             let _ = proxy_worker_connection(
-                AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: "agent".to_string(),
-                },
+                AgentId::from_parts(7, 1),
                 TraceOrigin::none(),
                 futures::stream::pending(),
                 sink,

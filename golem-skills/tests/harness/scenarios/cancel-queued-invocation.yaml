@@ -118,16 +118,16 @@ steps:
     shell:
       command: "golem"
       args:
-        effect: ["agent", "get", "Counter(\"c1\")"]
-        rust: *get-counter-agent
-        ts: *get-counter-agent
-        scala: *get-counter-agent
-        moonbit: *get-counter-agent
-        go: *get-counter-agent
+        effect: ["invocation", "get", "--agent", "Counter(\"c1\")", "--idempotency-key", "cancel-me"]
+        rust: &get-cancelled-invocation ["invocation", "get", "--agent", "CounterAgent(\"c1\")", "--idempotency-key", "cancel-me"]
+        ts: *get-cancelled-invocation
+        scala: *get-cancelled-invocation
+        moonbit: *get-cancelled-invocation
+        go: *get-cancelled-invocation
       cwd: "test-app"
     expect:
-      exit_code: 0
-      stdout_not_contains: "Pending invocation count: 1"
+      exit_code: 130
+      stdout_contains: "cancelled"
 
   - id: "cleanup"
     shell:

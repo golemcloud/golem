@@ -13,7 +13,7 @@ Both `golem` and `golem-cli` can be used — all commands below work with either
 golem agent invoke <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
 ```
 
-This invokes a method on a deployed agent and **waits for the result**. The agent is automatically created on first invocation if it does not exist yet. Standard output, error, and log streams from the agent are streamed live to the terminal by default.
+This invokes a method on a deployed agent and **waits for the result**. Addressed by its key, the agent is automatically created on first invocation if it does not exist yet. Standard output, error, and log streams from the agent are streamed live to the terminal by default.
 
 ## Encoding Parameters
 
@@ -58,19 +58,23 @@ golem agent invoke 'MyAgent()' produce_bytes --stdout-format raw > output.bin
 
 In structured CLI formats, invocation output is a sequence of lifecycle documents rather than one object or array. Streaming invocation is durable: disconnecting or pressing Ctrl-C detaches the current transport without cancelling the invocation. The CLI does not retry automatically. Use `--save-session <PATH>` on the initial invocation, then `--resume-session <PATH>` after a detach or `--takeover-session <PATH>` to fence an attached transport explicitly.
 
-## Agent ID Format
+## Agent Address Format
 
-The agent ID identifies the agent type and its constructor parameters:
+An agent is addressed either by its **key** — the agent type and its constructor parameters — or by its **agent ID**, a UUID that Golem issues:
 
 ```
 AgentTypeName(param1, param2, ...)
+AgentTypeName[<AGENT_ID>]
+<AGENT_ID>
 ```
 
-The agent ID can optionally be prefixed with environment or application paths:
+`AgentTypeName(params)` reaches the keyed agent of the parameters and creates it when it is missing. An agent created without a key (for example with `golem agent create` without `--keyed`) is reachable only by its agent ID; an ID address never creates an agent.
+
+The address can optionally be prefixed with environment or application paths:
 
 | Format | Description |
 |--------|-------------|
-| `AgentTypeName(params)` | Standalone agent name |
+| `AgentTypeName(params)` | Agent type and constructor parameters |
 | `env/AgentTypeName(params)` | Environment-specific |
 | `app/env/AgentTypeName(params)` | Application and environment-specific |
 | `account/app/env/AgentTypeName(params)` | Account, application, and environment-specific |
@@ -113,6 +117,7 @@ golem agent invoke 'staging/MyAgent("user-123")' get_status
 | `--stdin-format value\|raw` | Select stdin stream framing; defaults to `value` |
 | `--stdout-format value\|raw` | Select stream result rendering; defaults to `value` |
 | `--schedule-at <DATETIME>` | Schedule the invocation at a specific time (requires `--trigger`; ISO 8601 format) |
+| `--expected-fingerprint <UUID>` | Fail, and run nothing, unless the agent is the incarnation with this fingerprint |
 
 ## Idempotency
 
@@ -128,7 +133,7 @@ If the agent's component has not been deployed yet and the CLI is run from an ap
 
 ## Value Syntax
 
-The agent ID parameters and method arguments use **Rust syntax**:
+The constructor parameters in the key and the method arguments use **Rust syntax**:
 
 - Field names use `snake_case`
 - Options: `Some(value)` / `None`

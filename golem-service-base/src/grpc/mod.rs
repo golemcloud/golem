@@ -91,8 +91,7 @@ impl<E> From<&'static str> for GrpcError<E> {
 pub fn proto_agent_id_string(
     agent_id: &Option<golem_api_grpc::proto::golem::worker::AgentId>,
 ) -> Option<String> {
-    agent_id
-        .clone()
+    (*agent_id)
         .and_then(|v| TryInto::<AgentId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
@@ -108,8 +107,7 @@ pub fn proto_idempotency_key_string(
 pub fn proto_promise_id_string(
     promise_id: &Option<golem_api_grpc::proto::golem::worker::PromiseId>,
 ) -> Option<String> {
-    promise_id
-        .clone()
+    (*promise_id)
         .and_then(|v| TryInto::<PromiseId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
@@ -117,5 +115,5 @@ pub fn proto_promise_id_string(
 pub fn proto_invocation_context_parent_agent_id_string(
     invocation_context: &Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
 ) -> Option<String> {
-    proto_agent_id_string(&invocation_context.as_ref().and_then(|c| c.parent.clone()))
+    proto_agent_id_string(&invocation_context.as_ref().and_then(|c| c.parent))
 }

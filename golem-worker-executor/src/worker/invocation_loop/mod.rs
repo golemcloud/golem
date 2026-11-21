@@ -350,7 +350,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// - Suspending the worker
     /// - Process the retry decision
     pub async fn run(&mut self) {
-        let agent_id = self.owned_agent_id.agent_id.clone();
+        let agent_id = self.owned_agent_id.agent_id;
         let mut deferred_wakeups = VecDeque::new();
         let worker = Arc::downgrade(&self.parent);
         let _filesystem_limit_registration = self
@@ -425,7 +425,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     break;
                 }
                 let parent = self.parent.clone();
-                let permit_agent_id = self.owned_agent_id.agent_id().clone();
+                let permit_agent_id = self.owned_agent_id.agent_id();
                 let permit = parent
                     .registered_concurrent_account
                     .acquire(permit_agent_id)
@@ -1122,7 +1122,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .parent
                                             .get_last_known_status()
                                             .await
-                                            .current_idempotency_key;
+                                            .current_idempotency_key()
+                                            .copied();
                                         let recorded = match kind {
                                             InterruptKind::EntityCancellation => unreachable!("entity cancellation cannot interrupt the owner"),
                                             InterruptKind::Suspend(_) => {

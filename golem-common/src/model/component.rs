@@ -167,6 +167,7 @@ impl ComponentDto {
 
         Ok(diff::Component {
             wasm_hash: self.wasm_hash,
+            package_metadata: self.package_metadata.clone(),
             agent_types: metadata
                 .agent_types()
                 .iter()
@@ -363,9 +364,11 @@ mod tests {
             metadata: metadata.into(),
             created_at: chrono::Utc::now(),
             wasm_hash,
+            package_metadata: None,
         };
         let expected = diff::Component {
             wasm_hash,
+            package_metadata: None,
             agent_types: BTreeMap::new(),
             component_config: diff::ComponentConfig::default().into(),
             agent_type_provision_configs: BTreeMap::new(),

@@ -41,13 +41,13 @@ The error from `Await` reports only a payload that does not decode as `T`: the b
 
 ```go
 type PromiseID struct {
-    AgentID     golem.AgentID // ComponentID: the owning agent's component; AgentID: agent type + constructor params (the ":agent" path segment)
+    AgentID     golem.AgentID // the agent that created the promise: its agent ID, a UUID (the ":agent_id" path segment)
     Fingerprint golem.UUID    // the agent incarnation that created the promise ("fingerprint", as the UUID string)
     OplogIndex  uint64        // disambiguates promises from the same incarnation ("oplogIdx")
 }
 ```
 
-A deleted and re-created agent keeps its `AgentID` but gets a new `Fingerprint`, so a promise ID of the deleted incarnation no longer completes anything. `id.String()` renders `<component-id>/<agent-id>/<fingerprint>/<oplog-idx>`, the form Golem displays a promise ID in.
+A deleted and re-created agent keeps its `AgentID` but gets a new `Fingerprint`, so a promise ID of the deleted incarnation no longer completes anything. `id.String()` renders `<agent-id>/<fingerprint>/<oplog-idx>`, the form Golem displays a promise ID in.
 
 ## Full example: human-in-the-loop approval
 
@@ -129,16 +129,16 @@ _ = ok // false means it was already completed (idempotency signal)
 
 ## Completing from outside Golem (REST)
 
-Hand the `PromiseID` fields (component, agent, fingerprint and oplog index) to the external system; it POSTs to the worker-service complete endpoint:
+Hand the `PromiseID` fields (agent ID, fingerprint and oplog index) to the external system; it POSTs to the worker-service complete endpoint of the agent's environment:
 
 ```shell
 curl -X POST \
-  "$GOLEM_URL/v1/components/$COMPONENT_ID/workers/$AGENT_ID/complete" \
+  "$GOLEM_URL/v1/runtime/envs/$ENVIRONMENT_ID/agents/$AGENT_ID/complete" \
   -H 'Content-Type: application/json' \
   -d '{"oplogIdx": <oplog_index>, "fingerprint": "<fingerprint>", "data": [<bytes>]}'
 ```
 
-All three body fields are required; `fingerprint` is `id.Fingerprint.String()`.
+`$AGENT_ID` is `id.AgentID.String()`. All three body fields are required; `fingerprint` is `id.Fingerprint.String()`.
 
 The `data` bytes become the payload `Await` decodes as `T` (JSON when `T` is a struct).
 

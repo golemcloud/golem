@@ -504,8 +504,8 @@ struct HumanApprovalRequest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HumanApprovalOwner {
-    component_id: String,
-    agent_name: String,
+    environment_id: String,
+    agent_id: String,
 }
 
 #[derive(Deserialize)]
@@ -545,8 +545,8 @@ async fn human_approval(
     let metadata = golem_rust::get_self_metadata()
         .map_err(|error| ToolInvokeError::InternalError(format!("owner metadata: {error:?}")))?;
     let owner = HumanApprovalOwner {
-        component_id: metadata.agent_id.component_id.uuid.to_string(),
-        agent_name: metadata.agent_id.agent_id,
+        environment_id: metadata.environment_id.uuid.to_string(),
+        agent_id: metadata.agent_id.uuid.to_string(),
     };
     let request = HumanApprovalRequest {
         request_id: request_id.to_string(),

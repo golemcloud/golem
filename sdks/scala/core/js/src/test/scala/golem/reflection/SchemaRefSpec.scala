@@ -15,10 +15,12 @@ import golem.schema._
 import golem.schema.SchemaTypeBody._
 import golem.schema.SchemaValue._
 import golem.runtime.InputRecordCodec
+import zio.ZIO
 import zio.test._
 import zio.blocks.schema.json.Json
 
 import scala.collection.immutable.ListMap
+import scala.concurrent.Future
 
 object SchemaRefSpec extends ZIOSpecDefault {
   private val graph = SchemaGraph(
@@ -507,9 +509,10 @@ object SchemaRefSpec extends ZIOSpecDefault {
     test("rejects missing, unexpected, and malformed reflected outputs") {
       val input    = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(RecordType(Nil))))
       val output   = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(StringType)))
+      val agentId  = golem.AgentId(java.util.UUID.fromString("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))
       val metadata = InvocationMetadata(
-        ParsedAgentId("test"),
-        golem.InvocationId("test", java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
+        agentId,
+        golem.InvocationId(agentId, java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
       )
       val unit   = AgentMethod("unit", "", None, input, None)
       val single = AgentMethod("single", "", None, input, Some(output))
@@ -540,13 +543,15 @@ object SchemaRefSpec extends ZIOSpecDefault {
         constructor = InputRecordCodec.single[String]("name"),
         config = AgentConfigCodec[String](_ => Nil)
       )
-      val optionalConfig: String => Either[GolemReflectError, CallerCodecAgentClient] = configured.client.get
+      val withConfig
+        : (String, String, Boolean, Map[String, String]) => Future[Either[GolemReflectError, CallerCodecAgentClient]] =
+        configured.client.create
 
       assertTrue(
         binding.contractName.isEmpty,
         full.contractName.contains("CounterAgent"),
         wrongShape.isLeft,
-        optionalConfig != null
+        withConfig != null
       )
     },
     test("reflected config validates declared local paths before RPC creation") {
@@ -562,7 +567,6 @@ object SchemaRefSpec extends ZIOSpecDefault {
         "",
         "scala",
         AgentMode.Durable,
-        ComponentId(new java.util.UUID(0L, 1L)),
         SchemaRef(graph),
         Nil,
         List(
@@ -647,14 +651,10 @@ object SchemaRefSpec extends ZIOSpecDefault {
         constructor = InputRecordCodec.single[String]("name"),
         config = AgentConfigCodec[String](_ => throw new IllegalArgumentException("bad config"))
       )
-      val client   = definition.client
       val expected = Left(GolemReflectError.SchemaEncode("bad config"))
-      val phantom  = new java.util.UUID(0L, 1L)
-      assertTrue(
-        client.get("worker", "bad") == expected,
-        client.getPhantom("worker", phantom, "bad") == expected,
-        client.newPhantom("worker", "bad") == expected
-      )
+      ZIO
+        .fromFuture(_ => definition.client.create("worker", "bad", keyed = true, env = Map.empty))
+        .map(result => assertTrue(result == expected))
     }
   )
 }

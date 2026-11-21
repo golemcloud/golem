@@ -85,7 +85,7 @@ async fn chunk_f_native_config_uses_each_callers_effective_policy_without_host_b
         );
     }
 
-    let narrowed = agent_id!("ToolStreamingCaller", "chunk-f-native-config-narrowed");
+    let narrowed = agent_key!("ToolStreamingCaller", "chunk-f-native-config-narrowed");
     executor
         .start_agent_with(
             &narrowed_component.id,
@@ -109,7 +109,7 @@ async fn chunk_f_native_config_uses_each_callers_effective_policy_without_host_b
         );
     }
 
-    let empty = agent_id!("ToolStreamingCaller", "chunk-f-native-config-empty");
+    let empty = agent_key!("ToolStreamingCaller", "chunk-f-native-config-empty");
     executor
         .start_agent_with(
             &empty_component.id,

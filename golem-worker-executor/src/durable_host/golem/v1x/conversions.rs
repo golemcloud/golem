@@ -140,8 +140,8 @@ impl TryFrom<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::
 
     fn try_from(filter: golem_api_1_x::host::AgentPropertyFilter) -> Result<Self, Self::Error> {
         let converted = match filter {
-            golem_api_1_x::host::AgentPropertyFilter::Name(filter) => {
-                golem_common::model::AgentFilter::new_name(filter.comparator.into(), filter.value)
+            golem_api_1_x::host::AgentPropertyFilter::Key(filter) => {
+                golem_common::model::AgentFilter::new_key(filter.comparator.into(), filter.value)
             }
             golem_api_1_x::host::AgentPropertyFilter::Version(filter) => {
                 golem_common::model::AgentFilter::new_revision(
@@ -208,6 +208,8 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
     fn from(value: AgentMetadataForGuests) -> Self {
         Self {
             agent_id: value.agent_id.into(),
+            agent_type_name: value.agent_type_name.map(|name| name.0),
+            fingerprint: value.fingerprint.0.into(),
             args: vec![],
             env: value.env,
             config: value.config.into_iter().collect(),
@@ -242,10 +244,7 @@ mod tests {
             component_id,
             agent_type_name: None,
             canonical_key: None,
-            agent_id: AgentId {
-                component_id,
-                agent_id: "Sandbox()".to_string(),
-            },
+            agent_id: AgentId::from_parts(7, 1),
             owner_kind: OwnerKind::ComponentAgent,
             env: vec![],
             environment_id: EnvironmentId::new(),
@@ -259,7 +258,7 @@ mod tests {
                 never_live,
                 ..AgentStatusRecord::default()
             },
-            original_phantom_id: None,
+            constructor_parameters: None,
             fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
             agent_mode: AgentMode::Durable,
             create_request: CreateRequest::new(

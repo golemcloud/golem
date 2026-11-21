@@ -835,7 +835,7 @@ impl StreamSessionIndexService {
         fingerprint: AgentFingerprint,
     ) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
-            agent_id: id.agent_id.clone(),
+            owned_agent_id: id.clone(),
             fingerprint,
         }
     }
@@ -1289,7 +1289,7 @@ impl StreamSessionIndexService {
                         let field = stream_resume_index_field(
                             &StreamSessionKey {
                                 callee_environment_id: id.environment_id,
-                                callee: id.agent_id.clone(),
+                                callee: id.agent_id,
                                 callee_fingerprint: producer_fingerprint,
                                 idempotency_key: record.session_key,
                             },

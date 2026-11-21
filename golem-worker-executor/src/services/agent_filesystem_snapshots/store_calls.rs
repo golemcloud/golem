@@ -1239,10 +1239,7 @@ mod tests {
         let agent = AgentSnapshots::agent(
             &golem_common::model::OwnedAgentId::new(
                 golem_common::model::environment::EnvironmentId::new(),
-                &golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId::new(),
-                    agent_id: "next-take".to_string(),
-                },
+                &golem_common::model::AgentId::from_parts(7, 1),
             ),
             golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
         );

@@ -92,45 +92,47 @@ impl RedisKeyValueStorage {
             // Per-agent hash: each agent's split status fields live in their own hash so that
             // `hkeys`/`hdel` operate on a single agent's fields and multi-field writes are atomic.
             KeyValueStorageNamespace::AgentStatus {
-                agent_id,
+                owned_agent_id,
                 fingerprint,
             } => Some(format!(
                 "agent-status:{}:{fingerprint}",
-                agent_id.to_redis_key()
+                owned_agent_id.storage_key()
             )),
             KeyValueStorageNamespace::AgentInvocationResultIndex {
-                agent_id,
+                owned_agent_id,
                 fingerprint,
             } => Some(format!(
                 "agent-invocation-result-index:{}:{fingerprint}",
-                agent_id.to_redis_key()
+                owned_agent_id.storage_key()
             )),
             // Per-agent clean checkpoint hash; same per-agent isolation as `AgentStatus`.
             KeyValueStorageNamespace::AgentStatusCheckpoint {
-                agent_id,
+                owned_agent_id,
                 fingerprint,
             } => Some(format!(
                 "agent-status-checkpoint:{}:{fingerprint}",
-                agent_id.to_redis_key(),
+                owned_agent_id.storage_key(),
             )),
             KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
-                agent_id,
+                owned_agent_id,
                 fingerprint,
             } => Some(format!(
                 "agent:durable_stream_session_index:{}:{fingerprint}",
-                agent_id.to_redis_key()
+                owned_agent_id.storage_key()
             )),
-            KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => Some(format!(
-                "agent:rejected_periodic_snapshots:{}",
-                agent_id.to_redis_key()
-            )),
+            KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { owned_agent_id } => {
+                Some(format!(
+                    "agent:rejected_periodic_snapshots:{}",
+                    owned_agent_id.storage_key()
+                ))
+            }
             KeyValueStorageNamespace::RunningWorkers => None,
             KeyValueStorageNamespace::Promise {
-                agent_id,
+                owned_agent_id,
                 fingerprint,
             } => Some(format!(
                 "promises:{}:{fingerprint}",
-                agent_id.to_redis_key()
+                owned_agent_id.storage_key()
             )),
             KeyValueStorageNamespace::Schedule => None,
             KeyValueStorageNamespace::UserDefined {

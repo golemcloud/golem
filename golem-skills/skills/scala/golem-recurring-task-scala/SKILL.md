@@ -11,7 +11,7 @@ A Golem agent can act as its own scheduler by calling `.poll.scheduleAt(...)` on
 
 ## Basic Pattern
 
-Use a non-phantom durable agent: `PollerAgentClient.get(name)` must address the
+Use a keyed durable agent: `PollerAgentClient.upsert(name)` must address the
 running instance. Call `start` once to do the first poll immediately; subsequent
 polls run through the scheduled chain only. Repeated `start` calls or direct
 `poll` calls create extra chains. An executor restart recovers the existing
@@ -45,7 +45,7 @@ class PollerAgentImpl(name: String) extends PollerAgent {
     println(s"Polling $name")
 
     // 2. Schedule the next run (60 seconds from now)
-    val self = PollerAgentClient.get(name)
+    val self = PollerAgentClient.upsert(name)
     self.poll.scheduleAt(Datetime.afterSeconds(60))
   }
 }
@@ -77,7 +77,7 @@ class PollerAgentImpl(name: String) extends PollerAgent {
       Math.min(backoff, maxIntervalSecs)
     }
 
-    val self = PollerAgentClient.get(name)
+    val self = PollerAgentClient.upsert(name)
     self.poll.scheduleAt(Datetime.afterSeconds(delay))
   }
 }
@@ -109,7 +109,7 @@ class PollerAgentImpl(name: String) extends PollerAgent {
     if (cancelled) Future.successful(())
     else {
       println(s"Polling $name")
-      PollerAgentClient.get(name).poll
+      PollerAgentClient.upsert(name).poll
         .scheduleCancelableAt(Datetime.afterSeconds(60))
         .map { token => pendingToken = Some(token) }
     }
@@ -154,7 +154,7 @@ For a standalone scheduled poll, use an explicit idempotency key:
 golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z -i 'poll-next' 'PollerAgent("my-poller")' poll
 
 # Cancel the pending invocation
-golem agent cancel-invocation 'PollerAgent("my-poller")' 'poll-next'
+golem invocation cancel --agent 'PollerAgent("my-poller")' --idempotency-key 'poll-next'
 ```
 
 ## Common Use Cases
@@ -200,7 +200,7 @@ Extract the scheduling logic into a helper to keep methods clean:
 
 ```scala
 private def scheduleNext(delaySecs: Int): Future[Unit] = {
-  val self = PollerAgentClient.get(name)
+  val self = PollerAgentClient.upsert(name)
   self.poll.scheduleAt(Datetime.afterSeconds(delaySecs))
 }
 ```
