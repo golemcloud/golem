@@ -41,31 +41,34 @@ const MAX_STDIN: usize = 16 * 1024 * 1024;
 pub const RESERVED_ARGUMENTS: [&str; 4] = [STDIN_FIELD, "idempotency_key", "_agent", "_agent_id"];
 
 /// Projects a name to snake_case. A hyphen becomes an underscore, an uppercase letter that
-/// starts a new camelCase word gets an underscore before it, and every letter becomes
+/// starts a new camelCase word gets an underscore before it, and each uppercase letter becomes
 /// lowercase. `searchItems`, `search-items` and `search_items` all project to `search_items`.
-pub fn snake_case(name: &str) -> String {
-    let chars: Box<[char]> = name.chars().collect();
-    chars
-        .iter()
-        .enumerate()
-        .fold(String::with_capacity(name.len()), |mut out, (i, &c)| {
-            if c == '-' {
-                out.push('_');
-            } else if c.is_uppercase() {
-                let previous = i.checked_sub(1).map(|p| chars[p]);
-                let next = chars.get(i + 1);
-                let word_start = previous.is_some_and(|p| p.is_lowercase() || p.is_ascii_digit())
-                    || (previous.is_some_and(char::is_uppercase)
-                        && next.is_some_and(|n| n.is_lowercase()));
-                if word_start && !out.ends_with('_') {
+/// The function does not use heck, because heck removes a leading `_`, and `_stdin` must keep it.
+pub fn to_snake_case(name: &str) -> String {
+    let next_chars = name.chars().skip(1).map(Some).chain(std::iter::once(None));
+    name.chars()
+        .zip(next_chars)
+        .fold(
+            (String::with_capacity(name.len()), None::<char>),
+            |(mut out, previous), (c, next)| {
+                if c == '-' {
                     out.push('_');
+                } else if c.is_uppercase() {
+                    let word_start = previous
+                        .is_some_and(|p| p.is_lowercase() || p.is_ascii_digit())
+                        || (previous.is_some_and(char::is_uppercase)
+                            && next.is_some_and(char::is_lowercase));
+                    if word_start && !out.ends_with('_') {
+                        out.push('_');
+                    }
+                    out.extend(c.to_lowercase());
+                } else {
+                    out.push(c);
                 }
-                out.extend(c.to_lowercase());
-            } else {
-                out.push(c);
-            }
-            out
-        })
+                (out, Some(c))
+            },
+        )
+        .0
 }
 
 /// Returns the projected tool name of a command. The name is `<tool>_<command path>`, and each
@@ -73,7 +76,7 @@ pub fn snake_case(name: &str) -> String {
 pub fn projected_tool_name(tool: &str, command_path: &[String]) -> String {
     std::iter::once(tool)
         .chain(command_path.iter().map(String::as_str))
-        .map(snake_case)
+        .map(to_snake_case)
         .collect::<Vec<_>>()
         .join("_")
 }
@@ -104,7 +107,7 @@ pub fn check_reserved_arguments(
     definition
         .canonical_input_fields(command_index)
         .iter()
-        .map(|field| (field, snake_case(&field.name)))
+        .map(|field| (field, to_snake_case(&field.name)))
         .find(|(_, projected)| RESERVED_ARGUMENTS.contains(&projected.as_str()))
         .map_or(Ok(()), |(field, projected)| {
             Err(format!(
@@ -123,8 +126,8 @@ pub struct CompiledMcpToolExport {
     pub owner_component_name: ComponentName,
     pub tool_name: ToolName,
     pub command_path: Vec<String>,
-    /// The root name, as declared, that projects to the first part of `mcp_name`: the tool name,
-    /// a root alias or the `mcp.name` of the export.
+    /// The root name, as declared, that projects to the first part of `mcp_name`: the tool name
+    /// or a root alias.
     pub mcp_root_name: String,
     /// The command path, as declared, that projects to the rest of `mcp_name`: `command_path` or
     /// one of its alias paths.
@@ -162,7 +165,7 @@ impl CompiledMcpToolExport {
                 fields: fields
                     .iter()
                     .map(|field| NamedFieldType {
-                        name: snake_case(&field.name),
+                        name: to_snake_case(&field.name),
                         ..field.clone()
                     })
                     .collect(),
@@ -188,7 +191,7 @@ impl CompiledMcpToolExport {
             .into_iter()
             .zip(&model.fields)
         {
-            let name = snake_case(&field.name);
+            let name = to_snake_case(&field.name);
             let required = object
                 .entry("required")
                 .or_insert_with(|| json!([]))
@@ -317,7 +320,7 @@ impl CompiledMcpToolExport {
             !model
                 .fields
                 .iter()
-                .any(|field| snake_case(&field.name) == **name)
+                .any(|field| to_snake_case(&field.name) == **name)
         }) {
             return Err(format!("unknown argument `{name}`"));
         }
@@ -328,7 +331,7 @@ impl CompiledMcpToolExport {
             .into_iter()
             .zip(&model.fields)
         {
-            let name = snake_case(&field.name);
+            let name = to_snake_case(&field.name);
             fields.push(match args.remove(&name) {
                 Some(json) => from_untrusted_json_value(&self.input_schema, &field.type_, &json)
                     .map_err(|e| format!("invalid argument `{name}`: {e}"))?,
@@ -373,7 +376,7 @@ fn projected_constraints(
         fields
             .iter()
             .find(|field| field.name == *name || field.aliases.contains(name))
-            .map_or_else(|| snake_case(name), |field| snake_case(&field.name))
+            .map_or_else(|| to_snake_case(name), |field| to_snake_case(&field.name))
     };
     let refs = |declared: &[Ref]| {
         declared
@@ -417,10 +420,8 @@ fn projected_constraints(
 
 /// Projects the commands of `definition` that `include` and `exclude` select to MCP tools.
 ///
-/// `name_override` is the `mcp.name` of the export. When it is present, it replaces the tool
-/// name and its root aliases in each projected tool name. A `name_override` that projects to a
-/// name without a letter or digit is an error. The reserved-argument check runs at most once on
-/// each selected command, and on no other command.
+/// The reserved-argument check runs at most once on each selected command, and on no other
+/// command.
 pub fn compile_native_tool_exports(
     owner_component_id: ComponentId,
     owner_component_name: ComponentName,
@@ -428,17 +429,9 @@ pub fn compile_native_tool_exports(
     definition: &Tool,
     include: Option<&[String]>,
     exclude: Option<&[String]>,
-    name_override: Option<&str>,
 ) -> Result<Vec<CompiledMcpToolExport>, String> {
     if include.is_some() && exclude.is_some() {
         return Err("include and exclude are mutually exclusive".to_string());
-    }
-    if let Some(name_override) = name_override
-        && !snake_case(name_override).chars().any(char::is_alphanumeric)
-    {
-        return Err(format!(
-            "the MCP name `{name_override}` has no letter or digit"
-        ));
     }
     validate_tool(definition).map_err(|e| {
         e.into_iter()
@@ -456,17 +449,16 @@ pub fn compile_native_tool_exports(
     walk_paths(definition, 0, vec![], vec![vec![]], &mut candidates)?;
     let mut names = HashMap::new();
     let mut result = Vec::new();
-    let root_names: Box<[&str]> = match name_override {
-        Some(name_override) => Box::new([name_override]),
-        None => std::iter::once(tool_name.as_str())
-            .chain(
-                definition.commands.nodes[0]
-                    .aliases
-                    .iter()
-                    .map(String::as_str),
-            )
-            .collect(),
-    };
+    let root_names: Box<[&str]> = std::iter::once(tool_name.as_str())
+        .chain(
+            definition
+                .commands
+                .nodes
+                .first()
+                .into_iter()
+                .flat_map(|root| root.aliases.iter().map(String::as_str)),
+        )
+        .collect();
     for (index, canonical, exposed) in candidates {
         if excludes.iter().any(|p| pattern_matches(p, &canonical)) {
             continue;
@@ -541,7 +533,7 @@ pub fn compile_native_tool_exports(
                 }
                 result.push(CompiledMcpToolExport {
                     mcp_name: name,
-                    description: if root_name == tool_name.as_str() || name_override.is_some() {
+                    description: if root_name == tool_name.as_str() {
                         description.clone()
                     } else {
                         format!(
@@ -745,7 +737,7 @@ fn validate_collection_values(
         {
             return Err(format!(
                 "argument `{}` requires at least 1 value(s)",
-                snake_case(&value.name)
+                to_snake_case(&value.name)
             ));
         }
         let Some((min, max)) = collection_bounds(tool, command_index, surface) else {
@@ -758,7 +750,7 @@ fn validate_collection_values(
         if length < min {
             return Err(format!(
                 "argument `{}` requires at least {min} value(s)",
-                snake_case(&value.name)
+                to_snake_case(&value.name)
             ));
         }
         if let Some(max) = max
@@ -766,7 +758,7 @@ fn validate_collection_values(
         {
             return Err(format!(
                 "argument `{}` accepts at most {max} value(s)",
-                snake_case(&value.name)
+                to_snake_case(&value.name)
             ));
         }
     }

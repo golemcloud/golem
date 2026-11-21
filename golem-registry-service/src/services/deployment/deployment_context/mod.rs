@@ -1158,7 +1158,6 @@ impl DeploymentContext {
                     definition,
                     options.include.as_deref(),
                     options.exclude.as_deref(),
-                    None,
                 ) {
                     Ok(exports) => native_tools.extend(exports),
                     Err(error) => errors.push(DeployValidationError::McpDeploymentInvalidTool {

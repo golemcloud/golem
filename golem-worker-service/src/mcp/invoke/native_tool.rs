@@ -1048,7 +1048,6 @@ mod tests {
             &definition,
             None,
             None,
-            None,
         )
         .unwrap()
         .remove(0);
@@ -1183,7 +1182,6 @@ mod tests {
             "test:owner".try_into().unwrap(),
             "test".try_into().unwrap(),
             &record_definition,
-            None,
             None,
             None,
         )

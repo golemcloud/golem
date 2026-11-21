@@ -9,6 +9,8 @@ use golem_common::schema::metadata::TypeId;
 use golem_common::schema::public_json::encode_public_schema_value;
 use golem_common::schema::tool::*;
 use golem_common::schema::{MetadataEnvelope, NamedFieldType, SchemaTypeDef};
+use proptest::prelude::*;
+use proptest::string::string_regex;
 use test_r::test;
 
 fn body() -> CommandBody {
@@ -58,7 +60,6 @@ fn compile(tool: &Tool) -> Result<Vec<CompiledMcpToolExport>, String> {
         "test:owner".try_into().unwrap(),
         tool.commands.nodes[0].name.as_str().try_into().unwrap(),
         tool,
-        None,
         None,
         None,
     )
@@ -188,7 +189,6 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
         &definition,
         Some(&include),
         None,
-        None,
     )
     .unwrap();
     assert_eq!(exports.len(), 8);
@@ -221,7 +221,6 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
         &definition,
         None,
         Some(&["do-work **".to_string()]),
-        None,
     )
     .unwrap();
     assert_eq!(
@@ -294,15 +293,74 @@ fn an_alias_path_that_collides_with_another_command_is_named_by_its_alias_path()
 fn names_project_to_snake_case() {
     ["searchItems", "search-items", "search_items", "SearchItems"]
         .into_iter()
-        .for_each(|name| assert_eq!(snake_case(name), "search_items", "{name}"));
-    assert_eq!(snake_case("HTTPServer"), "http_server");
-    assert_eq!(snake_case("parseURL"), "parse_url");
-    assert_eq!(snake_case("item2Go"), "item2_go");
-    assert_eq!(snake_case("v2"), "v2");
+        .for_each(|name| assert_eq!(to_snake_case(name), "search_items", "{name}"));
+    assert_eq!(to_snake_case("HTTPServer"), "http_server");
+    assert_eq!(to_snake_case("parseURL"), "parse_url");
+    assert_eq!(to_snake_case("item2Go"), "item2_go");
+    assert_eq!(to_snake_case("v2"), "v2");
     assert_eq!(
         projected_tool_name("my-tool", &["searchItems".to_string(), "by-id".to_string()]),
         "my_tool_search_items_by_id"
     );
+}
+
+/// The camelCase form of the one-letter word `x` followed by the word `yz` is `xYZ`, which reads
+/// as `x` followed by the acronym `YZ`. The property generator therefore uses words of two or
+/// more characters.
+#[test]
+fn a_one_letter_camel_case_word_is_ambiguous() {
+    assert_eq!(to_snake_case("xYZ"), "x_yz");
+}
+
+fn arb_words() -> BoxedStrategy<Vec<String>> {
+    prop::collection::vec(string_regex("[a-z][a-z0-9]{1,5}").unwrap(), 1..=4).boxed()
+}
+
+fn arb_ascii() -> BoxedStrategy<String> {
+    string_regex("[\\x00-\\x7F]{0,16}").unwrap().boxed()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 256,
+        .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn proptest_kebab_snake_and_camel_case_words_project_to_the_words_joined_with_underscores(words in arb_words()) {
+        let expected = words.join("_");
+        let camel_case = words
+            .iter()
+            .enumerate()
+            .map(|(i, word)| {
+                if i == 0 {
+                    word.clone()
+                } else {
+                    word[..1].to_uppercase() + &word[1..]
+                }
+            })
+            .collect::<String>();
+        prop_assert_eq!(to_snake_case(&words.join("-")), expected.clone());
+        prop_assert_eq!(to_snake_case(&words.join("_")), expected.clone());
+        prop_assert_eq!(to_snake_case(&camel_case), expected);
+    }
+
+    #[test]
+    fn proptest_snake_case_projection_is_idempotent(name in arb_ascii()) {
+        let once = to_snake_case(&name);
+        prop_assert_eq!(to_snake_case(&once), once);
+    }
+
+    #[test]
+    fn proptest_snake_case_projection_has_no_uppercase_letter_or_hyphen(name in arb_ascii()) {
+        let projected = to_snake_case(&name);
+        prop_assert!(
+            !projected.chars().any(|c| c.is_uppercase() || c == '-'),
+            "{:?} projects to {:?}",
+            name,
+            projected
+        );
+    }
 }
 
 #[test]
@@ -413,7 +471,6 @@ fn the_reserved_argument_check_covers_only_the_selected_commands() {
             &definition,
             include,
             exclude,
-            None,
         )
     };
     let selected = |exports: Vec<CompiledMcpToolExport>| {
@@ -430,75 +487,6 @@ fn the_reserved_argument_check_covers_only_the_selected_commands() {
         selected(compile_with(Some(&["plain".to_string()]), None).unwrap()),
         ["root_plain"]
     );
-}
-
-#[test]
-fn mcp_name_replaces_the_tool_name_and_its_aliases_in_every_command() {
-    let mut root = node("root", Some(body()));
-    root.aliases.push("r".to_string());
-    root.subcommands.push(CommandIndex(1));
-    let mut child = node("do-work", Some(body()));
-    child.aliases.push("run".to_string());
-    let definition = Tool {
-        commands: CommandTree {
-            nodes: vec![root, child],
-        },
-        ..tool(node("root", None))
-    };
-    let exports = compile_native_tool_exports(
-        ComponentId::new(),
-        "test:owner".try_into().unwrap(),
-        "root".try_into().unwrap(),
-        &definition,
-        None,
-        None,
-        Some("fileSearch"),
-    )
-    .unwrap();
-    assert_eq!(
-        exports
-            .iter()
-            .map(|export| export.mcp_name.as_str())
-            .collect::<Vec<_>>(),
-        ["file_search", "file_search_do_work", "file_search_run"]
-    );
-    assert_eq!(
-        exports[2].command_label(),
-        "tool command `fileSearch run` of tool `root`"
-    );
-    assert_eq!(
-        exports
-            .iter()
-            .map(|export| export.description.as_str())
-            .collect::<Vec<_>>(),
-        ["", "", " (alias for do-work)"]
-    );
-    assert!(
-        exports
-            .iter()
-            .all(|export| export.tool_name.as_str() == "root")
-    );
-}
-
-#[test]
-fn an_mcp_name_without_a_letter_or_digit_is_rejected() {
-    let definition = tool(node("root", Some(body())));
-    ["", "-", "_", "--"].into_iter().for_each(|name_override| {
-        let error = compile_native_tool_exports(
-            ComponentId::new(),
-            "test:owner".try_into().unwrap(),
-            "root".try_into().unwrap(),
-            &definition,
-            None,
-            None,
-            Some(name_override),
-        )
-        .unwrap_err();
-        assert!(
-            error.contains(&format!("`{name_override}`")),
-            "{name_override:?}: {error}"
-        );
-    });
 }
 
 #[test]
@@ -753,7 +741,6 @@ fn nested_streams_and_filters_selecting_no_commands_fail_compilation() {
             "root".try_into().unwrap(),
             &definition,
             Some(&["missing".to_string()]),
-            None,
             None
         )
         .unwrap_err()
