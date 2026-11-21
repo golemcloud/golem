@@ -130,6 +130,8 @@ fn mcp_routes(
                     "Authorization",
                     "Accept",
                     "MCP-Protocol-Version",
+                    "Mcp-Method",
+                    "Mcp-Name",
                 ]),
         )
         .map_to_response()
@@ -860,7 +862,7 @@ mod tests {
             })
             .map_to_response();
         let (address, _server) = crate::transport_test_support::server(endpoint).await;
-        let url = format!("http://{address}/mcp");
+        let url: Arc<str> = format!("http://{address}/mcp").into();
         let client_info = || {
             ClientConfig::new(
                 ClientCapabilities::default(),

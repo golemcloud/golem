@@ -488,14 +488,17 @@ async fn mcp_other_methods_get_405_with_allow() {
 
 #[test]
 #[test_r::timeout("30s")]
-async fn mcp_cors_allows_the_protocol_version_header_and_no_session_headers() {
+async fn mcp_cors_allows_the_version_and_2026_method_and_name_headers_and_no_session_headers() {
     let (mcp, _db) = real_mcp_endpoint().await;
     let (endpoint, _) = dispatcher(mcp);
     let preflight = request("10.0.0.2", TOOLS, "/mcp")
         .method(Method::OPTIONS)
         .header("Origin", "https://app.example.com")
         .header("Access-Control-Request-Method", "POST")
-        .header("Access-Control-Request-Headers", "mcp-protocol-version")
+        .header(
+            "Access-Control-Request-Headers",
+            "mcp-method,mcp-name,mcp-protocol-version",
+        )
         .finish();
     let response = endpoint.get_response(preflight).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -504,6 +507,8 @@ async fn mcp_cors_allows_the_protocol_version_header_and_no_session_headers() {
         .unwrap()
         .to_ascii_lowercase();
     assert!(allowed.contains("mcp-protocol-version"), "{allowed}");
+    assert!(allowed.contains("mcp-method"), "{allowed}");
+    assert!(allowed.contains("mcp-name"), "{allowed}");
     assert!(!allowed.contains("mcp-session-id"), "{allowed}");
     assert!(!allowed.contains("last-event-id"), "{allowed}");
 
