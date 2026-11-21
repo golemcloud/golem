@@ -424,13 +424,10 @@ where
     let owned_agent_id = reader.owned_agent_id;
     let agent_mode = reader.agent_mode;
     let last_oplog_index = reader.horizon;
-    // The fold continues from its baseline and moves no start: a full rebuild reads from index 1
-    // with the retention of an oplog that keeps every entry, so it fails as expired when the
-    // retained start is above 1.
+    // The fold continues from its baseline and moves no start: a full rebuild reads from index 1,
+    // so it fails as expired when the retained start is above 1.
     let start = baseline.oplog_idx.next();
-    let Some(region_entries) =
-        read_region_entries(reader, OplogRetention::FULL, start, chunk_size, true).await?
-    else {
+    let Some(region_entries) = read_region_entries(reader, start, chunk_size, true).await? else {
         return Ok(None);
     };
     let pending_updates = std::mem::take(&mut baseline.pending_updates);
@@ -714,7 +711,7 @@ pub(crate) async fn skipped_regions_at(
     let reader = StatusOplogReader::new(this, owned_agent_id, AgentMode::Durable, None, horizon);
     // A manual update invocation changes only the manual admissions, which no skipped region
     // depends on, so the read leaves them out.
-    let entries = read_region_entries(&reader, retention, OplogIndex::INITIAL, 1024, false)
+    let entries = read_region_entries(&reader, retention.start(), 1024, false)
         .await?
         .ok_or("Missing fork source history")?;
     Ok(skipped_regions(&entries))
@@ -722,17 +719,17 @@ pub(crate) async fn skipped_regions_at(
 
 /// The retained entries from `first` to the horizon of `reader` that the region fold reads: the
 /// jumps, the reverts and the update entries, and the manual update invocations when
-/// `manual_admissions` is true. A `first` below the start of `retention` moves to the start.
+/// `manual_admissions` is true. The read does not move `first`, so a `first` below the retained
+/// start fails as expired.
 pub(super) async fn read_region_entries(
     reader: &StatusOplogReader<'_>,
-    retention: OplogRetention,
     mut first: OplogIndex,
     chunk_size: u64,
     manual_admissions: bool,
 ) -> Result<Option<BTreeMap<OplogIndex, OplogEntry>>, UnreadableOplog> {
     let mut regions = BTreeMap::new();
     let horizon = reader.horizon;
-    while let Some(chunk) = retention.chunk(first, horizon, chunk_size) {
+    while let Some(chunk) = OplogRange::within(first, horizon, chunk_size) {
         let entries = reader.read_exact(chunk.start, chunk.count).await?;
         let Some(last) = entries.keys().next_back() else {
             return Ok(None);

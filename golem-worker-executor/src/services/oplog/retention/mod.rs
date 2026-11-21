@@ -16,12 +16,15 @@
 //!
 //! Oplog indexes never renumber. A cut of the oplog removes the entries before the retained start,
 //! and the start only moves forward. The `Create` entry at index 1 is the identity of the agent.
-//! When the start is above 1, a read of the `Create` entry alone is the only read below the start
-//! that is allowed. A read of a range or a page from index 1 is expired.
+//! When the start is above 1, an empty read and a read of the `Create` entry alone are the only
+//! reads below the start that are allowed. A read of a range or a page from index 1 is expired.
 //!
 //! The rules here are pure functions over the retained start. Every reader of the retained
 //! entries uses them: a walk in chunks reads with [`OplogRetention::chunk`], a public page reads
 //! with [`OplogRetention::page`], and a walk with a fixed start reads with [`OplogRange::within`].
+//! One read keeps its own count: the refill of the replay buffer (`raw_read_next_oplog_entry` in
+//! `durable_host/replay_state/cursor/io.rs`) reads one entry also when the read position is after
+//! the replay target, where [`OplogRange::within`] gives no range.
 //! A read that reaches below the start fails with [`OplogReadError::Expired`], which names the
 //! start. A [`OplogReadError::Gap`] that ends below the start becomes the same error. A gap that
 //! ends at or after the start stays a read error, because entries that the oplog keeps are
@@ -77,7 +80,9 @@ impl OplogRange {
     pub fn within(from: OplogIndex, last: OplogIndex, max: u64) -> Option<Self> {
         (from <= last).then(|| Self {
             start: from,
-            count: (last.as_u64() - from.as_u64() + 1).min(max.max(1)),
+            count: (last.as_u64() - from.as_u64())
+                .saturating_add(1)
+                .min(max.max(1)),
         })
     }
 
@@ -132,9 +137,10 @@ impl OplogRetention {
     }
 
     /// The read of one page of the oplog of `agent_id`: at most `max` entries from `start` to
-    /// `last`, both included. Unlike [`Self::chunk`], the page does not move its start: a start
-    /// below the retained start is expired, except the read of the `Create` entry alone, as in
-    /// [`Self::check_read`]. `None` when the page is empty.
+    /// `last`, both included. Unlike [`Self::chunk`], the page does not move its start. A page
+    /// has no fixed end, because a cursor can continue it, so a start below the retained start is
+    /// expired, as in [`Self::check_agent_from`], also at index 1. `None` when the page is empty;
+    /// a page of 0 entries reads nothing and is never expired.
     pub fn page(
         self,
         agent_id: &AgentId,
@@ -142,10 +148,11 @@ impl OplogRetention {
         last: OplogIndex,
         max: u64,
     ) -> Result<Option<OplogRange>, UnreadableOplog> {
-        self.check_agent_read(agent_id, start, max)?;
-        Ok((max > 0)
-            .then(|| OplogRange::within(start, last, max))
-            .flatten())
+        if max == 0 {
+            return Ok(None);
+        }
+        self.check_agent_from(agent_id, start)?;
+        Ok(OplogRange::within(start, last, max))
     }
 
     /// Whether the retained oplog holds the entry at `index`, that is, whether the index is at or
@@ -176,63 +183,48 @@ impl OplogRetention {
         count != 0 && OplogRange { start, count } != OplogRange::CREATE
     }
 
-    /// Checks a read of `count` entries from `start`. A read that reaches below the retained start
-    /// fails with [`OplogReadError::Expired`], except the reads that
-    /// [`Self::read_needs_start`] always allows.
-    fn check_read(self, start: OplogIndex, count: u64) -> Result<(), OplogReadError> {
-        if Self::read_needs_start(start, count) {
-            self.check_from(start)
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Checks a read from `start` that has no fixed end, such as a page that a cursor continues,
-    /// or a copy of the whole history. A start below the retained start fails with
-    /// [`OplogReadError::Expired`], also at index 1.
-    fn check_from(self, start: OplogIndex) -> Result<(), OplogReadError> {
-        if self.retains(start) {
-            Ok(())
-        } else {
-            Err(self.expired())
-        }
-    }
-
-    /// [`Self::check_read`] for the oplog of `agent_id`. The error is an [`UnreadableOplog`].
+    /// Checks a read of `count` entries from `start` in the oplog of `agent_id`. A read that
+    /// reaches below the retained start fails with [`OplogReadError::Expired`] in an
+    /// [`UnreadableOplog`], except the reads that [`Self::read_needs_start`] always allows.
     pub fn check_agent_read(
         self,
         agent_id: &AgentId,
         start: OplogIndex,
         count: u64,
     ) -> Result<(), UnreadableOplog> {
-        self.check_read(start, count)
-            .map_err(|error| UnreadableOplog::new(agent_id, error))
+        if Self::read_needs_start(start, count) {
+            self.check_agent_from(agent_id, start)
+        } else {
+            Ok(())
+        }
     }
 
-    /// [`Self::check_from`] for the oplog of `agent_id`. The error is an [`UnreadableOplog`].
+    /// Checks a read from `start` in the oplog of `agent_id` that has no fixed end, such as a page
+    /// that a cursor continues, or a copy of the whole history. A start below the retained start
+    /// fails with [`OplogReadError::Expired`] in an [`UnreadableOplog`], also at index 1.
     pub fn check_agent_from(
         self,
         agent_id: &AgentId,
         start: OplogIndex,
     ) -> Result<(), UnreadableOplog> {
-        self.check_from(start)
-            .map_err(|error| UnreadableOplog::new(agent_id, error))
-    }
-
-    /// The error of a read, with a gap that ends below the retained start given as
-    /// [`OplogReadError::Expired`]. A gap that ends at or after the start stays a gap, because
-    /// entries that the oplog keeps are missing. Every other error stays as it is.
-    fn classify(self, error: OplogReadError) -> OplogReadError {
-        match error {
-            OplogReadError::Gap { end, .. } if end < self.retained_start => self.expired(),
-            other => other,
+        if self.retains(start) {
+            Ok(())
+        } else {
+            Err(UnreadableOplog::new(agent_id, self.expired()))
         }
     }
 
-    /// [`Self::classify`] for a failed read of the oplog of `agent_id`.
+    /// The error of a failed read of the oplog of an agent, with a gap that ends below the
+    /// retained start given as [`OplogReadError::Expired`]. A gap that ends at or after the start
+    /// stays a gap, because entries that the oplog keeps are missing. Every other error stays as
+    /// it is.
     fn classify_unreadable(self, unreadable: UnreadableOplog) -> UnreadableOplog {
+        let error = match unreadable.error {
+            OplogReadError::Gap { end, .. } if end < self.retained_start => self.expired(),
+            other => other,
+        };
         UnreadableOplog {
-            error: self.classify(unreadable.error),
+            error,
             agent_id: unreadable.agent_id,
         }
     }
@@ -480,6 +472,9 @@ mod tests {
         assert_eq!(within(4, 10, 0), range(4, 1));
         assert_eq!(within(4, 10, 1), range(4, 1));
         assert_eq!(within(1, 10, u64::MAX), range(1, 10));
+        assert_eq!(within(0, u64::MAX, u64::MAX), range(0, u64::MAX));
+        assert_eq!(within(1, u64::MAX, u64::MAX), range(1, u64::MAX));
+        assert_eq!(within(2, u64::MAX, u64::MAX), range(2, u64::MAX - 1));
     }
 
     #[test]
@@ -556,10 +551,12 @@ mod tests {
         assert_eq!(page(at(4), 2, 10, 1), refused);
         assert_eq!(
             page(at(4), 1, 10, 1),
-            Ok(range(1, 1)),
-            "the `Create` entry alone"
+            refused,
+            "a page of the `Create` entry alone has no fixed end"
         );
         assert_eq!(page(at(4), 1, 10, 2), refused);
+        assert_eq!(page(at(4), 1, 10, 0), Ok(None));
+        assert_eq!(page(at(1), 1, 10, 1), Ok(range(1, 1)));
         assert_eq!(page(at(1), 1, 10, 20), Ok(range(1, 10)));
     }
 
@@ -579,64 +576,65 @@ mod tests {
         assert_eq!(OplogRange::CREATE, range(1, 1).unwrap());
     }
 
+    fn checked_agent() -> AgentId {
+        AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "checked".to_string(),
+        }
+    }
+
     #[test]
     fn a_read_below_the_start_is_expired_except_an_empty_read_and_the_create_entry_alone() {
-        assert_eq!(at(4).check_read(idx(4), 3), Ok(()));
-        assert_eq!(at(4).check_read(idx(5), 3), Ok(()));
-        assert_eq!(at(4).check_read(idx(3), 3), expired(4));
-        assert_eq!(at(4).check_read(idx(3), 1), expired(4));
-        assert_eq!(at(4).check_read(idx(1), 1), Ok(()));
-        assert_eq!(at(4).check_read(idx(1), 2), expired(4));
-        assert_eq!(at(4).check_read(idx(2), 1), expired(4));
-        assert_eq!(at(4).check_read(idx(2), 0), Ok(()));
-        assert_eq!(at(4).check_read(OplogIndex::NONE, 0), Ok(()));
-        assert_eq!(at(4).check_read(OplogIndex::NONE, 1), expired(4));
-        assert_eq!(at(1).check_read(idx(1), 10), Ok(()));
-        assert_eq!(at(1).check_read(OplogIndex::NONE, 1), expired(1));
+        let agent_id = checked_agent();
+        let check = |retention: OplogRetention, start, count| {
+            retention
+                .check_agent_read(&agent_id, start, count)
+                .map_err(|unreadable| {
+                    assert_eq!(unreadable.agent_id, agent_id);
+                    unreadable.error
+                })
+        };
+        assert_eq!(check(at(4), idx(4), 3), Ok(()));
+        assert_eq!(check(at(4), idx(5), 3), Ok(()));
+        assert_eq!(check(at(4), idx(3), 3), expired(4));
+        assert_eq!(check(at(4), idx(3), 1), expired(4));
+        assert_eq!(check(at(4), idx(1), 1), Ok(()));
+        assert_eq!(check(at(4), idx(1), 2), expired(4));
+        assert_eq!(check(at(4), idx(2), 1), expired(4));
+        assert_eq!(check(at(4), idx(2), 0), Ok(()));
+        assert_eq!(check(at(4), OplogIndex::NONE, 0), Ok(()));
+        assert_eq!(check(at(4), OplogIndex::NONE, 1), expired(4));
+        assert_eq!(check(at(1), idx(1), 10), Ok(()));
+        assert_eq!(check(at(1), OplogIndex::NONE, 1), expired(1));
     }
 
     #[test]
     fn a_read_without_an_end_below_the_start_is_expired_also_at_index_1() {
-        assert_eq!(at(4).check_from(idx(3)), expired(4));
-        assert_eq!(at(4).check_from(idx(4)), Ok(()));
-        assert_eq!(at(4).check_from(idx(5)), Ok(()));
-        assert_eq!(at(4).check_from(idx(1)), expired(4));
-        assert_eq!(at(1).check_from(idx(1)), Ok(()));
-    }
-
-    #[test]
-    fn the_agent_checks_name_the_agent() {
-        let agent_id = AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "checked".to_string(),
+        let agent_id = checked_agent();
+        let check = |retention: OplogRetention, start| {
+            retention
+                .check_agent_from(&agent_id, start)
+                .map_err(|unreadable| {
+                    assert_eq!(unreadable.agent_id, agent_id);
+                    unreadable.error
+                })
         };
-        let unreadable = UnreadableOplog::new(&agent_id, expired(4).unwrap_err());
-        assert_eq!(
-            at(4).check_agent_read(&agent_id, idx(3), 1),
-            Err(unreadable.clone())
-        );
-        assert_eq!(at(4).check_agent_read(&agent_id, idx(4), 1), Ok(()));
-        assert_eq!(
-            at(4).check_agent_from(&agent_id, idx(3)),
-            Err(unreadable.clone())
-        );
-        assert_eq!(at(4).check_agent_from(&agent_id, idx(4)), Ok(()));
-        let gap = OplogReadError::Gap {
-            start: idx(1),
-            end: idx(3),
-        };
-        assert_eq!(
-            at(4).classify_unreadable(UnreadableOplog::new(&agent_id, gap.clone())),
-            unreadable
-        );
-        assert_eq!(
-            at(3).classify_unreadable(UnreadableOplog::new(&agent_id, gap.clone())),
-            UnreadableOplog::new(&agent_id, gap)
-        );
+        assert_eq!(check(at(4), idx(3)), expired(4));
+        assert_eq!(check(at(4), idx(4)), Ok(()));
+        assert_eq!(check(at(4), idx(5)), Ok(()));
+        assert_eq!(check(at(4), idx(1)), expired(4));
+        assert_eq!(check(at(1), idx(1)), Ok(()));
+        assert_eq!(check(at(1), OplogIndex::NONE), expired(1));
     }
 
     #[test]
     fn only_a_gap_that_ends_below_the_start_is_expired() {
+        let agent_id = checked_agent();
+        let classify = |retention: OplogRetention, error| {
+            let unreadable = retention.classify_unreadable(UnreadableOplog::new(&agent_id, error));
+            assert_eq!(unreadable.agent_id, agent_id);
+            unreadable.error
+        };
         let gap = |start, end| OplogReadError::Gap {
             start: idx(start),
             end: idx(end),
@@ -644,14 +642,15 @@ mod tests {
         let expired = OplogReadError::Expired {
             retained_start: idx(4),
         };
-        assert_eq!(at(4).classify(gap(1, 3)), expired);
-        assert_eq!(at(4).classify(gap(1, 1)), expired);
-        assert_eq!(at(4).classify(gap(2, 4)), gap(2, 4));
-        assert_eq!(at(4).classify(gap(2, 5)), gap(2, 5));
-        assert_eq!(at(4).classify(gap(4, 5)), gap(4, 5));
-        assert_eq!(at(4).classify(gap(6, 8)), gap(6, 8));
+        assert_eq!(classify(at(4), gap(1, 3)), expired);
+        assert_eq!(classify(at(4), gap(1, 1)), expired);
+        assert_eq!(classify(at(4), gap(2, 4)), gap(2, 4));
+        assert_eq!(classify(at(4), gap(2, 5)), gap(2, 5));
+        assert_eq!(classify(at(4), gap(4, 5)), gap(4, 5));
+        assert_eq!(classify(at(4), gap(6, 8)), gap(6, 8));
+        assert_eq!(classify(at(3), gap(1, 3)), gap(1, 3));
         let corrupt = OplogReadError::corruption(OplogReadSource::Primary, "bad");
-        assert_eq!(at(4).classify(corrupt.clone()), corrupt);
+        assert_eq!(classify(at(4), corrupt.clone()), corrupt);
     }
 
     #[test]

@@ -23,6 +23,7 @@ use crate::durable_host::concurrent::ResolvedCall;
 use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::public_oplog::find_component_revision_at;
 use crate::model::public_oplog::get_public_oplog_chunk;
+use crate::model::public_oplog::guest_search_start;
 use crate::model::public_oplog::search_public_oplog;
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::oplog::Host as OplogHost;
@@ -280,22 +281,18 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         .retention(&entry.owned_agent_id, agent_mode)
         .await
         .map_err(|error| error.to_string())?;
-    // A new search starts at the retained start of the oplog.
-    let (start, current_component_revision) = if entry.initialized {
-        (entry.next_oplog_index, entry.current_component_revision)
-    } else {
-        let start = retention.clamp(entry.next_oplog_index);
-        let revision = find_component_revision_at(
-            ctx.state.oplog_service(),
-            &entry.owned_agent_id,
-            agent_mode,
-            retention,
-            start,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-        (start, revision)
-    };
+    let (start, current_component_revision) = guest_search_start(
+        ctx.state.oplog_service(),
+        &entry.owned_agent_id,
+        agent_mode,
+        retention,
+        entry.next_oplog_index,
+        entry
+            .initialized
+            .then_some(entry.current_component_revision),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     let agent_type = &identity.create_parameters().agent_type_name;
     // The grant covers page_size indexes, not page_size matches. The scanner caps each
     // storage read at the remaining entry budget, even when a chunk has no matches.

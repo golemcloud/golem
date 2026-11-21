@@ -988,12 +988,13 @@ pub async fn count_oplog_errors_for(
         return Ok(0);
     };
     let entries = oplog.read_exact(range.start, range.count).await?;
-    Ok(entries
+    let count = entries
         .values()
         .filter(|entry| {
             matches!(entry, OplogEntry::Error { retry_from, .. } if *retry_from == retry_point)
         })
-        .count() as u32)
+        .count();
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
 }
 
 /// Implementation of [`InFunctionRetryHost`] for spawned background tasks (async RPC, HTTP).

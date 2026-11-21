@@ -4476,8 +4476,73 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         "a search below the start keeps the expired error"
     );
 
+    // A guest chunk is a page: a chunk from index 1 is expired, also with one entry.
+    let guest_chunk = |count: usize| {
+        get_public_oplog_chunk(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            retention,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            OplogIndex::INITIAL,
+            count,
+        )
+    };
+    assert_eq!(
+        WorkerExecutorError::from(guest_chunk(1).await.err().expect("expired")),
+        expired.clone(),
+        "a guest chunk of the `Create` entry alone is expired"
+    );
+    assert_eq!(
+        WorkerExecutorError::from(guest_chunk(2).await.err().expect("expired")),
+        expired.clone()
+    );
+
     // A new guest search starts at the retained start: it moves its start there and reads no
-    // entry below it.
+    // entry below it. A search that read a page before keeps its position.
+    let (search_start, search_revision) = guest_search_start(
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        retention,
+        OplogIndex::INITIAL,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (search_start, search_revision),
+        (retained_start, ComponentRevision::INITIAL)
+    );
+    assert_eq!(
+        guest_search_start(
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            retention,
+            OplogIndex::from_u64(7),
+            None,
+        )
+        .await,
+        Ok((OplogIndex::from_u64(7), updated_revision))
+    );
+    assert_eq!(
+        guest_search_start(
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            retention,
+            OplogIndex::from_u64(2),
+            Some(updated_revision),
+        )
+        .await,
+        Ok((OplogIndex::from_u64(2), updated_revision)),
+        "a search that read a page before keeps its position"
+    );
     let guest_search = search_public_oplog(
         Arc::new(PanicComponentService),
         oplog_service.clone(),
@@ -4487,8 +4552,8 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         owned_agent_id.component_id(),
         OwnerKind::ComponentAgent,
         None,
-        ComponentRevision::INITIAL,
-        retention.clamp(OplogIndex::INITIAL),
+        search_revision,
+        search_start,
         Some(OplogIndex::from_u64(5)),
         10,
         "context",

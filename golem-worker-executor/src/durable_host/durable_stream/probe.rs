@@ -378,7 +378,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             .collect::<HashMap<_, _>>();
         let retained = self
             .oplog_service
-            .read_retained_range(&consumer, agent_mode, OplogIndex::INITIAL, current)
+            .read_retained_range(&consumer, agent_mode, current)
             .await?;
         for (index, entry) in retained {
             if lineage.deleted_regions().is_in_deleted_region(index) {

@@ -265,7 +265,7 @@ pub async fn get_public_oplog_entry(
             .await?
         }
     };
-    let chunk = get_public_oplog_chunk(
+    let (chunk, _) = read_public_oplog_range(
         components,
         oplog_service,
         owned_agent_id,
@@ -276,8 +276,11 @@ pub async fn get_public_oplog_entry(
         agent_type_name,
         component_revision,
         oplog_index,
-        1,
+        last_index,
+        OplogRange::within(oplog_index, last_index, 1),
+        None,
         claims,
+        &mut InProcessChunk,
     )
     .await?;
     chunk.entries.into_iter().next().ok_or_else(|| {
@@ -319,10 +322,52 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
         last_index,
         count as u64,
     )?;
-    let raw_entries = match page {
-        Some(page) => {
+    read_public_oplog_range(
+        components,
+        oplog_service,
+        owned_agent_id,
+        agent_mode,
+        retention,
+        owner_component_id,
+        owner_kind,
+        agent_type_name,
+        initial_component_revision,
+        initial_oplog_index,
+        last_index,
+        page,
+        filter,
+        claims,
+        builder,
+    )
+    .await
+}
+
+/// Reads the entries of `range`, which the caller checked against the retained start, and adds
+/// the entries that match `filter` to the chunk, as [`read_public_oplog_chunk`] does. A `range`
+/// of `None` gives an empty chunk at `initial_oplog_index`. `last_index` is the last index of the
+/// oplog.
+#[allow(clippy::too_many_arguments)]
+async fn read_public_oplog_range<B: ChunkBuilder>(
+    components: Arc<dyn ComponentService>,
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    retention: OplogRetention,
+    owner_component_id: ComponentId,
+    owner_kind: OwnerKind,
+    agent_type_name: Option<&AgentTypeName>,
+    initial_component_revision: ComponentRevision,
+    initial_oplog_index: OplogIndex,
+    last_index: OplogIndex,
+    range: Option<OplogRange>,
+    filter: Option<&Query>,
+    claims: ClaimVisibility,
+    builder: &mut B,
+) -> Result<(PublicOplogChunk<B::Entry>, bool), PublicOplogReadError> {
+    let raw_entries = match range {
+        Some(range) => {
             oplog_service
-                .read_exact(owned_agent_id, agent_mode, page.start, page.count)
+                .read_exact(owned_agent_id, agent_mode, range.start, range.count)
                 .await?
         }
         None => BTreeMap::new(),
@@ -608,11 +653,15 @@ async fn scan_component_revision(
     let last_oplog_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
         .await?;
-    let last = OplogIndex::from_u64(start.as_u64().saturating_sub(1)).min(last_oplog_index);
+    // No entry is before `start`, or the oplog is empty.
+    if start <= OplogIndex::INITIAL || !last_oplog_index.is_defined() {
+        return Ok(Some(initial_component_revision));
+    }
+    let last = start.previous().min(last_oplog_index);
     // The scan reads the retained entries before `start`. When the `Create` entry is below the
     // retained start, the scan reads it alone first: it gives the revision that the agent started
     // with.
-    if let Some(create) = retention.create_read().filter(|_| last.is_defined()) {
+    if let Some(create) = retention.create_read() {
         if scan.is_spent() {
             return Ok(None);
         }
@@ -854,6 +903,35 @@ pub async fn get_public_oplog_range_page(
         last_index,
         scan: scan.report(!complete && scan.is_spent()),
     })
+}
+
+/// Where a guest search reads next, and the component revision to decode that entry with. A
+/// search that read a page before continues at `next_oplog_index` with `continued`, the revision
+/// that the page gave. A new search starts at `next_oplog_index` moved to the retained start, with
+/// the revision in effect there.
+pub async fn guest_search_start(
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    retention: OplogRetention,
+    next_oplog_index: OplogIndex,
+    continued: Option<ComponentRevision>,
+) -> Result<(OplogIndex, ComponentRevision), WorkerExecutorError> {
+    match continued {
+        Some(revision) => Ok((next_oplog_index, revision)),
+        None => {
+            let start = retention.clamp(next_oplog_index);
+            let revision = find_component_revision_at(
+                oplog_service,
+                owned_agent_id,
+                agent_mode,
+                retention,
+                start,
+            )
+            .await?;
+            Ok((start, revision))
+        }
+    }
 }
 
 /// The cursor of an oplog page of `query` whose next unread entry is `next_oplog_index`. A page has

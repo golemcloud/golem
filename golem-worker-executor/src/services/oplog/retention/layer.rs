@@ -796,9 +796,9 @@ mod tests {
         );
     }
 
-    /// The retained range read of the handle and of the service reads only the retained
-    /// entries, and an empty retained range reads nothing. The deletion scan, the revert append
-    /// and the consumer probe read through it.
+    /// The retained range read of the handle and of the service reads the retained entries from
+    /// the retained start to the last index, and reads nothing when the last index is below the
+    /// start. The deletion scan and the consumer probe read through it.
     #[test]
     async fn a_retained_range_read_reads_only_the_retained_entries() {
         use crate::services::oplog::{OplogOps, OplogServiceOps};
@@ -813,34 +813,26 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let handle = oplog.open().await;
-        let service = |from: u64, last: u64| {
-            oplog.service.read_retained_range(
-                &oplog.owned_agent_id,
-                AgentMode::Durable,
-                idx(from),
-                idx(last),
-            )
+        let service = |last: u64| {
+            oplog
+                .service
+                .read_retained_range(&oplog.owned_agent_id, AgentMode::Durable, idx(last))
         };
 
         assert_eq!(
-            keys(
-                handle
-                    .read_retained_range(OplogIndex::INITIAL, idx(6))
-                    .await
-                    .unwrap()
-            ),
+            keys(handle.read_retained_range(idx(6)).await.unwrap()),
             vec![4, 5, 6]
         );
         assert_eq!(
-            keys(handle.read_retained_range(idx(5), idx(6)).await.unwrap()),
-            vec![5, 6]
+            keys(handle.read_retained_range(idx(4)).await.unwrap()),
+            vec![4]
         );
         assert_eq!(
-            keys(handle.read_retained_range(idx(1), idx(3)).await.unwrap()),
+            keys(handle.read_retained_range(idx(3)).await.unwrap()),
             Vec::<u64>::new()
         );
-        assert_eq!(keys(service(1, 6).await.unwrap()), vec![4, 5, 6]);
-        assert_eq!(keys(service(1, 4).await.unwrap()), vec![4]);
-        assert_eq!(keys(service(1, 3).await.unwrap()), Vec::<u64>::new());
+        assert_eq!(keys(service(6).await.unwrap()), vec![4, 5, 6]);
+        assert_eq!(keys(service(4).await.unwrap()), vec![4]);
+        assert_eq!(keys(service(3).await.unwrap()), Vec::<u64>::new());
     }
 }

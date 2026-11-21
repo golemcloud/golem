@@ -79,14 +79,13 @@ impl From<OplogPayloadDownloadError> for String {
 
 #[async_trait]
 pub trait OplogOps: Oplog {
-    /// Reads the retained entries from `from` to `last`, both included. A `from` below the
-    /// retained start moves to the start. A range without a retained entry reads nothing.
+    /// Reads the retained entries from the retained start to `last`, both included. When `last`
+    /// is below the retained start, the read reads nothing.
     async fn read_retained_range(
         &self,
-        from: OplogIndex,
         last: OplogIndex,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
-        match self.retention().range(from, last) {
+        match self.retention().range(OplogIndex::INITIAL, last) {
             Some(range) => self.read_exact(range.start, range.count).await,
             None => Ok(BTreeMap::new()),
         }
@@ -514,20 +513,18 @@ impl<O: Oplog + ?Sized> OplogOps for O {}
 
 #[async_trait]
 pub trait OplogServiceOps: OplogService {
-    /// Reads the retained entries of the oplog from `from` to `last`, both included. A `from`
-    /// below the retained start moves to the start. A range without a retained entry reads
-    /// nothing.
+    /// Reads the retained entries of the oplog from the retained start to `last`, both included.
+    /// When `last` is below the retained start, the read reads nothing.
     async fn read_retained_range(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        from: OplogIndex,
         last: OplogIndex,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         match self
             .retention(owned_agent_id, agent_mode)
             .await?
-            .range(from, last)
+            .range(OplogIndex::INITIAL, last)
         {
             Some(range) => {
                 self.read_exact(owned_agent_id, agent_mode, range.start, range.count)
