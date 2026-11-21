@@ -166,9 +166,8 @@
 //!
 //! The first three scenarios are sized against a platform budget: S16 and S14
 //! stay inside one, S22 deliberately runs past it. S18 has no budget to run
-//! past. golem-dev sets
-//! `GOLEM__CACHE__CONFIG__RETRIES__MAX_ATTEMPTS` to
-//! `0`, which `RedisPool::configured` hands to fred as a `ReconnectPolicy` with
+//! past. S18 assumes `GOLEM__CACHE__CONFIG__RETRIES__MAX_ATTEMPTS` is `0`,
+//! which `RedisPool::configured` hands to fred as a `ReconnectPolicy` with
 //! unlimited attempts, and it passes no performance or connection config, so
 //! fred's defaults apply: no command timeout and an unbounded command buffer.
 //! A cache write during the cut therefore never fails. It waits, for as long as

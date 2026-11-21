@@ -217,8 +217,8 @@ scenarios:
     # out and puts the shards back in its routing table, and nothing reconciles
     # the two. One run left 460 of 1024 shards unserved for 43 minutes.
     #
-    # golem-dev now runs GOLEM_ADVANCED__SHARD_MANAGER__WORKER_EXECUTORS__REVOKE_SHARDS_TIMEOUT=60s
-    # (was 5s), matching the assign leg. That is a mitigation, not a fix — the
+    # These golem-dev runs used a 60s revoke-shards timeout,
+    # increased from 5s to match the assign leg. The
     # drain is unbounded, so a large enough working set still outruns any
     # timeout. Keeping this schedule here is deliberate: it is what tells us
     # whether the mitigation holds, and it is expected to fail again if the
@@ -2712,8 +2712,8 @@ scenarios:
   #
   # ── The arithmetic, and the gate S15 does not have ─────────────────────────
   #
-  # golem-dev sets `GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__MAX_CONCURRENT_OPS` to 64 in
-  # front of a 96-connection pool, and `PostgresIndexedStorage::configured`
+  # The golem-dev measurements used a 64-operation indexed-storage limit in
+  # front of a 96-connection pool. `PostgresIndexedStorage::configured`
   # turns that setting into a `Semaphore`. The gate is therefore tighter than
   # the pool, and it is the gate that binds: under a 500ms one-way delay it
   # clears about 128 indexed operations per second per pod where the pool alone
@@ -2918,8 +2918,8 @@ scenarios:
       # 0.6 of the window, which leaves 48s of overlap, and the number that
       # matters is the one it is under.
       #
-      # `GOLEM_ADVANCED__SHARD_MANAGER__WORKER_EXECUTORS__ASSIGN_SHARDS_TIMEOUT` is **60s** on golem-dev
-      # and golem-prod. It was raised from the 5s default in August 2026 after a
+      # The assignment timeout was **60s** for these golem-dev and golem-prod
+      # runs. It was raised from the 5s default in August 2026 after a
       # chaos run found the same failure on the revoke leg: 5s cannot cover a
       # handover whose handler recovers every agent it was just given, so the
       # shard-manager dropped the shards from the routing table and put them

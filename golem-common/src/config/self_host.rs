@@ -17,7 +17,7 @@ use figment::value::{Dict, Map};
 use figment::{Figment, Metadata, Profile, Provider};
 use serde_json::{Value, json};
 
-/// Settings retained for recovery records and package and HTTP transports.
+/// Settings retained for recovery records and package downloads.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct InstallationConfig {
@@ -30,8 +30,6 @@ pub struct InstallationConfig {
     pub recovery_horizon: Option<std::time::Duration>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package_mirror_url: Option<url::Url>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub outgoing_proxy: Option<url::Url>,
 }
 
 /// The service names used by the advanced channel.
@@ -99,7 +97,6 @@ pub fn server(input: &Figment) -> figment::Result<Figment> {
             "recovery_location",
             "recovery_horizon",
             "package_mirror_url",
-            "outgoing_proxy",
             "internal_grpc_tls",
             "etcd",
             "outbound_sockets",
