@@ -34,6 +34,7 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
     WorkerExecutorTestDependencies, force_oplog_retained_start,
     remove_cached_status_and_result_index, start_with_snapshot_policy,
+    stored_primary_oplog_entries,
 };
 use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test, timeout};
@@ -359,6 +360,27 @@ async fn a_recovery_without_a_usable_restore_source_keeps_the_oplog(
     drop(executor);
 
     let retained_start = retained_start(&history)?;
+    let stored_below_start = || {
+        stored_primary_oplog_entries(
+            deps,
+            &context,
+            &owned_agent_id,
+            OplogIndex::INITIAL,
+            retained_start.previous(),
+        )
+    };
+    let below_start = stored_below_start().await?;
+    assert_eq!(
+        below_start
+            .iter()
+            .map(|(index, _)| *index)
+            .collect::<Vec<_>>(),
+        history
+            .iter()
+            .map(|entry| entry.oplog_index)
+            .take_while(|index| *index < retained_start)
+            .collect::<Vec<_>>()
+    );
     force_oplog_retained_start(deps, &context, &owned_agent_id, retained_start).await?;
     let executor = start_with_snapshot_policy(deps, &context, policy).await?;
 
@@ -395,6 +417,12 @@ async fn a_recovery_without_a_usable_restore_source_keeps_the_oplog(
     assert!(
         names_expired_start(&last_error, retained_start),
         "{last_error}"
+    );
+    drop(executor);
+    assert_eq!(
+        stored_below_start().await?,
+        below_start,
+        "the stored entries below the start are kept"
     );
     Ok(())
 }

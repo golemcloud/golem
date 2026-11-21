@@ -3456,6 +3456,40 @@ pub async fn copy_agent_oplog_to(
     Ok(())
 }
 
+/// The entries from `first` to `last`, both included, that the primary oplog of the durable agent
+/// holds in storage. The read goes through no executor and no retention layer, so it also reads
+/// the entries below the retained start.
+pub async fn stored_primary_oplog_entries(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    first: OplogIndex,
+    last: OplogIndex,
+) -> anyhow::Result<Vec<(OplogIndex, OplogEntry)>> {
+    let storage = sqlite_indexed_storage(deps, context).await?;
+    storage
+        .read(
+            "oplog",
+            "test_read",
+            "entry",
+            IndexedStorageNamespace::OpLog {
+                owned_agent_id: owned_agent_id.clone(),
+                agent_mode: AgentMode::Durable,
+            },
+            &owned_agent_id.storage_key(),
+            first.as_u64(),
+            last.as_u64(),
+        )
+        .await?
+        .into_iter()
+        .map(|(index, bytes)| {
+            golem_common::serialization::deserialize(&bytes)
+                .map(|entry| (OplogIndex::from_u64(index), entry))
+                .map_err(|err| anyhow!(err))
+        })
+        .collect()
+}
+
 /// How many entries the agent's durable oplog holds in storage, read without going through any
 /// executor - the same storage [`take_agent_oplog_over_at_epoch`] writes to.
 pub async fn agent_oplog_length(
