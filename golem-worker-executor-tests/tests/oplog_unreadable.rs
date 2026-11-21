@@ -101,8 +101,8 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let unreadable = agent_id!("Counter", "unknown-primary-version");
-    let healthy = agent_id!("Counter", "unknown-cache-version");
+    let unreadable = agent_key!("Counter", "unknown-primary-version");
+    let healthy = agent_key!("Counter", "unknown-cache-version");
     let unreadable_id = executor
         .start_agent(&component.id, unreadable.clone())
         .await?;
@@ -119,10 +119,10 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
         golem_worker_executor::derive_disjoint_sqlite_config(&storage_config, "indexed");
     let indexed = SqliteIndexedStorage::configured(&indexed_config).await?;
     let namespace = IndexedStorageNamespace::OpLog {
-        agent_id: unreadable_id.clone(),
+        owned_agent_id: unreadable_id.clone(),
         agent_mode: AgentMode::Durable,
     };
-    let key = unreadable_id.to_redis_key();
+    let key = unreadable_id.storage_key();
     let mut corrupt = indexed
         .with_entity("test", "corrupt_version", "entry")
         .read_raw(namespace.clone(), &key, 2, 2)
@@ -148,10 +148,10 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
         .with_entity("test", "read_identity", "entry")
         .first::<OplogEntry>(
             IndexedStorageNamespace::OpLog {
-                agent_id: healthy_id.clone(),
+                owned_agent_id: healthy_id.clone(),
                 agent_mode: AgentMode::Durable,
             },
-            &healthy_id.to_redis_key(),
+            &healthy_id.storage_key(),
         )
         .await?
         .expect("the healthy agent must have a Create entry")
@@ -159,7 +159,7 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
         panic!("the first oplog entry must be Create");
     };
     let cache_namespace = KeyValueStorageNamespace::AgentStatus {
-        agent_id: Arc::new(healthy_id.clone()),
+        owned_agent_id: healthy_id.clone(),
         fingerprint: golem_common::model::AgentFingerprint(parameters.instance_id),
     };
     let kv = SqliteKeyValueStorage::configured(&storage_config).await?;
@@ -179,7 +179,10 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
         "{message}"
     );
     assert!(message.contains("entry 2"), "{message}");
-    assert!(message.contains("unknown-primary-version"), "{message}");
+    assert!(
+        message.contains(&unreadable_id.agent_id.to_string()),
+        "{message}"
+    );
     assert_eq!(
         executor
             .invoke_and_await_agent(&component, &healthy, "increment", data_value!())

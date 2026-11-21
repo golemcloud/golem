@@ -762,7 +762,9 @@ impl OplogService for PrimaryOplogService {
                 async move { read_persisted_oplog_entries(is, ns, key, start, end).await }
             })
             .await
-            .map_err(|error| UnreadableOplog::new(&agent_id, primary_read_error(error)))?
+            .map_err(|error| {
+                UnreadableOplog::new(&owned_agent_id.agent_id, primary_read_error(error))
+            })?
             .into_iter()
             .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
             .collect()

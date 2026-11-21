@@ -3250,7 +3250,7 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
 #[test]
 async fn unreadable_stream_index_rows_are_rebuilt_from_the_oplog() {
     let (_service, kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("unreadable-index", ComponentId::new());
+    let id = owned_agent("unreadable-index");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = session_key(&id, &test_invocation_id("cached-session".into()));
     let result = append_session(
@@ -3336,7 +3336,7 @@ async fn cache_repair_retries_when_an_independent_writer_advances_coverage() {
     futures::stream::iter([false, true])
         .for_each(|writer_wins| async move {
             let (_service, kv, oplog_service) = service_with_oplog().await;
-            let id = owned_agent("cache-repair-race", ComponentId::new());
+            let id = owned_agent("cache-repair-race");
             let oplog = create_oplog(oplog_service.as_ref(), &id).await;
             let key = session_key(&id, &test_invocation_id("cached-session".into()));
             let result = append_session(

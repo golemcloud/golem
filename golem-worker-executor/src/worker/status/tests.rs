@@ -6325,7 +6325,7 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
         kv.with_entity("test", "corrupt", "metadata")
             .set_raw(
                 KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
-                    agent_id: test_case.owned_agent_id.agent_id.clone(),
+                    owned_agent_id: test_case.owned_agent_id.clone(),
                     fingerprint,
                 },
                 "coverage",

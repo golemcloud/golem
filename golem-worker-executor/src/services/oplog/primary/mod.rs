@@ -69,6 +69,7 @@ use tracing::{error, warn};
 mod constructor;
 mod handle;
 mod reader;
+mod report;
 mod service;
 mod state;
 mod storage;
@@ -297,11 +298,7 @@ struct PrimaryOplogState {
     buffer: VecDeque<OplogEntry>,
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
-    last_reported_commit_idx: OplogIndex,
-    /// The entries of the latest commits outside an explicit one, kept for the next report while
-    /// a listener collects them. No other commit follows them before the next report, so the
-    /// report reads only the unreported entries before them back from storage.
-    retained_auto_commits: VecDeque<BTreeMap<OplogIndex, OplogEntry>>,
+    commit_report: report::ReportState,
     auto_commit_listener: AutoCommitListener,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,

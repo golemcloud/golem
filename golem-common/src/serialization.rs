@@ -80,8 +80,11 @@ pub fn decode_with_version<T: BinaryDeserializer>(
         SERIALIZATION_VERSION_V1 | SERIALIZATION_VERSION_V2 => {
             Err(DecodeError::UnsupportedVersion(version))
         }
-        SERIALIZATION_VERSION_V3 => desert_rust::deserialize(data)
-            .map_err(|error| DecodeError::InvalidData(error.to_string())),
+        SERIALIZATION_VERSION_V3 => desert_rust::deserialize(data).map_err(|error| {
+            DecodeError::InvalidData(format!(
+                "invalid data for serialization version {version}: {error}"
+            ))
+        }),
         _ => Err(DecodeError::UnknownVersion(version)),
     }
 }
@@ -218,10 +221,20 @@ mod tests {
                 Err(DecodeError::UnsupportedVersion(version))
             );
         }
-        assert!(matches!(
-            decode::<String>(&[SERIALIZATION_VERSION_V3]),
-            Err(DecodeError::InvalidData(_))
-        ));
+        let error = decode::<String>(&[SERIALIZATION_VERSION_V3]).unwrap_err();
+        assert!(matches!(error, DecodeError::InvalidData(_)));
+        assert!(
+            error.to_string().contains("serialization version 3"),
+            "{error}"
+        );
+        assert_eq!(
+            super::deserialize::<String>(&[SERIALIZATION_VERSION_V3]),
+            Err(error.to_string())
+        );
+        assert_eq!(
+            super::deserialize_with_version::<String>(&[], SERIALIZATION_VERSION_V3),
+            Err(error.to_string())
+        );
 
         let bytes = super::serialize(&"archived entry".to_string()).unwrap();
         assert_eq!(decode::<String>(&bytes), Ok("archived entry".to_string()));

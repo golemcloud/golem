@@ -670,7 +670,7 @@ async fn unreadable_status_cache_is_refolded_and_replaced() {
         Arc::new(IndexTestComponentService),
         Arc::new(GolemConfig::default()),
     );
-    let namespace = DefaultWorkerService::status_namespace(&owned_agent_id.agent_id, fingerprint);
+    let namespace = DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint);
     storage
         .with_entity("test", "corrupt", "status")
         .set_raw(
@@ -3657,7 +3657,7 @@ async fn a_result_index_field_that_does_not_decode_resets_the_index() {
             "invocation_result",
         )
         .set_raw(
-            namespace,
+            namespace.clone(),
             &invocation_result_index_field(&first),
             &[0xff, 0x00],
         )
@@ -3687,6 +3687,36 @@ async fn a_result_index_field_that_does_not_decode_resets_the_index() {
         InvocationResultIndexLookup::Incomplete
     );
 
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        positions_only(lookup(first).await),
+        InvocationResultIndexLookup::Found(result_at(3))
+    );
+
+    storage
+        .with_entity("test", "corrupt_result_listing", "invocation_result")
+        .set_raw(namespace, &invocation_result_index_field(&first), &[3])
+        .await
+        .unwrap();
+    assert!(
+        service
+            .list_invocation_result_index(&owned_agent_id, invocation_index_fingerprint(), &status,)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        lookup(second).await,
+        InvocationResultIndexLookup::Incomplete
+    );
     service
         .catch_up_invocation_result_index(
             &owned_agent_id,

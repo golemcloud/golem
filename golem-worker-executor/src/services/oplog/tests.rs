@@ -3809,6 +3809,19 @@ async fn exhausted_primary_read_retries_remain_transient(_tracing: &Tracing) {
 
 #[test]
 async fn primary_decode_failure_names_the_entry_without_exposing_its_bytes(_tracing: &Tracing) {
+    assert_primary_decode_diagnostic(
+        b"\xffprivate payload".to_vec(),
+        "unknown serialization version: 255",
+    )
+    .await;
+}
+
+#[test]
+async fn primary_invalid_data_names_the_codec_version_and_entry(_tracing: &Tracing) {
+    assert_primary_decode_diagnostic(vec![3], "serialization version 3").await;
+}
+
+async fn assert_primary_decode_diagnostic(bytes: Vec<u8>, diagnostic: &str) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let oplog_service = PrimaryOplogService::new(
         indexed_storage.clone(),
@@ -3821,22 +3834,19 @@ async fn primary_decode_failure_names_the_entry_without_exposing_its_bytes(_trac
     )
     .await;
     let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "unknown-version".to_string(),
-    };
+    let agent_id = crate::test_agent_id("unknown-version");
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let index = OplogIndex::from_u64(7);
     indexed_storage
         .with_entity("test", "corrupt", "entry")
         .append_raw(
             IndexedStorageNamespace::OpLog {
-                agent_id: agent_id.clone(),
+                owned_agent_id: owned_agent_id.clone(),
                 agent_mode: AgentMode::Durable,
             },
-            &agent_id.to_redis_key(),
+            &owned_agent_id.storage_key(),
             index.into(),
-            b"\xffprivate payload".to_vec(),
+            bytes,
             None,
         )
         .await
@@ -3847,7 +3857,7 @@ async fn primary_decode_failure_names_the_entry_without_exposing_its_bytes(_trac
             &owned_agent_id,
             AgentMode::Durable,
             Some(index),
-            make_agent_metadata(agent_id.clone(), AccountId::new(), environment_id),
+            make_agent_metadata(agent_id, AccountId::new(), environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
             None,
@@ -3865,10 +3875,7 @@ async fn primary_decode_failure_names_the_entry_without_exposing_its_bytes(_trac
         assert_eq!(error.agent_id, agent_id);
         assert!(!error.is_transient());
         let message = error.to_string();
-        assert!(
-            message.contains("unknown serialization version: 255"),
-            "{message}"
-        );
+        assert!(message.contains(diagnostic), "{message}");
         assert!(message.contains("entry 7"), "{message}");
         assert!(!message.contains("private payload"), "{message}");
     });
