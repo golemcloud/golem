@@ -4643,6 +4643,7 @@ dependencies = [
  "poem-openapi-derive",
  "pretty_assertions",
  "prometheus",
+ "proptest",
  "prost",
  "prost-types",
  "rand 0.9.5",
