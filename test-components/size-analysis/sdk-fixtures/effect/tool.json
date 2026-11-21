@@ -1,0 +1,6 @@
+{
+  "agents": {},
+  "calls": [
+    { "target": { "kind": "tool", "component": "size-fixture:provider", "tool": "chunk-m-effect-streaming" }, "arguments": { "argv": ["echo"], "stdin": [65, 0, 255, 90] }, "expected": { "result": { "bytesRead": "4", "outcome": "success" }, "stdout": [0, 127, 128, 255, 65, 0, 255, 90], "stderr": [] } }
+  ]
+}

@@ -128,7 +128,7 @@ object AgentDefinitionMacro {
       None,
       input(identity)
     )
-    val methods = sym.methodMembers.collect {
+    val methods = sym.methodMembers.sortBy(_.name).collect {
       case method if method.flags.is(Flags.Deferred) && method.isDefDef =>
         val handler  = HttpDeclarationMacro.has(method, "httpHandler")
         val provider = HttpDeclarationMacro.has(method, "openApiProvider")
@@ -286,7 +286,7 @@ object AgentDefinitionMacro {
       }
     }
 
-    val methods = typeSymbol.methodMembers.collect {
+    val methods = typeSymbol.methodMembers.sortBy(_.name).collect {
       case method if method.flags.is(Flags.Deferred) && method.isDefDef =>
         val handler  = HttpDeclarationMacro.has(method, "httpHandler")
         val provider = HttpDeclarationMacro.has(method, "openApiProvider")

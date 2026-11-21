@@ -245,6 +245,22 @@ function componentRollupConfig() {
             noEmitOnError: true,
             include,
         }),
+        {
+            name: "size-module-map",
+            generateBundle(_options, bundle) {
+                const modules = Object.values(bundle)
+                    .filter((output) => output.type === "chunk")
+                    .flatMap((chunk) => Object.entries(chunk.modules))
+                    .sort(([a], [b]) => a.localeCompare(b));
+                this.emitFile({
+                    type: "asset",
+                    fileName: "main.modules.json",
+                    source: JSON.stringify(Object.fromEntries(
+                        modules.map(([id, module]) => [id, module.renderedLength]),
+                    )),
+                });
+            },
+        },
     ];
 
     return {

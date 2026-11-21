@@ -1,0 +1,22 @@
+{
+  "agents": {
+    "main": { "agentType": "CounterAgent", "arguments": ["${run}"] },
+    "helper": { "agentType": "SizeHelper", "arguments": ["${run}"] }
+  },
+  "calls": [
+    { "target": { "kind": "invoke", "agent": "main", "method": "value" }, "arguments": [], "expected": 0 },
+    { "target": { "kind": "invoke", "agent": "main", "method": "add" }, "arguments": [7], "expected": 7 },
+    { "target": { "kind": "invoke", "agent": "main", "method": "add" }, "arguments": [11], "expected": 18 },
+    { "target": { "kind": "http", "method": "GET", "path": "/counters/${run}/value" }, "arguments": null, "expected": { "status": 200, "body": 18 } },
+    { "target": { "kind": "invoke", "agent": "main", "method": "configured" }, "arguments": [], "expected": "fixture-configured" },
+    { "target": { "kind": "invoke", "agent": "helper", "method": "value" }, "arguments": [], "expected": 0 },
+    { "target": { "kind": "invoke", "agent": "main", "method": "rpc_add" }, "arguments": [29], "expected": 29 },
+    { "target": { "kind": "invoke", "agent": "helper", "method": "value" }, "arguments": [], "expected": 29 },
+    { "target": { "kind": "invoke", "agent": "main", "method": "value" }, "arguments": [], "expected": 18 },
+    { "target": { "kind": "invoke", "agent": "main", "method": "payload_length" }, "arguments": [], "expected": 100000 },
+    { "target": { "kind": "invoke", "agent": "main", "method": "slice" }, "arguments": [17, 23], "expected": "5f2fbb0f794e8f89231cefb" },
+    { "target": { "kind": "invoke", "agent": "main", "method": "slice" }, "arguments": [99971, 29], "expected": "421c4fcaa4d75f9680e254c78d98b" },
+    { "target": { "kind": "invoke", "agent": "main", "method": "dependency" }, "arguments": [17, 3], "expected": "356632" },
+    { "target": { "kind": "invoke", "agent": "main", "method": "tool" }, "arguments": [], "expected": "no-stream:size-fixture" }
+  ]
+}

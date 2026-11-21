@@ -37,6 +37,9 @@ components:
     templates: rust, rust-test-component
 
 tools:
+  middleware:
+    nested-trap-isolation:
+      component: golem-it:tool-streaming-rust-provider
   streaming: {}
   capable-streaming: {}
   typed-output-stream: {}
@@ -50,6 +53,22 @@ tools:
   matrix-permission-issuer:
     component: golem-it:tool-streaming-rust-provider
   wallet-mutation:
+    component: golem-it:tool-streaming-rust-provider
+  artifact:
+    component: golem-it:tool-streaming-rust-provider
+  middleware-probe:
+    component: golem-it:tool-streaming-rust-provider
+  permissions:
+    component: golem-it:tool-streaming-rust-provider
+  quota:
+    component: golem-it:tool-streaming-rust-provider
+  return-boundary-probe:
+    component: golem-it:tool-streaming-rust-provider
+  secret:
+    component: golem-it:tool-streaming-rust-provider
+  typed:
+    component: golem-it:tool-streaming-rust-provider
+  typed-input-stream:
     component: golem-it:tool-streaming-rust-provider
 
 agents:
