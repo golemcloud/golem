@@ -596,14 +596,22 @@ enum OplogReadKind {
 /// cursor outside `range` is an error. A page needs the oplog only up to its last entry or the
 /// end of the range, when that is earlier. A search needs the oplog up to the end of the range.
 /// Before the read, the first entry of the oplog is not known, so a range without a start needs
-/// the oplog from index 1, the first index of an oplog.
+/// the oplog from index 1, the first index of an oplog. `OplogRange::new` and `OplogRange::resume`
+/// keep the end of a range at or after index 1 and its start, so a page from index 1 always
+/// exists; without one, the read needs the whole resumed range, which never asks for less.
 fn oplog_read_resource(
     range: OplogRange,
     cursor: Option<&OplogCursor>,
     kind: OplogReadKind,
 ) -> Result<OplogResourcePattern, OplogCursorOutsideRange> {
     let resumed = cursor.map_or(Ok(range), |cursor| range.resume(cursor))?;
-    Ok(oplog_resource_in(resumed, OplogIndex::INITIAL, kind))
+    let read = match kind {
+        OplogReadKind::Page(count) => resumed
+            .page_in(OplogIndex::INITIAL, count)
+            .unwrap_or(resumed),
+        OplogReadKind::Search => resumed,
+    };
+    Ok(oplog_resource_in(read, OplogIndex::INITIAL))
 }
 
 /// The oplog resource of the page that the executor returned for a read of at most `count`
@@ -611,8 +619,9 @@ fn oplog_read_resource(
 /// of a range without a start, without a cursor. The executor starts such a read at the first
 /// entry that the oplog holds, `first_index_in_chunk`, and the page needs the oplog from there to
 /// its last possible entry, or to the end of the range when that is earlier. A page without
-/// entries can give 0 as its first index; the page then needs the oplog from index 1. The other
-/// reads give `None`, because the check before the read covers them.
+/// entries can give 0 as its first index; the page then needs the oplog from index 1. A page whose
+/// first index is after the end of the range reads no entry, so it gives `None`. The other reads
+/// give `None`, because the check before the read covers them.
 fn oplog_returned_page_resource(
     range: OplogRange,
     cursor: Option<&OplogCursor>,
@@ -620,26 +629,19 @@ fn oplog_returned_page_resource(
     first_index_in_chunk: OplogIndex,
 ) -> Option<OplogResourcePattern> {
     match (cursor, range.to_indices()) {
-        (None, (None, _)) => Some(oplog_resource_in(
-            range,
-            first_index_in_chunk.max(OplogIndex::INITIAL),
-            OplogReadKind::Page(count),
-        )),
+        (None, (None, _)) => {
+            let oplog_first = first_index_in_chunk.max(OplogIndex::INITIAL);
+            range
+                .page_in(oplog_first, count)
+                .map(|page| oplog_resource_in(page, oplog_first))
+        }
         _ => None,
     }
 }
 
-/// The oplog resource that a read of `range` needs in an oplog whose first entry is at
-/// `oplog_first`: from the first index of the range to the end of the page or of the range.
-fn oplog_resource_in(
-    range: OplogRange,
-    oplog_first: OplogIndex,
-    kind: OplogReadKind,
-) -> OplogResourcePattern {
-    let read = match kind {
-        OplogReadKind::Page(count) => range.page_in(oplog_first, count),
-        OplogReadKind::Search => range,
-    };
+/// The oplog resource of the indices that a read of `read` holds in an oplog whose first entry is
+/// at `oplog_first`: from the first index of `read` to its end.
+fn oplog_resource_in(read: OplogRange, oplog_first: OplogIndex) -> OplogResourcePattern {
     let (_, end) = read.to_indices();
     OplogResourcePattern::range(Some(read.first_index_in(oplog_first).as_u64()), end)
 }
@@ -6290,6 +6292,8 @@ mod tests {
             ((range(None, None), None, 50, 1), pattern(1, Some(50))),
             ((range(None, None), None, 50, 40), pattern(40, Some(89))),
             ((range(None, Some(60)), None, 50, 40), pattern(40, Some(60))),
+            // The page starts after the end of the range, so it reads no entry.
+            ((range(None, Some(60)), None, 50, 70), None),
             ((range(None, None), None, 50, 0), pattern(1, Some(50))),
             (
                 (range(None, None), None, 50, u64::MAX - 1),

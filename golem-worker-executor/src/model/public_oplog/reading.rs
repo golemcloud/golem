@@ -429,9 +429,10 @@ pub async fn search_public_oplog_page(
 /// Searches the oplog from the first index of `range` in an oplog whose first entry is at
 /// `oplog_first` until the result holds `count` matches, the page is full, the oplog or the end of
 /// `range` ends the search, or `budget` is spent. The budget counts the oplog entries that the
-/// search reads, matching or not, and the time since the call started. Each chunk reads at most as many entries as the result still needs matches, so the
-/// result never holds more than `count` matches. A search always reads at least one chunk, and
-/// the result points to the first entry it did not read.
+/// search reads, matching or not, and the time since the call started. Each chunk reads at most
+/// as many entries as the result still needs matches, so the result never holds more than `count`
+/// matches. A search always reads at least one chunk, and the result points to the first entry it
+/// did not read.
 #[allow(clippy::too_many_arguments)]
 async fn search_public_oplog_with<B: ChunkBuilder>(
     component_service: Arc<dyn ComponentService>,

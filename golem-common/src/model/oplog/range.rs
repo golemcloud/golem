@@ -182,9 +182,13 @@ impl OplogRange {
     /// page, as [`Self::page_count`] counts it. A page reads at least one entry, so a `count` of 0
     /// gives the first index only. In a range without an end, a page that reaches index
     /// `u64::MAX`, or whose end overflows, has no end either, so that a page to the end of such a
-    /// range has one value.
-    pub fn page_in(&self, oplog_first: OplogIndex, count: u64) -> Self {
+    /// range has one value. When the first index is after the end of the range, the range has no
+    /// page in the oplog, and the result is `None`.
+    pub fn page_in(&self, oplog_first: OplogIndex, count: u64) -> Option<Self> {
         let start = self.first_index_in(oplog_first);
+        if self.end.is_some_and(|end| end < start) {
+            return None;
+        }
         let entries = u64::try_from(self.page_count(start, count))
             .unwrap_or(u64::MAX)
             .max(1);
@@ -194,10 +198,10 @@ impl OplogRange {
             .filter(|page_end| self.end.is_some() || *page_end < u64::MAX)
             .map(OplogIndex::from_u64)
             .or(self.end);
-        Self {
+        Some(Self {
             start: Some(start),
             end,
-        }
+        })
     }
 }
 
@@ -401,37 +405,54 @@ mod tests {
     #[test]
     fn a_page_of_a_range_ends_at_its_count_or_at_the_end_of_the_range() {
         [
-            ((range(None, None), 1, 50), range(Some(1), Some(50))),
-            ((range(None, None), 4, 50), range(Some(4), Some(53))),
-            ((range(None, Some(9)), 4, 50), range(Some(4), Some(9))),
-            ((range(Some(5), None), 1, 3), range(Some(5), Some(7))),
-            ((range(Some(5), None), 1, 1), range(Some(5), Some(5))),
-            ((range(Some(5), None), 1, 0), range(Some(5), Some(5))),
-            ((range(Some(5), Some(6)), 1, 3), range(Some(5), Some(6))),
-            ((range(Some(5), Some(7)), 1, 3), range(Some(5), Some(7))),
-            ((range(Some(5), Some(9)), 1, 3), range(Some(5), Some(7))),
+            ((range(None, None), 1, 50), Some(range(Some(1), Some(50)))),
+            ((range(None, None), 4, 50), Some(range(Some(4), Some(53)))),
+            ((range(None, Some(9)), 4, 50), Some(range(Some(4), Some(9)))),
+            ((range(Some(5), None), 1, 3), Some(range(Some(5), Some(7)))),
+            ((range(Some(5), None), 1, 1), Some(range(Some(5), Some(5)))),
+            ((range(Some(5), None), 1, 0), Some(range(Some(5), Some(5)))),
+            (
+                (range(Some(5), Some(6)), 1, 3),
+                Some(range(Some(5), Some(6))),
+            ),
+            (
+                (range(Some(5), Some(7)), 1, 3),
+                Some(range(Some(5), Some(7))),
+            ),
+            (
+                (range(Some(5), Some(9)), 1, 3),
+                Some(range(Some(5), Some(7))),
+            ),
             (
                 (range(Some(u64::MAX), None), 1, 3),
-                range(Some(u64::MAX), None),
+                Some(range(Some(u64::MAX), None)),
             ),
             (
                 (range(Some(u64::MAX - 1), Some(u64::MAX)), 1, 3),
-                range(Some(u64::MAX - 1), Some(u64::MAX)),
+                Some(range(Some(u64::MAX - 1), Some(u64::MAX))),
             ),
-            ((range(Some(2), None), 1, u64::MAX), range(Some(2), None)),
-            ((range(Some(1), None), 1, u64::MAX), range(Some(1), None)),
+            (
+                (range(Some(2), None), 1, u64::MAX),
+                Some(range(Some(2), None)),
+            ),
+            (
+                (range(Some(1), None), 1, u64::MAX),
+                Some(range(Some(1), None)),
+            ),
             (
                 (range(Some(1), Some(u64::MAX)), 1, u64::MAX),
-                range(Some(1), Some(u64::MAX)),
+                Some(range(Some(1), Some(u64::MAX))),
             ),
             (
                 (range(None, None), u64::MAX - 1, 2),
-                range(Some(u64::MAX - 1), None),
+                Some(range(Some(u64::MAX - 1), None)),
             ),
             (
                 (range(None, None), u64::MAX - 2, 2),
-                range(Some(u64::MAX - 2), Some(u64::MAX - 1)),
+                Some(range(Some(u64::MAX - 2), Some(u64::MAX - 1))),
             ),
+            // The oplog starts after the end of the range, so the range has no page in it.
+            ((range(None, Some(9)), 10, 50), None),
         ]
         .into_iter()
         .for_each(|((range, oplog_first, count), expected)| {
