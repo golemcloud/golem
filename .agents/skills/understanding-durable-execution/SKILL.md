@@ -1379,9 +1379,14 @@ indexes never renumber, and the start only moves forward: `advance_oplog_retenti
 record with a compare-and-set. Only tests write the record, so in production every oplog starts
 at index 1. `RetentionOplogService` sits directly on the base oplog service, below the plugin
 forwarding layer, and it is the only layer that reads the record. `Oplog::retention` and
-`OplogService::retention` give the plain `OplogRetention` value, and every reader uses its pure
-rules: `clamp`, `range` (`None` when the range holds no retained entry), `check_read`,
-`check_from` and `create_read`. A read below the start returns
+`OplogService::retention` give the plain `OplogRetention` value. Every reader of the retained
+entries uses its pure rules: a walk in chunks reads with `chunk`, a public page reads with
+`page`, and a walk with a fixed start reads with `OplogRange::within`; `range`, `clamp`,
+`retains`, `create_read` and the agent checks give the rest. Some walks need the whole history,
+because a walk from the start gives a wrong result: the full status rebuild, the revert
+preflight, the epoch fence of a stream fork revert (`max_issued_epoch`) and the creation receipt
+of a fork export. They read from index 1 or from a fixed index, so the layer gives the expired
+error when the start is above 1. A read below the start returns
 `OplogReadError::Expired { retained_start }`. The one exception is a read of the `Create` entry
 alone at index 1, because that entry is the identity of the agent; a page or a range from index 1
 is expired. A `Gap` that ends below the start becomes the same error, and a gap that ends at or

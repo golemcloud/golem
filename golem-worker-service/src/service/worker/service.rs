@@ -1458,7 +1458,8 @@ impl WorkerService {
             .await?;
 
         // A read without a start begins at the retained start of the oplog, which can be after
-        // the index that the check above authorized. The entries that it gave are checked too.
+        // the index that the check above authorized. The check below also covers the entries that
+        // the read gave.
         if result.first_index_in_chunk > start {
             agent.authorize(
                 &auth_ctx,
