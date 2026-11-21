@@ -1487,7 +1487,7 @@ async fn a_start_on_another_executor_confirms_a_whole_snapshot_and_restores_it(
     .await
 }
 
-/// Changes the tree of `agent` with an upload that takes two seconds, stops the agent while the
+/// Changes the tree of `agent` with a held upload, stops the agent while the
 /// upload runs, and waits until the store holds the whole snapshot and the upload ended. Gives the
 /// tree before the stop and the name of the snapshot.
 async fn stop_during_an_upload(
@@ -1496,7 +1496,7 @@ async fn stop_during_an_upload(
     store: &TestFilesystemSnapshotStore,
     agent: &Agent,
 ) -> anyhow::Result<(Vec<String>, String)> {
-    store.set_save_delay(Duration::from_secs(2));
+    let held = store.hold_next_publication();
     agent
         .apply_all(
             executor,
@@ -1507,13 +1507,15 @@ async fn stop_during_an_upload(
         )
         .await?;
     let live = agent.describe(executor).await?;
-    let named = eventually(Duration::from_secs(30), || async {
-        let records = agent.records(executor).await?;
-        Ok(records.newest_name())
-    })
-    .await?;
+    let named = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
     let (owned, fingerprint) = agent.incarnation(executor, context).await?;
     agent.stop(executor, context).await?;
+    held.release();
+    eventually(Duration::from_secs(30), || async {
+        Ok(store.publication_result(&named))
+    })
+    .await?
+    .map_err(anyhow::Error::msg)?;
     eventually(Duration::from_secs(30), || async {
         Ok(store
             .snapshot_names(&owned, fingerprint)
@@ -1522,9 +1524,6 @@ async fn stop_during_an_upload(
             .then_some(()))
     })
     .await?;
-    store.set_save_delay(Duration::ZERO);
-    // The upload asks for its confirmation right after the save; give it time to get its answer.
-    tokio::time::sleep(Duration::from_millis(500)).await;
     Ok((live, named))
 }
 

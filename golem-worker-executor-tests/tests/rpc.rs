@@ -4109,10 +4109,13 @@ async fn streaming_output_resume_restores_exact_cursors(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.invocation_results.recent_capacity = 0;
-            config.invocation_results.bloom_bits = 1;
-            config.invocation_results.bloom_hashes = 1;
+        configure: Some(Arc::new(move |config| {
+            // Ephemeral results have no catch-up index; evict history only for durable recovery.
+            if restart_executor {
+                config.invocation_results.recent_capacity = 0;
+                config.invocation_results.bloom_bits = 1;
+                config.invocation_results.bloom_hashes = 1;
+            }
             // Keep the promise gate valid beyond this test's two-minute deadline.
             config.suspend.ephemeral_max_sleep = Duration::from_secs(180);
         })),

@@ -15,9 +15,7 @@
 use super::super::name_comparison::{
     NativeNameComparisonMode, NativeNameCoordinationKey, SandboxNameComparisonKey,
 };
-use super::super::object_identity::{
-    NativeFileIdentity, SandboxDirectoryId, directory_identity, native_file_identity,
-};
+use super::super::object_identity::{SandboxDirectoryId, directory_identity, native_file_identity};
 use super::super::open_handles::{NativeDirectoryHandle, SandboxDirectory, SandboxFilePermissions};
 use super::super::sandbox_paths::{
     ResolvedPathEntry, SandboxPath, SandboxResolvedPathTarget, split_path_target,

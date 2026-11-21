@@ -920,7 +920,7 @@ async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
     );
     let runtime_path = root
         .join(context.default_environment_id.to_string())
-        .join(component.id.to_string())
+        .join(format!("{:08x}", worker_id.agent_id.type_tag()))
         .join(agent_path_segment(&worker_id.agent_id));
     assert!(runtime_path.exists());
 
@@ -1256,7 +1256,7 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
         .await?;
     let victim_path = root
         .join(context.default_environment_id.to_string())
-        .join(component.id.to_string())
+        .join(format!("{:08x}", victim_worker.agent_id.type_tag()))
         .join(agent_path_segment(&victim_worker.agent_id));
     assert!(victim_path.is_dir(), "the victim did not use the XFS root");
     create_allocated_file(
@@ -1280,7 +1280,7 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
         .await?;
     let trigger_path = root
         .join(context.default_environment_id.to_string())
-        .join(component.id.to_string())
+        .join(format!("{:08x}", trigger_worker.agent_id.type_tag()))
         .join(agent_path_segment(&trigger_worker.agent_id));
     assert!(
         trigger_path.is_dir(),
@@ -3834,6 +3834,7 @@ async fn http_client_interrupting_response_stream_async(
 }
 
 #[test]
+#[test_r::tag(latency)]
 #[tracing::instrument]
 async fn sleep(
     last_unique_id: &LastUniqueId,
@@ -4174,6 +4175,7 @@ async fn p3_all_long_timers_suspend_and_resume_at_earliest_deadline(
 }
 
 #[test]
+#[test_r::tag(latency)]
 #[timeout("120s")]
 #[tracing::instrument]
 async fn p3_repeated_short_timer_races_preserve_shared_scheduler_wakeups(

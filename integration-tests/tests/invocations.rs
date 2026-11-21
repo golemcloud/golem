@@ -396,6 +396,17 @@ async fn invocation_api_reads_and_cancels_invocations(
     );
 
     // The ID resolves only in its agent's environment, and unknown IDs are not found.
+    let (_, other_env) = user.app_and_env().await?;
+    assert_eq!(
+        error_code(
+            client
+                .get_invocation(&other_env.id.0, &waiting.invocation_id)
+                .await
+        )
+        .0,
+        404
+    );
+    // A caller cannot read agents in an environment it cannot view, including a missing one.
     assert_eq!(
         error_code(
             client
@@ -403,7 +414,7 @@ async fn invocation_api_reads_and_cancels_invocations(
                 .await
         )
         .0,
-        404
+        403
     );
     assert_eq!(
         error_code(
