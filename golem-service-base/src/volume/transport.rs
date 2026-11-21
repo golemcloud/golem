@@ -207,6 +207,46 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct NeverAnsweringDns;
+
+    impl Resolve for NeverAnsweringDns {
+        fn resolve(&self, _: &str, _: u16) -> BoxFuture<'static, io::Result<Box<[SocketAddr]>>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    #[test]
+    fn connection_to_a_never_answering_resolver_times_out_at_ten_seconds() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap()
+            .block_on(async {
+                let mut connector = CheckedConnector {
+                    policy: Arc::new(ConnectionPolicy::default()),
+                    resolver: Arc::new(NeverAnsweringDns),
+                };
+                let started = tokio::time::Instant::now();
+                let mut connection = connector.call("http://volume.invalid/key".parse().unwrap());
+                assert!(futures::poll!(connection.as_mut()).is_pending());
+
+                tokio::time::advance(Duration::from_millis(9_999)).await;
+                assert!(
+                    futures::poll!(connection.as_mut()).is_pending(),
+                    "the connection must not time out before ten seconds"
+                );
+
+                tokio::time::advance(Duration::from_millis(1)).await;
+                let Poll::Ready(Err(error)) = futures::poll!(connection.as_mut()) else {
+                    panic!("the connection must fail at exactly ten seconds");
+                };
+                assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+                assert_eq!(started.elapsed(), Duration::from_secs(10));
+            });
+    }
+
     #[test]
     #[timeout("30s")]
     async fn each_connection_checks_all_dns_answers_and_uses_the_checked_address() {
