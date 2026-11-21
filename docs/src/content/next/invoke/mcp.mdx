@@ -40,7 +40,7 @@ The MCP server serves the protocol revisions `2025-03-26`, `2025-06-18`, `2025-1
 - `server/discover` returns the served revisions and the capabilities of the server. A `2026-07-28` client starts with `server/discover`, and each of its requests names its revision in `_meta`.
 - The server answers `ping` on `2025-03-26`, `2025-06-18` and `2025-11-25`. On `2026-07-28`, `ping` is an unknown method and gets the JSON-RPC error `-32601`.
 - `GET` and `DELETE` on `/mcp` get `405 Method Not Allowed` with `Allow: POST`. So the server has no stream for notifications, and it does not resume a response stream: it ignores `Last-Event-ID`.
-- The response stream of a request stays open until its result is ready. On a slow call, the server sends SSE keep-alives at [`mcp.sse_keep_alive_interval`](/next/operate/http-gateway#long-lived-connections).
+- On `2025-03-26`, `2025-06-18` and `2025-11-25`, the response stream of a request opens at once. It stays open until the result is ready. On a slow call, the server sends SSE keep-alives at [`mcp.sse_keep_alive_interval`](/next/operate/http-gateway#long-lived-connections). On `2026-07-28`, the server sends the response only when the result is ready. It sends no keep-alive before the response.
 - A closed response stream does not cancel a call. The server accepts `notifications/cancelled` and ignores it. The call runs to its end.
 - The server sends no log notifications and no `notifications/tools/list_changed`.
 
