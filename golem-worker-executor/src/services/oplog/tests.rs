@@ -9122,7 +9122,7 @@ fn assert_oplog_failed(
     needles: &[&str],
 ) {
     assert!(
-        matches!(error, WorkerExecutorError::OplogFailed { agent_id, failure: OplogFailure::Unreadable { details } }
+        matches!(error, WorkerExecutorError::OplogFailed { agent_id, failure: OplogFailure::Failed { details } }
             if agent_id == &owned_agent_id.agent_id
                 && needles.iter().all(|needle| details.contains(needle))),
         "{error:?}"

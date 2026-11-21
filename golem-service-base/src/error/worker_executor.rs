@@ -196,7 +196,7 @@ pub enum WorkerExecutorError {
 pub enum OplogFailure {
     /// A source of the oplog failed or gave corrupt data, or an archive layer did not store its
     /// entries. Crosses the wire as `RuntimeError` with the text of the error.
-    Unreadable { details: String },
+    Failed { details: String },
     /// The read reaches below the retained start of the oplog: a cut removed those entries. Crosses
     /// the wire as `OplogExpired`.
     Expired { retained_start: OplogIndex },
@@ -369,7 +369,7 @@ impl WorkerExecutorError {
     pub fn oplog_failed(agent_id: AgentId, details: impl Into<String>) -> Self {
         Self::OplogFailed {
             agent_id,
-            failure: OplogFailure::Unreadable {
+            failure: OplogFailure::Failed {
                 details: details.into(),
             },
         }
@@ -579,7 +579,7 @@ impl Display for WorkerExecutorError {
             ),
             Self::OplogFailed {
                 agent_id,
-                failure: OplogFailure::Unreadable { details },
+                failure: OplogFailure::Failed { details },
             } => write!(f, "The oplog of {agent_id} failed: {details}"),
             Self::OplogFailed {
                 agent_id,

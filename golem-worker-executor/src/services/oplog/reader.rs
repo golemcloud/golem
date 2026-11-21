@@ -477,7 +477,7 @@ mod tests {
         assert!(matches!(
             WorkerExecutorError::from(failed),
             WorkerExecutorError::OplogFailed {
-                failure: OplogFailure::Unreadable { .. },
+                failure: OplogFailure::Failed { .. },
                 ..
             }
         ));

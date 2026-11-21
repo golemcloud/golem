@@ -5839,7 +5839,7 @@ async fn a_rebuild_with_regions_covering_the_empty_baseline_is_corrupt() {
         let error = WorkerExecutorError::from(OplogError::from(refusal));
         assert!(matches!(
             error,
-            WorkerExecutorError::OplogFailed { agent_id, failure: OplogFailure::Unreadable { details } }
+            WorkerExecutorError::OplogFailed { agent_id, failure: OplogFailure::Failed { details } }
                 if agent_id == test_case.owned_agent_id.agent_id
                     && details.contains("empty status baseline")
         ));
@@ -7235,7 +7235,7 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
             (
                 WorkerExecutorError::OplogFailed {
                     agent_id,
-                    failure: OplogFailure::Unreadable { details },
+                    failure: OplogFailure::Failed { details },
                 },
                 "corrupt" | "missing",
             ) => {

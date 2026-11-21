@@ -423,7 +423,7 @@ fn only_a_fenced_terminal_write_is_a_lost_shard() {
             level: 0,
             details: "injected archive failure".to_string(),
         })),
-        Ok(WorkerExecutorError::OplogFailed { failure: OplogFailure::Unreadable { details }, .. })
+        Ok(WorkerExecutorError::OplogFailed { failure: OplogFailure::Failed { details }, .. })
             if details.contains("injected archive failure")
     ));
     let fence = OplogFence {
