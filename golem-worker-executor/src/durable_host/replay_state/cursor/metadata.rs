@@ -169,6 +169,10 @@ impl ReplayState {
                 replay_buffer: VecDeque::new(),
                 starts,
                 custom_subtrees: HashMap::new(),
+                open_anchors: std::collections::BTreeMap::new(),
+                owners: Default::default(),
+                settled_invocations: std::collections::BTreeMap::new(),
+                last_started_invocation: None,
             }),
             unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
@@ -443,16 +447,23 @@ impl ReplayState {
                         }
                         None
                     }
+                    OplogEntry::AgentInvocationStarted { .. } => {
+                        invocation_finishes.insert(marker_idx, InvocationBoundary::Started);
+                        None
+                    }
                     OplogEntry::AgentInvocationFinished { .. } => {
-                        invocation_finishes.insert(marker_idx, None);
+                        invocation_finishes.insert(marker_idx, InvocationBoundary::Finished);
                         None
                     }
                     OplogEntry::AgentInvocationFailed {
-                        start_index,
                         entity_parent_start_index: None,
                         ..
                     } => {
-                        invocation_finishes.insert(marker_idx, Some(start_index));
+                        invocation_finishes.insert(marker_idx, InvocationBoundary::LocalFailure);
+                        None
+                    }
+                    OplogEntry::AgentInvocationSettled { .. } => {
+                        invocation_finishes.insert(marker_idx, InvocationBoundary::Settled);
                         None
                     }
                     OplogEntry::CompletionDelivered { start_index, .. } => {
@@ -571,8 +582,13 @@ impl ReplayState {
         })
     }
 
-    /// The first visible invocation terminal after the cursor and before `index`. Reads
-    /// only the scanned invocation finishes, never the oplog.
+    /// The first visible invocation boundary (an `AgentInvocationStarted`, an invocation
+    /// terminal or an `AgentInvocationSettled`) after the cursor and before `index`. Reads only
+    /// the scanned invocation finishes, never the oplog.
+    ///
+    /// The `AgentInvocationStarted` of the next invocation keeps a boundary in place while the
+    /// cursor drains an invocation's background work past its terminal and its settlement hint:
+    /// the cursor reaches that `AgentInvocationStarted` only after the drain ended.
     pub(in crate::durable_host::replay_state) fn invocation_finish_before(
         &self,
         index: OplogIndex,
@@ -591,7 +607,9 @@ impl ReplayState {
     }
 
     /// The index of the invocation-local failure that terminates the invocation started at
-    /// `start`, when its recorded terminal is one.
+    /// `start`, when its recorded terminal is one. Its terminal precedes its
+    /// `AgentInvocationSettled` and the next `AgentInvocationStarted`, so it is the first
+    /// invocation boundary after `start`.
     pub(crate) fn recorded_local_failure_of_invocation(
         &self,
         start: OplogIndex,
@@ -602,7 +620,27 @@ impl ReplayState {
             .unwrap()
             .range(start.next()..)
             .next()
-            .and_then(|(index, anchor)| anchor.map(|_| *index))
+            .and_then(|(index, boundary)| {
+                (*boundary == InvocationBoundary::LocalFailure).then_some(*index)
+            })
+    }
+
+    /// Whether the recorded history closes the invocation anchored at `start`: an
+    /// `AgentInvocationSettled` or the next `AgentInvocationStarted` follows it. Its background
+    /// work then ended in the recorded run, with every remaining store task parked, so live work
+    /// of such a task belongs to a later invocation.
+    pub(crate) fn invocation_closed_in_history(&self, start: OplogIndex) -> bool {
+        self.cursor
+            .invocation_finishes
+            .lock()
+            .unwrap()
+            .range(start.next()..)
+            .any(|(_, boundary)| {
+                matches!(
+                    boundary,
+                    InvocationBoundary::Settled | InvocationBoundary::Started
+                )
+            })
     }
 
     pub(crate) fn transaction_marker(
@@ -689,6 +727,8 @@ impl ReplayState {
                 std::cmp::Ordering::Less => {
                     tx.st.replay_buffer.clear();
                     tx.prune_retained_starts(|idx| idx > new_target);
+                    tx.st.owners.truncate_after(new_target);
+                    tx.st.settled_invocations.split_off(&new_target.next());
                     cursor
                         .completion_markers
                         .lock()

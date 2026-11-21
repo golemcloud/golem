@@ -29,7 +29,7 @@ pub use resolved_names::{
 
 pub use invocation::{
     AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, InvocationRequestOperation, PendingInvocationRef,
+    AgentInvocationResult, BackgroundFailure, InvocationRequestOperation, PendingInvocationRef,
     RedactedAgentInvocationResult, StoredAgentInvocationPayload, TimestampedAgentInvocation,
 };
 pub use status::{
@@ -42,7 +42,8 @@ pub use status::{
     InvocationRequestRef, InvocationResultBloom, InvocationResultMembership,
     InvocationResultPosition, MAX_INVOCATION_OPERATION_BYTES, OpenEntityReplayScope,
     OplogProcessorCheckpointState, PendingCardEventRef, PendingUpdateKind, PendingUpdateRef,
-    RunningInvocation, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
+    RunningInvocation, SettlingInvocation, SnapshotFiles, SuccessfulUpdateRecord,
+    UsableAutomaticSnapshot,
 };
 
 #[cfg(test)]

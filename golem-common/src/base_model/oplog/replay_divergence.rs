@@ -174,6 +174,8 @@ pub struct ReplayHostCall {
     pub parent_start_index: Option<OplogIndex>,
     pub invocation_id: Option<DurableInvocationId>,
     pub observational_owner: Option<OplogIndex>,
+    /// The invocation that drives the call when it is not the invocation the call belongs to.
+    pub driver: Option<OplogIndex>,
     /// Whether the call carries a request: `true` for a durable call, `false` for a durable
     /// scope.
     pub carries_request: bool,
@@ -209,6 +211,7 @@ impl ReplayHostCall {
                 self.parent_start_index != other.parent_start_index,
                 StartIdentityField::Parent,
             ),
+            (self.driver != other.driver, StartIdentityField::Driver),
         ]
         .into_iter()
         .filter_map(|(differs, field)| differs.then_some(field))
@@ -227,6 +230,7 @@ impl PartialEq for ReplayHostCall {
             && self.parent_start_index == other.parent_start_index
             && self.invocation_id == other.invocation_id
             && self.observational_owner == other.observational_owner
+            && self.driver == other.driver
             && self.carries_request == other.carries_request
             && match (&self.request, &other.request) {
                 (None, None) => true,
@@ -245,6 +249,7 @@ impl Hash for ReplayHostCall {
         self.parent_start_index.hash(state);
         self.invocation_id.hash(state);
         self.observational_owner.hash(state);
+        self.driver.hash(state);
         self.carries_request.hash(state);
     }
 }
@@ -274,6 +279,9 @@ impl Display for ReplayHostCall {
         if let Some(owner) = self.observational_owner {
             write!(f, " observed by {owner}")?;
         }
+        if let Some(driver) = self.driver {
+            write!(f, " driven by {driver}")?;
+        }
         Ok(())
     }
 }
@@ -290,6 +298,7 @@ declare_enums! {
         ObservationalOwner,
         RequestPresence,
         Parent,
+        Driver,
     }
 
     /// Why an update failed.
@@ -354,6 +363,7 @@ pub(crate) mod replay_divergence_test_values {
             parent_start_index: None,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             carries_request: true,
             request: Some(Box::new(request)),
         }

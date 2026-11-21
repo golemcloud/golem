@@ -13,14 +13,15 @@
 // limitations under the License.
 
 use super::{
-    Accessor, CallReplayOutcome, CardId, CardState, DateTime, DurabilityHost, DurableCallSession,
-    DurableFunctionType, DurableWorkerCtx, GolemPermissionsCardLiveness, HostFailureKind,
-    HostPermissionCard, HostPermissionCardWithStore, HostRequestPermissionCardLiveness,
-    HostResponsePermissionCardLiveness, InternalRetryResult, NotCancellable, PermissionCardEntry,
-    PermissionCardHandleRep, PermissionCardResolver, PermissionCardValuePayload,
-    ResolvedPermissionCard, Resource, ScopeCard, SerializablePermissionCardLiveness, StoredCard,
-    Utc, Uuid, WorkerCtx, WorkerExecutorError, anyhow, deserialize, permission_error_to_anyhow,
-    permissions_types, serialize, worker_error_to_permission_error,
+    Accessor, BTreeSet, CallReplayOutcome, CardId, CardState, DateTime, DurabilityHost,
+    DurableCallSession, DurableFunctionType, DurableWorkerCtx, GolemPermissionsCardLiveness,
+    HostFailureKind, HostPermissionCard, HostPermissionCardWithStore,
+    HostRequestPermissionCardLiveness, HostResponsePermissionCardLiveness, InternalRetryResult,
+    NotCancellable, PermissionCardEntry, PermissionCardHandleRep, PermissionCardResolver,
+    PermissionCardValuePayload, ResolvedPermissionCard, Resource, ScopeCard,
+    SerializablePermissionCardLiveness, StoredCard, Utc, Uuid, WorkerCtx, WorkerExecutorError,
+    anyhow, deserialize, permission_error_to_anyhow, permissions_types, serialize,
+    worker_error_to_permission_error,
 };
 
 impl PermissionCardEntry {
@@ -41,10 +42,12 @@ impl PermissionCardEntry {
     pub(super) fn from_scope(
         card: ScopeCard,
         invocation_key: golem_common::model::InvocationId,
+        lineage: BTreeSet<CardId>,
     ) -> Self {
         Self::Scope {
             card,
             invocation_key: Some(invocation_key),
+            lineage,
         }
     }
 
@@ -77,7 +80,21 @@ impl PermissionCardEntry {
             Self::Scope {
                 card,
                 invocation_key,
+                ..
             } => Some((card, invocation_key.as_ref())),
+        }
+    }
+
+    /// The lineage that a scope card derived from this entry inherits: this entry's scope card
+    /// and the scope cards it was derived from. A persistent card adds nothing.
+    pub(super) fn scope_lineage_of_child(&self) -> BTreeSet<CardId> {
+        match self {
+            Self::Persistent { .. } => BTreeSet::new(),
+            Self::Scope { card, lineage, .. } => lineage
+                .iter()
+                .copied()
+                .chain(std::iter::once(card.scope_card_id))
+                .collect(),
         }
     }
 
@@ -248,7 +265,50 @@ pub(crate) fn resolve_invocation_scope_card<Ctx: WorkerCtx>(
         .ok_or_else(|| "scope cards require an active invocation".to_string())?;
     let scope_card = permission_card_scope_card(ctx, handle)
         .map_err(|error| format!("invalid permission-card handle: {error}"))?;
-    resolve_owned_scope_card(scope_card, &invocation_key)
+    let card = resolve_owned_scope_card(scope_card, &invocation_key)?;
+    let lineage = permission_card_scope_lineage_of_child(ctx, handle)
+        .map_err(|error| format!("invalid permission-card handle: {error}"))?;
+    refuse_cut_off_scope_card(
+        card.scope_card_id,
+        &lineage,
+        ctx.state.authority().cut_off_scope_card(),
+    )?;
+    Ok(card)
+}
+
+/// The lineage that a scope card derived from the handle inherits; see
+/// [`PermissionCardEntry::scope_lineage_of_child`].
+pub(super) fn permission_card_scope_lineage_of_child<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: &Resource<PermissionCardHandleRep>,
+) -> Result<BTreeSet<CardId>, WorkerExecutorError> {
+    let rep = ctx.table().get(handle).map_err(invalid_handle_error)?;
+    Ok(rep
+        .downcast_ref::<PermissionCardEntry>()
+        .map(PermissionCardEntry::scope_lineage_of_child)
+        .unwrap_or_default())
+}
+
+/// Refuses the scope card `card_id`, whose handle inherits `lineage_of_child`, when the running
+/// call may no longer use it: it is `cut_off`, the scope card that the invocation's export
+/// return hid from this call, or a scope card derived from it.
+pub(super) fn refuse_cut_off_scope_card(
+    card_id: CardId,
+    lineage_of_child: &BTreeSet<CardId>,
+    cut_off: Option<&ScopeCard>,
+) -> Result<(), String> {
+    match cut_off {
+        Some(cut_off)
+            if card_id == cut_off.scope_card_id
+                || lineage_of_child.contains(&cut_off.scope_card_id) =>
+        {
+            Err(
+                "the scope-card handle is not valid after this invocation's export returned"
+                    .to_string(),
+            )
+        }
+        _ => Ok(()),
+    }
 }
 
 pub(super) fn resolve_owned_scope_card(

@@ -17,8 +17,11 @@ use crate::durable_host::authorization::targets::{
 };
 use crate::durable_host::concurrent::{
     AccessClaimOptions, CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+    resolve_current_observational_owner,
 };
-use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost, HostFailureKind};
+use crate::durable_host::durability::{
+    ClassifiedHostError, DurabilityHost, GuestTaskContext, HostFailureKind,
+};
 use crate::durable_host::keyvalue::environment_owner;
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::{
@@ -42,6 +45,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::retry_policy::RetryProperties;
 use golem_common::model::{AgentId, OplogIndex, RdbmsPoolKey, RetryContext, TransactionId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use sqlx::ConnectOptions;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -364,6 +368,13 @@ where
     dyn RdbmsService: RdbmsTypeService<T>,
     E: From<RdbmsError>,
 {
+    // Capture the custom durable invocation that observes the guest task before the first await,
+    // as every direct call does at its initiation.
+    let custom_invocation_context =
+        wasmtime::component::current_guest_task_context::<GuestTaskContext>()
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    let observational_owner =
+        resolve_current_observational_owner(ctx, custom_invocation_context.as_deref())?;
     let begun = DurableCallSession::<T::ConnBeginTransaction, NotCancellable>::begin(
         ctx,
         DurableFunctionType::ReadLocal,
@@ -421,11 +432,14 @@ where
     };
 
     let result = ctx
-        .begin_transaction_function(RdbmsRemoteTransactionHandler::<T>::new(
-            pool_key.clone(),
-            ctx.state.owned_agent_id.agent_id,
-            ctx.state.rdbms_service.clone(),
-        ))
+        .begin_transaction_function(
+            observational_owner,
+            RdbmsRemoteTransactionHandler::<T>::new(
+                pool_key.clone(),
+                ctx.state.owned_agent_id.agent_id,
+                ctx.state.rdbms_service.clone(),
+            ),
+        )
         .await;
 
     match result {

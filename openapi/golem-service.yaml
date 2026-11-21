@@ -15761,6 +15761,8 @@ components:
         componentRevision:
           type: integer
           format: uint64
+        backgroundFailure:
+          $ref: '#/components/schemas/InvocationFailure'
       required:
       - agentId
       - idempotencyKey
@@ -18572,8 +18574,8 @@ components:
     Invocation:
       title: Invocation
       description: |-
-        An invocation with its result. `result` is present once the invocation is `completed` or
-        `failed`; a completed constructor run has no result.
+        An invocation with its result. `result` is present once the invocation is `completed`,
+        `background-failed` or `failed`; a completed constructor run has no result.
       type: object
       properties:
         summary:
@@ -18582,6 +18584,19 @@ components:
           $ref: '#/components/schemas/InvocationOutcome'
       required:
       - summary
+    InvocationBackgroundFailure:
+      title: InvocationBackgroundFailure
+      description: |-
+        The recorded result of an invocation, and the failure of the agent during the invocation's
+        background work after it. `value` is absent for the constructor run.
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
+        error:
+          type: string
+      required:
+      - error
     InvocationFailure:
       title: InvocationFailure
       type: object
@@ -18621,11 +18636,25 @@ components:
           Method: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
           Tool: '#/components/schemas/InvocationOutcome_InvocationToolResult'
           Failure: '#/components/schemas/InvocationOutcome_InvocationFailure'
+          BackgroundFailure: '#/components/schemas/InvocationOutcome_InvocationBackgroundFailure'
       type: object
       oneOf:
       - $ref: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
       - $ref: '#/components/schemas/InvocationOutcome_InvocationToolResult'
       - $ref: '#/components/schemas/InvocationOutcome_InvocationFailure'
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationBackgroundFailure'
+    InvocationOutcome_InvocationBackgroundFailure:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: BackgroundFailure
+            type: string
+            enum:
+            - BackgroundFailure
+        required:
+        - type
+      - $ref: '#/components/schemas/InvocationBackgroundFailure'
     InvocationOutcome_InvocationFailure:
       allOf:
       - type: object
@@ -18686,6 +18715,7 @@ components:
       - retrying
       - interrupted
       - completed
+      - background-failed
       - failed
       - cancelled
     InvocationStatus:
@@ -20010,6 +20040,7 @@ components:
           AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
           AgentInvocationFailed: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
+          AgentInvocationSettled: '#/components/schemas/PublicOplogEntry_r#AgentInvocationSettledParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -20070,6 +20101,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationSettledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -20206,6 +20238,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#AgentInvocationFinishedParams'
+    PublicOplogEntry_r#AgentInvocationSettledParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentInvocationSettled
+            type: string
+            enum:
+            - AgentInvocationSettled
+        required:
+        - type
+      - $ref: '#/components/schemas/r#AgentInvocationSettledParams'
     PublicOplogEntry_r#AgentInvocationStartedParams:
       allOf:
       - type: object
@@ -21717,6 +21761,10 @@ components:
         invocationId:
           $ref: '#/components/schemas/DurableInvocationId'
         observationalOwner:
+          type: integer
+          format: uint64
+        driver:
+          description: The invocation that drives the call when it is not the invocation the call belongs to.
           type: integer
           format: uint64
         carriesRequest:
@@ -23394,6 +23442,7 @@ components:
       - observational-owner
       - request-presence
       - parent
+      - driver
     StoredCard:
       discriminator:
         propertyName: type
@@ -23950,6 +23999,23 @@ components:
       - result
       - consumedFuel
       - componentRevision
+    r#AgentInvocationSettledParams:
+      title: r#AgentInvocationSettledParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocationId:
+          type: string
+          format: uuid
+        consumedFuel:
+          type: integer
+          format: int64
+      required:
+      - timestamp
+      - invocationId
+      - consumedFuel
     r#AgentInvocationStartedParams:
       title: r#AgentInvocationStartedParams
       type: object
@@ -24776,6 +24842,9 @@ components:
         invocationId:
           $ref: '#/components/schemas/DurableInvocationId'
         observationalOwner:
+          type: integer
+          format: uint64
+        driver:
           type: integer
           format: uint64
         request:

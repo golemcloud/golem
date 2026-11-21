@@ -137,6 +137,7 @@ fn start(index: u64, function: &str, request: TypedSchemaValue) -> PublicOplogEn
             function_name: function.to_string(),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(request),
             durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
             span_started: None,
@@ -3807,6 +3808,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
             function_name: fqfn::<host_functions::GolemRpcWasmRpcInvoke>().to_string(),
             invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(1), 3)),
             observational_owner: Some(OplogIndex::from_u64(1)),
+            driver: None,
             request: Some(request(rpc_invoke(SchemaValue::String("MARKER".into())))),
             durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
             span_started: Some(marker_span_started()),
@@ -3835,6 +3837,11 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
             invocation_id: invocation_id(),
             error: "MARKER".into(),
             start_index: OplogIndex::from_u64(3),
+        }),
+        PublicOplogEntry::AgentInvocationSettled(AgentInvocationSettledParams {
+            timestamp: ts(),
+            invocation_id: invocation_id(),
+            consumed_fuel: 0x5EC2E7,
         }),
         PublicOplogEntry::Error(ErrorParams {
             timestamp: ts(),
@@ -3898,6 +3905,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
                         parent_start_index: None,
                         invocation_id: None,
                         observational_owner: None,
+                        driver: None,
                         carries_request: true,
                         request: Some(Box::new(
                             "MARKER".to_string().into_typed_schema_value().unwrap(),
@@ -4261,7 +4269,7 @@ fn every_entry_kind_has_no_marker() {
         .iter()
         .map(|e| e.entry.entry_type().to_string())
         .collect();
-    assert_eq!(kinds.len(), 57, "{kinds:?}");
+    assert_eq!(kinds.len(), 58, "{kinds:?}");
     let secrets = every_entry_kind_secrets();
     for entry in &entries {
         let out = rendered(KeepFlags::default(), entry, None);
@@ -4345,6 +4353,10 @@ fn every_entry_kind_keeps_metadata() {
     assert_eq!(field(&failed.entry, "startIndex"), &super::value::number(3));
     assert!(
         matches!(field(&failed.entry, "invocationId"), ReportNode::Str(s) if s.token.is_some() && s.value.is_none())
+    );
+    let settled = render("AgentInvocationSettled");
+    assert!(
+        matches!(field(&settled.entry, "invocationId"), ReportNode::Str(s) if s.token.is_some() && s.value.is_none())
     );
     let error = render("Error");
     let retry = serde_json::to_value(field(&error.entry, "retryPolicyState")).unwrap();

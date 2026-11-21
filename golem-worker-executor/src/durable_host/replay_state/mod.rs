@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::QuotaClass;
+use crate::durable_host::attribution::ExportReturned;
 use crate::durable_host::concurrent::{ReplayCallHandle, Resolution, ResolutionOutcome};
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::card::{CardHolder, CardId, InvocationWalletPin, StoredCard};
@@ -184,6 +185,7 @@ impl BlockedOn {
 mod abandoned;
 mod claims;
 mod cursor;
+mod owners;
 mod resolution;
 mod starts;
 
@@ -318,8 +320,31 @@ type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIn
 type StreamObservationPositions = std::collections::BTreeMap<OplogIndex, Option<OplogIndex>>;
 type StartsByInvocationId =
     HashMap<DurableInvocationId, std::collections::BTreeMap<OplogIndex, claims::RecordedStart>>;
-// Terminal index -> local-failure invocation anchor; successful terminals have no anchor.
-type InvocationFinishes = std::collections::BTreeMap<OplogIndex, Option<OplogIndex>>;
+type InvocationFinishes = std::collections::BTreeMap<OplogIndex, InvocationBoundary>;
+
+/// The kind of an invocation boundary in [`InvocationFinishes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InvocationBoundary {
+    /// An `AgentInvocationStarted`.
+    Started,
+    /// An `AgentInvocationFinished`.
+    Finished,
+    /// An `AgentInvocationFailed` that no entity body recorded.
+    LocalFailure,
+    /// An `AgentInvocationSettled`.
+    Settled,
+}
+
+/// Where [`ReplayState::close_invocation_anchor`] found the end of an invocation's background
+/// work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettledAt {
+    /// The `AgentInvocationSettled` of the invocation is at this index.
+    Recorded(OplogIndex),
+    /// The replay range ends before the invocation's `AgentInvocationSettled`. The live run
+    /// appends it.
+    ReplayTail,
+}
 
 /// The recovery metadata that one scan of a visible oplog range collects.
 struct ScannedRecoveryMetadata {
@@ -610,10 +635,12 @@ struct ReplayCursor {
     /// extended by the scan of exactly the newly visible range when the replay target grows. A
     /// claim of an identified call looks its `Start` up here instead of scanning the oplog.
     start_invocation_ids: std::sync::Mutex<StartsByInvocationId>,
-    /// The visible invocation terminal positions up to the replay target. Built and kept in
-    /// sync with the visible prefix by the same scans as the delivery markers; an entry in a
-    /// deleted region is not visible. A delivery wait looks up its invocation boundary here
-    /// instead of reading the oplog.
+    /// The visible invocation boundary positions up to the replay target: the
+    /// `AgentInvocationStarted` entries, the invocation terminals and the
+    /// `AgentInvocationSettled` entries. Built and kept in sync with the
+    /// visible prefix by the same scans as the delivery markers; an entry in a deleted region is
+    /// not visible. A delivery wait looks up its invocation boundary here instead of reading the
+    /// oplog.
     invocation_finishes: std::sync::Mutex<InvocationFinishes>,
     /// Published physical and claimed positions. Lock-free reads; writes hold `state`.
     position: PublishedPosition,
@@ -867,6 +894,104 @@ struct CursorState {
     /// them again. The map stores every known member index for each root so nested descendants
     /// can be recognized by parent.
     custom_subtrees: HashMap<OplogIndex, HashSet<OplogIndex>>,
+    /// The anchors (`AgentInvocationStarted` indexes) of the agent-method and constructor
+    /// invocations whose background work may still replay. Opened by
+    /// [`ReplayState::open_invocation_anchor`], removed by
+    /// [`ReplayState::close_invocation_anchor`].
+    open_anchors: std::collections::BTreeMap<OplogIndex, OpenInvocation>,
+    /// The owners of the committed `Start`s, and the invocations that closed.
+    owners: owners::OwnerMap,
+    /// The `AgentInvocationSettled` entries the cursor committed or skipped as hints, with their
+    /// invocation ids. Entries no open or later anchor can need are pruned when an anchor closes.
+    settled_invocations: std::collections::BTreeMap<OplogIndex, golem_common::model::InvocationId>,
+    /// The index and invocation id of the last `AgentInvocationStarted` the cursor committed.
+    last_started_invocation: Option<(OplogIndex, golem_common::model::InvocationId)>,
+}
+
+/// One entry of [`CursorState::open_anchors`].
+#[derive(Debug)]
+struct OpenInvocation {
+    invocation_id: golem_common::model::InvocationId,
+    export_returned: ExportReturned,
+}
+
+/// Whether `entry` is the primary invocation terminal (`AgentInvocationFinished`, or an
+/// `AgentInvocationFailed` that no entity body recorded) of `invocation_id`.
+fn is_invocation_terminal_of(
+    entry: &OplogEntry,
+    invocation_id: &golem_common::model::InvocationId,
+) -> bool {
+    primary_invocation_terminal_id(entry) == Some(invocation_id)
+}
+
+fn primary_invocation_terminal_id(
+    entry: &OplogEntry,
+) -> Option<&golem_common::model::InvocationId> {
+    match entry {
+        OplogEntry::AgentInvocationFinished { invocation_id, .. }
+        | OplogEntry::AgentInvocationFailed {
+            entity_parent_start_index: None,
+            invocation_id,
+            ..
+        } => Some(invocation_id),
+        _ => None,
+    }
+}
+
+impl CursorState {
+    /// The open anchor of the invocation `invocation_id`.
+    fn open_invocation(
+        &self,
+        invocation_id: &golem_common::model::InvocationId,
+    ) -> Option<(OplogIndex, &OpenInvocation)> {
+        self.open_anchors
+            .iter()
+            .find(|(_, open)| open.invocation_id == *invocation_id)
+            .map(|(anchor, open)| (*anchor, open))
+    }
+
+    /// Whether `invocation_id` names the invocation of an open anchor.
+    fn is_open_invocation(&self, invocation_id: &golem_common::model::InvocationId) -> bool {
+        self.open_invocation(invocation_id).is_some()
+    }
+
+    /// Whether `entry` is the primary invocation terminal of an open anchor whose export
+    /// returned. Only the open-anchor reader consumes such a terminal.
+    fn is_returned_open_invocation_terminal(&self, entry: &OplogEntry) -> bool {
+        primary_invocation_terminal_id(entry)
+            .and_then(|id| self.open_invocation(id))
+            .is_some_and(|(_, open)| open.export_returned.is_marked())
+    }
+
+    /// Whether the entry buffered at the cursor head is the primary invocation terminal of an
+    /// open anchor whose export returned.
+    fn returned_open_invocation_terminal_at_head(&self) -> bool {
+        self.replay_buffer
+            .front()
+            .is_some_and(|(_, entry)| self.is_returned_open_invocation_terminal(entry))
+    }
+
+    /// The index of the `AgentInvocationSettled` of `invocation_id` that the cursor committed or
+    /// skipped after `anchor`.
+    fn settled_after(
+        &self,
+        anchor: OplogIndex,
+        invocation_id: &golem_common::model::InvocationId,
+    ) -> Option<OplogIndex> {
+        self.settled_invocations
+            .range(anchor.next()..)
+            .find(|(_, settled)| *settled == invocation_id)
+            .map(|(index, _)| *index)
+    }
+
+    /// The first `AgentInvocationSettled` of any invocation that the cursor committed or skipped
+    /// after `anchor`.
+    fn first_settled_after(&self, anchor: OplogIndex) -> Option<OplogIndex> {
+        self.settled_invocations
+            .range(anchor.next()..)
+            .next()
+            .map(|(index, _)| *index)
+    }
 }
 
 /// One retained entry of [`CursorState::starts`].
@@ -902,10 +1027,6 @@ impl RetainedStartCounts {
         self.total.store(retained.total, Ordering::Release);
         self.http.store(retained.http, Ordering::Release);
         self.rpc.store(retained.rpc, Ordering::Release);
-    }
-
-    fn clear(&self) {
-        self.publish(&starts::RetainedSummary::default());
     }
 
     fn any(&self) -> bool {

@@ -414,6 +414,7 @@ impl Walker<'_, '_> {
                         "observationalOwner",
                         call.observational_owner.as_ref().map(idx),
                     )
+                    .opt("driver", call.driver.as_ref().map(idx))
                     .add("carriesRequest", flag(call.carries_request))
                     .opt("request", request)
                     .build();
@@ -902,6 +903,7 @@ impl Walker<'_, '_> {
                 function_name,
                 invocation_id,
                 observational_owner,
+                driver,
                 request,
                 durable_function_type,
                 span_started,
@@ -921,6 +923,7 @@ impl Walker<'_, '_> {
                         }),
                 )
                 .opt("observationalOwner", observational_owner.as_ref().map(idx))
+                .opt("driver", driver.as_ref().map(idx))
                 .opt(
                     "request",
                     request
@@ -1014,6 +1017,14 @@ impl Walker<'_, '_> {
                 .add("invocationId", self.tok(invocation_id))
                 .add("error", self.agent_error_message(error))
                 .add("startIndex", idx(start_index))
+                .build(),
+            PublicOplogEntry::AgentInvocationSettled(AgentInvocationSettledParams {
+                timestamp: _,
+                invocation_id,
+                consumed_fuel,
+            }) => Fields::new()
+                .add("invocationId", self.tok(invocation_id))
+                .add("consumedFuel", self.int(*consumed_fuel))
                 .build(),
             PublicOplogEntry::Suspend(SuspendParams { timestamp: _ })
             | PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp: _ })

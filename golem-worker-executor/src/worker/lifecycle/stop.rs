@@ -724,6 +724,24 @@ pub(in crate::worker) fn invocation_keys_to_fail(
     keys
 }
 
+/// The invocations that giving up on the agent fails: `current` first, then the pending
+/// invocations and the current invocation of `status`. When `current` recorded its result
+/// (`current_recorded`), it keeps that result and is not failed.
+pub(in crate::worker) fn invocation_keys_failed_on_giving_up(
+    status: &AgentStatusRecord,
+    current: Option<&InvocationId>,
+    current_recorded: bool,
+) -> Vec<InvocationId> {
+    if current_recorded {
+        invocation_keys_to_fail(status, None, true)
+            .into_iter()
+            .filter(|key| Some(key) != current)
+            .collect()
+    } else {
+        invocation_keys_to_fail(status, current, true)
+    }
+}
+
 impl UnloadReason {
     pub(in crate::worker) fn release_cause(self) -> crate::metrics::resource_release::Cause {
         use crate::metrics::resource_release::Cause;

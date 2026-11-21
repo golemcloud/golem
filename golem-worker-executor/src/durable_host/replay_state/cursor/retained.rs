@@ -136,12 +136,34 @@ impl RetainedClaims<'_> {
     }
 }
 
+/// Rejects folding or releasing the unclaimed `Start` at `index` when its commit has replay
+/// effects: a fork the replayed guest never requested must not be applied.
+fn reject_unclaimed_replay_effect(
+    index: OplogIndex,
+    entry: &OplogEntry,
+) -> Result<(), WorkerExecutorError> {
+    match entry {
+        OplogEntry::Start { function_name, .. } if !AbandonedStarts::can_drain(function_name) => {
+            Err(boundary_divergence(
+                index,
+                format!(
+                    "unclaimed {function_name:?} Start at {index} — a replay-side-effecting record \
+                     cannot be tolerated as abandoned"
+                ),
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
 impl CursorTx<'_> {
     /// Whether a `Start` nobody has claimed yet may be committed past and retained for its owner
-    /// instead of being handed to (or parking) the reader that reached it. Only replay-inert
-    /// `Start`s qualify; see [`AbandonedStarts::can_drain`] for the excluded commit effects.
+    /// instead of being handed to (or parking) the reader that reached it. Every `Start`
+    /// qualifies: its owner claims it by identity, and the replay events of its commit are
+    /// deferred until that claim. A `Start` whose commit has replay effects is never folded as
+    /// abandoned instead (see [`AbandonedStarts::can_drain`]).
     pub(in crate::durable_host::replay_state) fn is_retainable_start(entry: &OplogEntry) -> bool {
-        matches!(entry, OplogEntry::Start { function_name, .. } if AbandonedStarts::can_drain(function_name))
+        matches!(entry, OplogEntry::Start { .. })
     }
 
     fn publish_retained_count(&mut self) {
@@ -219,13 +241,28 @@ impl CursorTx<'_> {
         Ok(true)
     }
 
-    /// Moves every retained `Start` into the invocation-boundary abandoned-record tolerance. The
-    /// replayed guest has produced its invocation result, so no owner can claim them anymore.
+    /// Moves the retained `Start`s at the `selection` indices, which a close classified as its
+    /// own, into the invocation-boundary abandoned-record tolerance: their invocation and its
+    /// background work have ended, so no owner can claim them anymore.
     pub(super) fn fold_retained_into_abandoned(
         &mut self,
         abandoned: &mut AbandonedStarts,
+        selection: &std::collections::BTreeSet<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
-        let retained = self.st.starts.take_retained();
+        for (idx, start) in self.st.starts.retained_iter() {
+            if selection.contains(idx) {
+                reject_unclaimed_replay_effect(*idx, &start.entry)?;
+            }
+        }
+        let all = self.st.starts.take_retained();
+        let mut retained = std::collections::BTreeMap::new();
+        for (idx, start) in all {
+            if selection.contains(&idx) {
+                retained.insert(idx, start);
+            } else {
+                self.st.starts.insert_retained(idx, start);
+            }
+        }
         self.publish_retained_count();
         for (idx, retained) in retained {
             let OplogEntry::Start {
@@ -617,9 +654,9 @@ impl ReplayState {
         self.cursor.unclaimed_retained_starts.any_charged_to(quota)
     }
 
-    /// Releases every still-retained `Start` when a live primary invocation finishes. The
-    /// recorded prefix those `Start`s came from belongs to the invocation that just produced its
-    /// result, so no replayed owner can claim them anymore; keeping them would make every later
+    /// Releases the retained `Start`s of the invocation that reached the replay tail when its live
+    /// primary invocation finishes. The primary guest tasks of that invocation have exited, so no
+    /// replayed owner can claim its own `Start`s anymore; keeping them would make every later
     /// durable call take the replay admission path (see `WorkerState::durable_call_is_live`) for
     /// nothing. Mirrors the invocation-boundary tolerance of [`AbandonedStarts`] for a replayed
     /// finish, including its structural rule: every released `Start` must already be closed by a
@@ -627,8 +664,9 @@ impl ReplayState {
     /// a warning, because appending `AgentInvocationFinished` after it would make the next
     /// reconstruction's boundary read reject the history deterministically.
     ///
-    /// Nothing is released while an entity body is still being reconstructed: a retained `Start`
-    /// may be a descendant of that body whose owner has not been admitted yet.
+    /// A `Start` under an entity body that can still claim it, and a `Start` of another open
+    /// invocation, stays retained. An unclaimed fork is a divergence, and its deferred
+    /// `ForkReplayed` is never published.
     pub(crate) async fn release_retained_starts_at_live_invocation_end(
         &self,
     ) -> Result<(), WorkerExecutorError> {
@@ -638,28 +676,44 @@ impl ReplayState {
         let owned_agent_id = self.cursor.owned_agent_id.clone();
         self.run_owned_cursor_op(move |state| async move {
             let mut st = state.cursor.state.lock().await;
-            if !state
-                .cursor
-                .reconstruction_claims
-                .subscribe_bodies()
-                .borrow()
-                .is_empty()
-            {
+            let ending = st.last_started_invocation.map(|(started, _)| started);
+            let mut own = Vec::new();
+            let mut waiting = false;
+            let retained: Vec<OplogIndex> = st.starts.retained_keys().copied().collect();
+            for index in retained {
+                let class = match ending {
+                    Some(ending) => st.classify(
+                        &state.cursor.reconstruction_claims,
+                        index,
+                        ending,
+                        Some(ending),
+                    ),
+                    None => Ok(Class::Own),
+                };
+                match class {
+                    Ok(Class::Own) => own.push(index),
+                    Ok(Class::Wait) => waiting = true,
+                    Ok(Class::Keep) => {}
+                    Err(divergence) => return Err(boundary_divergence(index, divergence)),
+                }
+            }
+            for index in &own {
+                reject_unclaimed_replay_effect(*index, &st.starts.get_retained(index).unwrap().entry)?;
+            }
+            if waiting {
                 tracing::debug!(
                     retained = st.starts.retained_len(),
-                    "Keeping unclaimed retained Starts across a live invocation end while an entity body is still reconstructing"
+                    "Keeping retained Starts under entity bodies that can still claim them across a live invocation end"
                 );
-                return Ok(());
             }
             // A retained `Start` normally has its terminal attached when the cursor commits past
             // it. Replay may still have clamped the head to the target without reading every
             // entry in between, so an unattached terminal is looked up in the recorded prefix
             // before the `Start` is declared unclosed.
-            let mut unclosed: HashSet<OplogIndex> = st
-                .starts
-                .retained_iter()
-                .filter(|(_, retained)| retained.terminal.is_none())
-                .map(|(idx, _)| *idx)
+            let mut unclosed: HashSet<OplogIndex> = own
+                .iter()
+                .copied()
+                .filter(|idx| st.starts.get_retained(idx).unwrap().terminal.is_none())
                 .collect();
             let replay_target = state.cursor.replay_target();
             if let Some(first_unclosed) = unclosed.iter().min().copied() {
@@ -709,8 +763,21 @@ impl ReplayState {
                     ),
                 ));
             }
-            let released = st.starts.take_retained();
-            state.cursor.unclaimed_retained_starts.clear();
+            let released: std::collections::BTreeMap<OplogIndex, RetainedStart> = own
+                .iter()
+                .map(|idx| (*idx, st.starts.remove_retained(idx).unwrap()))
+                .collect();
+            state
+                .cursor
+                .unclaimed_retained_starts
+                .publish(st.starts.retained_summary());
+            if !waiting && let Some(ending) = ending {
+                let st = &mut *st;
+                // The live run appends the settlement after the replay target.
+                st.owners.close(ending, replay_target.next(), |index| {
+                    st.starts.get_retained(&index).is_some()
+                });
+            }
             if released.is_empty() {
                 return Ok(());
             }

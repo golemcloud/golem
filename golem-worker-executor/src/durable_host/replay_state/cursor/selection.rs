@@ -39,6 +39,7 @@ pub(in crate::durable_host::replay_state) fn scope_entry_owner(
         OplogEntry::Create { .. }
         | OplogEntry::AgentInvocationStarted { .. }
         | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::AgentInvocationSettled { .. }
         | OplogEntry::AgentInvocationFailed { .. }
         | OplogEntry::Suspend { .. }
         | OplogEntry::RecoverySucceeded { .. }
@@ -111,6 +112,7 @@ pub(in crate::durable_host::replay_state) fn terminal_start_index(
         | OplogEntry::CompletionDelivered { .. }
         | OplogEntry::AgentInvocationStarted { .. }
         | OplogEntry::AgentInvocationFinished { .. }
+        | OplogEntry::AgentInvocationSettled { .. }
         | OplogEntry::AgentInvocationFailed { .. }
         | OplogEntry::Suspend { .. }
         | OplogEntry::Error { .. }
@@ -173,7 +175,9 @@ pub(super) fn start_invocation_id(entry: &OplogEntry) -> Option<DurableInvocatio
 }
 
 /// Whether `entry` is the `Start` of an entity invocation, accepted or rejected.
-pub(super) fn is_entity_invocation_start(entry: &OplogEntry) -> bool {
+pub(in crate::durable_host::replay_state) fn is_entity_invocation_start(
+    entry: &OplogEntry,
+) -> bool {
     matches!(
         entry,
         OplogEntry::Start {
@@ -186,7 +190,9 @@ pub(super) fn is_entity_invocation_start(entry: &OplogEntry) -> bool {
 
 /// Whether `entry` is the `Start` of a custom durable invocation: a numbered call `Start` of a
 /// guest-named function. Scopes share the naming but record no request.
-pub(super) fn is_custom_invocation_start(entry: &OplogEntry) -> bool {
+pub(in crate::durable_host::replay_state) fn is_custom_invocation_start(
+    entry: &OplogEntry,
+) -> bool {
     matches!(
         entry,
         OplogEntry::Start {
@@ -276,33 +282,6 @@ pub(in crate::durable_host::replay_state) fn missing_start_waits_for(
 }
 
 impl CursorTx<'_> {
-    /// An entity Store can append its first positional record before the asynchronously enqueued
-    /// invocation `Start` is assigned its oplog index. The record carries that reserved future
-    /// index as its owner, so leave it for the body while the identity claim scans ahead to the
-    /// `Start`. This is accepted only when the referenced index is replay-visible and names an
-    /// entity invocation claim; arbitrary forward attribution must not turn corrupt history into
-    /// a wait.
-    pub(super) async fn future_entity_start_can_be_claimed(
-        &self,
-        head_idx: OplogIndex,
-        owner: OplogIndex,
-    ) -> Result<bool, UnreadableOplog> {
-        if owner <= head_idx
-            || owner > self.cursor.replay_target()
-            || self.st.skipped_regions.is_in_deleted_region(owner)
-        {
-            return Ok(false);
-        }
-        Ok(matches!(
-            self.cursor.oplog.read(owner).await?,
-            OplogEntry::Start {
-                function_name: HostFunctionName::GolemEntityInvoke
-                    | HostFunctionName::GolemToolInvocationRejected,
-                ..
-            }
-        ))
-    }
-
     /// The owner named by the entry buffered at the cursor head, when the buffer holds the next
     /// entry after the cursor and the head path stops at it (the claim's head fast path leaves it
     /// there).
@@ -404,6 +383,7 @@ impl CursorTx<'_> {
             }
             match self.sibling_record_at_head().await? {
                 SiblingRecord::Retain(index, entry) => {
+                    self.validate_start_owner(index, &entry)?;
                     self.retain_start(index, entry.clone());
                     self.commit_retained_entry(index, &entry).await?;
                 }
@@ -418,6 +398,14 @@ impl CursorTx<'_> {
             claim.expected_parent_start_index(),
         ) {
             Some(bodies) => Ok(MissingStart::Blocked(BlockedOn::ActiveBody(bodies))),
+            // The export of an open invocation returned and its terminal is at the head: a call
+            // of the invocation's background work can have its `Start` after that terminal, so
+            // the claim is decided once the primary Store read the terminal. Before the export
+            // returned, every replayed call is one the live run made before the export returned,
+            // and its `Start` precedes the terminal.
+            None if self.st.returned_open_invocation_terminal_at_head() => {
+                Ok(MissingStart::Blocked(BlockedOn::CursorProgress))
+            }
             None => {
                 // The first unconsumed entry that the claiming owner would consume next.
                 let (index, entry) = match self.st.replay_buffer.front() {

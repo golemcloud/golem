@@ -255,6 +255,7 @@ mod tests {
             function_name,
             invocation_id: None,
             observational_owner: observational.then(|| OplogIndex::from_u64(1)),
+            driver: None,
             request: request.map(|request| OplogPayload::Inline(Box::new(request))),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,

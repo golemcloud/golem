@@ -182,6 +182,11 @@ pub(super) struct BegunCallExecutionScope {
     /// Invocation id of the guest call, recorded in every `Start` of the call; see
     /// [`InvocationIdSource`].
     pub(super) invocation_id: Option<DurableInvocationId>,
+    /// The `AgentInvocationStarted` index of the invocation that drives the call when it is not
+    /// the invocation the call's records are numbered under: a store task of an earlier
+    /// invocation resumed by a later one. Recorded in the `Start` as its `driver`, and checked
+    /// against the recorded `driver` on replay.
+    pub(super) driver: Option<OplogIndex>,
     /// The entity logical position of the call's idempotency key. A Store-holding call takes it
     /// when it begins, in guest call order, so live execution and replay agree on it. `None`
     /// outside an entity Store with logical key positions, and for accessor calls.

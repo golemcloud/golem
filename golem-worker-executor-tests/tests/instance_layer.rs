@@ -290,7 +290,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
     let mut live_initializer_calls = Vec::new();
     let mut live_decisions = Vec::new();
     for historical in [false, true] {
-        let parent_start = active.execution().oplog().current_oplog_index().await;
+        let parent_start = stage_invocation_started(&active).await?;
         let parent_id = OwnerInvocationId::Agent(parent_start);
         let parent = active
             .execution()
@@ -355,10 +355,14 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                 .execution()
                 .install_replay_generation(
                     DeletedRegions::from_regions([OplogRegion::from_index_range(
-                        OplogIndex::INITIAL.next()..=parent_start,
+                        OplogIndex::INITIAL.next()..=parent_start.previous(),
                     )]),
                     None,
                 )
+                .await?;
+            active
+                .execution()
+                .test_replay_invocation_started(parent_start)
                 .await?;
             let claim = active
                 .execution()
@@ -481,6 +485,7 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
                 .collect();
         }
         drop(parent);
+        settle_staged_invocation(&active, parent_start).await?;
     }
     Ok(())
 }
@@ -558,6 +563,7 @@ async fn record_entity_call(
             function_name,
             invocation_id: Some(DurableInvocationId::new(entity_start, ordinal)),
             observational_owner: None,
+            driver: None,
             request,
             durable_function_type,
             span_started: None,
@@ -1199,7 +1205,7 @@ async fn initialize_entity(
         &metadata,
         &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
     )?;
-    let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
+    let result = invoke_observed_and_traced(lowered, store, instance, None, None).await?;
     match result {
         InvokeResult::Succeeded { result, .. }
             if matches!(*result, AgentInvocationResult::AgentInitialization) =>
@@ -1240,7 +1246,7 @@ async fn invoke_sleep_p3(
         &metadata,
         &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
     )?;
-    let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
+    let result = invoke_observed_and_traced(lowered, store, instance, None, None).await?;
     assert!(matches!(
         result,
         InvokeResult::Succeeded { result, .. }
@@ -1277,7 +1283,7 @@ async fn invoke_entity_method(
         &metadata,
         &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
     )?;
-    match invoke_observed_and_traced(lowered, store, instance, None).await? {
+    match invoke_observed_and_traced(lowered, store, instance, None, None).await? {
         InvokeResult::Succeeded { result, .. } => Ok(*result),
         result => Err(
             golem_service_base::error::worker_executor::WorkerExecutorError::runtime(format!(
@@ -1456,7 +1462,7 @@ where
         -> Pin<Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>>,
 {
     let lane = active_agent.execution().lane();
-    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(active_agent).await?;
     let parent_id = OwnerInvocationId::Agent(parent_start);
     let parent = lane
         .enter_primary(parent_start)
@@ -1492,14 +1498,116 @@ where
     )?;
 
     let result = body.await_result(&parent_id).await;
+    drop(parent);
     if result.is_ok() {
         finish_entity_boundary(active_agent, parent_start.next()).await?;
+        settle_staged_invocation(active_agent, parent_start).await?;
     }
-    drop(parent);
     result
 }
 
-/// Records a boundary for a staged body, not an executor recovery or tool dispatch.
+/// The last entry of the owner's oplog that `matches`.
+async fn last_recorded(
+    active: &ActiveAgent<TestWorkerCtx>,
+    matches: impl Fn(&OplogEntry) -> bool,
+) -> Option<OplogEntry> {
+    let oplog = active.execution().oplog();
+    let tip = oplog.current_oplog_index().await;
+    oplog
+        .read_exact(OplogIndex::INITIAL, u64::from(tip))
+        .await
+        .unwrap()
+        .into_values()
+        .rev()
+        .find(|entry| matches(entry))
+}
+
+/// Appends the `AgentInvocationStarted` of a new invocation that repeats the payload of the last
+/// recorded invocation, pinned to the current wallet as an admitted invocation is, and returns
+/// its index. Tests stage an entity boundary under it as the entity call of that invocation, and
+/// end it with [`settle_staged_invocation`].
+async fn stage_invocation_started(
+    active: &ActiveAgent<TestWorkerCtx>,
+) -> Result<OplogIndex, WorkerExecutorError> {
+    let Some(OplogEntry::AgentInvocationStarted {
+        operation,
+        payload,
+        trace_id,
+        trace_states,
+        invocation_context,
+        ..
+    }) = last_recorded(active, |entry| {
+        matches!(entry, OplogEntry::AgentInvocationStarted { .. })
+    })
+    .await
+    else {
+        panic!("staging an invocation needs a recorded invocation to repeat");
+    };
+    let wallet_pin = active.execution().test_current_wallet_pin().await?;
+    Ok(active
+        .execution()
+        .oplog()
+        .add(OplogEntry::AgentInvocationStarted {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            invocation_id: InvocationId(uuid::Uuid::new_v4()),
+            operation,
+            payload,
+            trace_id,
+            trace_states,
+            invocation_context,
+            wallet_pin: Box::new(wallet_pin),
+        })
+        .await?)
+}
+
+/// Records the result and the settlement of the invocation that [`stage_invocation_started`]
+/// staged at `anchor`, repeating the result of the last recorded invocation.
+async fn settle_staged_invocation(
+    active: &ActiveAgent<TestWorkerCtx>,
+    anchor: OplogIndex,
+) -> Result<(), WorkerExecutorError> {
+    let oplog = active.execution().oplog();
+    let OplogEntry::AgentInvocationStarted { invocation_id, .. } =
+        oplog.read(anchor).await.unwrap()
+    else {
+        panic!("expected a staged AgentInvocationStarted at {anchor}");
+    };
+    let Some(OplogEntry::AgentInvocationFinished {
+        result,
+        method_name,
+        component_revision,
+        ..
+    }) = last_recorded(active, |entry| {
+        matches!(entry, OplogEntry::AgentInvocationFinished { .. })
+    })
+    .await
+    else {
+        panic!("settling a staged invocation needs a recorded result to repeat");
+    };
+    oplog
+        .add(OplogEntry::AgentInvocationFinished {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            invocation_id,
+            result,
+            method_name,
+            consumed_fuel: 0,
+            component_revision,
+            awaits_settlement: true,
+        })
+        .await?;
+    oplog
+        .add(OplogEntry::AgentInvocationSettled {
+            timestamp: golem_common::model::Timestamp::now_utc(),
+            invocation_id,
+            consumed_fuel: 0,
+        })
+        .await?;
+    Ok(())
+}
+
+/// Records a boundary for a staged body, not an executor recovery or tool dispatch. The scope's
+/// parent is the `AgentInvocationStarted` that [`stage_invocation_started`] staged, or the
+/// `Start` of an enclosing entity body, as a production entity call records it.
 async fn stage_entity_boundary(
     active: &ActiveAgent<TestWorkerCtx>,
     scope: &EntityInvocationScope,
@@ -1579,6 +1687,7 @@ async fn stage_entity_boundary(
             function_name: HostFunctionName::GolemEntityInvoke,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(
                 HostRequest::EntityInvocation(HostRequestEntityInvocation {
                     metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
@@ -1609,6 +1718,7 @@ async fn record_entity_self_wallet(
             function_name: HostFunctionName::GolemPermissionsSelfWallet,
             invocation_id: Some(DurableInvocationId::new(entity_start_index, ordinal)),
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
@@ -1653,6 +1763,7 @@ async fn record_live_card_liveness(
             function_name: HostFunctionName::GolemPermissionsCardLiveness,
             invocation_id: Some(DurableInvocationId::new(entity_start, ordinal)),
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(
                 HostRequest::PermissionCardLiveness(HostRequestPermissionCardLiveness {
                     card_id: card.card_id().0,
@@ -1817,7 +1928,7 @@ async fn completed_entity_replay_rejects_positional_calls(
         ExecutableTarget::new(component.id, component.revision),
         ToolMiddlewareName::try_from("completed-positional-tail").unwrap(),
     ));
-    let parent_start = active.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(&active).await?;
     let entity_start = parent_start.next();
     let parent_id = OwnerInvocationId::Agent(parent_start);
     let lane = active.execution().lane();
@@ -1865,12 +1976,16 @@ async fn completed_entity_replay_rejects_positional_calls(
         .execution()
         .install_replay_generation(
             DeletedRegions::from_regions([OplogRegion::from_index_range(
-                OplogIndex::INITIAL.next()..=parent_start,
+                OplogIndex::INITIAL.next()..=parent_start.previous(),
             )]),
             None,
         )
         .await?;
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    active
+        .execution()
+        .test_replay_invocation_started(parent_start)
+        .await?;
     let claim = active
         .execution()
         .test_claim_entity_boundary(parent_start)
@@ -1942,6 +2057,7 @@ async fn completed_entity_replay_rejects_positional_calls(
         .test_settle_entity_boundary(claim)
         .await?;
     drop(replay_primary);
+    settle_staged_invocation(&active, parent_start).await?;
     Ok(())
 }
 
@@ -1980,7 +2096,7 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
         ExecutableTarget::new(component.id, component.revision),
         name,
     ));
-    let parent_start = active.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(&active).await?;
     let entity_start = parent_start.next();
     let parent_id = OwnerInvocationId::Agent(parent_start);
     let lane = active.execution().lane();
@@ -2000,6 +2116,10 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
     for replay in [false, true] {
         let primary = lane.enter_primary(parent_start)?.acquire().await?;
         let claim = if replay {
+            active
+                .execution()
+                .test_replay_invocation_started(parent_start)
+                .await?;
             Some(
                 active
                     .execution()
@@ -2150,13 +2270,14 @@ async fn retry_decisions_replay_jitter_and_typed_errors(
                 .execution()
                 .install_replay_generation(
                     DeletedRegions::from_regions([OplogRegion::from_index_range(
-                        OplogIndex::INITIAL.next()..=parent_start,
+                        OplogIndex::INITIAL.next()..=parent_start.previous(),
                     )]),
                     None,
                 )
                 .await?;
         }
     }
+    settle_staged_invocation(&active, parent_start).await?;
     Ok(())
 }
 
@@ -2260,7 +2381,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         category: None,
     };
     let lane = active_agent.execution().lane();
-    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(&active_agent).await?;
     let entity_start = parent_start.next();
     let parent_id = OwnerInvocationId::Agent(parent_start);
 
@@ -2365,7 +2486,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         .execution()
         .install_replay_generation(
             DeletedRegions::from_regions([
-                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=parent_start),
+                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=parent_start.previous()),
                 OplogRegion::from_index_range(config_end..=live_tip),
             ]),
             None,
@@ -2373,6 +2494,10 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         .await?;
 
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(parent_start)
+        .await?;
     let claim = active_agent
         .execution()
         .test_claim_entity_boundary(parent_start)
@@ -2427,6 +2552,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         .test_settle_entity_boundary(claim)
         .await?;
     drop(replay_primary);
+    settle_staged_invocation(&active_agent, parent_start).await?;
     assert!(
         matches!(
             recorded,
@@ -2539,7 +2665,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         category: None,
     };
     let lane = active_agent.execution().lane();
-    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(&active_agent).await?;
     let entity_start = parent_start.next();
     let parent_id = OwnerInvocationId::Agent(parent_start);
 
@@ -2625,7 +2751,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         .execution()
         .install_replay_generation(
             DeletedRegions::from_regions([
-                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=parent_start),
+                OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=parent_start.previous()),
                 OplogRegion::from_index_range(reveal_end..=live_tip),
             ]),
             None,
@@ -2637,6 +2763,10 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
             .await?;
     }
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(parent_start)
+        .await?;
     let claim = active_agent
         .execution()
         .test_claim_entity_boundary(parent_start)
@@ -2690,6 +2820,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         .test_settle_entity_boundary(claim)
         .await?;
     drop(replay_primary);
+    settle_staged_invocation(&active_agent, parent_start).await?;
     if fail_authority_check {
         let error = replay_result.expect_err("authority synchronization failure must escape");
         let error = format!("{error:?}");
@@ -3669,7 +3800,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
     // restart and interrupt of nested entity bodies are covered with real guest tool calls by
     // `owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity_admission`.
     let lane = active_agent.execution().lane();
-    let root_start = active_agent.execution().oplog().current_oplog_index().await;
+    let root_start = stage_invocation_started(&active_agent).await?;
     let root_id = OwnerInvocationId::Agent(root_start);
     let root = lane.enter_primary(root_start)?.acquire().await?;
     let middleware_start = root_start.next();
@@ -3782,6 +3913,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         .expect("nested tool must wait for its release");
     middleware.await_result(&root_id).await?;
     drop(root);
+    settle_staged_invocation(&active_agent, root_start).await?;
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while active_agent
             .entity_metadata()
@@ -3795,7 +3927,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
     .await
     .expect("completed Stores leave only vacant in-memory slots, never durable child status");
 
-    let delete_parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let delete_parent_start = stage_invocation_started(&active_agent).await?;
     let delete_parent = OwnerInvocationId::Agent(delete_parent_start);
     let delete_parent_permit = lane.enter_primary(delete_parent_start)?.acquire().await?;
     let delete_start = delete_parent_start.next();
@@ -4040,7 +4172,7 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         FilesystemCapability::Capable,
     ));
     let lane = active_agent.execution().lane();
-    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let parent_start = stage_invocation_started(&active_agent).await?;
     let entity_start = parent_start.next();
     let parent_id = OwnerInvocationId::Agent(parent_start);
 
@@ -4106,13 +4238,17 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         .execution()
         .install_replay_generation(
             DeletedRegions::from_regions([OplogRegion::from_index_range(
-                OplogIndex::INITIAL.next()..=parent_start,
+                OplogIndex::INITIAL.next()..=parent_start.previous(),
             )]),
             None,
         )
         .await?;
 
     let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(parent_start)
+        .await?;
     let claim = active_agent
         .execution()
         .test_claim_entity_boundary(parent_start)
@@ -4169,6 +4305,7 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         .test_settle_entity_boundary(claim)
         .await?;
     drop(replay_primary);
+    settle_staged_invocation(&active_agent, parent_start).await?;
 
     assert!(live_result.replay_equivalent(&replay_result));
     let replayed_contents = executor
@@ -4582,12 +4719,17 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             None,
         )
         .await?;
-    let config_parent_id = OwnerInvocationId::Agent(before_denial);
+    let denial_invocation = before_denial.next();
+    let config_parent_id = OwnerInvocationId::Agent(denial_invocation);
     let lane = active_agent.execution().lane();
-    let replay_primary = lane.enter_primary(before_denial)?.acquire().await?;
+    let replay_primary = lane.enter_primary(denial_invocation)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(denial_invocation)
+        .await?;
     let claim = active_agent
         .execution()
-        .test_claim_entity_boundary(before_denial)
+        .test_claim_entity_boundary(denial_invocation)
         .await?;
     assert_eq!(claim.start_idx(), config_entity_start);
     let replay = active_agent.start_entity_invocation(
@@ -4596,7 +4738,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             &owner_id,
             &entity,
             config_entity_start,
-            before_denial,
+            denial_invocation,
             permissive_activation,
             callers::agent(owner_id.agent_id, agent_id.agent_type.clone()),
         ),
@@ -4771,12 +4913,17 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             None,
         )
         .await?;
-    let parent_id = OwnerInvocationId::Agent(before_reveal_denial);
+    let reveal_invocation = before_reveal_denial.next();
+    let parent_id = OwnerInvocationId::Agent(reveal_invocation);
     let lane = active_agent.execution().lane();
-    let replay_primary = lane.enter_primary(before_reveal_denial)?.acquire().await?;
+    let replay_primary = lane.enter_primary(reveal_invocation)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(reveal_invocation)
+        .await?;
     let claim = active_agent
         .execution()
-        .test_claim_entity_boundary(before_reveal_denial)
+        .test_claim_entity_boundary(reveal_invocation)
         .await?;
     assert_eq!(claim.start_idx(), entity_start);
     let replay = active_agent.start_entity_invocation(
@@ -4785,7 +4932,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             &owner_id,
             &entity,
             entity_start,
-            before_reveal_denial,
+            reveal_invocation,
             permissive_activation.clone(),
             callers::agent(owner_id.agent_id, agent_id.agent_type.clone()),
         ),
@@ -4838,10 +4985,14 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             None,
         )
         .await?;
-    let replay_primary = lane.enter_primary(before_reveal_denial)?.acquire().await?;
+    let replay_primary = lane.enter_primary(reveal_invocation)?.acquire().await?;
+    active_agent
+        .execution()
+        .test_replay_invocation_started(reveal_invocation)
+        .await?;
     let claim = active_agent
         .execution()
-        .test_claim_entity_boundary(before_reveal_denial)
+        .test_claim_entity_boundary(reveal_invocation)
         .await?;
     assert_eq!(claim.start_idx(), entity_start);
     let replay_scope = EntityInvocationScope::new(
@@ -4853,7 +5004,7 @@ async fn entity_secret_policy_denies_unreadable_owner_secret(
             entity_start,
         )
         .unwrap(),
-        before_reveal_denial,
+        reveal_invocation,
         reveal_activation,
         callers::agent_principal(owner_id.agent_id, agent_id.agent_type.clone()),
         InvocationExecutionMode::ReplayingIncomplete,

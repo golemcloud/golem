@@ -50,7 +50,8 @@ impl DeferredAdmissionTable {
         if closed_parents.contains(&parent) {
             return false;
         }
-        self.parents
+        let inserted = self
+            .parents
             .lock()
             .unwrap()
             .entry(parent)
@@ -62,7 +63,31 @@ impl DeferredAdmissionTable {
                     cohort: None,
                 },
             )
-            .is_none()
+            .is_none();
+        drop(closed_parents);
+        if inserted {
+            self.changed.notify_waiters();
+        }
+        inserted
+    }
+
+    /// Whether the body of the capable tool operation at `start` waits for a cohort release that
+    /// nothing requested yet: no result await of the parent claimed it, and the parent has not
+    /// ended. Only the end of the parent admits such a body when no later result await claims it.
+    pub(super) fn waits_for_unrequested_release(
+        &self,
+        parent: &OwnerInvocationId,
+        start: OplogIndex,
+    ) -> bool {
+        self.parents
+            .lock()
+            .unwrap()
+            .get(parent)
+            .and_then(|entries| entries.get(&start))
+            .is_some_and(|entry| {
+                entry.cohort.is_none()
+                    && entry.readiness != DeferredAdmissionReadiness::SettledWithoutBody
+            })
     }
 
     pub(crate) fn close_parent_and_snapshot(

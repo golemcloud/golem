@@ -147,6 +147,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 idempotency_key: Some(ik),
                 oplog_index: None,
                 agent_fingerprint: None,
+                background_failure: None,
             });
         }
 
@@ -210,11 +211,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     )
                     .await;
                 let (worker, _response_lease) = match acquisition {
-                    Err(error @ WorkerExecutorError::PreviousInvocationFailed { .. })
-                        if request.origin_invocation.is_some()
-                            && freshness_disposition
-                                == InvocationFreshnessDisposition::MayExist =>
-                    {
+                    // A same-key retry that the agent's health refuses observes the recorded
+                    // success of its invocation: an invocation that recorded its result keeps it
+                    // when the agent gave up during its background work.
+                    Err(
+                        error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+                        | WorkerExecutorError::PreviousInvocationExited),
+                    ) if freshness_disposition == InvocationFreshnessDisposition::MayExist => {
                         match self
                             .get_or_create_pending_for_lookup(
                                 request,
@@ -231,10 +234,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 // The scope is not bound yet, so a deletion can stop this
                                 // generation's state actor; that read fails with the original
                                 // error rather than panicking.
-                                if matches!(
-                                    worker.try_lookup_invocation_result(&ik).await,
-                                    Ok(crate::model::LookupResult::New) | Err(_)
-                                ) {
+                                // Another caller observes only a recorded success; a recorded
+                                // failure keeps the agent's health error. Only an RPC caller
+                                // waits for accepted work without a result on a failed agent:
+                                // it is attached to that work.
+                                let observable =
+                                    match worker.try_lookup_invocation_result(&ik).await {
+                                        Ok(crate::model::LookupResult::Complete(Ok(_))) => true,
+                                        Ok(crate::model::LookupResult::New) | Err(_) => false,
+                                        Ok(_) => request.origin_invocation.is_some(),
+                                    };
+                                if !observable {
                                     return worker
                                         .deleted_incarnation_as_not_found(
                                             expected_fingerprint,
@@ -533,6 +543,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             idempotency_key: Some(ik),
                             oplog_index: None,
                             agent_fingerprint: Some(metadata.fingerprint),
+                            background_failure: None,
                         })
                     }
                     None => {
@@ -565,6 +576,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             idempotency_key: Some(ik),
                             oplog_index: None,
                             agent_fingerprint: None,
+                            background_failure: None,
                         })
                     }
                 }

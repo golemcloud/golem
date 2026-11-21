@@ -78,6 +78,11 @@ pub(crate) struct StartClaim {
     /// guest call at return, so its host-internal records need no reconstruction.
     #[transient(false)]
     abandon_incomplete_host_internal_calls: bool,
+    /// The `driver` the claimed `Start` must record: the invocation that drives the claiming call
+    /// when it is not the invocation the call belongs to, else `None`. Every claim checks it. The
+    /// driver is not part of the identity: a claimed `Start` with another driver is a divergence,
+    /// not a reason to look for another `Start`.
+    driver: Option<OplogIndex>,
 }
 
 impl StartClaim {
@@ -97,6 +102,7 @@ impl StartClaim {
             custom_invocation: false,
             host_internal_calls: false,
             abandon_incomplete_host_internal_calls: false,
+            driver: None,
         }
     }
 
@@ -171,6 +177,35 @@ impl StartClaim {
         self
     }
 
+    /// Requires the claimed `Start` to record `driver`, the invocation that drives the claiming
+    /// call when it is not the invocation the call is numbered under.
+    pub(crate) fn with_driver(mut self, driver: Option<OplogIndex>) -> Self {
+        self.driver = driver;
+        self
+    }
+
+    /// Checks the `driver` of the claimed `Start` at `start_index` against the driver of the
+    /// claiming call. A claimed `Start` driven by another invocation is a divergence.
+    pub(super) fn validate_driver(
+        &self,
+        start_index: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Result<(), WorkerExecutorError> {
+        let Some(recorded) = RecordedStart::of(entry) else {
+            return Ok(());
+        };
+        if recorded.driver == self.driver {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
+                oplog_index: start_index,
+                expected: ReplayStep::HostCall(recorded.replay_host_call()),
+                actual: ReplayStep::HostCall(self.replay_host_call()),
+                mismatched: vec![StartIdentityField::Driver],
+            }))
+        }
+    }
+
     /// Marks the call as one that makes host-internal calls under its own `Start`.
     pub(crate) fn with_host_internal_calls(mut self, host_internal_calls: bool) -> Self {
         self.host_internal_calls = host_internal_calls;
@@ -240,6 +275,7 @@ impl StartClaim {
             parent_start_index: self.parent_start_index,
             invocation_id: self.invocation_id,
             observational_owner: self.observational_owner,
+            driver: self.driver,
             carries_request: self.carries_request(),
             request: None,
         }
@@ -325,6 +361,7 @@ pub(super) struct RecordedStart {
     parent_start_index: Option<OplogIndex>,
     observational_owner: Option<OplogIndex>,
     invocation_id: Option<DurableInvocationId>,
+    driver: Option<OplogIndex>,
     carries_request: bool,
 }
 
@@ -336,6 +373,7 @@ impl RecordedStart {
             parent_start_index: self.parent_start_index,
             invocation_id: self.invocation_id,
             observational_owner: self.observational_owner,
+            driver: self.driver,
             carries_request: self.carries_request,
             request: None,
         }
@@ -350,6 +388,7 @@ impl RecordedStart {
                 request,
                 durable_function_type,
                 parent_start_index,
+                driver,
                 ..
             } => Some(Self {
                 function_name: function_name.clone(),
@@ -357,6 +396,7 @@ impl RecordedStart {
                 parent_start_index: *parent_start_index,
                 observational_owner: *observational_owner,
                 invocation_id: *invocation_id,
+                driver: *driver,
                 carries_request: request.is_some(),
             }),
             _ => None,
@@ -568,6 +608,28 @@ impl ReplayState {
                                         owned_claim.divergence_from_start(index, &recorded),
                                     ));
                                 }
+                                // Every record of an entity body precedes its recorded
+                                // `Cancelled`. A replaying body that claims beyond them would
+                                // issue the call after its recorded cancellation point, so the
+                                // claim waits until the body is aborted, which drops it.
+                                if let Some(body) = tx
+                                    .st
+                                    .claim_nearest_body(
+                                        owned_claim.expected_parent_start_index(),
+                                        owned_claim.expected_invocation_id(),
+                                    )
+                                    .filter(|body| tx.st.owners.is_cancelled_entity(*body))
+                                {
+                                    let mut bodies =
+                                        tx.cursor.reconstruction_claims.subscribe_bodies();
+                                    if bodies.borrow_and_update().contains(&body) {
+                                        return Ok((
+                                            None,
+                                            Some(BlockedOn::ActiveBody(bodies)),
+                                            None,
+                                        ));
+                                    }
+                                }
                                 if tx.cursor.at_replay_tail() {
                                     return Ok((None, None, Some(Missing::ReplayEnded)));
                                 }
@@ -614,6 +676,7 @@ impl ReplayState {
                 })
                 .await?;
             if let Some(claimed) = claimed {
+                claim.validate_driver(claimed.0.start_idx(), &claimed.1)?;
                 return Ok(ReplayStartClaimOutcome::Claimed {
                     handle: claimed.0,
                     entry: claimed.1,

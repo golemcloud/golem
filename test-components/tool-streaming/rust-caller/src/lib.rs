@@ -711,6 +711,7 @@ pub trait ToolStreamingCaller {
         directory: String,
         gate: golem_rust::PromiseId,
     ) -> bool;
+    async fn cancel_run_then_receive(&self, mode: String, websocket_url: String) -> String;
     async fn filesystem_policy_write_read(
         &self,
         path: String,
@@ -761,6 +762,7 @@ pub trait ToolStreamingCaller {
     async fn collect_capable(&self, path: String, input: Vec<u8>) -> StreamEvidence;
     async fn collect_capable_dual(&self, path: String, output_size: u64) -> Vec<Vec<u8>>;
     async fn completed_capable_tool_then_promise(&self, path: String, input: Vec<u8>) -> Vec<u8>;
+    async fn tool_calls_after_return(&self, value: String) -> String;
     async fn permanent_tool_trap_isolation(&self) -> Vec<String>;
     async fn clean_stdout_then_trap(&self);
     async fn trap_with_blocked_sibling(&self);
@@ -3355,6 +3357,35 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         matches!(result, Err(ToolRpcError::Cancelled))
     }
 
+    // Runs the streaming tool in `mode` and cancels it once its first stdout chunk arrives. After
+    // the cancelled result, connects a WebSocket to `websocket_url` and makes one receive that
+    // times out at once.
+    async fn cancel_run_then_receive(&self, mode: String, websocket_url: String) -> String {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (stdout_target, mut stdout) = tool_host::create_output();
+        let invocation = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input(&mode),
+            Some(closed_raw_stdin()),
+            Some(stdout_target),
+            None,
+        );
+        let first = raw_chunk(&mut stdout).await;
+        invocation.cancel();
+        let result = raw_result(&invocation).await;
+        let connection =
+            golem_rust::websocket::WebsocketConnection::connect(&websocket_url, None, None)
+                .expect("connect the WebSocket after the cancelled result");
+        let received = connection
+            .receive_with_timeout(0)
+            .await
+            .expect("receive with timeout after the cancelled result");
+        format!(
+            "{}:{result:?}:{received:?}",
+            String::from_utf8_lossy(&first)
+        )
+    }
+
     async fn filesystem_policy_write_read(
         &self,
         path: String,
@@ -4826,6 +4857,30 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .expect("capable tool has stdout");
         wait_at_promise_checkpoint("completed-capable-tool").await;
         output
+    }
+
+    async fn tool_calls_after_return(&self, value: String) -> String {
+        let background = value.clone();
+        spawn_local(async move {
+            wait_at_promise_checkpoint("tool-calls-after-return").await;
+            let incapable = StreamingClient::default()
+                .no_stream(background.clone())
+                .await
+                .expect("incapable tool call after the return");
+            let capable = CapableStreamingClient::default()
+                .run_capable(
+                    "/after-return-capable.bin".to_string(),
+                    input_stream(vec![background.into_bytes()]),
+                )
+                .await
+                .expect("start capable tool call after the return")
+                .collect()
+                .await;
+            capable.result.expect("capable tool call after the return");
+            std::fs::write("/after-return-incapable.txt", incapable)
+                .expect("record the incapable tool result after the return");
+        });
+        format!("returned({value})")
     }
 
     async fn clean_stdout_then_trap(&self) {
