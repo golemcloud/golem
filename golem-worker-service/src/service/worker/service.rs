@@ -759,11 +759,12 @@ impl WorkerService {
         }))
     }
 
-    /// Reads the agent that a request names by its ID; this never creates the agent. When it
-    /// is missing, a caller that `permissions` would allow on the type's current implementer
-    /// gets not found, and every other caller gets the denial that an existing agent gives, so
-    /// the answer never tells an unauthorized caller whether the agent exists. A caller that
-    /// expects another incarnation gets not found.
+    /// Reads the agent that a request names by its ID; this never creates the agent. In an
+    /// existing environment, when the agent is missing, a caller that `permissions` would
+    /// allow on the type's current implementer gets not found, and every other caller gets
+    /// the denial that an existing agent gives, so the answer never tells an unauthorized
+    /// caller whether the agent exists. A missing environment or another incarnation gets
+    /// not found.
     async fn read_agent(
         &self,
         agent_id: &OwnedAgentId,
@@ -836,8 +837,10 @@ impl WorkerService {
             .authorize_environment(agent_id.environment_id, auth_ctx)
             .await
             .map_err(|error| match error {
+                RegistryServiceError::NotFound(_) => {
+                    WorkerServiceError::AgentNotFound(agent_id.agent_id)
+                }
                 RegistryServiceError::Unauthorized(_)
-                | RegistryServiceError::NotFound(_)
                 | RegistryServiceError::CouldNotAuthenticate(_) => denied(),
                 other => other.into(),
             })?;
@@ -9527,6 +9530,26 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+        let missing_environment_agent = OwnedAgentId {
+            environment_id: EnvironmentId::new(),
+            agent_id: AgentId::from_parts(42, 123),
+        };
+        for auth in [authorized, auth_ctx_with_permissions(vec![])] {
+            let read = harness
+                .worker_service
+                .get_metadata(&missing_environment_agent, None, auth.clone())
+                .await;
+            let delete = harness
+                .worker_service
+                .delete(&missing_environment_agent, None, auth)
+                .await;
+            for error in [read.unwrap_err(), delete.unwrap_err()] {
+                assert!(
+                    matches!(error, WorkerServiceError::AgentNotFound(id) if id == missing_environment_agent.agent_id),
+                    "{error:?}"
+                );
             }
         }
         assert!(
