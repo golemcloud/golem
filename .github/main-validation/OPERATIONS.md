@@ -6,6 +6,55 @@ release fallback. Preparing this change does not merge it or change live setting
 Do not dispatch workflows, create request labels/issues/statuses, post to Slack
 or change rulesets without separate authorization.
 
+## Scheduling and tooling qualification
+
+SDK preparation produces packages and templates before their consumers. Lint,
+formatting, drift and test verdicts run independently on CI (`CI=true`) and still
+fail the final result. Local validator invocations fail fast, even with the `ci`
+profile. A failed producer blocks only consumers admitted by its current-cycle
+status. Final checks use five static lanes after every stateful lane joins;
+managed XFS and Docker follow their join serially. Preserve this barrier when
+tuning the tail, including when a stateful lane fails.
+
+Solo preparation uses 32 Cargo jobs. Service compilation retains 20 while it
+overlaps worker tests. Final lanes use four Cargo/native harness workers, with
+separate Bash and Rust SDK targets. Compare acceptance `build-jobs=20` and `32`
+on the same source before claiming a compilation speedup. Measure disk and
+memory contention as well as CPU use.
+
+The flow and observer helpers now use the pinned TypeScript package. Install
+dependencies in both selected and control checkouts; keep each helper's imports
+beside its own package. Shared generators, Bash conformance and Docker inspection
+still require Python. Dashboard deployment must ship the bundled server and Bun,
+not just the TypeScript source. Coordinate the observer checkout, its prompt pin
+and the dashboard deployment with the merge, using the reporting rollout below.
+Existing summaries do not acquire new layout unless deliberately republished.
+
+### Reporting rollout after merge
+
+1. Wait for the approved changes to merge. Let any in-flight observer analysis
+   finish, and retain the existing owner, credentials, state path, seen markers,
+   webhook configuration and delivery receipts.
+2. Update the existing observer checkout and operator prompt pin to the merged
+   revision. Install the pinned TypeScript dependencies. Do not create another
+   observer or resend previously processed reports.
+3. Build and deploy the dashboard bundle and Bun from that same revision. Retain
+   the existing data directory and separate observer/progress credentials.
+4. Verify the deployed health/read endpoints, then confirm readable new summaries
+   and duplicate suppression on naturally completed validation. Do not dispatch
+   validation, republish old summaries or post test Slack reports as part of this
+   rollout without separate authorization.
+
+Cache evidence includes visible-cycle markers before and after the workload,
+disk capacity and device identity, plus fixture input-group digests and mutation
+diagnostics. Compare each restore against the preceding completed cycle and the
+provider's snapshot evidence. A completion marker precedes the provider commit
+hook and does not prove a durable save. The three repaired fixture lockfiles
+must remain unchanged during real builds before completed-WASM reuse is accepted.
+Skill inputs remain conservative because the CLI embeds and synchronizes them.
+Do not restore checkout timestamps or narrow keys without a discriminating build
+experiment. Local fixtures do not establish real warm hits or provider durability.
+
 ## Blacksmith acceptance
 
 1. Run a cold serial cycle from the feature branch in acceptance mode. Compare
@@ -60,16 +109,16 @@ reads these manually until the analysis agent is accepted.
 
 [observer/PROMPT.md](observer/PROMPT.md) owns the reusable instructions.
 [observer/README.md](observer/README.md) documents account-independent setup,
-the 30-minute wake-up, credentials, state transfer and prompt updates. The helper
+the completion webhook handoff, credentials, state transfer and prompt updates. The helper
 scripts live beside the prompt. Keep receipts and seen markers in durable local
 state, not Git. Updating these files does not update an existing observer's
-checkout or schedule automatically.
+checkout or trigger automatically.
 
 The current observer is configured under Daniel's personal Amp account in
 [its own thread](https://ampcode.com/threads/T-01a1e9ca-bfca-772d-aa93-7feaf0270dc1).
-Its existing 30-minute schedule reads the repo-owned prompt from a pinned checkout.
-The schedule holds the operator-specific checkout revision, state path and acceptance
-destination. Generated receipt state is separate from the repo-owned helpers.
+Its operator instructions pin the checkout revision, state path and acceptance
+destination. Preserve those values and the existing receipts when adopting the
+completion webhook. Generated receipt state is separate from the repo-owned helpers.
 The [public dashboard](https://golem-ci-status--vigoo.onamp.dev/) runs on the
 always-on `vigoo/golem-ci` Box, independently of the observer orb. Slack reports
 link to the corresponding run attempt on that dashboard.

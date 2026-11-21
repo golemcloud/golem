@@ -1053,10 +1053,12 @@ export function registerAgentInitiator(
       // paths await the initiate result.
       let state: object;
       try {
-        state = await impl.init(withCaller(ctx, {
-          id: idRecord as never,
-          config,
-        }));
+        state = await impl.init(
+          withCaller(ctx, {
+            id: idRecord as never,
+            config,
+          }),
+        );
         return {
           tag: 'ok',
           val: complete(state, resolved.val) as never,
@@ -1113,11 +1115,14 @@ export function registerAgentInitiator(
               AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>['snapshot']
             >;
             const load = snapshot.load;
-            state = await load(bytes, withCaller(ctx, {
-              id: idRecord as never,
-              agentId: resolved.val.agentId,
-              config,
-            }));
+            state = await load(
+              bytes,
+              withCaller(ctx, {
+                id: idRecord as never,
+                agentId: resolved.val.agentId,
+                config,
+              }),
+            );
           } else if (reg.snapshotStateSchema) {
             state = await validateSnapshotState(
               reg.snapshotStateSchema,

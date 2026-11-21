@@ -24,12 +24,9 @@ use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget, UpdateRecord};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{
-    MultipartPartData, OplogEntry, OplogPayload, PublicAgentInvocation, PublicOplogEntry,
-    PublicSnapshotData,
+    MultipartPartData, OplogEntry, PublicAgentInvocation, PublicOplogEntry, PublicSnapshotData,
 };
-use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocationPayload, IdempotencyKey, OplogIndex, OwnedAgentId,
-};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -969,7 +966,7 @@ async fn a_late_snapshot_publication_cannot_reach_a_recreated_incarnation(
                 .snapshots
                 .iter()
                 .flatten()
-                .any(|name| &**name == late)
+                .any(|name| **name == late)
         );
         assert!(!records.is_confirmed(&late));
         assert!(records.is_confirmed(&newer));
@@ -3666,20 +3663,10 @@ async fn a_terminal_interrupt_ends_a_manual_update_that_waits_for_an_upload(
 
 /// The target revision of a manual-update invocation entry.
 fn manual_update_target(entry: &OplogEntry) -> Option<ComponentRevision> {
-    let OplogEntry::PendingAgentInvocation { payload, .. } = entry else {
+    let OplogEntry::PendingAgentInvocation { operation, .. } = entry else {
         return None;
     };
-    let payload = match payload {
-        OplogPayload::Inline(payload) => (**payload).clone(),
-        OplogPayload::SerializedInline { bytes, .. } => {
-            golem_common::serialization::deserialize::<AgentInvocationPayload>(bytes).ok()?
-        }
-        OplogPayload::External { .. } => return None,
-    };
-    match payload {
-        AgentInvocationPayload::ManualUpdate { target_revision } => Some(target_revision),
-        _ => None,
-    }
+    operation.manual_update_target()
 }
 
 /// The incarnation of the shard manager that the test executors trust.

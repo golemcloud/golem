@@ -33,11 +33,14 @@ use golem_common::base_model::durable_stream::{
 };
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::TraceId;
-use golem_common::model::{AgentInvocationPayload, OplogIndex, OwnedAgentId};
+use golem_common::model::oplog::OplogPayload;
+use golem_common::model::{OplogIndex, OwnedAgentId};
 use golem_schema::proto::golem::schema::{ListValue, SchemaValueStreamReference, schema_value};
 use golem_schema::schema::schema_value::UnionValuePayload;
 use golem_schema::schema::tool::compatibility::{
@@ -1863,7 +1866,8 @@ async fn append_prepared_pending(
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -10937,7 +10941,8 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -11573,7 +11578,8 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         .add(OplogEntry::pending_agent_invocation(
             None,
             consumer.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -12115,7 +12121,8 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -12540,7 +12547,8 @@ async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_with
         .add(OplogEntry::pending_agent_invocation(
             None,
             session_key.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -12771,7 +12779,8 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         .add(OplogEntry::pending_agent_invocation(
             None,
             session_key.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -13316,7 +13325,8 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         .add(OplogEntry::pending_agent_invocation(
             None,
             consumer.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),

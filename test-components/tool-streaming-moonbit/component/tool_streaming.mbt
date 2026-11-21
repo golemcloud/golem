@@ -177,7 +177,7 @@ pub fn MatrixCoreArtifact::inspect(
   matrix_core_inspect(
     request,
     multiplier,
-    principal,
+    context,
     self_agent_id_text(),
   )
 }

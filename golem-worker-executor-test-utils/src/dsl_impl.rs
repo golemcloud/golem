@@ -162,6 +162,110 @@ impl TestWorkerExecutor {
         Ok(result)
     }
 
+    /// The executor's `GetInvocation` answer for the invocation of an agent.
+    pub async fn get_invocation(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        invocation_id: golem_common::model::InvocationId,
+    ) -> anyhow::Result<
+        Result<
+            Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>,
+            golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError,
+        >,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            GetInvocationRequest, get_invocation_response,
+        };
+        let response = self
+            .client
+            .clone()
+            .get_invocation(GetInvocationRequest {
+                agent_id: Some((*agent_id).into()),
+                environment_id: Some(environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                invocation_id: Some(invocation_id.into()),
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(get_invocation_response::Result::Success(success)) => Ok(Ok(success.invocation)),
+            Some(get_invocation_response::Result::Failure(error)) => Ok(Err(error)),
+            None => Err(anyhow!("Empty get invocation response")),
+        }
+    }
+
+    /// The executor's `ListInvocations` answer. `request` names the filters, page size and
+    /// cursor; the agent, environment and caller are filled in.
+    pub async fn list_invocations(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+    ) -> anyhow::Result<
+        Result<
+            golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsSuccess,
+            golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError,
+        >,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            ListInvocationsRequest, list_invocations_response,
+        };
+        let response = self
+            .client
+            .clone()
+            .list_invocations(ListInvocationsRequest {
+                agent_id: Some((*agent_id).into()),
+                environment_id: Some(environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                ..request
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(list_invocations_response::Result::Success(success)) => Ok(Ok(success)),
+            Some(list_invocations_response::Result::Failure(error)) => Ok(Err(error)),
+            None => Err(anyhow!("Empty list invocations response")),
+        }
+    }
+
+    /// The executor's `LookupInvocations` answer for the caller's idempotency key.
+    pub async fn lookup_invocations(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        operation: Option<&str>,
+    ) -> anyhow::Result<
+        Result<
+            Vec<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>,
+            golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError,
+        >,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            LookupInvocationsRequest, lookup_invocations_response,
+        };
+        let response = self
+            .client
+            .clone()
+            .lookup_invocations(LookupInvocationsRequest {
+                agent_id: Some((*agent_id).into()),
+                environment_id: Some(environment_id.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
+                operation: operation.map(str::to_string),
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(lookup_invocations_response::Result::Success(success)) => {
+                Ok(Ok(success.invocations))
+            }
+            Some(lookup_invocations_response::Result::Failure(error)) => Ok(Err(error)),
+            None => Err(anyhow!("Empty lookup invocations response")),
+        }
+    }
+
     /// Reads one oplog entry in full through the streaming `GetOplogEntry` call.
     pub async fn get_oplog_entry(
         &self,
@@ -241,10 +345,13 @@ impl TestWorkerExecutor {
                         )
                         .map(|reason| reason.as_str_name())
                         .unwrap_or("UNKNOWN");
-                    terminal = Some(Err(anyhow!(
-                        "Agent invocation rejected ({reason}): {}",
-                        rejected.error
-                    )));
+                    terminal = Some(Err(match &rejected.worker_error {
+                        Some(worker_error) => anyhow!(
+                            "Agent invocation rejected ({reason}): {} ({worker_error:?})",
+                            rejected.error
+                        ),
+                        None => anyhow!("Agent invocation rejected ({reason}): {}", rejected.error),
+                    }));
                 }
                 Some(invocation_response::Response::Result(invocation_result)) => {
                     result = Some(invocation_result);

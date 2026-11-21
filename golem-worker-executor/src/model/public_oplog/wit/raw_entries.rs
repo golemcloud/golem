@@ -121,6 +121,7 @@ before (value) {}
                     Ok(M::AgentInvocationStarted {
                         timestamp: timestamp_from_datetime(params.timestamp),
                         invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+                        operation: Box::new(params.operation.try_into()?),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
                         trace_states: params.trace_states,
@@ -195,6 +196,7 @@ before (value) {}
                         timestamp: timestamp_from_datetime(params.timestamp),
                         not_before: params.not_before.map(timestamp_from_datetime),
                         invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+                        operation: Box::new(params.operation.try_into()?),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
                         trace_states: params.trace_states,
@@ -631,6 +633,7 @@ before (value) {}
     AgentInvocationStarted { record () => RawAgentInvocationStartedParameters {
         timestamp: timestamp.into(),
         invocation_id: invocation_id.0.into(),
+        operation: (*operation).into(),
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,
@@ -676,6 +679,7 @@ before (value) {}
         timestamp: timestamp.into(),
         not_before: not_before.map(Into::into),
         invocation_id: invocation_id.0.into(),
+        operation: (*operation).into(),
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,

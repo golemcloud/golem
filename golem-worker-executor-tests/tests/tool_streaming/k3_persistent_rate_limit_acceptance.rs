@@ -221,8 +221,8 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
         rate_limit_component,
         agent_type
     );
-    let principal_a = oidc_principal("k3-principal-a");
-    let principal_b = oidc_principal("k3-principal-b");
+    let principal_a = oidc_principal("k3-caller-a");
+    let principal_b = oidc_principal("k3-caller-b");
     let owner_a = agent_key!("ToolStreamingCaller", "k3-rate-1-owner-a");
     let owner_b = agent_key!("ToolStreamingCaller", "k3-rate-1-owner-b");
     let worker_a = executor

@@ -34,6 +34,7 @@ import "golem/worker/worker_metadata.proto";
 import "golem/worker/worker_status.proto";
 import "golem/schema/schema.proto";
 import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
 
 service WorkerExecutor {
   rpc CreateWorker(CreateWorkerRequest) returns (CreateWorkerResponse);
@@ -61,6 +62,9 @@ service WorkerExecutor {
   rpc ResolveRevertLastInvocations(ResolveRevertLastInvocationsRequest) returns (ResolveRevertLastInvocationsResponse);
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
+  rpc GetInvocation(GetInvocationRequest) returns (GetInvocationResponse);
+  rpc ListInvocations(ListInvocationsRequest) returns (ListInvocationsResponse);
+  rpc LookupInvocations(LookupInvocationsRequest) returns (LookupInvocationsResponse);
 
   rpc GetFileSystemNode(GetFileSystemNodeRequest) returns (GetFileSystemNodeResponse);
   rpc GetAgentWallet(GetAgentWalletRequest) returns (GetAgentWalletResponse);
@@ -601,6 +605,109 @@ message CancelInvocationRequest {
 message CancelInvocationResponse {
   oneof result {
     bool success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+enum InvocationLifecycleState {
+  INVOCATION_LIFECYCLE_STATE_UNSPECIFIED = 0;
+  INVOCATION_LIFECYCLE_STATE_PENDING = 1;
+  INVOCATION_LIFECYCLE_STATE_SCHEDULED = 2;
+  INVOCATION_LIFECYCLE_STATE_RUNNING = 3;
+  INVOCATION_LIFECYCLE_STATE_WAITING = 4;
+  INVOCATION_LIFECYCLE_STATE_RETRYING = 5;
+  INVOCATION_LIFECYCLE_STATE_INTERRUPTED = 6;
+  INVOCATION_LIFECYCLE_STATE_COMPLETED = 7;
+  INVOCATION_LIFECYCLE_STATE_FAILED = 8;
+  INVOCATION_LIFECYCLE_STATE_CANCELLED = 9;
+}
+
+enum InvocationKind {
+  INVOCATION_KIND_UNSPECIFIED = 0;
+  INVOCATION_KIND_METHOD = 1;
+  INVOCATION_KIND_CONSTRUCTOR = 2;
+  INVOCATION_KIND_TOOL = 3;
+}
+
+// One invocation of an agent. `kind` is unspecified, and `operation` absent, when the
+// invocation's request is not known.
+message InvocationSummary {
+  golem.common.UUID invocation_id = 1;
+  InvocationLifecycleState state = 2;
+  InvocationKind kind = 3;
+  // The method name, or `tool:<tool>/<command path>`. Absent for the constructor run.
+  optional string operation = 4;
+  optional google.protobuf.Timestamp accepted_at = 5;
+  google.protobuf.Timestamp changed_at = 6;
+}
+
+message GetInvocationRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  golem.common.UUID invocation_id = 4;
+}
+
+// No `invocation` when the agent has no invocation with this ID.
+message GetInvocationSuccess {
+  optional InvocationSummary invocation = 1;
+}
+
+message GetInvocationResponse {
+  oneof result {
+    GetInvocationSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message ListInvocationsRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  optional string operation = 4;
+  // Any of these states; all states when empty.
+  repeated InvocationLifecycleState states = 5;
+  optional InvocationKind kind = 6;
+  // Inclusive bounds on the last change of the invocation.
+  optional google.protobuf.Timestamp since = 7;
+  optional google.protobuf.Timestamp until = 8;
+  // 0 gives the default page size; larger values are capped.
+  uint32 page_size = 9;
+  // The opaque cursor of the previous page.
+  optional golem.worker.Cursor cursor = 10;
+}
+
+message ListInvocationsSuccess {
+  repeated InvocationSummary invocations = 1;
+  // Present when more invocations may follow.
+  optional golem.worker.Cursor next_cursor = 2;
+}
+
+message ListInvocationsResponse {
+  oneof result {
+    ListInvocationsSuccess success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+// Finds the invocations of an agent that the caller started with an idempotency key, in the
+// caller's idempotency scope. A caller without a scope finds none.
+message LookupInvocationsRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  // Only the invocation of this operation.
+  optional string operation = 5;
+}
+
+message LookupInvocationsSuccess {
+  repeated InvocationSummary invocations = 1;
+}
+
+message LookupInvocationsResponse {
+  oneof result {
+    LookupInvocationsSuccess success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }

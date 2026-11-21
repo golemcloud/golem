@@ -180,6 +180,16 @@ lazy_static! {
         "Oplog entries processed while catching up the physical invocation-result index"
     )
     .unwrap();
+    static ref INVOCATION_LISTINGS_TOTAL: Counter = register_counter!(
+        "invocation_listings_total",
+        "Listings of the invocations of one agent"
+    )
+    .unwrap();
+    static ref INVOCATION_LISTING_RESULTS_TOTAL: Counter = register_counter!(
+        "invocation_listing_results_total",
+        "Invocation results read to list the invocations of one agent"
+    )
+    .unwrap();
     static ref AGENT_IDENTITY_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
         "agent_identity_resolution_total",
         "Mode-hint events observed during authoritative agent identity resolution; multiple events may occur per resolution",
@@ -282,6 +292,11 @@ pub fn record_invocation_result_resolution(outcome: &'static str) {
     INVOCATION_RESULT_RESOLUTION_TOTAL
         .with_label_values(&[outcome])
         .inc();
+}
+
+pub fn record_invocation_listing(results: usize) {
+    INVOCATION_LISTINGS_TOTAL.inc();
+    INVOCATION_LISTING_RESULTS_TOTAL.inc_by(results as f64);
 }
 
 pub fn record_invocation_result_index_catch_up(entries: usize) {

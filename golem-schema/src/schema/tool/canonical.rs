@@ -175,23 +175,42 @@ impl Tool {
     /// Returns `None` when a segment does not match or the selected command
     /// has no body.
     pub fn command_index_by_path(&self, command_path: &[String]) -> Option<usize> {
+        self.resolve_command_path(command_path)
+            .map(|(index, _)| index)
+    }
+
+    /// The canonical form of `command_path`: each segment replaced by the name of the
+    /// subcommand it matches by name or alias. Returns `None` when
+    /// [`Tool::command_index_by_path`] does, so only a path that selects a command body has a
+    /// canonical form.
+    pub fn canonical_command_path(&self, command_path: &[String]) -> Option<Vec<String>> {
+        self.resolve_command_path(command_path)
+            .map(|(_, path)| path)
+    }
+
+    fn resolve_command_path(&self, command_path: &[String]) -> Option<(usize, Vec<String>)> {
         let mut current = 0usize;
         if self.commands.nodes.is_empty() {
             return None;
         }
+        let mut canonical = Vec::with_capacity(command_path.len());
         for segment in command_path {
-            let next = self.commands.nodes[current]
+            let (next, node) = self.commands.nodes[current]
                 .subcommands
                 .iter()
                 .find_map(|idx| {
                     let idx = idx.as_usize()?;
                     let node = self.commands.nodes.get(idx)?;
                     (node.name == *segment || node.aliases.iter().any(|alias| alias == segment))
-                        .then_some(idx)
+                        .then_some((idx, node))
                 })?;
+            canonical.push(node.name.clone());
             current = next;
         }
-        self.commands.nodes[current].body.as_ref().map(|_| current)
+        self.commands.nodes[current]
+            .body
+            .as_ref()
+            .map(|_| (current, canonical))
     }
 
     /// The inherited globals in scope for `command_index`, collected along the
@@ -1126,6 +1145,50 @@ mod tests {
             Some(1)
         );
         assert_eq!(tool.command_index_by_path(&["missing".to_string()]), None);
+    }
+
+    #[test]
+    fn canonical_command_path_replaces_aliases_by_names() {
+        let tool = grep_tool();
+        assert_eq!(tool.canonical_command_path(&[]), Some(vec![]));
+        assert_eq!(
+            tool.canonical_command_path(&["substitute".to_string()]),
+            Some(vec!["replace".to_string()])
+        );
+        assert_eq!(
+            tool.canonical_command_path(&["replace".to_string()]),
+            Some(vec!["replace".to_string()])
+        );
+        assert_eq!(tool.canonical_command_path(&["missing".to_string()]), None);
+
+        let mut tool = grep_tool();
+        tool.commands.nodes[1].body = None;
+        assert_eq!(
+            tool.canonical_command_path(&["substitute".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn validation_bounds_the_operation_of_every_command() {
+        use crate::schema::tool::validation::{ToolValidationError, validate_tool};
+        use crate::schema::tool::{MAX_INVOCATION_OPERATION_BYTES, tool_operation};
+
+        // `tool:grep/` plus the subcommand name; an alias never reaches an operation.
+        let longest = MAX_INVOCATION_OPERATION_BYTES - "tool:grep/".len();
+        let mut tool = grep_tool();
+        tool.commands.nodes[1].name = format!("r{}", "e".repeat(longest - 1));
+        tool.commands.nodes[1].aliases = vec![format!("s{}", "e".repeat(longest))];
+        validate_tool(&tool).unwrap();
+
+        tool.commands.nodes[1].name = format!("r{}", "e".repeat(longest));
+        let operation = tool_operation(&"grep", &[tool.commands.nodes[1].name.clone()]);
+        assert_eq!(operation.len(), MAX_INVOCATION_OPERATION_BYTES + 1);
+        assert!(
+            validate_tool(&tool)
+                .unwrap_err()
+                .contains(&ToolValidationError::OperationTooLong { operation })
+        );
     }
 
     #[test]

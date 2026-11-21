@@ -43,6 +43,8 @@ message WorkerExecutionError {
     CreateIdempotencyKeyConflict create_idempotency_key_conflict = 31;
     StaleCursor stale_cursor = 32;
     AgentKeyCollision agent_key_collision = 33;
+    InvocationCancelled invocation_cancelled = 34;
+    CannotCancelRunningInvocation cannot_cancel_running_invocation = 35;
   }
 }
 
@@ -104,6 +106,10 @@ message AgentKeyCollision {
   AgentId agent_id = 1;
   string requested_key = 2;
 }
+
+message InvocationCancelled {}
+
+message CannotCancelRunningInvocation {}
 
 message AgentCreationFailed {
   AgentId agent_id = 1;

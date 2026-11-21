@@ -440,6 +440,13 @@ impl From<WorkerExecutorError> for RpcError {
                 details: "Invalid account".to_string(),
             },
             WorkerExecutorError::PermissionDenied { details } => RpcError::Denied { details },
+            // Permanent: every retry under the same key is cancelled again. The detail string
+            // identifies a cancelled callee until the agent `rpc-error` gains a `cancelled` case.
+            error @ WorkerExecutorError::InvocationCancelled => RpcError::RemoteAgentError {
+                error: Box::new(ModelAgentError::InvalidInput(format!(
+                    "invocation-cancelled: {error}"
+                ))),
+            },
             WorkerExecutorError::InvalidRequest { details } => RpcError::RemoteAgentError {
                 error: Box::new(ModelAgentError::InvalidInput(details)),
             },

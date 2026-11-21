@@ -89,6 +89,34 @@ fn typed_worker_failure_preserves_rpc_error_category() {
     );
 }
 #[test]
+fn cancelled_callee_is_the_same_permanent_error_before_and_after_acceptance() {
+    let expected = RpcError::RemoteAgentError {
+        error: Box::new(ModelAgentError::InvalidInput(
+            "invocation-cancelled: Invocation was cancelled before execution".to_string(),
+        )),
+    };
+    let finished = rpc_error_from_failure(InvocationFailure {
+        kind: InvocationFailureKind::Execution as i32,
+        code: "worker-execution".to_string(),
+        message: WorkerExecutorError::InvocationCancelled.to_string(),
+        worker_error: Some(WorkerExecutorError::InvocationCancelled.into()),
+    });
+    // A rejection whose reason alone would read as a transient internal error.
+    let rejected = super::remote::rpc_error_from_rejection(
+        golem_api_grpc::proto::golem::worker::InvocationRejected {
+            reason: golem_api_grpc::proto::golem::worker::InvocationRejectionReason::Internal
+                as i32,
+            error: WorkerExecutorError::InvocationCancelled.to_string(),
+            worker_error: Some(WorkerExecutorError::InvocationCancelled.into()),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(finished, expected);
+    assert_eq!(rejected, expected);
+}
+
+#[test]
 fn invalid_remote_request_is_an_agent_input_error() {
     let error = RpcError::from(WorkerExecutorError::invalid_request("wrong argument shape"));
 

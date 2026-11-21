@@ -4252,6 +4252,7 @@ dependencies = [
  "rand 0.9.5",
  "range-set-blaze",
  "regex",
+ "rustix 1.1.4",
  "scc",
  "semver",
  "serde",
@@ -6081,6 +6082,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "url",
+ "urlencoding",
  "uuid",
 ]
 

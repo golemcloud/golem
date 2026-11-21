@@ -1121,6 +1121,7 @@ impl ReplayState {
                 match oplog_entry {
                     OplogEntry::AgentInvocationStarted {
                         invocation_id: idempotency_key,
+                        operation,
                         payload,
                         trace_id,
                         trace_states,
@@ -1131,7 +1132,7 @@ impl ReplayState {
                         let invocation_payload = self
                             .cursor
                             .oplog
-                            .download_payload_classified(payload)
+                            .download_request_classified(*operation, payload)
                             .await
                             .map_err(|error| match error {
                                 crate::services::oplog::OplogPayloadDownloadError::Backend(

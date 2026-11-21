@@ -1187,7 +1187,6 @@ struct PrivateDurableWorkerState {
     /// oplog.
     file_stream_pollables: HashSet<u32>,
 
-    tcp_connect_replay: sockets::tcp::TcpConnectReplay,
     /// The hostnames that this Store's completed address lookups linked to addresses, for the
     /// grant check of socket connects and datagrams.
     resolved_names: sockets::resolved_names::SharedResolvedNames,
