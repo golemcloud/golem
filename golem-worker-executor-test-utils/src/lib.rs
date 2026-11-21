@@ -762,35 +762,23 @@ impl TestWorkerExecutor {
     }
 
     pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
-        use golem_worker_executor::services::HasOplogService;
-
-        let services = self
-            .services
-            .as_ref()
-            .expect("test service graph is captured");
+        let fingerprint = self.agent_fingerprint(agent_id).await?;
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let create = services
-            .oplog_service()
-            .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
-            .await?
-            .remove(&OplogIndex::INITIAL)
-            .ok_or_else(|| anyhow!("agent create entry is missing: {owned_agent_id}"))?;
-        let OplogEntry::Create { parameters, .. } = create else {
-            return Err(anyhow!("first oplog entry is not create: {owned_agent_id}"));
-        };
-        services
+        self.services
+            .as_ref()
+            .expect("test service graph is captured")
             .worker_service()
-            .remove_cached_status(&owned_agent_id, AgentFingerprint(parameters.instance_id))
+            .remove_cached_status(&owned_agent_id, fingerprint)
             .await?;
         Ok(())
     }
 
-    /// Removes the status baseline of the durable agent, so that a start with no cached status
-    /// folds the status from index 1. It opens the SQLite key-value store of
-    /// [`sqlite_storage_config`], so it is correct only for an executor that keeps the status
-    /// baseline in that store. Call it when no invocation loop of the executor runs, because an
-    /// invocation can write a new baseline.
-    pub async fn remove_status_baseline(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+    /// Removes the clean status checkpoint (the durable status baseline) of the durable agent,
+    /// so that a start with no cached status folds the status from index 1. Fails when the agent
+    /// has no checkpoint. It opens the SQLite key-value store of [`sqlite_storage_config`], so it
+    /// is correct only for an executor that keeps the checkpoint in that store. Call it when no
+    /// invocation loop of the executor runs, because an invocation can write a new checkpoint.
+    pub async fn remove_status_checkpoint(&self, agent_id: &AgentId) -> anyhow::Result<()> {
         use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
         use golem_worker_executor::storage::keyvalue::{
             KeyValueStorageLabelledApi, KeyValueStorageNamespace,
@@ -804,12 +792,16 @@ impl TestWorkerExecutor {
             SqliteKeyValueStorage::configured(&sqlite_storage_config(&self.deps, &self.context))
                 .await
                 .map_err(|error| anyhow!(error))?;
-        let labelled = storage.with("test", "remove_status_baseline");
+        let labelled = storage.with("test", "remove_status_checkpoint");
         let fields: Arc<[String]> = labelled
             .keys(namespace.clone())
             .await
             .map_err(anyhow::Error::msg)?
             .into();
+        anyhow::ensure!(
+            !fields.is_empty(),
+            "agent {agent_id} has no status checkpoint to remove"
+        );
         labelled
             .del_many(namespace, fields)
             .await
