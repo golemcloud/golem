@@ -8931,9 +8931,15 @@ mod tests {
         harness
             .worker_client
             .set_metadata_component_revision(harness.component_revision);
-        let other_type = AgentId::from_parts(test_type_id().get() + 1, 1);
         let mistyped = harness
-            .invoke_rest(by_id(other_type), None, AuthCtx::system())
+            .worker_service
+            .invoke_agent_rest(
+                harness.environment_id,
+                &AgentTypeName("other-agent".into()),
+                by_id(harness.keyed_agent_id()),
+                None,
+                AuthCtx::system(),
+            )
             .await;
         assert!(
             matches!(mistyped, Err(WorkerServiceError::AgentNotFound(_))),
