@@ -639,7 +639,7 @@ command = "cargo"
 args = ["fmt", "--all"]
 
 [tasks.fix-clippy]
-description = "Runs clippy checks and applies fixes"
+description = "Applies host-only Clippy fixes; review cfg-gated references before accepting deletions (see AGENTS.md)"
 install_crate = "clippy"
 command = "cargo"
 args = [
