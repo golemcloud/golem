@@ -128,9 +128,17 @@ pub struct JsComponent<'a> {
 
 impl JsComponent<'_> {
     fn bundle_and_snapshot(&self) -> anyhow::Result<(u64, u64)> {
+        use wasm_encoder::reencode::{ReencodeComponent, RoundtripReencoder};
+
+        // Injection re-encodes the guest and removes padded instruction operands. Compare
+        // the same encoding on both sides so those runtime savings do not reduce the bundle.
+        let mut guest = wasm_encoder::Component::new();
+        RoundtripReencoder
+            .parse_component(&mut guest, wasmparser::Parser::new(0), self.guest)
+            .context("failed to re-encode the JS guest")?;
         let bundle = (self.dynamic.len() as u64)
-            .checked_sub(self.guest.len() as u64)
-            .context("the injected component is smaller than its guest")?;
+            .checked_sub(guest.finish().len() as u64)
+            .context("the injected component is smaller than its re-encoded guest")?;
         let snapshot = if self.uploaded == self.dynamic {
             0
         } else {
@@ -289,7 +297,9 @@ impl SymbolClassifier {
         let owner = owner.as_ref();
         let matches = |owners: &[String]| {
             owners.iter().any(|o| {
-                if o.ends_with('/') {
+                if self.naming == SymbolNaming::Go && go_symbol_matches(name, o) {
+                    true
+                } else if o.ends_with('/') {
                     owner.starts_with(o.as_str())
                 } else {
                     owner == o
@@ -301,13 +311,39 @@ impl SymbolClassifier {
         } else if matches(&self.sdk) {
             Bucket::Sdk
         } else if matches(&self.runtime)
-            || (self.naming == SymbolNaming::Go && is_go_runtime(owner))
+            || (self.naming == SymbolNaming::Go
+                && (is_go_runtime(owner)
+                    || GO_STANDARD_LIBRARY.iter().any(|package| {
+                        go_symbol_matches(name, package)
+                            || go_symbol_matches(name, &format!("{package}/"))
+                    })
+                    || go_symbol_matches(name, "vendor/")
+                    || name.starts_with("type_.")
+                    || name.starts_with("go_itab.")))
         {
             Bucket::Runtime
         } else {
             Bucket::Dependencies
         }
     }
+}
+
+/// Matches Go's Wasm function names, whose linker replaces every character except ASCII
+/// letters, digits, `_` and `.` with `_`. A trailing `/` selects all subpackages. The encoding
+/// is lossy, so it establishes approximate ownership, not a reversible package path.
+pub fn go_symbol_matches(name: &str, package: &str) -> bool {
+    let prefix: String = package
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    name.strip_prefix(&prefix)
+        .is_some_and(|suffix| package.ends_with('/') || suffix.starts_with('.'))
 }
 
 /// The owner of a twiggy item: the crate of a Rust symbol, or the package path of a Go or
@@ -708,6 +744,62 @@ mod tests {
     }
 
     #[test]
+    fn js_injection_encoding_savings_belong_to_the_runtime() {
+        use wasm_encoder::{CodeSection, Function, Instruction, Module, RawSection};
+
+        let core = js_core(1000, "runtime");
+        let mut padded = Module::new();
+        let mut canonical = Module::new();
+        for payload in wasmparser::Parser::new(0).parse_all(&core) {
+            let payload = payload.unwrap();
+            if let Some((id, range)) = payload.as_section() {
+                if id == 10 {
+                    let mut function = Function::new([]);
+                    let mut unpadded = Function::new([]);
+                    for _ in 0..400 {
+                        // i32.const 1 with a padded signed LEB, followed by drop.
+                        function.raw([0x41, 0x81, 0x80, 0x80, 0x80, 0x00, 0x1a]);
+                        unpadded.instruction(&Instruction::I32Const(1));
+                        unpadded.instruction(&Instruction::Drop);
+                    }
+                    function.raw([0x41, 0x01, 0x0b]);
+                    unpadded.instruction(&Instruction::I32Const(1));
+                    unpadded.instruction(&Instruction::End);
+                    padded.section(CodeSection::new().function(&function));
+                    canonical.section(CodeSection::new().function(&unpadded));
+                } else {
+                    let section = RawSection {
+                        id,
+                        data: &core[range],
+                    };
+                    padded.section(&section);
+                    canonical.section(&section);
+                }
+            }
+        }
+        let guest = wrap(&[padded.finish()]);
+        let canonical = wrap(&[canonical.finish()]);
+        let mut dynamic = canonical.clone();
+        // A seven-byte custom section distinguishes added bytes from encoding savings.
+        dynamic.extend(crate::sections::tests::section(0, &[0, 1, 2, 3, 4]));
+        assert!(dynamic.len() < guest.len());
+        let component = JsComponent {
+            guest: &guest,
+            dynamic: &dynamic,
+            uploaded: &dynamic,
+        };
+        let map = BTreeMap::from([("src/main.ts".into(), 1)]);
+        let breakdown = js_breakdown(&component, &map).unwrap();
+        assert_eq!(breakdown.bucket(Bucket::UserCode), 7);
+        assert_eq!(breakdown.bucket(Bucket::Runtime), canonical.len() as u64);
+        assert_eq!(breakdown.bucket(Bucket::Snapshot), 0);
+        assert_eq!(
+            scala_breakdown(&component).unwrap().bucket(Bucket::Bundle),
+            7
+        );
+    }
+
+    #[test]
     fn js_module_ids_map_to_sdk_dependency_and_user_buckets() {
         assert_eq!(
             js_module_bucket("/app/node_modules/@golemcloud/effect-golem/x.js"),
@@ -841,6 +933,15 @@ mod tests {
             ("example.com/app.Counter.Inc", Bucket::UserCode),
             ("example.com/app/internal/store.Get", Bucket::UserCode),
             ("main.main", Bucket::UserCode),
+            ("example.com_app_internal_store.Get", Bucket::UserCode),
+            (
+                "github.com_golemcloud_golem_sdks_go_golem.Invoke",
+                Bucket::Sdk,
+            ),
+            ("github.com_dustin_go_humanize.Bytes", Bucket::Dependencies),
+            ("encoding_json_v2.Marshal", Bucket::Runtime),
+            ("type_.eq.example_com.Record", Bucket::Runtime),
+            ("main_not_the_application.Run", Bucket::Dependencies),
             (
                 "github.com/golemcloud/golem/sdks/go/golem.Invoke",
                 Bucket::Sdk,

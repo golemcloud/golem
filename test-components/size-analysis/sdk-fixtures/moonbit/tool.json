@@ -1,0 +1,6 @@
+{
+  "agents": {},
+  "calls": [
+    { "target": { "kind": "tool", "component": "size-fixture:provider", "tool": "moonbit-streaming" }, "arguments": { "argv": ["no-streams"], "stdin": [] }, "expected": { "result": "91", "stdout": [], "stderr": [] } }
+  ]
+}

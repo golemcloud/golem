@@ -1,0 +1,6 @@
+{
+  "agents": {},
+  "calls": [
+    { "target": { "kind": "tool", "component": "size-fixture:provider", "tool": "scala-streaming" }, "arguments": { "argv": ["plain"], "stdin": [] }, "expected": { "result": "plain", "stdout": [], "stderr": [] } }
+  ]
+}

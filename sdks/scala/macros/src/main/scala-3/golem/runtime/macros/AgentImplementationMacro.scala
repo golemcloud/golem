@@ -198,7 +198,7 @@ object AgentImplementationMacro {
     val result: Expr[Any] = ctorTypeRepr.asType match {
       case '[ctor] =>
         val metadataExpr  = '{ AgentDefinitionMacro.generate[Trait] }
-        val methodSymbols = traitSymbol.methodMembers.collect {
+        val methodSymbols = traitSymbol.methodMembers.sortBy(_.name).collect {
           case method
               if method.owner == traitSymbol && method.flags.is(
                 Flags.Deferred
@@ -563,7 +563,7 @@ object AgentImplementationMacro {
     if !traitSymbol.flags.is(Flags.Trait) then
       report.errorAndAbort(s"@agentImplementation target must be a trait, found: ${traitSymbol.fullName}")
 
-    val methodSymbols = traitSymbol.methodMembers.collect {
+    val methodSymbols = traitSymbol.methodMembers.sortBy(_.name).collect {
       case method if method.owner == traitSymbol && method.flags.is(Flags.Deferred) && method.isDefDef =>
         method
     }
@@ -624,7 +624,7 @@ object AgentImplementationMacro {
 
     val metadataExpr = '{ AgentDefinitionMacro.generate[Trait] }
     val methodsExpr  = buildImplementationMethodsExpr[Trait](
-      traitSymbol.methodMembers.collect {
+      traitSymbol.methodMembers.sortBy(_.name).collect {
         case method if method.owner == traitSymbol && method.flags.is(Flags.Deferred) && method.isDefDef =>
           method
       },
