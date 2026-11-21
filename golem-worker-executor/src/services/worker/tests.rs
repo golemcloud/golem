@@ -3811,10 +3811,11 @@ mod status_baseline_round_trip {
                 }),
                 1..40,
             ),
+            initial_plugins in any::<u8>(),
             first in any::<prop::sample::Index>(),
             second in any::<prop::sample::Index>(),
         ) {
-            let entries = oplog(&generated);
+            let entries = oplog(initial_plugins, &generated);
             let indexes: Vec<OplogIndex> = entries.keys().copied().collect();
             let (earlier, later) = (first.index(indexes.len()), second.index(indexes.len()));
             let (earlier, later) = (earlier.min(later), earlier.max(later));
