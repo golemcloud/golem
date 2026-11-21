@@ -659,7 +659,7 @@ async fn rejected_periodic_snapshots_are_exact_indexes_and_incarnation_scoped() 
 }
 
 #[test]
-async fn remembered_status_baseline_recovers_complete_hash_after_cache_loss() {
+async fn a_remembered_delta_base_recovers_the_complete_hash_after_cache_loss() {
     let storage = Arc::new(InMemoryKeyValueStorage::new());
     let service = DefaultWorkerService::new(
         storage.clone(),
@@ -713,7 +713,7 @@ async fn remembered_status_baseline_recovers_complete_hash_after_cache_loss() {
 }
 
 #[test]
-async fn stale_status_baseline_reconciles_without_mixed_auxiliary_fields() {
+async fn a_stale_delta_base_reconciles_without_mixed_auxiliary_fields() {
     let storage = Arc::new(InMemoryKeyValueStorage::new());
     let service = DefaultWorkerService::new(
         storage,
