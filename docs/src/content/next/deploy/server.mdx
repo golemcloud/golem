@@ -50,7 +50,6 @@ The supported settings are shared by all binaries:
 | `package_mirror_url` | URL retained for the package-mirror feature. It does not yet change package downloads. |
 | `internal_grpc_tls.*` | `enabled`, `cert_file`, `key_file`, `ca_cert_file` and optional `server_name`. Internal mTLS is off by default. |
 | `etcd.tls.*` | Paths to the CA certificate, client certificate and key for etcd. The shard manager's etcd backend remains an advanced setting. |
-| `outgoing_proxy` | Input only. No transport uses it, so it does not route outgoing traffic through a proxy. |
 | `logging.*`, `otlp.*` | Logging and OTLP export settings. |
 | `outbound_sockets` | Allow outbound agent sockets, default `false`. |
 | `filesystem_snapshots.*` | Enable and configure filesystem snapshots. |

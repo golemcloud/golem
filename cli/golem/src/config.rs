@@ -1636,7 +1636,6 @@ mod tests {
                 recovery_location = "s3://recovery/installation"
                 recovery_horizon = "17days"
                 package_mirror_url = "https://packages.example.com/golem/"
-                outgoing_proxy = "http://proxy.internal:3128"
                 outbound_sockets = true
                 retained_update_snapshots = 7
                 [postgres]
@@ -1870,10 +1869,6 @@ mod tests {
                 assert_eq!(
                     config.package_mirror_url.as_ref().unwrap().as_str(),
                     "https://packages.example.com/golem/"
-                );
-                assert_eq!(
-                    config.outgoing_proxy.as_ref().unwrap().as_str(),
-                    "http://proxy.internal:3128/"
                 );
             });
             assert!(executor.agent_sockets.enabled);
