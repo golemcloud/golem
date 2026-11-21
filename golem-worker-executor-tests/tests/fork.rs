@@ -1386,7 +1386,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     // With no cached status and no status baseline, the start after the restart folds the
     // whole oplog.
     executor.remove_cached_status(&source.agent_id).await?;
-    executor.remove_status_baseline(&source.agent_id).await?;
+    executor.remove_status_checkpoint(&source.agent_id).await?;
     drop(executor);
     let executor = start_with_local_resume(deps, &context, false).await?;
     let mut retry = request.clone();
