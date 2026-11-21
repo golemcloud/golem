@@ -160,6 +160,7 @@ impl Context {
     pub async fn new(
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
+        allow_manifest_upgrades: bool,
     ) -> anyhow::Result<Self> {
         if matches!(
             global_flags.environment,
@@ -203,7 +204,7 @@ impl Context {
         let app_source_mode =
             ApplicationContextConfig::app_source_mode_from_global_flags(&global_flags);
 
-        if log_output_for_help.is_none() {
+        if allow_manifest_upgrades && log_output_for_help.is_none() {
             ApplicationContext::plan_and_apply_manifest_upgrades_before_load(
                 app_source_mode.clone(),
                 global_flags.yes,

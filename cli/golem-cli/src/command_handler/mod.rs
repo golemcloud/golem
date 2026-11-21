@@ -131,17 +131,25 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     async fn new_context(
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
+        allow_manifest_upgrades: bool,
     ) -> anyhow::Result<Arc<Context>> {
         Ok(Arc::new(
-            Context::new(global_flags, log_output_for_help).await?,
+            Context::new(global_flags, log_output_for_help, allow_manifest_upgrades).await?,
         ))
     }
 
     async fn new_context_with_init_hint_error_handler(
         global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
+        allow_manifest_upgrades: bool,
     ) -> anyhow::Result<Arc<Context>> {
-        match Self::new_context(global_flags.clone(), log_output_for_help).await {
+        match Self::new_context(
+            global_flags.clone(),
+            log_output_for_help,
+            allow_manifest_upgrades,
+        )
+        .await
+        {
             Ok(ok) => Ok(ok),
             Err(error) => {
                 set_log_output(Output::Stderr);
@@ -255,6 +263,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 let ctx = Self::new_context_with_init_hint_error_handler(
                     fallback_command.global_flags.clone(),
                     Some(Output::Stderr),
+                    false,
                 )
                 .await;
 
@@ -320,6 +329,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     component_name,
                     build: build_args,
                 } => {
+                    ctx.allow_manifest_upgrades = build_args.step.is_empty()
+                        || build_args
+                            .step
+                            .iter()
+                            .any(|step| *step != crate::model::app::AppBuildStep::Check);
                     ctx.get_or_init()
                         .await?
                         .app_handler()
@@ -674,6 +688,7 @@ struct LazyContext<Hooks: CommandHandlerHooks> {
     #[allow(unused)]
     hooks: Arc<Hooks>,
     ctx: Option<Arc<Context>>,
+    allow_manifest_upgrades: bool,
 }
 
 impl<Hooks: CommandHandlerHooks + 'static> LazyContext<Hooks> {
@@ -682,6 +697,7 @@ impl<Hooks: CommandHandlerHooks + 'static> LazyContext<Hooks> {
             global_flags,
             hooks,
             ctx: None,
+            allow_manifest_upgrades: true,
         }
     }
 
@@ -694,6 +710,7 @@ impl<Hooks: CommandHandlerHooks + 'static> LazyContext<Hooks> {
             global_flags,
             hooks,
             ctx: Some(ctx),
+            allow_manifest_upgrades: true,
         }
     }
 
@@ -705,6 +722,7 @@ impl<Hooks: CommandHandlerHooks + 'static> LazyContext<Hooks> {
                 CommandHandler::<Hooks>::new_context_with_init_hint_error_handler(
                     self.global_flags.clone(),
                     None,
+                    self.allow_manifest_upgrades,
                 )
                 .await?,
             );
