@@ -101,34 +101,34 @@ impl<'a> PublicOplogAttributionResolver<'a> {
         &mut self,
         index: OplogIndex,
         entry: &OplogEntry,
-    ) -> Result<PublicOplogEntryAttribution, String> {
+    ) -> Result<PublicOplogEntryAttribution, PublicOplogReadError> {
         if let Some(start_index) = entry.entity_parent_start_index() {
             if start_index >= index {
-                return Err(format!(
+                return Err(PublicOplogReadError::Invalid(format!(
                     "oplog entry {index} has non-causal entity parent Start index {start_index}"
-                ));
+                )));
             }
             if !self.retention.retains(start_index) {
                 return Ok(PublicOplogEntryAttribution::agent());
             }
             let source = self.load_start(start_index).await?.ok_or_else(|| {
-                format!(
+                PublicOplogReadError::Invalid(format!(
                     "oplog entry {index} entity parent index {start_index} does not reference a Start"
-                )
+                ))
             })?;
             if source.function_name != HostFunctionName::GolemEntityInvoke {
-                return Err(format!(
+                return Err(PublicOplogReadError::Invalid(format!(
                     "oplog entry {index} entity parent Start {start_index} is not an entity invocation"
-                ));
+                )));
             }
             return self
                 .entity_context_for_start(start_index)
                 .await?
                 .map(PublicOplogEntryAttribution::entity)
                 .ok_or_else(|| {
-                    format!(
+                    PublicOplogReadError::Invalid(format!(
                         "oplog entry {index} entity parent Start {start_index} has no entity attribution"
-                    )
+                    ))
                 });
         }
 
@@ -297,7 +297,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
     async fn entity_context_for_start(
         &mut self,
         start_index: OplogIndex,
-    ) -> Result<Option<PublicEntityInvocationContext>, String> {
+    ) -> Result<Option<PublicEntityInvocationContext>, PublicOplogReadError> {
         let mut path = Vec::new();
         let mut visited = HashSet::new();
         let mut current = start_index;
@@ -306,7 +306,9 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 break resolved.clone();
             }
             if !visited.insert(current) {
-                return Err(format!("cyclic oplog Start attribution at index {current}"));
+                return Err(PublicOplogReadError::Invalid(format!(
+                    "cyclic oplog Start attribution at index {current}"
+                )));
             }
 
             let Some(source) = self.load_start(current).await? else {
@@ -317,7 +319,10 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 break None;
             }
             if source.function_name == HostFunctionName::GolemEntityInvoke {
-                let invocation = self.load_public_entity_invocation(current, &source).await?;
+                let invocation = self
+                    .load_public_entity_invocation(current, &source)
+                    .await
+                    .map_err(PublicOplogReadError::Invalid)?;
                 let parent = source.parent();
                 path.push(AttributionPathNode::Entity(current, invocation));
                 match parent {
@@ -366,7 +371,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
     async fn load_start(
         &mut self,
         index: OplogIndex,
-    ) -> Result<Option<OplogStartAttributionSource>, String> {
+    ) -> Result<Option<OplogStartAttributionSource>, PublicOplogReadError> {
         if let Some(start) = self.starts.get(&index) {
             return Ok(start.clone());
         }
@@ -377,8 +382,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
         let entry = self
             .oplog_service
             .read_exact(self.owned_agent_id, self.agent_mode, index, 1)
-            .await
-            .map_err(|error| error.to_string())?
+            .await?
             .remove(&index);
         let start = entry
             .as_ref()

@@ -46,7 +46,8 @@ use std::time::Duration;
 
 /// An open oplog that refuses reads below its retained start.
 ///
-/// The handle keeps the retention it was opened with. Nothing moves the start of an open oplog.
+/// The handle keeps the retention that the service read when it opened the oplog. Nothing moves
+/// the start of an open oplog. The handle keeps the [`AgentId`] for the error of a refused read.
 pub struct RetentionOplog {
     inner: Arc<dyn Oplog>,
     agent_id: AgentId,

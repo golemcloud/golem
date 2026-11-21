@@ -15,7 +15,7 @@
 use super::*;
 use crate::services::golem_config::ScanBudget;
 use crate::services::oplog::UnreadableOplog;
-use crate::services::oplog::retention::OplogRetention;
+use crate::services::oplog::retention::{OplogRange, OplogRetention};
 use golem_common::model::oplog::{OplogCursor, OplogScan, OplogScanAllowance};
 use golem_service_base::error::worker_executor::StaleCursorReason;
 use std::collections::BTreeMap;
@@ -313,9 +313,12 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
         .await?;
-    let page = retention
-        .page(initial_oplog_index, last_index, count as u64)
-        .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?;
+    let page = retention.page(
+        &owned_agent_id.agent_id,
+        initial_oplog_index,
+        last_index,
+        count as u64,
+    )?;
     let raw_entries = match page {
         Some(page) => {
             oplog_service
@@ -348,8 +351,7 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
 
         let attribution = attribution_resolver
             .attribution_for_entry(index, &raw_entry)
-            .await
-            .map_err(PublicOplogReadError::Invalid)?;
+            .await?;
         let entry = PublicOplogEntry::from_oplog_entry(
             index,
             raw_entry,
@@ -522,7 +524,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
 
     loop {
         let to_last = last_oplog_index.map_or(u64::MAX, |last| {
-            (last.as_u64() + 1).saturating_sub(current_index.as_u64())
+            OplogRange::within(current_index, last, u64::MAX).map_or(0, |range| range.count)
         });
         let chunk_size = (count.saturating_sub(results.len()) as u64)
             .min(budget.remaining_entries(scanned))
@@ -622,8 +624,9 @@ async fn scan_component_revision(
             .unwrap_or(initial_component_revision);
         scan.charge(create.count);
     }
+    const BATCH_SIZE: u64 = 256;
     let mut current = OplogIndex::INITIAL;
-    while let Some(chunk) = retention.chunk(current, last, 256) {
+    while let Some(chunk) = retention.chunk(current, last, BATCH_SIZE) {
         if scan.is_spent() {
             return Ok(None);
         }

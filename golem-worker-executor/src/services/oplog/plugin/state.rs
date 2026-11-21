@@ -982,15 +982,14 @@ mod tests {
     use super::*;
     use test_r::test;
 
-    fn idx(value: u64) -> OplogIndex {
-        OplogIndex::from_u64(value)
-    }
+    use crate::services::oplog::retention::test_oplog::{at, idx};
 
+    /// A cut does not pass the confirmed index of a plugin, so a repeated batch starts at or after
+    /// the retained start.
     #[test]
     fn a_repeated_batch_keeps_the_range_that_was_sent() {
-        let retention = OplogRetention::FULL.advanced_to(idx(8));
         assert_eq!(
-            next_batch(idx(3), idx(5), idx(10), retention),
+            next_batch(idx(3), idx(5), idx(10), at(4)),
             Some((idx(4), idx(5), true))
         );
         assert_eq!(
@@ -1001,7 +1000,6 @@ mod tests {
 
     #[test]
     fn a_new_batch_starts_after_the_confirmed_index_or_at_the_retained_start() {
-        let at = |start| OplogRetention::FULL.advanced_to(idx(start));
         assert_eq!(
             next_batch(idx(3), idx(3), idx(10), OplogRetention::FULL),
             Some((idx(4), idx(10), false))

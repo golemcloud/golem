@@ -275,8 +275,139 @@ mod tests {
     use super::*;
     use test_r::test;
 
-    fn idx(value: u64) -> OplogIndex {
-        OplogIndex::from_u64(value)
+    use crate::services::golem_config::GolemConfig;
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, at, idx, jump};
+    use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::payload::OplogPayload;
+    use golem_common::model::{AgentInvocationPayload, Timestamp};
+
+    /// The services of the error history walks over an oplog behind the retention layer.
+    struct Retained {
+        oplog: RetainedOplog,
+        config: Arc<GolemConfig>,
+    }
+
+    impl Retained {
+        async fn new(entries: Vec<OplogEntry>) -> Self {
+            let oplog = RetainedOplog::new().await;
+            oplog.add(entries).await;
+            Self {
+                oplog,
+                config: Arc::new(GolemConfig::default()),
+            }
+        }
+    }
+
+    impl HasOplogService for Retained {
+        fn oplog_service(&self) -> Arc<dyn OplogService> {
+            self.oplog.service.clone()
+        }
+    }
+
+    impl HasConfig for Retained {
+        fn config(&self) -> Arc<GolemConfig> {
+            self.config.clone()
+        }
+    }
+
+    fn stderr(message: &str) -> OplogEntry {
+        OplogEntry::Log {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            level: LogLevel::Stderr,
+            context: String::new(),
+            message: message.to_string(),
+            trace_context: None,
+        }
+    }
+
+    fn started() -> OplogEntry {
+        OplogEntry::AgentInvocationStarted {
+            timestamp: Timestamp::now_utc(),
+            invocation_id: uuid::Uuid::from_u128(1).into(),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            trace_id: TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+            wallet_pin: Box::new(InvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 0,
+                },
+                pinned_card_ids: Vec::new(),
+                scope_card_id: None,
+            }),
+        }
+    }
+
+    /// The last error walks back to the retained start. An error below the start is not found,
+    /// and the walk reads no entry below the start: a read below it would report the expired
+    /// error as the last error.
+    #[test]
+    async fn the_last_error_walk_stops_at_the_retained_start() {
+        let retained = Retained::new(vec![
+            jump(1),
+            OplogEntry::Error {
+                timestamp: Timestamp::from(2),
+                entity_parent_start_index: None,
+                kind: OplogErrorKind::Invocation,
+                invocation_id: None,
+                error: AgentError::Unknown("below".to_string()),
+                retry_from: idx(1),
+                retry_policy_state: None,
+                retry_at: None,
+                retrying_start_index: None,
+            },
+            jump(3),
+            jump(4),
+            jump(5),
+        ])
+        .await;
+        let status = AgentStatusRecord {
+            status: AgentStatus::Failed,
+            ..Default::default()
+        };
+        let last = || {
+            last_error(
+                &retained,
+                &retained.oplog.owned_agent_id,
+                AgentMode::Durable,
+                &status,
+            )
+        };
+        assert_eq!(
+            last().await.map(|last| last.error),
+            Some(AgentError::Unknown("below".to_string()))
+        );
+        retained.oplog.advance(3).await;
+        assert_eq!(last().await.map(|last| last.error), None);
+    }
+
+    /// The stderr walk collects the logs of the last invocation back to the retained start. The
+    /// logs below the start are not read.
+    #[test]
+    async fn the_stderr_walk_stops_at_the_retained_start() {
+        let retained = Retained::new(vec![
+            jump(1),
+            stderr("old"),
+            started(),
+            stderr("new"),
+            started(),
+            stderr("tail"),
+        ])
+        .await;
+        let logs = || {
+            recover_stderr_logs(
+                &retained,
+                &retained.oplog.owned_agent_id,
+                AgentMode::Durable,
+                idx(6),
+            )
+        };
+        assert_eq!(logs().await, "newtail");
+        retained.oplog.advance(4).await;
+        assert_eq!(logs().await, "tail");
     }
 
     fn window(start: u64, count: u64) -> Option<OplogRange> {
@@ -288,7 +419,6 @@ mod tests {
 
     #[test]
     fn a_backward_scan_window_ends_at_the_retained_start() {
-        let at = |start| OplogRetention::FULL.advanced_to(idx(start));
         assert_eq!(
             backward_scan_window(OplogRetention::FULL, idx(10_000)),
             window(
