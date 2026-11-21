@@ -117,9 +117,13 @@ impl ReplayCursor {
 
         let mut violation = false;
 
-        while start < end {
-            let available = end.as_u64() - start.as_u64();
-            let entries = self.read_oplog(start, CHUNK_SIZE.min(available)).await?;
+        // `end` is the index after the scan. Every caller starts the scan at index 1 or later, so
+        // an `end` of 0 gives no read.
+        let last = OplogIndex::from_u64(end.as_u64().saturating_sub(1));
+        while let Some(chunk) =
+            crate::services::oplog::retention::OplogRange::within(start, last, CHUNK_SIZE)
+        {
+            let entries = self.read_oplog(chunk.start, chunk.count).await?;
             for (idx, entry) in &entries {
                 if current_next_skip_region
                     .as_ref()

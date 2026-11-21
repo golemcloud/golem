@@ -829,6 +829,9 @@ impl StreamSessionIndexService {
             .oplog
             .upgrade()
             .ok_or_else(|| "oplog service is unavailable".to_string())?;
+        // The index covers the retained oplog: the entries before its start are gone. The
+        // `Create` entry is kept below the start, and names the producer.
+        let retention = oplog.retention(id, mode).await?;
         loop {
             let mut expected = self
                 .kv
@@ -866,10 +869,7 @@ impl StreamSessionIndexService {
             if metadata.covered_through >= horizon {
                 return Ok(());
             }
-            // The index covers the retained oplog: the entries before its start are gone. The
-            // `Create` entry is kept below the start, and names the producer.
             // A horizon below the retained start leaves nothing to index.
-            let retention = oplog.retention(id, mode).await?;
             let Some(chunk) = retention.chunk(metadata.covered_through.next(), horizon, 1024)
             else {
                 return Ok(());

@@ -122,13 +122,15 @@ fn first_start(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<OplogInd
 }
 
 /// An agent whose oplog starts at the bootstrap range of its snapshot recovers from the snapshot
-/// after a real restart. The cached status and the invocation result index are removed before
-/// the restart, so the executor answers the status and the repeated call by idempotency key from
-/// the oplog after the start. The agent answers pages from the start with their original indexes,
-/// the `Create` entry alone, and search. A page before the start is refused as expired with the
-/// start. The repeated call by key runs nothing: each call of `increment` has one start and one
-/// finish. A fork of the agent is refused as expired. A revert of more invocations than the oplog
-/// keeps stops at the start, and a revert of the last invocation reads only retained entries.
+/// after a real restart. The test removes the cached status and the invocation result index
+/// before the restart, so the executor answers the status and the repeated call by idempotency
+/// key from the oplog after the start. The agent answers pages from the start with their original
+/// indexes, the `Create` entry alone, and search. The executor refuses a page before the start as
+/// expired with the start. The repeated call by key runs nothing: each call of `increment` has one
+/// start and one finish. The executor refuses a fork of the agent as expired. A revert of more
+/// invocations than the oplog keeps stops at the start. A revert of the last invocation reads the
+/// whole history, so the executor refuses it as expired. An agent whose oplog starts at index 1
+/// reverts its last call in the same executor.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -275,19 +277,54 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
         too_far.contains("Could not find 100 invocations to revert"),
         "{too_far}"
     );
-    executor
+    let refused = executor
         .revert(
             &agent_id,
             RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
                 number_of_invocations: 1,
             }),
         )
-        .await?;
+        .await
+        .expect_err("the revert reads the whole history from index 1");
+    let refused = format!("{refused:#}");
+    assert!(names_expired_start(&refused, retained_start), "{refused}");
     let value = executor
         .invoke_and_await_agent(&component, &agent, "get", data_value!())
         .await?
         .into_typed::<u32>()?;
-    assert_eq!(value, 4, "the revert of the last `get` keeps the counter");
+    assert_eq!(value, 4, "the refused revert changed nothing");
+
+    // An agent whose oplog starts at index 1 reverts its last call in the same executor.
+    let control = agent_id!("FailingCounter", "retained-start-control");
+    let control_id = executor.start_agent(&component.id, control.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &control, "add", data_value!(5u64))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &control, "add", data_value!(7u64))
+        .await?;
+    executor
+        .revert(
+            &control_id,
+            RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                number_of_invocations: 1,
+            }),
+        )
+        .await?;
+    let reverted = executor.get_oplog(&control_id, OplogIndex::INITIAL).await?;
+    assert!(
+        matches!(
+            reverted.last().map(|entry| &entry.entry),
+            Some(PublicOplogEntry::Revert(_))
+        ),
+        "{:?}",
+        reverted.last()
+    );
+    let total = executor
+        .invoke_and_await_agent(&component, &control, "get", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(total, 5, "the revert removed the last `add`");
     Ok(())
 }
 

@@ -139,6 +139,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             next = chunk.end();
         }
+        // The initialization of a fork is in its retained entries, or it is below the retained
+        // start, where the oplog no longer keeps it.
+        retention.check_agent_from(&self.owned_agent_id.agent_id, OplogIndex::INITIAL)?;
         Err(self.missing_initialization())
     }
 

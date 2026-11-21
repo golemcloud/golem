@@ -650,6 +650,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 }
 
+/// The error of a revert whose stream fork cut failed. A cut that the revert cannot make is an
+/// invalid request. An unreadable oplog keeps its type, so a cut that reads below the retained
+/// start fails as expired.
+fn revert_cut_error(
+    error: crate::durable_host::durable_stream::StreamStoreError,
+) -> WorkerExecutorError {
+    use crate::durable_host::durable_stream::StreamStoreError;
+    match error {
+        StreamStoreError::InvalidOffset(_) => {
+            WorkerExecutorError::invalid_request(error.to_string())
+        }
+        StreamStoreError::Unreadable(unreadable) => unreadable.into(),
+        _ => WorkerExecutorError::runtime(error.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -668,6 +684,31 @@ mod tests {
         AgentStatus::Exited,
         AgentStatus::Sandboxed,
     ];
+
+    #[test]
+    fn a_revert_cut_error_keeps_an_unreadable_oplog() {
+        use crate::durable_host::durable_stream::StreamStoreError;
+        use crate::services::oplog::UnreadableOplog;
+        use crate::services::oplog::retention::test_oplog::expired;
+
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "reverted".to_string(),
+        };
+        let unreadable = UnreadableOplog::new(&agent_id, expired(4));
+        assert_eq!(
+            revert_cut_error(StreamStoreError::Unreadable(unreadable.clone())),
+            WorkerExecutorError::from(unreadable)
+        );
+        assert!(matches!(
+            revert_cut_error(StreamStoreError::InvalidOffset("outside".to_string())),
+            WorkerExecutorError::InvalidRequest { .. }
+        ));
+        assert!(matches!(
+            revert_cut_error(StreamStoreError::CounterOverflow),
+            WorkerExecutorError::Runtime { .. }
+        ));
+    }
 
     #[test]
     fn automatic_update_duplicates_are_kind_scoped() {
@@ -1393,10 +1434,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         last_oplog_index: OplogIndex,
         number_of_invocations: Option<u64>,
     ) -> Result<Box<[FilesystemSnapshotName]>, WorkerExecutorError> {
-        use crate::durable_host::durable_stream::StreamStoreError;
         use crate::services::oplog::DurableStreamOplogRecord;
 
         let region_end = self.oplog.current_oplog_index().await;
+        // The preflight folds the status after the revert from a default baseline, so it reads
+        // the whole history from index 1. When the retained start is above 1, the read fails as
+        // expired.
         let entries = self
             .oplog
             .read_exact(OplogIndex::INITIAL, region_end.as_u64())
@@ -1581,12 +1624,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     true,
                 )
                 .await
-                .map_err(|error| match error {
-                    StreamStoreError::InvalidOffset(_) => {
-                        WorkerExecutorError::invalid_request(error.to_string())
-                    }
-                    _ => WorkerExecutorError::runtime(error.to_string()),
-                })?;
+                .map_err(revert_cut_error)?;
                 let mut cut_cancelled = Vec::new();
                 let mut entries = vec![
                     DurableStreamOplogRecord::InlineEntry(OplogEntry::revert(

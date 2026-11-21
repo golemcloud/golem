@@ -345,18 +345,18 @@ where
     let chunk_size = this
         .config()
         .invocation_results
-        .physical_index_catch_up_chunk_size
-        .max(1);
+        .physical_index_catch_up_chunk_size;
 
     if full_rebuild {
         return fold_status_with_precomputed_regions(this, reader, baseline, chunk_size).await;
     }
 
+    // The fold continues from its baseline, so it reads every entry after the baseline and moves
+    // no start.
     let original_baseline = baseline.clone();
     let mut first = baseline.oplog_idx.next();
-    while first <= last_oplog_index {
-        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let mut entries = reader.read_exact(first, count).await?;
+    while let Some(chunk) = OplogRange::within(first, last_oplog_index, chunk_size) {
+        let mut entries = reader.read_exact(chunk.start, chunk.count).await?;
         if entries.is_empty() {
             return Ok(None);
         }
@@ -424,8 +424,13 @@ where
     let owned_agent_id = reader.owned_agent_id;
     let agent_mode = reader.agent_mode;
     let last_oplog_index = reader.horizon;
+    // The fold continues from its baseline and moves no start: a full rebuild reads from index 1
+    // with the retention of an oplog that keeps every entry, so it fails as expired when the
+    // retained start is above 1.
     let start = baseline.oplog_idx.next();
-    let Some(region_entries) = read_region_entries(reader, start, chunk_size, true).await? else {
+    let Some(region_entries) =
+        read_region_entries(reader, OplogRetention::FULL, start, chunk_size, true).await?
+    else {
         return Ok(None);
     };
     let pending_updates = std::mem::take(&mut baseline.pending_updates);
@@ -451,9 +456,8 @@ where
     let mut final_pending_updates = Some(std::mem::take(&mut regions.queue).into_open().0);
 
     let mut first = start;
-    while first <= last_oplog_index {
-        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let mut entries = reader.read_exact(first, count).await?;
+    while let Some(chunk) = OplogRange::within(first, last_oplog_index, chunk_size) {
+        let mut entries = reader.read_exact(chunk.start, chunk.count).await?;
         if entries.is_empty() {
             return Ok(None);
         }
@@ -710,26 +714,26 @@ pub(crate) async fn skipped_regions_at(
     let reader = StatusOplogReader::new(this, owned_agent_id, AgentMode::Durable, None, horizon);
     // A manual update invocation changes only the manual admissions, which no skipped region
     // depends on, so the read leaves them out.
-    let entries = read_region_entries(&reader, retention.start(), 1024, false)
+    let entries = read_region_entries(&reader, retention, OplogIndex::INITIAL, 1024, false)
         .await?
         .ok_or("Missing fork source history")?;
     Ok(skipped_regions(&entries))
 }
 
-/// The entries from `first` to the horizon of `reader` that the region fold reads: the jumps,
-/// the reverts and the update entries, and the manual update invocations when
-/// `manual_admissions` is true.
+/// The retained entries from `first` to the horizon of `reader` that the region fold reads: the
+/// jumps, the reverts and the update entries, and the manual update invocations when
+/// `manual_admissions` is true. A `first` below the start of `retention` moves to the start.
 pub(super) async fn read_region_entries(
     reader: &StatusOplogReader<'_>,
+    retention: OplogRetention,
     mut first: OplogIndex,
     chunk_size: u64,
     manual_admissions: bool,
 ) -> Result<Option<BTreeMap<OplogIndex, OplogEntry>>, UnreadableOplog> {
     let mut regions = BTreeMap::new();
     let horizon = reader.horizon;
-    while first <= horizon {
-        let count = (horizon.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let entries = reader.read_exact(first, count).await?;
+    while let Some(chunk) = retention.chunk(first, horizon, chunk_size) {
+        let entries = reader.read_exact(chunk.start, chunk.count).await?;
         let Some(last) = entries.keys().next_back() else {
             return Ok(None);
         };
