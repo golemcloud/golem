@@ -75,12 +75,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name = &identity.create_parameters().agent_type_name;
 
         let limits = self.oplog_query_limits(request.count)?;
+        // The first entry that the oplog holds, where a range without a start starts.
+        let oplog_first = OplogIndex::INITIAL;
         let (range, start_component_revision) = oplog_page_start(
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
             cursor,
             range,
+            oplog_first,
         )
         .await?;
         let chunk = get_public_oplog_page(
@@ -93,6 +96,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_type_name.as_ref(),
             start_component_revision,
             range,
+            oplog_first,
             limits,
         )
         .await
@@ -197,12 +201,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name = &identity.create_parameters().agent_type_name;
 
         let limits = self.oplog_query_limits(request.count)?;
+        // The first entry that the oplog holds, where a range without a start starts.
+        let oplog_first = OplogIndex::INITIAL;
         let (range, start_component_revision) = oplog_page_start(
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
             cursor,
             range,
+            oplog_first,
         )
         .await?;
         let chunk = search_public_oplog_page(
@@ -215,6 +222,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_type_name.as_ref(),
             start_component_revision,
             range,
+            oplog_first,
             limits,
             &request.query,
             self.services.config().limits.scan_budget,

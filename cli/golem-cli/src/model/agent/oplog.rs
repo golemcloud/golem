@@ -157,8 +157,8 @@ fn check_oplog_export_order(
     index: OplogIndex,
 ) -> anyhow::Result<()> {
     match (selection, previous) {
-        (OplogExportSelection::EveryEntry(range), None) => match range.start() {
-            Some(start) if index != start => anyhow::bail!(
+        (OplogExportSelection::EveryEntry(range), None) => match range.to_indices() {
+            (Some(start), _) if index.as_u64() != start => anyhow::bail!(
                 "the oplog read started at the entry at index {index}, not at the start of the \
                  range at index {start}"
             ),

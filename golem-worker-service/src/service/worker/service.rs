@@ -595,21 +595,53 @@ enum OplogReadKind {
 /// The oplog resource that a read of `range` needs. The read resumes `range` at the cursor, and a
 /// cursor outside `range` is an error. A page needs the oplog only up to its last entry or the
 /// end of the range, when that is earlier. A search needs the oplog up to the end of the range.
-/// A range without a start needs the oplog from index 1, the first index of an oplog.
+/// Before the read, the first entry of the oplog is not known, so a range without a start needs
+/// the oplog from index 1, the first index of an oplog.
 fn oplog_read_resource(
     range: OplogRange,
     cursor: Option<&OplogCursor>,
     kind: OplogReadKind,
 ) -> Result<OplogResourcePattern, OplogCursorOutsideRange> {
     let resumed = cursor.map_or(Ok(range), |cursor| range.resume(cursor))?;
+    Ok(oplog_resource_in(resumed, OplogIndex::INITIAL, kind))
+}
+
+/// The oplog resource of the page that the executor returned for a read of at most `count`
+/// entries of `range`, when the check before the read did not know where the page starts: a read
+/// of a range without a start, without a cursor. The executor starts such a read at the first
+/// entry that the oplog holds, `first_index_in_chunk`, and the page needs the oplog from there to
+/// its last possible entry, or to the end of the range when that is earlier. A page without
+/// entries can give 0 as its first index; the page then needs the oplog from index 1. The other
+/// reads give `None`, because the check before the read covers them.
+fn oplog_returned_page_resource(
+    range: OplogRange,
+    cursor: Option<&OplogCursor>,
+    count: u64,
+    first_index_in_chunk: OplogIndex,
+) -> Option<OplogResourcePattern> {
+    match (cursor, range.to_indices()) {
+        (None, (None, _)) => Some(oplog_resource_in(
+            range,
+            first_index_in_chunk.max(OplogIndex::INITIAL),
+            OplogReadKind::Page(count),
+        )),
+        _ => None,
+    }
+}
+
+/// The oplog resource that a read of `range` needs in an oplog whose first entry is at
+/// `oplog_first`: from the first index of the range to the end of the page or of the range.
+fn oplog_resource_in(
+    range: OplogRange,
+    oplog_first: OplogIndex,
+    kind: OplogReadKind,
+) -> OplogResourcePattern {
     let read = match kind {
-        OplogReadKind::Page(count) => resumed.page_in(OplogIndex::INITIAL, count),
-        OplogReadKind::Search => resumed,
+        OplogReadKind::Page(count) => range.page_in(oplog_first, count),
+        OplogReadKind::Search => range,
     };
-    Ok(OplogResourcePattern::range(
-        Some(read.first_index_in(OplogIndex::INITIAL).as_u64()),
-        read.end().map(u64::from),
-    ))
+    let (_, end) = read.to_indices();
+    OplogResourcePattern::range(Some(read.first_index_in(oplog_first).as_u64()), end)
 }
 
 fn authorize_filesystem_permission(
@@ -1271,12 +1303,21 @@ impl WorkerService {
             .get_oplog(
                 agent_id,
                 range,
-                cursor,
+                cursor.clone(),
                 count,
                 component.environment_id,
-                auth_ctx,
+                auth_ctx.clone(),
             )
             .await?;
+
+        if let Some(resource) = oplog_returned_page_resource(
+            range,
+            cursor.as_ref(),
+            count,
+            OplogIndex::from_u64(result.first_index_in_chunk),
+        ) {
+            authorize_oplog_permission(&auth_ctx, &component, agent_id, resource)?;
+        }
 
         Ok(result)
     }
@@ -4600,6 +4641,7 @@ mod tests {
         deleted_agent_ids: Mutex<Vec<AgentId>>,
         fingerprint: AgentFingerprint,
         oplog_entry_reads: Mutex<Vec<(OplogIndex, Option<ComponentRevision>)>>,
+        oplog_page_first_index_in_chunk: Mutex<u64>,
     }
 
     impl RecordingWorkerClient {
@@ -4623,6 +4665,7 @@ mod tests {
                 deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
                 oplog_entry_reads: Mutex::new(Vec::new()),
+                oplog_page_first_index_in_chunk: Mutex::new(0),
             }
         }
 
@@ -4649,6 +4692,7 @@ mod tests {
                 deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
                 oplog_entry_reads: Mutex::new(Vec::new()),
+                oplog_page_first_index_in_chunk: Mutex::new(0),
             }
         }
 
@@ -4896,7 +4940,7 @@ mod tests {
             Ok(GetOplogResponse {
                 entries: Vec::new(),
                 next: None,
-                first_index_in_chunk: 0,
+                first_index_in_chunk: *self.oplog_page_first_index_in_chunk.lock().unwrap(),
                 last_index: 0,
             })
         }
@@ -6225,6 +6269,117 @@ mod tests {
                 "{range:?}, {cursor:?}, {kind:?}"
             )
         });
+    }
+
+    #[test]
+    fn an_oplog_page_without_a_start_or_a_cursor_needs_the_page_that_the_executor_returned() {
+        let index = OplogIndex::from_u64;
+        let range = |from: Option<u64>, to: Option<u64>| {
+            OplogRange::new(from.map(index), to.map(index)).unwrap()
+        };
+        let cursor = |next: u64| OplogCursor {
+            next_oplog_index: next,
+            current_component_revision: 0,
+            query_hash: String::new(),
+        };
+        let pattern =
+            |start: u64, end: Option<u64>| Some(OplogResourcePattern::range(Some(start), end));
+        [
+            // A range without a start: from the first index that the executor returned, to the
+            // end of the page or of the range.
+            ((range(None, None), None, 50, 1), pattern(1, Some(50))),
+            ((range(None, None), None, 50, 40), pattern(40, Some(89))),
+            ((range(None, Some(60)), None, 50, 40), pattern(40, Some(60))),
+            ((range(None, None), None, 50, 0), pattern(1, Some(50))),
+            (
+                (range(None, None), None, 50, u64::MAX - 1),
+                pattern(u64::MAX - 1, None),
+            ),
+            // A range with a start, or a read with a cursor: the check before the read covers it.
+            ((range(Some(5), None), None, 50, 40), None),
+            ((range(Some(5), Some(60)), None, 50, 40), None),
+            ((range(None, None), Some(cursor(8)), 50, 40), None),
+            ((range(None, Some(60)), Some(cursor(8)), 50, 40), None),
+        ]
+        .into_iter()
+        .for_each(|((range, cursor, count, first), expected)| {
+            assert_eq!(
+                super::oplog_returned_page_resource(range, cursor.as_ref(), count, index(first)),
+                expected,
+                "{range:?}, {cursor:?}, page of {count}, first index {first}"
+            )
+        });
+    }
+
+    #[test]
+    async fn an_oplog_page_without_a_start_is_authorized_again_for_the_page_that_it_returned() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        *harness
+            .worker_client
+            .oplog_page_first_index_in_chunk
+            .lock()
+            .unwrap() = 40;
+        let index = OplogIndex::from_u64;
+        let range = |from: Option<u64>, to: Option<u64>| {
+            OplogRange::new(from.map(index), to.map(index)).unwrap()
+        };
+        let permitted = |start: u64, end: u64| {
+            auth_ctx_with_permissions(vec![oplog_target(
+                &agent_id,
+                OplogResourcePattern::range(Some(start), Some(end)),
+            )])
+        };
+        let get_oplog = |range: OplogRange, cursor: Option<u64>, auth_ctx: AuthCtx| {
+            harness.worker_service.get_oplog(
+                &agent_id,
+                range,
+                cursor.map(|next| OplogCursor {
+                    next_oplog_index: next,
+                    current_component_revision: 0,
+                    query_hash: String::new(),
+                }),
+                50,
+                auth_ctx,
+            )
+        };
+
+        // The permission covers the check before the read, from index 1, but not the page that
+        // the executor returned from index 40.
+        assert!(
+            get_oplog(OplogRange::ALL, None, permitted(1, 50))
+                .await
+                .is_err(),
+            "the page from index 40 reads past the permitted index 50"
+        );
+        get_oplog(OplogRange::ALL, None, permitted(1, 89))
+            .await
+            .unwrap();
+        get_oplog(range(None, Some(60)), None, permitted(1, 60))
+            .await
+            .unwrap();
+        // A read with a start or with a cursor is not checked again.
+        get_oplog(range(Some(5), None), None, permitted(5, 54))
+            .await
+            .unwrap();
+        get_oplog(OplogRange::ALL, Some(8), permitted(8, 57))
+            .await
+            .unwrap();
+        assert_eq!(
+            harness
+                .worker_client
+                .effects
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|effect| **effect == "get-oplog")
+                .count(),
+            5,
+            "the check of the returned page runs after the read"
+        );
     }
 
     #[test]

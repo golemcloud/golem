@@ -879,17 +879,18 @@ impl TestDsl for TestWorkerExecutor {
             .get_latest_component_revision(&agent_id.component_id)
             .await?;
 
+        let (from_oplog_index, to_oplog_index) = OplogRange::ALL.to_indices();
         let response = self
             .client
             .clone()
             .get_oplog(workerexecutor::v1::GetOplogRequest {
                 agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
-                from_oplog_index: Some(OplogIndex::INITIAL.into()),
+                from_oplog_index,
                 cursor: None,
                 count: 1,
                 auth_ctx: Some(self.auth_ctx().into()),
-                to_oplog_index: None,
+                to_oplog_index,
             })
             .await?
             .into_inner();

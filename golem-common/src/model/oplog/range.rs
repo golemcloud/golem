@@ -44,6 +44,13 @@ impl Display for OplogRangeEndsBeforeStart {
     }
 }
 
+impl OplogRangeEndsBeforeStart {
+    /// The end of the range.
+    pub fn end(&self) -> OplogIndex {
+        self.end
+    }
+}
+
 impl std::error::Error for OplogRangeEndsBeforeStart {}
 
 /// The error of a cursor whose next index is not in the range of the read. The cursor came from
@@ -63,7 +70,7 @@ impl OplogCursorOutsideRange {
 
 impl Display for OplogCursorOutsideRange {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let start = self.range.first_index_in(OplogIndex::INITIAL);
+        let start = self.range.first_possible();
         write!(f, "the oplog cursor points to index {}, ", self.next)?;
         match self.range.end {
             Some(end) => write!(f, "outside the oplog range from {start} to {end}"),
@@ -93,7 +100,7 @@ impl OplogRange {
             start: from.filter(OplogIndex::is_defined),
             end: to,
         };
-        let start = range.first_index_in(OplogIndex::INITIAL);
+        let start = range.first_possible();
         match to {
             Some(end) if end < start => Err(OplogRangeEndsBeforeStart { start, end }),
             _ => Ok(range),
@@ -117,18 +124,16 @@ impl OplogRange {
         )
     }
 
-    pub fn start(&self) -> Option<OplogIndex> {
-        self.start
-    }
-
-    pub fn end(&self) -> Option<OplogIndex> {
-        self.end
-    }
-
     /// The first index of the range in an oplog whose first entry is at `oplog_first`: the start
     /// of the range, or `oplog_first` when the range has no start.
     pub fn first_index_in(&self, oplog_first: OplogIndex) -> OplogIndex {
         self.start.unwrap_or(oplog_first)
+    }
+
+    /// The first index that the range can hold: its start, or 1 when it has no start, because an
+    /// oplog has no entry before index 1.
+    fn first_possible(&self) -> OplogIndex {
+        self.first_index_in(OplogIndex::INITIAL)
     }
 
     /// The last index of the range in an oplog whose last index is `oplog_last`: the end of the
@@ -138,10 +143,10 @@ impl OplogRange {
     }
 
     /// Whether the range holds no index of an oplog whose last index is `oplog_last`: the range
-    /// starts after it. A range without a start starts at 1 for this rule, so it holds no index
-    /// only of an oplog without entries.
+    /// starts after it. A range without a start starts at 1 for this rule, so it is empty only
+    /// when `oplog_last` is 0.
     pub fn is_empty_in(&self, oplog_last: OplogIndex) -> bool {
-        oplog_last < self.first_index_in(OplogIndex::INITIAL)
+        oplog_last < self.first_possible()
     }
 
     /// The rest of the range from the next index of `cursor`. A cursor before the start or after
@@ -149,8 +154,7 @@ impl OplogRange {
     /// without a start starts at 1 for this check. The rest of the range has a start.
     pub fn resume(&self, cursor: &OplogCursor) -> Result<Self, OplogCursorOutsideRange> {
         let next = OplogIndex::from_u64(cursor.next_oplog_index);
-        let outside = next < self.first_index_in(OplogIndex::INITIAL)
-            || self.end.is_some_and(|end| next > end);
+        let outside = next < self.first_possible() || self.end.is_some_and(|end| next > end);
         if outside {
             Err(OplogCursorOutsideRange { next, range: *self })
         } else {
@@ -176,8 +180,9 @@ impl OplogRange {
     /// The part of the range that a page of at most `count` entries reads in an oplog whose first
     /// entry is at `oplog_first`: from the first index of the range to the last entry of the
     /// page, as [`Self::page_count`] counts it. A page reads at least one entry, so a `count` of 0
-    /// gives the first index only. When the end of the page overflows, the page ends where the
-    /// range ends.
+    /// gives the first index only. In a range without an end, a page that reaches index
+    /// `u64::MAX`, or whose end overflows, has no end either, so that a page to the end of such a
+    /// range has one value.
     pub fn page_in(&self, oplog_first: OplogIndex, count: u64) -> Self {
         let start = self.first_index_in(oplog_first);
         let entries = u64::try_from(self.page_count(start, count))
@@ -186,6 +191,7 @@ impl OplogRange {
         let end = start
             .as_u64()
             .checked_add(entries - 1)
+            .filter(|page_end| self.end.is_some() || *page_end < u64::MAX)
             .map(OplogIndex::from_u64)
             .or(self.end);
         Self {
@@ -247,16 +253,14 @@ mod tests {
                 "from {from:?} to {to:?}"
             )
         });
+        assert_eq!(
+            OplogRange::from_indices(Some(5), Some(4)).map_err(|error| error.end()),
+            Err(index(4))
+        );
         assert_eq!(OplogRange::new(None, None), Ok(OplogRange::ALL));
         assert_eq!(
             OplogRange::new(Some(index(3)), Some(index(9))),
             OplogRange::from_indices(Some(3), Some(9))
-        );
-        assert_eq!(
-            range(Some(3), Some(9))
-                .start()
-                .zip(range(Some(3), Some(9)).end()),
-            Some((index(3), index(9)))
         );
     }
 
@@ -415,9 +419,18 @@ mod tests {
                 range(Some(u64::MAX - 1), Some(u64::MAX)),
             ),
             ((range(Some(2), None), 1, u64::MAX), range(Some(2), None)),
+            ((range(Some(1), None), 1, u64::MAX), range(Some(1), None)),
             (
-                (range(Some(1), None), 1, u64::MAX),
+                (range(Some(1), Some(u64::MAX)), 1, u64::MAX),
                 range(Some(1), Some(u64::MAX)),
+            ),
+            (
+                (range(None, None), u64::MAX - 1, 2),
+                range(Some(u64::MAX - 1), None),
+            ),
+            (
+                (range(None, None), u64::MAX - 2, 2),
+                range(Some(u64::MAX - 2), Some(u64::MAX - 1)),
             ),
         ]
         .into_iter()

@@ -700,12 +700,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .worker_http_client(&self.token)
             .await;
 
+        let (from, to) = OplogRange::ALL.to_indices();
         let response = client
             .get_oplog(
                 &agent_id.component_id.0,
                 &agent_id.agent_id,
-                Some(OplogIndex::INITIAL.as_u64()),
-                None,
+                from,
+                to,
                 1,
                 None,
                 None,
