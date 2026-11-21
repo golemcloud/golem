@@ -349,15 +349,12 @@ where
             )
             .await?;
             hydrate_initial_pending_evidence(reader, &mut baseline, &entries).await?;
-            let finalize_oplog_processor_checkpoints =
-                entries.keys().next_back() == Some(&last_oplog_index);
             update_status_with_new_entries_internal(
                 agent_mode,
                 baseline,
                 entries,
                 &this.config().retry,
                 true,
-                finalize_oplog_processor_checkpoints,
             )
             .map_err(StatusError::from)
         }
@@ -435,9 +432,8 @@ where
         )
         .await?;
         hydrate_initial_pending_evidence(reader, &mut baseline, &entries).await?;
-        let finalize_oplog_processor_checkpoints =
-            entries.keys().next_back() == Some(&last_oplog_index);
-        let pending_updates = if finalize_oplog_processor_checkpoints {
+        let last_chunk = entries.keys().next_back() == Some(&last_oplog_index);
+        let pending_updates = if last_chunk {
             final_pending_updates.take().unwrap_or_default()
         } else {
             std::mem::take(&mut baseline.pending_updates)
@@ -453,7 +449,6 @@ where
                 steps: &regions.steps,
             },
             pending_updates,
-            finalize_oplog_processor_checkpoints,
         )?;
         first = baseline.oplog_idx.next();
     }

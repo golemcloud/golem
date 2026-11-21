@@ -82,7 +82,7 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Durable-call `Start`/`End`/`Cancelled` and `CompletionDelivered`/`CompletionDiscarded` markers | `DurableCallSession`, `ReplayableOneshot`, spawned store tasks |
 | `PendingUpdate` / `SuccessfulUpdate` / `FailedUpdate`, `Snapshot` hints, snapshot blobs | In-flight update decision, loaded snapshot bytes |
 | Validated operator revert/fork cuts and retained history | Replay cursor and runtime handles |
-| Agent status **folded from the durable status baseline and the oplog after it** (`worker/status.rs`, `AgentStatusCheckpoint`) | Status cache (baseline only) |
+| Agent status **folded from the durable status baseline and the oplog after it** (`worker/status.rs`, `AgentStatusCheckpoint`) | Status cache (a disposable start of the fold) |
 | Persisted promises and scheduler actions (`WakeupScheduler`), `RunningWorkers` recovery index | Tokio timers, in-memory wake channels |
 
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
@@ -104,7 +104,7 @@ one handle twice or replace a terminal session-loss outcome (see
 wake is persisted as a scheduler action before automatic suspension (`worker/suspension.rs::RuntimeStore::drive`,
 `WakeupScheduler::sleep_until`), and the shard-keyed `RunningWorkers` index is updated
 synchronously so a crash/reshard can enumerate workers with pending work
-(`worker/status_flusher.rs`). The status blob cache is an asynchronously flushed baseline only.
+(`worker/status_flusher.rs`). The status blob cache is asynchronously flushed and only speeds up the fold.
 The status cache, clean-checkpoint, invocation-result-index, and durable-stream-index namespaces include
 the current `Create.instance_id` (`AgentFingerprint`). Readers select them only after resolving the
 authoritative `Create` entry, while resident workers carry that fingerprint directly. A delayed

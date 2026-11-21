@@ -437,9 +437,9 @@ fn successful_update_resets_total_linear_memory_size() {
 }
 
 /// Why `commit_and_update_state` still compares the folded record against the previous one
-/// instead of taking "the commit produced entries" as the answer: the fold's `finalize` step
-/// prunes oplog-processor checkpoints that are neither active nor in-flight, and it runs
-/// whether or not there were entries. So an empty fold can still change the record, and
+/// instead of taking "the commit produced entries" as the answer: the fold drops the
+/// oplog-processor checkpoints that are neither active nor in flight before it applies the
+/// entries, also when there are no entries. So an empty fold can still change the record, and
 /// skipping it would drop that change.
 #[test]
 fn empty_fold_is_not_the_identity() {
@@ -889,7 +889,6 @@ fn export_fork_admission_fold_ignores_ancestor_after_reverting_before_fork_cut()
         &RetryConfig::default(),
         regions_without_updates(deleted),
         std::collections::VecDeque::new(),
-        true,
     )
     .unwrap();
 
@@ -6117,7 +6116,6 @@ fn checkpoint_latest_per_grant_id_wins() {
         &active_plugins,
         &deleted_regions,
         &entries,
-        true,
     );
 
     assert_eq!(result.len(), 1);
@@ -6176,7 +6174,6 @@ fn checkpoint_different_plugins_tracked_independently() {
         &active_plugins,
         &deleted_regions,
         &entries,
-        true,
     );
 
     assert_eq!(result.len(), 2);
@@ -6219,7 +6216,6 @@ fn checkpoint_target_agent_id_preserved() {
         &active_plugins,
         &deleted_regions,
         &entries,
-        true,
     );
 
     let state = result.get(&grant_id).unwrap();
@@ -6253,13 +6249,8 @@ fn deactivated_plugin_evicted_from_checkpoints() {
     )]);
 
     let entries = BTreeMap::new();
-    let result = calculate_oplog_processor_checkpoints(
-        initial,
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result =
+        calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
 
     assert!(
         !result.contains_key(&grant_id),
@@ -6290,13 +6281,8 @@ fn deactivated_plugin_retained_when_in_flight() {
     )]);
 
     let entries = BTreeMap::new();
-    let result = calculate_oplog_processor_checkpoints(
-        initial,
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result =
+        calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
 
     assert!(
         result.contains_key(&grant_id),
@@ -6312,8 +6298,8 @@ fn successful_update_drops_old_grant_retains_new() {
     let old_grant = EnvironmentPluginGrantId::new();
     let new_grant = EnvironmentPluginGrantId::new();
     let deleted_regions = DeletedRegions::default();
-    // After SuccessfulUpdate, only new_grant is active
-    let active_plugins = HashSet::from([new_grant]);
+    // Before SuccessfulUpdate, only old_grant is active
+    let active_plugins = HashSet::from([old_grant]);
 
     // Pre-seed old checkpoint
     let initial = HashMap::from([(
@@ -6361,13 +6347,8 @@ fn successful_update_drops_old_grant_retains_new() {
         ),
     ]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        initial,
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result =
+        calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
 
     assert!(
         !result.contains_key(&old_grant),
@@ -6403,7 +6384,6 @@ fn activate_plugin_initializes_checkpoint() {
         &active_plugins,
         &deleted_regions,
         &entries,
-        true,
     );
 
     assert_eq!(result.len(), 1);
@@ -6452,13 +6432,8 @@ fn activate_plugin_does_not_overwrite_existing_checkpoint() {
         },
     )]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        initial,
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-        true,
-    );
+    let result =
+        calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
 
     let state = result.get(&grant_id).unwrap();
     assert_eq!(
@@ -6470,30 +6445,25 @@ fn activate_plugin_does_not_overwrite_existing_checkpoint() {
     assert_eq!(state.sending_up_to, OplogIndex::from_u64(8));
 }
 
+/// A fold of the oplog processor checkpoints in chunks of any size, and a fold from a status
+/// baseline at any index, give the result of a fold of the whole oplog. After a deactivation, a
+/// confirmation of the last entries in flight and a new activation, the state starts at the new
+/// activation.
 #[test]
 fn oplog_processor_checkpoint_fold_is_chunk_composable() {
-    fn fold(entries: &BTreeMap<OplogIndex, OplogEntry>, chunk_size: usize) -> AgentStatusRecord {
-        let mut status = AgentStatusRecord::default();
-        let last_index = *entries.keys().next_back().unwrap();
-        let all_entries: Vec<_> = entries.iter().collect();
-        for chunk in all_entries.chunks(chunk_size) {
-            let chunk: BTreeMap<_, _> = chunk
-                .iter()
-                .map(|(index, entry)| (**index, (**entry).clone()))
-                .collect();
-            let finalize = chunk.keys().next_back() == Some(&last_index);
-            status = super::update_status_with_precomputed_regions(
-                AgentMode::Durable,
-                status,
-                chunk,
-                &RetryConfig::default(),
-                regions_without_updates(DeletedRegions::new()),
-                std::collections::VecDeque::new(),
-                finalize,
-            )
-            .unwrap();
-        }
-        status
+    fn fold(
+        baseline: AgentStatusRecord,
+        entries: BTreeMap<OplogIndex, OplogEntry>,
+    ) -> AgentStatusRecord {
+        super::update_status_with_precomputed_regions(
+            AgentMode::Durable,
+            baseline,
+            entries,
+            &RetryConfig::default(),
+            regions_without_updates(DeletedRegions::new()),
+            std::collections::VecDeque::new(),
+        )
+        .unwrap()
     }
 
     let grant_id = EnvironmentPluginGrantId::new();
@@ -6552,15 +6522,111 @@ fn oplog_processor_checkpoint_fold_is_chunk_composable() {
         ),
     ]);
 
-    let unchunked = fold(&entries, entries.len());
-    assert_eq!(fold(&entries, 1), unchunked);
-    assert_eq!(fold(&entries, 2), unchunked);
-    let checkpoint = unchunked
-        .oplog_processor_checkpoints
-        .get(&grant_id)
-        .unwrap();
-    assert_eq!(checkpoint.target_agent_id, Some(target));
-    assert_eq!(checkpoint.confirmed_up_to, OplogIndex::from_u64(4));
+    let whole = fold(AgentStatusRecord::default(), entries.clone());
+    let pairs: Vec<_> = entries.clone().into_iter().collect();
+    (1..=pairs.len()).for_each(|chunk_size| {
+        let chunked = pairs
+            .chunks(chunk_size)
+            .fold(AgentStatusRecord::default(), |status, chunk| {
+                fold(status, chunk.iter().cloned().collect())
+            });
+        assert_eq!(chunked, whole, "chunk size {chunk_size}");
+    });
+    entries.keys().for_each(|at| {
+        let (before, after): (BTreeMap<_, _>, BTreeMap<_, _>) = entries
+            .clone()
+            .into_iter()
+            .partition(|(index, _)| index <= at);
+        let baseline = fold(AgentStatusRecord::default(), before);
+        assert_eq!(fold(baseline, after), whole, "baseline at {at}");
+    });
+    let activation = OplogIndex::from_u64(5);
+    assert_eq!(
+        whole.oplog_processor_checkpoints.get(&grant_id),
+        Some(&OplogProcessorCheckpointState {
+            target_agent_id: None,
+            confirmed_up_to: activation,
+            sending_up_to: activation,
+            last_batch_start: activation,
+            delivery: None,
+        })
+    );
+}
+
+/// A checkpoint that confirms the last entries in flight of a plugin that is not active drops
+/// the state of the plugin, so that a later activation starts a fresh state.
+#[test]
+fn a_confirmed_checkpoint_of_an_inactive_plugin_drops_its_state() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let target = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "inactive-target".to_string(),
+    };
+    let in_flight = HashMap::from([(
+        grant_id,
+        OplogProcessorCheckpointState {
+            target_agent_id: Some(target.clone()),
+            confirmed_up_to: OplogIndex::from_u64(1),
+            sending_up_to: OplogIndex::from_u64(4),
+            last_batch_start: OplogIndex::from_u64(1),
+            delivery: None,
+        },
+    )]);
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(5),
+        OplogEntry::OplogProcessorCheckpoint {
+            timestamp: Timestamp::now_utc(),
+            plugin_grant_id: grant_id,
+            target_agent_id: target,
+            confirmed_up_to: OplogIndex::from_u64(4),
+            sending_up_to: OplogIndex::from_u64(4),
+            last_batch_start: OplogIndex::from_u64(1),
+            source_component_revision: ComponentRevision::INITIAL,
+            delivery: None,
+        },
+    )]);
+
+    let result = calculate_oplog_processor_checkpoints(
+        in_flight,
+        &HashSet::new(),
+        &DeletedRegions::default(),
+        &entries,
+    );
+
+    assert_eq!(result, HashMap::new());
+}
+
+/// A second activation of an active plugin that has nothing in flight keeps the progress of the
+/// plugin.
+#[test]
+fn a_second_activation_keeps_the_progress_of_an_active_plugin() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let progress = OplogProcessorCheckpointState {
+        target_agent_id: Some(AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "active-target".to_string(),
+        }),
+        confirmed_up_to: OplogIndex::from_u64(6),
+        sending_up_to: OplogIndex::from_u64(6),
+        last_batch_start: OplogIndex::from_u64(3),
+        delivery: None,
+    };
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(10),
+        OplogEntry::ActivatePlugin {
+            timestamp: Timestamp::now_utc(),
+            plugin_grant_id: grant_id,
+        },
+    )]);
+
+    let result = calculate_oplog_processor_checkpoints(
+        HashMap::from([(grant_id, progress.clone())]),
+        &HashSet::from([grant_id]),
+        &DeletedRegions::default(),
+        &entries,
+    );
+
+    assert_eq!(result, HashMap::from([(grant_id, progress)]));
 }
 
 #[test]
@@ -6598,7 +6664,6 @@ fn deactivate_then_reactivate_seeds_new_checkpoint() {
         &active_plugins,
         &deleted_regions,
         &entries,
-        true,
     );
 
     let state = result.get(&grant_id).unwrap();
@@ -9722,12 +9787,6 @@ pub(crate) mod status_baseline {
                 entity_parent_start_index: None,
                 name: retry_policy_names[usize::from(*second)].to_string(),
             },
-            // A generated processor checkpoint is always in flight: its `sending_up_to` is after
-            // its `confirmed_up_to`. A checkpoint with nothing in flight for a plugin that is not
-            // active, followed by an `ActivatePlugin`, gives a fold of the whole oplog that keeps
-            // the old checkpoint state, while a fold from a status baseline between them seeds a
-            // fresh state at the activation index. The fold of the live status entry by entry
-            // gives the second result too, so the generator leaves that shape out.
             Generated::ProcessorCheckpoint(second, confirmed) => {
                 OplogEntry::OplogProcessorCheckpoint {
                     timestamp,
@@ -9736,7 +9795,7 @@ pub(crate) mod status_baseline {
                         component_id: ComponentId(Uuid::from_u128(8)),
                         agent_id: "processor".to_string(),
                     },
-                    confirmed_up_to: idx(u64::from(*confirmed) % (index - 1)),
+                    confirmed_up_to: idx((index - 1).saturating_sub(u64::from(*confirmed) % 3)),
                     sending_up_to: idx(index - 1),
                     last_batch_start: OplogIndex::NONE,
                     source_component_revision: ComponentRevision::INITIAL,
@@ -9830,7 +9889,7 @@ pub(crate) mod status_baseline {
 
         /// A status baseline at any index folds the rest of the oplog to the status of a fold
         /// of the whole oplog, in every field. A fold refuses a baseline only when a later
-        /// `Jump` or `Revert` covers its index; the reader then folds the whole oplog from index
+        /// `Jump` or `Revert` follows its index; the reader then folds the whole oplog from index
         /// 1. The write and the read of the stored baseline have their own property in
         /// `services::worker::tests`.
         #[test]
