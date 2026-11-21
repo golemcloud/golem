@@ -15761,6 +15761,8 @@ components:
         componentRevision:
           type: integer
           format: uint64
+        backgroundFailure:
+          $ref: '#/components/schemas/InvocationFailure'
       required:
       - agentId
       - idempotencyKey
@@ -18572,8 +18574,8 @@ components:
     Invocation:
       title: Invocation
       description: |-
-        An invocation with its result. `result` is present once the invocation is `completed` or
-        `failed`; a completed constructor run has no result.
+        An invocation with its result. `result` is present once the invocation is `completed`,
+        `background-failed` or `failed`; a completed constructor run has no result.
       type: object
       properties:
         summary:
@@ -18582,6 +18584,19 @@ components:
           $ref: '#/components/schemas/InvocationOutcome'
       required:
       - summary
+    InvocationBackgroundFailure:
+      title: InvocationBackgroundFailure
+      description: |-
+        The recorded result of an invocation, and the failure of the agent during the invocation's
+        background work after it. `value` is absent for the constructor run.
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
+        error:
+          type: string
+      required:
+      - error
     InvocationFailure:
       title: InvocationFailure
       type: object
@@ -18621,11 +18636,25 @@ components:
           Method: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
           Tool: '#/components/schemas/InvocationOutcome_InvocationToolResult'
           Failure: '#/components/schemas/InvocationOutcome_InvocationFailure'
+          BackgroundFailure: '#/components/schemas/InvocationOutcome_InvocationBackgroundFailure'
       type: object
       oneOf:
       - $ref: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
       - $ref: '#/components/schemas/InvocationOutcome_InvocationToolResult'
       - $ref: '#/components/schemas/InvocationOutcome_InvocationFailure'
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationBackgroundFailure'
+    InvocationOutcome_InvocationBackgroundFailure:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: BackgroundFailure
+            type: string
+            enum:
+            - BackgroundFailure
+        required:
+        - type
+      - $ref: '#/components/schemas/InvocationBackgroundFailure'
     InvocationOutcome_InvocationFailure:
       allOf:
       - type: object
@@ -18686,6 +18715,7 @@ components:
       - retrying
       - interrupted
       - completed
+      - background-failed
       - failed
       - cancelled
     InvocationStatus:

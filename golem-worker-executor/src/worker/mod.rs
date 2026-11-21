@@ -1295,6 +1295,8 @@ enum InvocationResult {
     Cancelled,
     Lazy {
         oplog_idx: OplogIndex,
+        /// The give-up entry of a background failure after the result at `oplog_idx`.
+        background_failure: Option<OplogIndex>,
     },
 }
 

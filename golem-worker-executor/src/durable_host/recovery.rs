@@ -52,6 +52,7 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for ReplayRecorder {
                         idempotency_key: None,
                         oplog_index: None,
                         agent_fingerprint: None,
+                        background_failure: None,
                     };
                     let recorded = store
                         .data_mut()
@@ -361,6 +362,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     idempotency_key: None,
                                     oplog_index: None,
                                     agent_fingerprint: None,
+                                    background_failure: None,
                                 };
                                 if recorded_success != Some(true)
                                     && let Err(err) = store

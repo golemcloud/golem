@@ -1083,6 +1083,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let decision = terminal_decision;
 
         let after_result = self.state.result_recorded_at_return;
+        let retry_policy_state =
+            drain_give_up_retry_state(after_result, &decision, retry_policy_state);
         let FailureAttribution {
             failed_invocation,
             rejection,
@@ -1698,6 +1700,28 @@ pub(crate) fn ephemeral_suspend_trap(
             })
         }
         _ => None,
+    }
+}
+
+/// The retry state recorded with the trap `Error` when the agent decided `decision`. A give-up
+/// after the invocation recorded its result records an exhausted state, whatever the policy
+/// evaluation gave: the status fold reads that `Error`, which names no invocation, as the
+/// background failure of the settling invocation only when its state is exhausted.
+pub(in crate::durable_host) fn drain_give_up_retry_state(
+    after_result: bool,
+    decision: &RetryDecision,
+    retry_policy_state: Option<RetryPolicyState>,
+) -> Option<RetryPolicyState> {
+    match retry_policy_state {
+        Some(state)
+            if after_result && *decision == RetryDecision::None && !state.is_exhausted() =>
+        {
+            Some(state.exhausted())
+        }
+        None if after_result && *decision == RetryDecision::None => {
+            Some(RetryPolicyState::Terminal)
+        }
+        state => state,
     }
 }
 

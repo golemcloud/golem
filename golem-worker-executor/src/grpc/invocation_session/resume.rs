@@ -389,6 +389,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             status: None,
                             oplog_index: None,
                             agent_fingerprint: resume.expected_callee_fingerprint,
+                            background_failure: None,
                         },
                     )),
                 })

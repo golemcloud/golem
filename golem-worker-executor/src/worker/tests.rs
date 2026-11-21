@@ -1464,6 +1464,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
         first,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(2),
+            background_failure: None,
         },
         0,
         OplogIndex::from_u64(2),
@@ -1473,6 +1474,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
         second,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(4),
+            background_failure: None,
         },
         0,
         OplogIndex::from_u64(4),
@@ -1504,6 +1506,7 @@ fn hydrated_invocation_results_share_payloads_but_reject_deleted_branches() {
             idempotency_key: Some(key),
             oplog_index: Some(index),
             agent_fingerprint: None,
+            background_failure: None,
         }),
     });
     let mut cache = HydratedInvocationResultCache::new(1);

@@ -3322,6 +3322,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
                 idempotency_key: None,
                 oplog_index: Some(finished),
                 agent_fingerprint: None,
+                background_failure: None,
             },
         ),
     )

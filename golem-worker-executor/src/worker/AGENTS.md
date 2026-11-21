@@ -43,8 +43,14 @@ rewinding a cursor.
   failure during the drain never replaces the recorded result: a trap reconstructs under the retry
   policy, and an interrupt or suspension stops the agent until it resumes and reconstructs; giving
   up fails the agent and the queued invocations, an interrupt fails the queued invocations, and
-  neither publishes a failure for the recorded one. A retained resource can span invocations; its
-  deferred destructor may wait passively across historical terminals and settlements, then repair
+  neither publishes a failure for the recorded one. A give-up during the drain records an
+  exhausted retry state (`drain_give_up_retry_state`), and the result fold turns a successful
+  result that settles into `InvocationEnd::BackgroundFailed` at that `Error` or at an `Exited`
+  (`InvocationRequests::settling`): a same-key lookup returns the recorded result with its
+  `background_failure`, and a same-key `Await` refused because an invocation give-up failed the
+  agent or the agent exited still returns the recorded success (a recorded failure keeps the
+  refusal; a recovery failure is not a background failure). A retained
+  resource can span invocations; its deferred destructor may wait passively across historical terminals and settlements, then repair
   under its original Start when a later invocation drives the Store after replay becomes live.
   That repair stays active until its terminal is recorded. Hint entries such as streaming-session
   completion can follow `Finished` without another invocation.

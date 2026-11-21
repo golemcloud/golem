@@ -27,9 +27,9 @@ use golem_common::model::{
     AgentStatus, IdempotencyKey, InvocationId, OwnedAgentId, PromiseId, RetryConfig,
 };
 use golem_common::{agent_key, data_value};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{AgentResult, TestDsl};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
@@ -283,7 +283,7 @@ impl Agents {
         executor: &(impl TestDsl + Sync),
         key: &IdempotencyKey,
         release: &PromiseId,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<AgentResult> {
         let result = tokio::time::timeout(
             RESULT_WAIT,
             executor.invoke_and_await_agent_with_key(
@@ -300,7 +300,7 @@ impl Agents {
                 "the result of trap_after_release did not arrive within {RESULT_WAIT:?}"
             )
         })??;
-        result.into_typed::<String>()
+        Ok(result)
     }
 
     /// The number of completed background runs. The worker admits this invocation only after
@@ -1045,9 +1045,12 @@ async fn a_restart_after_the_background_work_ended_repeats_nothing(
 
 /// A trap of the background work after the result is an ordinary trap of the agent: the caller
 /// keeps the recorded success, the method does not run again, and the retry policy decides what
-/// happens to the agent. A Rust panic is permanent, so the agent fails. A failed agent refuses
-/// every new external call before it looks up a result, so the test checks that the oplog keeps
-/// the success as the outcome of the invocation, before and after a reconstruction.
+/// happens to the agent. A Rust panic is permanent, so the agent fails, and the invocation becomes
+/// `background-failed`. While the background work waits, the invocation is `completed` and a
+/// cancel leaves it unchanged. The release comes only after a restart, so the trap and the
+/// give-up happen in the reconstructed drain. A same-key retry then returns the recorded result
+/// with the background failure, before and after another reconstruction, and a fresh key is
+/// refused.
 #[test]
 #[timeout("180s")]
 #[tracing::instrument]
@@ -1057,20 +1060,57 @@ async fn a_trap_after_the_result_keeps_the_result(
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        InvocationLifecycleState, InvocationSummary,
+    };
+    fn state_of(summary: &InvocationSummary) -> InvocationLifecycleState {
+        InvocationLifecycleState::try_from(summary.state).unwrap()
+    }
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .store()
         .await?;
+    let environment_id = component.environment_id;
     let agents = Agents::new(&executor, component, &context, "trap-after-result").await?;
     let release = agents.create_release(&executor, &agents.worker).await?;
     let key = IdempotencyKey::fresh();
 
-    assert_eq!(
-        agents.trap_after_release(&executor, &key, &release).await?,
-        "returned"
+    let first = agents.trap_after_release(&executor, &key, &release).await?;
+    assert_eq!(first.background_failure(), None);
+    assert_eq!(first.into_typed::<String>()?, "returned");
+    executor
+        .wait_for_status(
+            &agents.worker_id,
+            AgentStatus::Suspended,
+            Duration::from_secs(30),
+        )
+        .await?;
+    let oplog = executor
+        .get_oplog(&agents.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let started = method_starts(&oplog, "trap_after_release");
+    assert_eq!(started.len(), 1, "the method runs once");
+    let invocation = started[0];
+
+    // The draining invocation is complete: a cancel finds nothing pending.
+    assert!(
+        !executor
+            .cancel_invocation(&agents.worker_id, &invocation)
+            .await?,
+        "a cancel of the draining invocation finds nothing pending"
     );
+    let draining = executor
+        .get_invocation(&agents.worker_id.agent_id, environment_id, invocation)
+        .await?
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?
+        .expect("the draining invocation");
+    assert_eq!(state_of(&draining), InvocationLifecycleState::Completed);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
     agents.complete(&executor, &release).await?;
     executor
         .wait_for_status(
@@ -1083,9 +1123,12 @@ async fn a_trap_after_the_result_keeps_the_result(
     let oplog = executor
         .get_oplog(&agents.worker_id, OplogIndex::INITIAL)
         .await?;
-    let started = method_starts(&oplog, "trap_after_release");
-    assert_eq!(started.len(), 1, "the method runs once");
-    let finished = finished_of(&oplog, &started[0]).expect("the result is recorded");
+    assert_eq!(
+        method_starts(&oplog, "trap_after_release"),
+        vec![invocation],
+        "the method does not run again"
+    );
+    let finished = finished_of(&oplog, &invocation).expect("the result is recorded");
     let errors = oplog
         .iter()
         .filter_map(|entry| match &entry.entry {
@@ -1108,28 +1151,81 @@ async fn a_trap_after_the_result_keeps_the_result(
         "the trap cancels no invocation"
     );
 
-    drop(executor);
-    let executor = start(deps, &context).await?;
+    let assert_background_failed = |result: AgentResult, when: &str| -> anyhow::Result<()> {
+        let failure = result.background_failure().map(str::to_string);
+        assert!(
+            failure
+                .as_deref()
+                .is_some_and(|failure| failure.contains("background work trapped after the result")),
+            "the same key reports the background failure {when}: {failure:?}"
+        );
+        assert_eq!(
+            result.into_typed::<String>()?,
+            "returned",
+            "the same key returns the recorded result {when}"
+        );
+        Ok(())
+    };
+    let assert_listed_background_failed =
+        async |executor: &TestWorkerExecutor, when: &str| -> anyhow::Result<()> {
+            let got = executor
+                .get_invocation(&agents.worker_id.agent_id, environment_id, invocation)
+                .await?
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?
+                .expect("the background-failed invocation");
+            assert_eq!(
+                state_of(&got),
+                InvocationLifecycleState::BackgroundFailed,
+                "get shows the background failure {when}"
+            );
+            let looked_up = executor
+                .lookup_invocations(&agents.worker_id.agent_id, environment_id, &key, None)
+                .await?
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            assert_eq!(
+                looked_up.iter().map(state_of).collect::<Vec<_>>(),
+                vec![InvocationLifecycleState::BackgroundFailed],
+                "the key lookup shows the background failure {when}"
+            );
+            Ok(())
+        };
+
+    assert_background_failed(
+        agents.trap_after_release(&executor, &key, &release).await?,
+        "after the give-up",
+    )?;
+    assert_listed_background_failed(&executor, "after the give-up").await?;
     let error = agents
-        .trap_after_release(&executor, &key, &release)
+        .trap_after_release(&executor, &IdempotencyKey::fresh(), &release)
         .await
-        .expect_err("the failed agent refuses the call");
+        .expect_err("the failed agent refuses a fresh key");
     assert!(
         format!("{error:#}").contains("background work trapped after the result"),
         "the agent stays failed with the trap of its background work: {error:#}"
     );
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    assert_background_failed(
+        agents.trap_after_release(&executor, &key, &release).await?,
+        "after a reconstruction",
+    )?;
+    assert_listed_background_failed(&executor, "after a reconstruction").await?;
     let oplog = executor
         .get_oplog(&agents.worker_id, OplogIndex::INITIAL)
         .await?;
-    let started = method_starts(&oplog, "trap_after_release");
-    assert_eq!(started.len(), 1, "the method does not run again");
+    assert_eq!(
+        method_starts(&oplog, "trap_after_release"),
+        vec![invocation],
+        "the method does not run again"
+    );
     assert_eq!(
         oplog
             .iter()
             .filter(|entry| matches!(
                 &entry.entry,
                 PublicOplogEntry::AgentInvocationFinished(params)
-                    if params.invocation_id == started[0]
+                    if params.invocation_id == invocation
             ))
             .count(),
         1,
@@ -1353,6 +1449,23 @@ async fn a_transient_failure_in_the_drain_is_retried_and_keeps_the_result(
         .await?;
     let started = method_starts(&oplog, "add_after_http");
     let finished = finished_of(&oplog, &started[0]).expect("the result is recorded");
+    let state = executor
+        .get_invocation(
+            &agents.worker_id.agent_id,
+            agents.component.environment_id,
+            started[0],
+        )
+        .await?
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?
+        .expect("the invocation")
+        .state;
+    assert_eq!(
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationLifecycleState::try_from(
+            state
+        )?,
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationLifecycleState::Completed,
+        "retries that recover leave the invocation completed, with no background failure"
+    );
     let errors = oplog
         .iter()
         .filter_map(|entry| match &entry.entry {

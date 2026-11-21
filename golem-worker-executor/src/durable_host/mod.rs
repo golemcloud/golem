@@ -54,7 +54,8 @@ pub(crate) use error_history::{last_error, recover_stderr_logs};
 use filesystem::component_file_node;
 #[cfg(test)]
 use invocation::{
-    FailureAttribution, ephemeral_terminal_decision, ephemeral_terminal_trap, failure_attribution,
+    FailureAttribution, drain_give_up_retry_state, ephemeral_terminal_decision,
+    ephemeral_terminal_trap, failure_attribution,
 };
 #[cfg(test)]
 pub(crate) use invocation::{ephemeral_suspend_trap, terminal_entry_refusal};

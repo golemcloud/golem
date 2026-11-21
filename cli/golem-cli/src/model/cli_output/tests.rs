@@ -3896,17 +3896,21 @@ fn arb_agent_invoke_result() -> OutputDocumentStrategy {
         prop_oneof![Just(0u8), Just(1u8)],
         arb_value_and_type(),
         arb_format_string(),
+        proptest::option::of(arb_small_string()),
     )
-        .prop_map(|(idempotency_key, shape, result_json, result_format)| {
-            to_structured_output_value(crate::model::invoke_result_view::InvokeResultView {
-                idempotency_key,
-                result_json: (shape == 1).then_some(result_json),
-                result: None,
-                result_format: (shape != 0).then_some(result_format.to_string()),
-                is_void_result: shape == 0,
-            })
-            .expect("generated invoke result should serialize")
-        })
+        .prop_map(
+            |(idempotency_key, shape, result_json, result_format, background_failure)| {
+                to_structured_output_value(crate::model::invoke_result_view::InvokeResultView {
+                    idempotency_key,
+                    result_json: (shape == 1).then_some(result_json),
+                    result: None,
+                    result_format: (shape != 0).then_some(result_format.to_string()),
+                    background_failure,
+                    is_void_result: shape == 0,
+                })
+                .expect("generated invoke result should serialize")
+            },
+        )
         .boxed()
 }
 
@@ -5447,6 +5451,7 @@ fn arb_invocation_summary() -> BoxedStrategy<golem_client::model::InvocationSumm
             Just(InvocationState::Retrying),
             Just(InvocationState::Interrupted),
             Just(InvocationState::Completed),
+            Just(InvocationState::BackgroundFailed),
             Just(InvocationState::Failed),
             Just(InvocationState::Cancelled),
         ],
@@ -5485,8 +5490,8 @@ fn arb_external_typed_schema_value() -> BoxedStrategy<golem_common::schema::Exte
 
 fn arb_invocation_outcome() -> BoxedStrategy<golem_client::model::InvocationOutcome> {
     use golem_client::model::{
-        InvocationFailure, InvocationMethodResult, InvocationOutcome, InvocationToolResult,
-        NativeToolFailure, NativeToolResult, NativeToolSuccess,
+        InvocationBackgroundFailure, InvocationFailure, InvocationMethodResult, InvocationOutcome,
+        InvocationToolResult, NativeToolFailure, NativeToolResult, NativeToolSuccess,
     };
     use golem_common::model::tool::SerializableToolRpcError;
 
@@ -5507,6 +5512,13 @@ fn arb_invocation_outcome() -> BoxedStrategy<golem_client::model::InvocationOutc
         }),
         arb_small_string()
             .prop_map(|error| InvocationOutcome::Failure(InvocationFailure { error })),
+        (
+            proptest::option::of(arb_external_typed_schema_value()),
+            arb_small_string()
+        )
+            .prop_map(|(value, error)| {
+                InvocationOutcome::BackgroundFailure(InvocationBackgroundFailure { value, error })
+            }),
     ]
     .boxed()
 }

@@ -2798,6 +2798,25 @@ agent as running; after a restart the drain resumes without an outside activatio
 predicates for "a result is recorded and the drain has not settled" use that status, not the
 Store's `result_recorded_at_return` flag, which stays set after `Settled`.
 
+A give-up during the drain never replaces the recorded result, but it is visible. The trap handler
+records the give-up `Error` with an exhausted retry state (`drain_give_up_retry_state`). The
+invocation result fold keeps the settling result (`InvocationRequests::settling`, mirrored as
+`AgentStatusRecord::settling_result` and in the persisted result index metadata) and turns a
+`Completed` result into `InvocationEnd::BackgroundFailed { failure }` at an exhausted `Error` that
+names no invocation and no entity body, or at an `Exited`, while no invocation runs. `terminal`
+stays the `AgentInvocationFinished`, so every reader of the recorded result still finds it. The
+background failure stays when a revived agent later writes `Settled`: every result changes at the
+entry being folded, and the recent results (`InvocationResultMembership`) are ordered by that last
+change (`InvocationResultPosition::last_change`), so the persisted result index is complete only
+when it covers every change the recent results dropped. A same-key lookup returns the result
+with `AgentInvocationOutput::background_failure`; when the gRPC `Await` admission refuses a failed
+or exited agent, it looks up the same-key result and returns a recorded success (a recorded
+failure keeps the refusal). Retained work that
+a later invocation drives fails that invocation: before its terminal the `Error` names it, after
+its terminal the give-up is its background failure. Unit tests: `worker/status/tests.rs`
+(`a_give_up_while_a_result_settles_is_its_background_failure` and its neighbours); executor test:
+`background_work.rs::a_trap_after_the_result_keeps_the_result`.
+
 Failures after the result never replace it. A trap during the drain goes through
 `on_invocation_failure` with the retry policy; reconstruction replays the invocation, consumes
 its terminal at the return and continues the background work live, so the method body does not

@@ -81,7 +81,12 @@ oplog-processor batches and external-tool invocations keep the settled path: the
   reconstruction under the retry policy; an interrupt or suspension stops the agent as it does
   during the method, and the resumed agent reconstructs. Replay consumes the recorded terminal, so
   the method does not run again. Giving up fails the agent and the queued invocations but publishes
-  no failure for the recorded one; an interrupt also fails the queued invocations. A rejection
+  no failure for the recorded one; an interrupt also fails the queued invocations. A give-up of the
+  primary Store records an exhausted retry state, so a successful result that settles becomes
+  `background-failed` (`InvocationEnd::BackgroundFailed`, folded from that `Error` or an
+  `Exited`; no new oplog entry). A same-key retry or lookup returns the recorded result with its
+  `background_failure`; RPC callers get the plain result. A recorded method failure stays
+  `failed`, and a later `AgentInvocationSettled` of the invocation keeps `background-failed`. A rejection
   trap (`PermissionDenied`, `InvalidRequest`) after the result is an ordinary trap of the agent.
   A stop or capacity failure that lands before `AgentInvocationSettled` stops the agent even when
   no background work is left: a durable agent reconstructs to write `Settled`, and an ephemeral

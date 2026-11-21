@@ -685,6 +685,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         idempotency_key,
                         oplog_index,
                         agent_fingerprint,
+                        background_failure: None,
                     },
                     None => AgentInvocationOutput {
                         result: AgentInvocationResult::AgentInitialization,
@@ -695,6 +696,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         idempotency_key,
                         oplog_index,
                         agent_fingerprint,
+                        background_failure: None,
                     },
                 };
                 Ok(output)

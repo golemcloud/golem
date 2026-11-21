@@ -600,6 +600,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 prepared.attempt.expected_callee_fingerprint.0.into()
                             }),
                             new_stream_mappings: persisted_result.1.clone(),
+                            background_failure: None,
                         },
                     )),
                 })
@@ -845,6 +846,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .agent_fingerprint
                             .map(|fingerprint| fingerprint.0.into()),
                         new_stream_mappings,
+                        background_failure: output.background_failure.clone().map(|failure| {
+                            WorkerExecutorError::from(failure).into()
+                        }),
                     },
                 )),
             })

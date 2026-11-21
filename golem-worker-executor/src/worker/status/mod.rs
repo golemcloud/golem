@@ -19,7 +19,8 @@ use golem_common::model::{
     InvocationResultMembership, InvocationResultPosition, OplogProcessorCheckpointState,
     OwnedAgentId, PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
     ReceivedCardTransferIndex, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
-    RunningInvocation, SnapshotFiles, SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
+    RunningInvocation, SettlingInvocation, SnapshotFiles, SuccessfulUpdateRecord, Timestamp,
+    UsableAutomaticSnapshot,
 };
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -461,6 +462,7 @@ fn update_status_with_precomputed_regions(
         running: requests.current,
         withdrawn_again: requests.withdrawn_again,
         settling_invocation,
+        settling_result: requests.settling,
         component_revision,
         component_size,
         owned_resources,

@@ -2129,6 +2129,10 @@
         },
         "resultFormat": {
           "type": "string"
+        },
+        "backgroundFailure": {
+          "type": "string",
+          "description": "The failure of the agent during the background work of the invocation, after it recorded the result."
         }
       },
       "additionalProperties": false
@@ -9050,7 +9054,7 @@
       "additionalProperties": false
     },
     "InvocationState": {
-      "enum": ["scheduled", "pending", "running", "waiting", "retrying", "interrupted", "completed", "failed", "cancelled"]
+      "enum": ["scheduled", "pending", "running", "waiting", "retrying", "interrupted", "completed", "background-failed", "failed", "cancelled"]
     },
     "InvocationKind": {
       "enum": ["method", "constructor", "tool"]
@@ -9080,6 +9084,16 @@
           "required": ["type", "error"],
           "properties": {
             "type": { "const": "Failure" },
+            "error": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "value", "error"],
+          "properties": {
+            "type": { "const": "BackgroundFailure" },
+            "value": { "oneOf": [{ "$ref": "#/definitions/ExternalTypedSchemaValue" }, { "type": "null" }] },
             "error": { "type": "string" }
           },
           "additionalProperties": false

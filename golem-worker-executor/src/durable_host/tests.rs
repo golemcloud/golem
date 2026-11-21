@@ -558,6 +558,132 @@ fn a_rejection_after_the_result_is_an_ordinary_trap_of_the_agent() {
     );
 }
 
+/// A give-up after the result records an exhausted retry state, whatever the policy evaluation
+/// gave, so the status fold reads the `Error` as the background failure of the settling result.
+/// A retry, and a give-up before the result, keep the evaluated state.
+#[test]
+fn a_give_up_after_the_result_records_an_exhausted_retry_state() {
+    let counted = RetryPolicyState::Counter(2);
+    for evaluated in [
+        None,
+        Some(counted.clone()),
+        Some(RetryPolicyState::Terminal),
+    ] {
+        let recorded = drain_give_up_retry_state(true, &RetryDecision::None, evaluated.clone());
+        assert!(
+            recorded
+                .as_ref()
+                .is_some_and(RetryPolicyState::is_exhausted),
+            "a give-up after the result with {evaluated:?} records {recorded:?}"
+        );
+        assert_eq!(
+            drain_give_up_retry_state(false, &RetryDecision::None, evaluated.clone()),
+            evaluated
+        );
+        assert_eq!(
+            drain_give_up_retry_state(true, &RetryDecision::Immediate, evaluated.clone()),
+            evaluated
+        );
+    }
+    assert_eq!(
+        drain_give_up_retry_state(true, &RetryDecision::None, Some(RetryPolicyState::Terminal)),
+        Some(RetryPolicyState::Terminal),
+        "an exhausted state stays as it is"
+    );
+
+    let key = golem_common::model::InvocationId::new();
+    let index = OplogIndex::from_u64;
+    let give_up = OplogEntry::error(
+        None,
+        OplogErrorKind::Invocation,
+        failure_attribution(
+            Some(key),
+            &TrapType::Error {
+                error: AgentError::Unknown("trapped".to_string()),
+                retry_from: index(1),
+                semantic_trap_retry_override: None,
+                provenance: crate::model::FailureProvenance::TargetInstruction,
+            },
+            true,
+        )
+        .failed_invocation,
+        AgentError::Unknown("trapped".to_string()),
+        index(1),
+        drain_give_up_retry_state(true, &RetryDecision::None, None),
+        None,
+        None,
+    );
+    let settling = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        std::collections::BTreeMap::from([
+            (
+                index(1),
+                OplogEntry::AgentInvocationStarted {
+                    timestamp: Timestamp::now_utc(),
+                    invocation_id: key,
+                    operation: Box::new(
+                        golem_common::model::InvocationRequestOperation::AgentMethod {
+                            method_name: "agent:method".to_string(),
+                        },
+                    ),
+                    payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(
+                        golem_common::model::StoredAgentInvocationPayload::AgentMethod {
+                            input: golem_common::schema::SchemaValue::Record { fields: Vec::new() },
+                            caller: golem_common::model::caller::Caller::anonymous(),
+                            scope_card: None,
+                        },
+                    )),
+                    trace_id: golem_common::model::invocation_context::TraceId::generate(),
+                    trace_states: Vec::new(),
+                    invocation_context: Vec::new(),
+                    wallet_pin: Box::new(golem_common::model::card::InvocationWalletPin {
+                        wallet_token: golem_common::model::card::WalletVersionToken {
+                            wallet_id_hash: [0; 32],
+                            generation: 0,
+                        },
+                        pinned_card_ids: Vec::new(),
+                        scope_card_id: None,
+                    }),
+                },
+            ),
+            (
+                index(2),
+                OplogEntry::AgentInvocationFinished {
+                    timestamp: Timestamp::now_utc(),
+                    invocation_id: key,
+                    result: golem_common::model::oplog::OplogPayload::Inline(Box::new(
+                        golem_common::model::AgentInvocationResult::AgentInitialization,
+                    )),
+                    method_name: None,
+                    consumed_fuel: 0,
+                    component_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                    awaits_settlement: true,
+                },
+            ),
+        ]),
+        &golem_common::model::RetryConfig::default(),
+    )
+    .expect("the status folds")
+    .expect("the status folds from the new entries");
+    let failed = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        settling,
+        std::collections::BTreeMap::from([(index(3), give_up)]),
+        &golem_common::model::RetryConfig::default(),
+    )
+    .expect("the status folds")
+    .expect("the status folds from the new entries");
+    assert_eq!(failed.status, AgentStatus::Failed);
+    assert_eq!(
+        failed
+            .invocation_results
+            .position(&key)
+            .map(|position| position.end),
+        Some(golem_common::model::InvocationEnd::BackgroundFailed { failure: index(3) })
+    );
+}
+
 #[test]
 fn ephemeral_active_suspend_becomes_an_invocation_failure() {
     let start_index = OplogIndex::from_u64(37);

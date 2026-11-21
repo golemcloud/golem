@@ -57,6 +57,7 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for LoopRecorder<Ctx> {
                         idempotency_key: None,
                         oplog_index: None,
                         agent_fingerprint: None,
+                        background_failure: None,
                     };
                     let recorded = store
                         .data_mut()
@@ -584,6 +585,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         };
         let recorded = self
             .store

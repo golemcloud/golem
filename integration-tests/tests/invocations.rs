@@ -534,3 +534,102 @@ async fn invoke_returns_invocation_headers_that_resolve(
     );
     Ok(())
 }
+
+/// An invocation whose background work fails the agent after the result keeps the result. A
+/// same-key REST invoke answers 200 with the recorded result and `backgroundFailure`, and the
+/// invocation API shows `background-failed` with both the result and the error.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn a_background_failure_keeps_the_recorded_result(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_rust_release")
+        .store()
+        .await?;
+    let agent = agent_key!("BackgroundWork", "rest-background-failure");
+    let agent_id = user.start_agent(&component.id, agent.clone()).await?;
+    let env_id = env.id.0;
+    let client = user
+        .deps
+        .worker_service()
+        .invocation_http_client(&user.token)
+        .await;
+
+    let release = user
+        .invoke_and_await_agent(&component, &agent, "create_release", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let key = IdempotencyKey::fresh();
+    let first = user
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &key,
+            "trap_after_release",
+            data_value!(release.clone()),
+        )
+        .await?;
+    assert_eq!(first.background_failure(), None);
+    assert_eq!(first.into_typed::<String>()?, "returned");
+    user.complete_promise(&env.id, &release, vec![1]).await?;
+    user.wait_for_status(&agent_id, AgentStatus::Failed, Duration::from_secs(60))
+        .await?;
+
+    let again = user
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &key,
+            "trap_after_release",
+            data_value!(release.clone()),
+        )
+        .await?;
+    let failure = again.background_failure().map(str::to_string);
+    assert!(
+        failure
+            .as_deref()
+            .is_some_and(|failure| failure.contains("background work trapped after the result")),
+        "the same key reports the background failure: {failure:?}"
+    );
+    assert_eq!(again.into_typed::<String>()?, "returned");
+
+    let mut found = client
+        .lookup_invocations(&env_id, &agent_id.agent_id.0, None, &key.value)
+        .await?
+        .invocations;
+    assert_eq!(found.len(), 1, "one invocation per key and agent");
+    let summary = found.remove(0);
+    assert_eq!(summary.state, InvocationState::BackgroundFailed);
+    let got = client
+        .get_invocation(&env_id, &summary.invocation_id)
+        .await?;
+    assert_eq!(got.summary.state, InvocationState::BackgroundFailed);
+    let Some(InvocationOutcome::BackgroundFailure(outcome)) = got.result else {
+        anyhow::bail!(
+            "a background-failed invocation has its result and its error: {:?}",
+            got.result
+        );
+    };
+    let value = TypedSchemaValue::from(
+        outcome
+            .value
+            .ok_or_else(|| anyhow!("the background failure keeps the method result"))?,
+    );
+    assert_eq!(
+        <String as FromSchema>::from_value(value.value()).map_err(|e| anyhow!("{e}"))?,
+        "returned"
+    );
+    assert!(
+        outcome
+            .error
+            .contains("background work trapped after the result"),
+        "the outcome names the background failure: {}",
+        outcome.error
+    );
+    Ok(())
+}

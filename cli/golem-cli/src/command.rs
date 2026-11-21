@@ -2786,6 +2786,7 @@ pub mod invocation {
         Retrying,
         Interrupted,
         Completed,
+        BackgroundFailed,
         Failed,
         Cancelled,
     }

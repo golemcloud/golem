@@ -65,7 +65,7 @@ use golem_common::model::{
 };
 use golem_common::model::{
     InvocationEnd, InvocationOperation, InvocationRequestRef, InvocationResultMembership,
-    InvocationResultPosition, RunningInvocation,
+    InvocationResultPosition, RunningInvocation, SettlingInvocation,
 };
 use golem_common::read_only_lock;
 use golem_common::resource_runtime::ResourceTypeId;
@@ -2020,6 +2020,7 @@ async fn background_work_after_invocation_result_runs_until_settled() {
             OplogEntry::agent_invocation_settled(invocation, 17),
             |mut status| {
                 status.settling_invocation = None;
+                status.settling_result = None;
                 status.status = AgentStatus::Idle;
                 status
             },
@@ -2381,6 +2382,347 @@ fn invocation_error_naming_a_finished_invocation_keeps_its_result() {
     ]);
     assert_eq!(results, vec![(running, result(2, Some(1)))]);
     assert_eq!(current, None);
+}
+
+/// The ends that a fold of `entries`, numbered from `first`, gives, in order, with their
+/// terminals. `requests` carries the fold state across calls.
+fn fold_ends(
+    requests: &mut InvocationRequests,
+    first: u64,
+    entries: Vec<OplogEntry>,
+) -> Vec<(InvocationId, InvocationEnd, OplogIndex)> {
+    let entries = entries
+        .into_iter()
+        .enumerate()
+        .map(|(offset, entry)| (OplogIndex::from_u64(first + offset as u64), entry))
+        .collect::<BTreeMap<_, _>>();
+    let mut ends = Vec::new();
+    fold_invocation_result_entries(
+        requests,
+        &DeletedRegions::default(),
+        &entries,
+        |key, position| ends.push((*key, position.end, position.terminal)),
+    );
+    ends
+}
+
+fn finished_awaiting(key: &InvocationId) -> OplogEntry {
+    let mut finished = finished_invocation(key);
+    if let OplogEntry::AgentInvocationFinished {
+        awaits_settlement, ..
+    } = &mut finished
+    {
+        *awaits_settlement = true;
+    }
+    finished
+}
+
+/// The `Error` of a trap during background work that names no invocation, with `retry`.
+fn background_error(retry: RetryPolicyState) -> OplogEntry {
+    OplogEntry::error(
+        None,
+        OplogErrorKind::Invocation,
+        None,
+        AgentError::InternalError("background work trapped".to_string()),
+        OplogIndex::INITIAL,
+        Some(retry),
+        None,
+        None,
+    )
+}
+
+fn background_failed(failure: u64) -> InvocationEnd {
+    InvocationEnd::BackgroundFailed {
+        failure: OplogIndex::from_u64(failure),
+    }
+}
+
+#[test]
+fn a_give_up_while_a_result_settles_is_its_background_failure() {
+    let key = InvocationId(Uuid::new_v4());
+    let index = OplogIndex::from_u64;
+    for give_up in [
+        background_error(RetryPolicyState::Terminal),
+        OplogEntry::exited(),
+    ] {
+        let mut requests = InvocationRequests::default();
+        // The result and the give-up in different folds.
+        assert_eq!(
+            fold_ends(
+                &mut requests,
+                1,
+                vec![started_invocation(&key), finished_awaiting(&key)]
+            ),
+            vec![(key, InvocationEnd::Completed, index(2))]
+        );
+        assert_eq!(
+            fold_ends(&mut requests, 3, vec![give_up]),
+            vec![(key, background_failed(3), index(2))]
+        );
+        assert!(
+            requests
+                .settling
+                .as_ref()
+                .is_some_and(|settling| settling.background_failed)
+        );
+        // A later settlement of the invocation keeps the background failure.
+        assert_eq!(
+            fold_ends(
+                &mut requests,
+                4,
+                vec![OplogEntry::agent_invocation_settled(key, 0)]
+            ),
+            vec![]
+        );
+        assert_eq!(requests.settling, None);
+    }
+}
+
+#[test]
+fn a_give_up_after_a_settled_result_without_a_driving_invocation_attaches_to_none() {
+    let key = InvocationId(Uuid::new_v4());
+    let mut requests = InvocationRequests::default();
+    assert_eq!(
+        fold_ends(
+            &mut requests,
+            1,
+            vec![
+                started_invocation(&key),
+                finished_awaiting(&key),
+                OplogEntry::agent_invocation_settled(key, 0),
+                background_error(RetryPolicyState::Terminal),
+                OplogEntry::exited(),
+            ]
+        ),
+        vec![(key, InvocationEnd::Completed, OplogIndex::from_u64(2))]
+    );
+}
+
+#[test]
+fn a_background_retry_that_recovers_keeps_the_result() {
+    let key = InvocationId(Uuid::new_v4());
+    let mut requests = InvocationRequests::default();
+    assert_eq!(
+        fold_ends(
+            &mut requests,
+            1,
+            vec![
+                started_invocation(&key),
+                finished_awaiting(&key),
+                background_error(RetryPolicyState::Counter(1)),
+                OplogEntry::agent_invocation_settled(key, 0),
+            ]
+        ),
+        vec![(key, InvocationEnd::Completed, OplogIndex::from_u64(2))]
+    );
+    assert_eq!(requests.settling, None);
+}
+
+#[test]
+fn retained_work_that_a_later_invocation_drives_fails_the_driving_invocation() {
+    let spawner = InvocationId(Uuid::new_v4());
+    let driver = InvocationId(Uuid::new_v4());
+    let index = OplogIndex::from_u64;
+    let prefix = || {
+        vec![
+            started_invocation(&spawner),
+            finished_awaiting(&spawner),
+            OplogEntry::agent_invocation_settled(spawner, 0),
+            started_invocation(&driver),
+        ]
+    };
+
+    // The driving invocation recorded its result: the give-up is its background failure.
+    let mut entries = prefix();
+    entries.push(finished_awaiting(&driver));
+    entries.push(background_error(RetryPolicyState::Terminal));
+    assert_eq!(
+        fold_ends(&mut InvocationRequests::default(), 1, entries),
+        vec![
+            (spawner, InvocationEnd::Completed, index(2)),
+            (driver, InvocationEnd::Completed, index(5)),
+            (driver, background_failed(6), index(5)),
+        ]
+    );
+
+    // The driving invocation still runs: the trap names it, and it fails the ordinary way.
+    let mut entries = prefix();
+    entries.push(OplogEntry::error(
+        None,
+        OplogErrorKind::Invocation,
+        Some(driver),
+        AgentError::InternalError("background work trapped".to_string()),
+        OplogIndex::INITIAL,
+        Some(RetryPolicyState::Terminal),
+        None,
+        None,
+    ));
+    assert_eq!(
+        fold_ends(&mut InvocationRequests::default(), 1, entries),
+        vec![
+            (spawner, InvocationEnd::Completed, index(2)),
+            (driver, InvocationEnd::Retrying, index(5)),
+        ]
+    );
+}
+
+#[test]
+fn only_an_exhausted_invocation_give_up_of_the_primary_store_fails_a_settling_result() {
+    let key = InvocationId(Uuid::new_v4());
+    let index = OplogIndex::from_u64;
+    let failed = OplogEntry::agent_invocation_failed(
+        None,
+        key,
+        AgentError::InternalError("method failed".to_string()),
+        OplogIndex::INITIAL,
+        true,
+    );
+    // A method failure recorded at the return stays the result.
+    assert_eq!(
+        fold_ends(
+            &mut InvocationRequests::default(),
+            1,
+            vec![
+                started_invocation(&key),
+                failed,
+                background_error(RetryPolicyState::Terminal),
+                OplogEntry::exited(),
+            ]
+        ),
+        vec![(key, InvocationEnd::Failed, index(2))]
+    );
+    for not_a_give_up in [
+        OplogEntry::error(
+            None,
+            OplogErrorKind::Recovery,
+            None,
+            AgentError::InternalError("replay diverged".to_string()),
+            OplogIndex::INITIAL,
+            Some(RetryPolicyState::Terminal),
+            None,
+            None,
+        ),
+        OplogEntry::error(
+            Some(index(3)),
+            OplogErrorKind::Invocation,
+            None,
+            AgentError::InternalError("entity body trapped".to_string()),
+            OplogIndex::INITIAL,
+            Some(RetryPolicyState::Terminal),
+            None,
+            None,
+        ),
+        OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            None,
+            AgentError::InternalError("background work trapped".to_string()),
+            OplogIndex::INITIAL,
+            None,
+            None,
+            None,
+        ),
+        OplogEntry::interrupted(),
+        OplogEntry::suspend(),
+    ] {
+        assert_eq!(
+            fold_ends(
+                &mut InvocationRequests::default(),
+                1,
+                vec![
+                    started_invocation(&key),
+                    finished_awaiting(&key),
+                    not_a_give_up,
+                ]
+            ),
+            vec![(key, InvocationEnd::Completed, index(2))]
+        );
+    }
+}
+
+#[test]
+fn a_constructor_give_up_while_it_settles_is_its_background_failure() {
+    let key = InvocationId(Uuid::new_v4());
+    let mut started = started_invocation(&key);
+    if let OplogEntry::AgentInvocationStarted {
+        operation, payload, ..
+    } = &mut started
+    {
+        **operation = InvocationRequestOperation::AgentInitialization;
+        *payload = OplogPayload::Inline(Box::new(
+            StoredAgentInvocationPayload::AgentInitialization {
+                input: SchemaValue::Record { fields: Vec::new() },
+                caller: Caller::anonymous(),
+            },
+        ));
+    }
+    assert_eq!(
+        fold_ends(
+            &mut InvocationRequests::default(),
+            1,
+            vec![
+                started,
+                finished_awaiting(&key),
+                background_error(RetryPolicyState::Terminal),
+            ]
+        ),
+        vec![
+            (key, InvocationEnd::Completed, OplogIndex::from_u64(2)),
+            (key, background_failed(3), OplogIndex::from_u64(2)),
+        ]
+    );
+}
+
+/// The status keeps the settling invocation twice: as `settling_invocation`, from the agent status
+/// fold, and as `settling_result`, from the invocation result fold. Both name the same invocation
+/// after every entry, and a give-up folded on top of a stored status still finds its result.
+#[test]
+fn the_status_mirrors_the_settling_invocation_of_both_folds() {
+    let key = InvocationId(Uuid::new_v4());
+    let other = InvocationId(Uuid::new_v4());
+    let entries = [
+        started_invocation(&key),
+        finished_awaiting(&key),
+        background_error(RetryPolicyState::Counter(1)),
+        OplogEntry::agent_invocation_settled(other, 0),
+        OplogEntry::agent_invocation_settled(key, 0),
+        started_invocation(&other),
+        finished_awaiting(&other),
+        background_error(RetryPolicyState::Terminal),
+    ];
+    let mut status = AgentStatusRecord::default();
+    for (offset, entry) in entries.into_iter().enumerate() {
+        let index = OplogIndex::from_u64(offset as u64 + 1);
+        status = crate::worker::status::update_status_with_new_entries(
+            AgentMode::Durable,
+            status,
+            BTreeMap::from([(index, entry)]),
+            &RetryConfig::default(),
+        )
+        .expect("the status folds")
+        .expect("the status folds from the new entries");
+        assert_eq!(
+            status.settling_invocation,
+            status.settling_result.as_ref().map(|settling| settling.key),
+            "after the entry at {index}"
+        );
+    }
+    assert_eq!(status.settling_invocation, Some(other));
+    assert_eq!(
+        status
+            .invocation_results
+            .position(&other)
+            .map(|position| position.end),
+        Some(background_failed(8))
+    );
+    assert_eq!(
+        status
+            .invocation_results
+            .position(&key)
+            .map(|position| position.end),
+        Some(InvocationEnd::Completed)
+    );
+    assert_eq!(status.status, AgentStatus::Failed);
 }
 
 #[test]
@@ -5388,6 +5730,15 @@ impl TestCaseBuilder {
                 );
                 if awaits_settlement {
                     status.settling_invocation = Some(idempotency_key);
+                    status.settling_result = Some(SettlingInvocation {
+                        key: idempotency_key,
+                        result: status
+                            .invocation_results
+                            .position(&idempotency_key)
+                            .expect("the result was just inserted")
+                            .clone(),
+                        background_failed: false,
+                    });
                     status.status = AgentStatus::Running;
                 } else {
                     status.status = AgentStatus::Idle;
