@@ -1186,6 +1186,15 @@ mod tests {
         );
     }
 
+    /// The expiry of a derived cache is a week.
+    #[test]
+    fn the_derived_cache_expiry_is_a_week() {
+        assert_eq!(
+            super::DERIVED_CACHE_EXPIRY,
+            std::time::Duration::from_secs(604_800)
+        );
+    }
+
     /// The derived caches of an agent expire after a week. The status baseline and the other
     /// namespaces do not expire.
     #[test]

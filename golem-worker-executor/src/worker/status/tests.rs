@@ -6666,6 +6666,191 @@ fn a_successful_update_keeps_the_progress_of_a_plugin_that_stays_active() {
     );
 }
 
+/// The `Create` entry of an agent whose initial active plugins are `initial_active_plugins`.
+fn create_with_plugins(initial_active_plugins: HashSet<EnvironmentPluginGrantId>) -> OplogEntry {
+    let mut create = TestCase::builder(0).build().entries[0].oplog_entry.clone();
+    let OplogEntry::Create { parameters, .. } = &mut create else {
+        unreachable!()
+    };
+    parameters.initial_active_plugins = initial_active_plugins;
+    create
+}
+
+/// A `Create` gives the initial active plugins of the agent.
+#[test]
+fn a_create_gives_the_initial_active_plugins() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let entries = BTreeMap::from([(
+        OplogIndex::INITIAL,
+        create_with_plugins(HashSet::from([grant_id])),
+    )]);
+
+    assert_eq!(
+        calculate_plugin_status(
+            HashSet::new(),
+            HashMap::new(),
+            &DeletedRegions::default(),
+            &entries
+        ),
+        (HashSet::from([grant_id]), HashMap::new())
+    );
+}
+
+/// A deactivation of a plugin that has entries in flight keeps the checkpoint state of the
+/// plugin, so that the processor can confirm the entries in flight.
+#[test]
+fn a_deactivation_keeps_the_checkpoint_state_of_a_plugin_with_entries_in_flight() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let target = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "in-flight-target".to_string(),
+    };
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::INITIAL,
+            create_with_plugins(HashSet::from([grant_id])),
+        ),
+        (
+            OplogIndex::from_u64(2),
+            OplogEntry::OplogProcessorCheckpoint {
+                timestamp: Timestamp::now_utc(),
+                plugin_grant_id: grant_id,
+                target_agent_id: target.clone(),
+                confirmed_up_to: OplogIndex::INITIAL,
+                sending_up_to: OplogIndex::from_u64(4),
+                last_batch_start: OplogIndex::INITIAL,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
+            },
+        ),
+        (
+            OplogIndex::from_u64(3),
+            OplogEntry::DeactivatePlugin {
+                timestamp: Timestamp::now_utc(),
+                plugin_grant_id: grant_id,
+            },
+        ),
+    ]);
+
+    assert_eq!(
+        calculate_plugin_status(
+            HashSet::new(),
+            HashMap::new(),
+            &DeletedRegions::default(),
+            &entries
+        ),
+        (
+            HashSet::new(),
+            HashMap::from([(
+                grant_id,
+                OplogProcessorCheckpointState {
+                    target_agent_id: Some(target),
+                    confirmed_up_to: OplogIndex::INITIAL,
+                    sending_up_to: OplogIndex::from_u64(4),
+                    last_batch_start: OplogIndex::INITIAL,
+                    delivery: None,
+                },
+            )])
+        )
+    );
+}
+
+/// A checkpoint entry gives every field of the checkpoint state, also the start of the last
+/// batch and the pending delivery.
+#[test]
+fn a_checkpoint_entry_gives_every_field_of_the_checkpoint_state() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let target = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "delivery-target".to_string(),
+    };
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(12),
+        OplogEntry::OplogProcessorCheckpoint {
+            timestamp: Timestamp::now_utc(),
+            plugin_grant_id: grant_id,
+            target_agent_id: target.clone(),
+            confirmed_up_to: OplogIndex::from_u64(10),
+            sending_up_to: OplogIndex::from_u64(11),
+            last_batch_start: OplogIndex::from_u64(7),
+            source_component_revision: ComponentRevision::INITIAL,
+            delivery: Some(vec![1, 2, 3]),
+        },
+    )]);
+
+    let (_, result) = calculate_plugin_status(
+        HashSet::from([grant_id]),
+        HashMap::new(),
+        &DeletedRegions::default(),
+        &entries,
+    );
+
+    assert_eq!(
+        result,
+        HashMap::from([(
+            grant_id,
+            OplogProcessorCheckpointState {
+                target_agent_id: Some(target),
+                confirmed_up_to: OplogIndex::from_u64(10),
+                sending_up_to: OplogIndex::from_u64(11),
+                last_batch_start: OplogIndex::from_u64(7),
+                delivery: Some(vec![1, 2, 3]),
+            },
+        )])
+    );
+}
+
+/// The fold does not apply an activation in a deleted region, as replay does not. The same
+/// activation outside the deleted region is applied.
+#[test]
+fn an_activation_in_a_deleted_region_is_not_applied() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let activation = OplogIndex::from_u64(5);
+    let entries = BTreeMap::from([(
+        activation,
+        OplogEntry::ActivatePlugin {
+            timestamp: Timestamp::now_utc(),
+            plugin_grant_id: grant_id,
+        },
+    )]);
+    let activated = (
+        HashSet::from([grant_id]),
+        HashMap::from([(
+            grant_id,
+            OplogProcessorCheckpointState {
+                target_agent_id: None,
+                confirmed_up_to: activation,
+                sending_up_to: activation,
+                last_batch_start: activation,
+                delivery: None,
+            },
+        )]),
+    );
+
+    [
+        (
+            DeletedRegions::from_regions([OplogRegion::from_index_range(
+                OplogIndex::from_u64(4)..=OplogIndex::from_u64(6),
+            )]),
+            (HashSet::new(), HashMap::new()),
+        ),
+        (
+            DeletedRegions::from_regions([OplogRegion::from_index_range(
+                OplogIndex::from_u64(6)..=OplogIndex::from_u64(8),
+            )]),
+            activated,
+        ),
+    ]
+    .into_iter()
+    .for_each(|(deleted_regions, expected)| {
+        assert_eq!(
+            calculate_plugin_status(HashSet::new(), HashMap::new(), &deleted_regions, &entries),
+            expected,
+            "deleted regions {deleted_regions:?}"
+        );
+    });
+}
+
 #[test]
 fn deactivate_then_reactivate_seeds_new_checkpoint() {
     let grant_id = EnvironmentPluginGrantId::new();
