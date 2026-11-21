@@ -2372,6 +2372,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                 .service
                 .read_durable_stream_consumer_page(
                     &owner,
+                    AgentMode::Durable,
                     fixture.identity.fingerprint,
                     &target,
                     reader,
@@ -2453,6 +2454,7 @@ async fn persisted_fork_chain_preserves_consumer_only_heads() {
                     .service
                     .read_durable_stream_consumer_page(
                         &owner,
+                        AgentMode::Durable,
                         fixture.identity.fingerprint,
                         &target,
                         reader,

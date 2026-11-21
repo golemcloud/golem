@@ -653,6 +653,48 @@ async fn rejected_periodic_snapshots_are_exact_indexes_and_incarnation_scoped() 
 }
 
 #[test]
+async fn unreadable_status_cache_is_refolded_and_replaced() {
+    let storage = Arc::new(InMemoryKeyValueStorage::new());
+    let owned_agent_id = test_owned_agent_id("unreadable-status-cache");
+    let fingerprint = AgentFingerprint::new();
+    let service = DefaultWorkerService::new(
+        storage.clone(),
+        Arc::new(ShardServiceDefault::new()),
+        Arc::new(IndexTestOplogService::new(BTreeMap::from([
+            (
+                OplogIndex::INITIAL,
+                test_create_entry(&owned_agent_id, AgentMode::Durable, fingerprint),
+            ),
+            (OplogIndex::from_u64(2), OplogEntry::exited()),
+        ]))),
+        Arc::new(IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let namespace = DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint);
+    storage
+        .with_entity("test", "corrupt", "status")
+        .set_raw(
+            namespace.clone(),
+            status::STATUS_CORE_FIELD,
+            b"\xffprivate payload",
+        )
+        .await
+        .unwrap();
+
+    let metadata = service.get(&owned_agent_id).await.unwrap().unwrap();
+    let status = metadata.last_known_status.unwrap();
+    assert_eq!(status.status, AgentStatus::Exited);
+    assert_eq!(status.oplog_idx, OplogIndex::from_u64(2));
+    assert_eq!(
+        service
+            .read_split_status(&owned_agent_id, namespace)
+            .await
+            .unwrap(),
+        Some(status)
+    );
+}
+
+#[test]
 async fn remembered_status_baseline_recovers_complete_hash_after_cache_loss() {
     let storage = Arc::new(InMemoryKeyValueStorage::new());
     let service = DefaultWorkerService::new(
@@ -3615,7 +3657,7 @@ async fn a_result_index_field_that_does_not_decode_resets_the_index() {
             "invocation_result",
         )
         .set_raw(
-            namespace,
+            namespace.clone(),
             &invocation_result_index_field(&first),
             &[0xff, 0x00],
         )
@@ -3645,6 +3687,36 @@ async fn a_result_index_field_that_does_not_decode_resets_the_index() {
         InvocationResultIndexLookup::Incomplete
     );
 
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        positions_only(lookup(first).await),
+        InvocationResultIndexLookup::Found(result_at(3))
+    );
+
+    storage
+        .with_entity("test", "corrupt_result_listing", "invocation_result")
+        .set_raw(namespace, &invocation_result_index_field(&first), &[3])
+        .await
+        .unwrap();
+    assert!(
+        service
+            .list_invocation_result_index(&owned_agent_id, invocation_index_fingerprint(), &status,)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        lookup(second).await,
+        InvocationResultIndexLookup::Incomplete
+    );
     service
         .catch_up_invocation_result_index(
             &owned_agent_id,

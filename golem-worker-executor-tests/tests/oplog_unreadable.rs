@@ -41,13 +41,19 @@ use golem_worker_executor::services::HasEvents;
 use golem_worker_executor::services::events::Event;
 use golem_worker_executor::services::golem_config::OplogConfig;
 use golem_worker_executor::services::oplog::CompressedOplogChunk;
+use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
+use golem_worker_executor::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
+use golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage;
+use golem_worker_executor::storage::keyvalue::{
+    KeyValueStorageLabelledApi, KeyValueStorageNamespace,
+};
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, agent_oplog_length, archived_oplog_chunks,
-    scheduler_sqlite_storage_config, start_with_oplog_config, start_with_overrides,
-    truncate_archived_oplog_chunk,
+    scheduler_sqlite_storage_config, sqlite_storage_config, start_with_oplog_config,
+    start_with_overrides, truncate_archived_oplog_chunk,
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -75,6 +81,134 @@ inherit_test_dep!(Tracing);
 
 /// The compressed archive level the agents' oplogs move to; with no blob level they stay there.
 const ARCHIVE_LEVEL: usize = 1;
+
+#[test]
+#[timeout("4m")]
+async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_rebuilt(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let config = OplogConfig {
+        indexed_storage_layers: 1,
+        blob_storage_layers: 0,
+        ..Default::default()
+    };
+    let executor = start_with_oplog_config(deps, &context, Some(config.clone())).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let unreadable = agent_key!("Counter", "unknown-primary-version");
+    let healthy = agent_key!("Counter", "unknown-cache-version");
+    let unreadable_id = executor
+        .start_agent(&component.id, unreadable.clone())
+        .await?;
+    let healthy_id = executor.start_agent(&component.id, healthy.clone()).await?;
+    let (_, healthy_result) = futures::try_join!(
+        executor.invoke_and_await_agent(&component, &unreadable, "increment", data_value!()),
+        executor.invoke_and_await_agent(&component, &healthy, "increment", data_value!()),
+    )?;
+    assert_eq!(healthy_result.into_typed::<u32>()?, 1);
+    drop(executor);
+
+    let storage_config = sqlite_storage_config(deps, &context);
+    let indexed_config =
+        golem_worker_executor::derive_disjoint_sqlite_config(&storage_config, "indexed");
+    let indexed = SqliteIndexedStorage::configured(&indexed_config).await?;
+    let namespace = IndexedStorageNamespace::OpLog {
+        owned_agent_id: unreadable_id.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let key = unreadable_id.storage_key();
+    let mut corrupt = indexed
+        .with_entity("test", "corrupt_version", "entry")
+        .read_raw(namespace.clone(), &key, 2, 2)
+        .await?
+        .pop()
+        .expect("the invocation must have stored a second entry")
+        .1;
+    assert_eq!(corrupt[0], 3);
+    corrupt[0] = 255;
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", indexed_config.database)).await?;
+    assert_eq!(
+        sqlx::query("UPDATE index_storage SET value = ? WHERE namespace = 'durable-worker-oplog' AND key = ? AND id = 2")
+            .bind(&corrupt)
+            .bind(&key)
+            .execute(&pool)
+            .await?
+            .rows_affected(),
+        1
+    );
+    pool.close().await;
+
+    let (_, OplogEntry::Create { parameters, .. }) = indexed
+        .with_entity("test", "read_identity", "entry")
+        .first::<OplogEntry>(
+            IndexedStorageNamespace::OpLog {
+                owned_agent_id: healthy_id.clone(),
+                agent_mode: AgentMode::Durable,
+            },
+            &healthy_id.storage_key(),
+        )
+        .await?
+        .expect("the healthy agent must have a Create entry")
+    else {
+        panic!("the first oplog entry must be Create");
+    };
+    let cache_namespace = KeyValueStorageNamespace::AgentStatus {
+        owned_agent_id: healthy_id.clone(),
+        fingerprint: golem_common::model::AgentFingerprint(parameters.instance_id),
+    };
+    let kv = SqliteKeyValueStorage::configured(&storage_config).await?;
+    kv.with_entity("test", "corrupt_version", "status")
+        .set_raw(cache_namespace.clone(), "core", &[255])
+        .await
+        .map_err(anyhow::Error::msg)?;
+
+    let executor = start_with_oplog_config(deps, &context, Some(config)).await?;
+    let error = executor
+        .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
+        .await
+        .expect_err("the unknown oplog version must fail its agent");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("unknown serialization version: 255"),
+        "{message}"
+    );
+    assert!(message.contains("entry 2"), "{message}");
+    assert!(
+        message.contains(&unreadable_id.agent_id.to_string()),
+        "{message}"
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &healthy, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        2
+    );
+    let rebuilt = kv
+        .with_entity("test", "read_cache", "status")
+        .get_raw(cache_namespace, "core")
+        .await
+        .map_err(anyhow::Error::msg)?
+        .expect("the status cache must have been rebuilt");
+    assert!(
+        golem_common::serialization::decode::<golem_common::model::AgentStatusRecord>(&rebuilt)
+            .is_ok()
+    );
+    assert_eq!(
+        indexed
+            .with_entity("test", "read_corrupt", "entry")
+            .read_raw(namespace, &key, 2, 2)
+            .await?,
+        vec![(2, corrupt)]
+    );
+    Ok(())
+}
 
 /// Archives the oplogs of idle agents within a second, into the compressed level only.
 fn archiving_config() -> OplogConfig {

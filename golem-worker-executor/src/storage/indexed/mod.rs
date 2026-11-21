@@ -829,7 +829,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         self.read_try_decode(namespace, key, start_id, end_id)
             .await?
             .into_iter()
-            .map(|(id, value)| Self::expect_decoded(value).map(|value| (id, value)))
+            .map(|(id, value)| Self::expect_decoded(key, id, value).map(|value| (id, value)))
             .collect()
     }
 
@@ -896,7 +896,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
         self.first_try_decode(namespace, key)
             .await?
-            .map(|(id, value)| Self::expect_decoded(value).map(|value| (id, value)))
+            .map(|(id, value)| Self::expect_decoded(key, id, value).map(|value| (id, value)))
             .transpose()
     }
 
@@ -929,7 +929,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
         self.last_try_decode(namespace, key)
             .await?
-            .map(|(id, value)| Self::expect_decoded(value).map(|value| (id, value)))
+            .map(|(id, value)| Self::expect_decoded(key, id, value).map(|value| (id, value)))
             .transpose()
     }
 
@@ -1002,7 +1002,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
         self.closest_try_decode(namespace, key, id)
             .await?
-            .map(|(id, value)| Self::expect_decoded(value).map(|value| (id, value)))
+            .map(|(id, value)| Self::expect_decoded(key, id, value).map(|value| (id, value)))
             .transpose()
     }
 
@@ -1019,14 +1019,16 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             .map(|(id, bytes)| (id, decode(&bytes))))
     }
 
-    /// Strict reads require a known version; malformed data of a known version stays an error.
-    fn expect_decoded<V>(value: Result<V, DecodeError>) -> Result<V, IndexedStorageError> {
-        match &value {
-            Err(DecodeError::MissingVersion | DecodeError::UnknownVersion(_)) => {
-                Ok(value.expect("invalid serialization version"))
-            }
-            _ => value.map_err(|error| IndexedStorageError::Other(error.to_string())),
-        }
+    fn expect_decoded<V>(
+        key: &str,
+        id: u64,
+        value: Result<V, DecodeError>,
+    ) -> Result<V, IndexedStorageError> {
+        value.map_err(|error| {
+            IndexedStorageError::Other(format!(
+                "Failed to decode entry {id} for key '{key}': {error}"
+            ))
+        })
     }
 
     /// Gets the entry with the closest id to the given id in the index of the given key,
@@ -1100,12 +1102,10 @@ mod tests {
         IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageNamespace, ScanResume,
         memory::InMemoryIndexedStorage, scan_prefix_upper_bound, stable_scan_key_bounds,
     };
-    use futures::FutureExt;
     use golem_common::model::agent::AgentMode;
     use golem_common::model::{AgentId, OwnedAgentId};
     use golem_common::serialization::{DecodeError, serialize};
     use proptest::prelude::*;
-    use std::panic::AssertUnwindSafe;
     use test_r::test;
 
     test_r::enable!();
@@ -1161,8 +1161,34 @@ mod tests {
                     .closest_try_decode::<u64>(namespace.clone(), key, 3)
                     .await
                     .unwrap(),
-                Some((7, expected))
+                Some((7, expected.clone()))
             );
+            let reads = [
+                labelled.read::<u64>(namespace.clone(), key, 2, 9).await,
+                labelled
+                    .first::<u64>(namespace.clone(), key)
+                    .await
+                    .map(|entry| entry.into_iter().collect()),
+                labelled
+                    .last::<u64>(namespace.clone(), key)
+                    .await
+                    .map(|entry| entry.into_iter().collect()),
+                labelled
+                    .closest::<u64>(namespace.clone(), key, 3)
+                    .await
+                    .map(|entry| entry.into_iter().collect()),
+            ];
+            reads.into_iter().for_each(|read| match &expected {
+                Ok(value) => assert_eq!(read.unwrap(), vec![(7, *value)]),
+                Err(expected) => {
+                    let error = read.unwrap_err();
+                    assert!(matches!(error, IndexedStorageError::Other(_)));
+                    let message = error.to_string();
+                    assert!(message.contains(key), "{message}");
+                    assert!(message.contains("entry 7"), "{message}");
+                    assert!(message.contains(&expected.to_string()), "{message}");
+                }
+            });
         }
         assert!(
             labelled
@@ -1178,14 +1204,6 @@ mod tests {
                 .unwrap(),
             vec![(7, 37)]
         );
-        for key in ["empty", "unknown"] {
-            assert!(
-                AssertUnwindSafe(labelled.read::<u64>(namespace.clone(), key, 2, 9))
-                    .catch_unwind()
-                    .await
-                    .is_err()
-            );
-        }
         labelled
             .append_raw(namespace.clone(), "malformed", 7, vec![3], None)
             .await

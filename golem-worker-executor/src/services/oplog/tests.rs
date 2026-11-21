@@ -32,7 +32,7 @@ use crate::storage::indexed::{
 };
 use assert2::check;
 use bytes::Bytes;
-use futures::FutureExt;
+use futures::{FutureExt, StreamExt};
 use golem_common::config::RedisConfig;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -3059,6 +3059,48 @@ async fn archiving_auto_committed_entries_does_not_consume_explicit_commit_repor
 }
 
 #[test]
+async fn a_failed_commit_report_keeps_the_explicit_commit_in_the_next_report(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = PrimaryOplogService::new(
+        indexed_storage.clone(),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        1,
+        RetryConfig::default(),
+    )
+    .await;
+    let oplog = create_append_reconciliation_oplog(&service, "failed-commit-report").await;
+    let listener: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+    oplog.set_auto_commit_listener(Arc::downgrade(&listener));
+    let expected: BTreeMap<_, _> = futures::stream::iter(1..=5)
+        .then(|delta| {
+            let oplog = oplog.clone();
+            async move {
+                let entry = OplogEntry::grow_memory(delta).rounded();
+                (oplog.add(entry.clone()).await.unwrap(), entry)
+            }
+        })
+        .collect()
+        .await;
+    assert_eq!(expected.len(), 5);
+    indexed_storage
+        .read_failures
+        .lock()
+        .unwrap()
+        .push_back(IndexedStorageError::Other("injected read failure".into()));
+    assert!(matches!(
+        oplog.commit(CommitLevel::Always).await,
+        Err(OplogError::Unreadable(_))
+    ));
+    assert_eq!(
+        oplog.commit(CommitLevel::ReportOnly).await.unwrap(),
+        expected
+    );
+}
+
+#[test]
 async fn report_only_returns_retained_threshold_commits_without_reading_storage(
     _tracing: &Tracing,
 ) {
@@ -3663,7 +3705,7 @@ async fn primary_read_range_overflow_fails_without_storage_io(_tracing: &Tracing
 }
 
 #[test]
-async fn primary_storage_read_failures_panic_from_all_read_paths(_tracing: &Tracing) {
+async fn primary_storage_read_failures_return_from_all_read_paths(_tracing: &Tracing) {
     let indexed_storage = Arc::new(ReadCountingIndexedStorage::failing_reads(
         IndexedStorageError::Other("injected permanent read failure".to_string()),
     ));
@@ -3682,7 +3724,7 @@ async fn primary_storage_read_failures_panic_from_all_read_paths(_tracing: &Trac
     let agent_id = AgentId::from_parts(7, 19);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
-    assert_panics(oplog_service.read_exact(
+    assert_unreadable(oplog_service.read_exact(
         &owned_agent_id,
         AgentMode::Durable,
         OplogIndex::INITIAL,
@@ -3703,7 +3745,7 @@ async fn primary_storage_read_failures_panic_from_all_read_paths(_tracing: &Trac
         )
         .await
         .unwrap();
-    assert_panics(oplog.read_exact(OplogIndex::INITIAL, 1)).await;
+    assert_unreadable(oplog.read_exact(OplogIndex::INITIAL, 1)).await;
     drop(oplog);
 
     let oplog = oplog_service
@@ -3719,12 +3761,18 @@ async fn primary_storage_read_failures_panic_from_all_read_paths(_tracing: &Trac
         )
         .await
         .unwrap();
-    assert_panics(oplog.read(OplogIndex::INITIAL)).await;
-    assert_eq!(indexed_storage.reads(), 3);
+    assert_unreadable(oplog.read(OplogIndex::INITIAL)).await;
+    oplog.add(OplogEntry::suspend()).await.unwrap();
+    oplog.add(OplogEntry::suspend()).await.unwrap();
+    assert!(matches!(
+        oplog.commit(CommitLevel::ReportOnly).await,
+        Err(OplogError::Unreadable(_))
+    ));
+    assert_eq!(indexed_storage.reads(), 4);
 }
 
 #[test]
-async fn exhausted_primary_read_retries_panic(_tracing: &Tracing) {
+async fn exhausted_primary_read_retries_remain_transient(_tracing: &Tracing) {
     let indexed_storage = Arc::new(ReadCountingIndexedStorage::failing_reads(
         IndexedStorageError::Transient("injected transient read failure".to_string()),
     ));
@@ -3748,14 +3796,89 @@ async fn exhausted_primary_read_retries_panic(_tracing: &Tracing) {
     let agent_id = AgentId::from_parts(7, 20);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
 
-    assert_panics(oplog_service.read_exact(
+    let error = assert_unreadable(oplog_service.read_exact(
         &owned_agent_id,
         AgentMode::Durable,
         OplogIndex::INITIAL,
         1,
     ))
     .await;
+    assert!(error.is_transient());
     assert_eq!(indexed_storage.reads(), 3);
+}
+
+#[test]
+async fn primary_decode_failure_names_the_entry_without_exposing_its_bytes(_tracing: &Tracing) {
+    assert_primary_decode_diagnostic(
+        b"\xffprivate payload".to_vec(),
+        "unknown serialization version: 255",
+    )
+    .await;
+}
+
+#[test]
+async fn primary_invalid_data_names_the_codec_version_and_entry(_tracing: &Tracing) {
+    assert_primary_decode_diagnostic(vec![3], "serialization version 3").await;
+}
+
+async fn assert_primary_decode_diagnostic(bytes: Vec<u8>, diagnostic: &str) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage.clone(),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        32,
+        RetryConfig::default(),
+    )
+    .await;
+    let environment_id = EnvironmentId::new();
+    let agent_id = crate::test_agent_id("unknown-version");
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let index = OplogIndex::from_u64(7);
+    indexed_storage
+        .with_entity("test", "corrupt", "entry")
+        .append_raw(
+            IndexedStorageNamespace::OpLog {
+                owned_agent_id: owned_agent_id.clone(),
+                agent_mode: AgentMode::Durable,
+            },
+            &owned_agent_id.storage_key(),
+            index.into(),
+            bytes,
+            None,
+        )
+        .await
+        .unwrap();
+    let oplog = oplog_service
+        .open(
+            &mut oplog_service.lock_lifecycle(&agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(index),
+            make_agent_metadata(agent_id, AccountId::new(), environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            None,
+        )
+        .await
+        .unwrap();
+    let errors = [
+        assert_unreadable(oplog_service.read_exact(&owned_agent_id, AgentMode::Durable, index, 1))
+            .await,
+        assert_unreadable(oplog.read_exact(index, 1)).await,
+        assert_unreadable(oplog.read_source(index, 1)).await,
+        assert_unreadable(oplog.read(index)).await,
+    ];
+    errors.into_iter().for_each(|error| {
+        assert_eq!(error.agent_id, agent_id);
+        assert!(!error.is_transient());
+        let message = error.to_string();
+        assert!(message.contains(diagnostic), "{message}");
+        assert!(message.contains("entry 7"), "{message}");
+        assert!(!message.contains("private payload"), "{message}");
+    });
 }
 
 #[test]
@@ -15291,10 +15414,16 @@ fn a_read_that_outlives_the_blocking_pool_parks_instead_of_failing() {
 
     let live = runtime.block_on(read(1)).unwrap();
     assert_eq!(live.get(&OplogIndex::from_u64(1)), Some(&entry));
-    let corrupt = std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(read(2))));
+    let corrupt = runtime
+        .block_on(read(2))
+        .expect_err("a corrupt stored entry must fail the read without panicking");
+    assert_eq!(corrupt.agent_id, agent_id);
     assert!(
-        corrupt.is_err(),
-        "a corrupt stored entry must still fail the read"
+        corrupt.to_string().contains("oplog entry 2")
+            && corrupt
+                .to_string()
+                .contains("unknown serialization version: 255"),
+        "{corrupt}"
     );
 
     let handle = runtime.handle().clone();

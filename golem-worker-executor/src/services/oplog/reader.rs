@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::OplogPayloadDownloadError;
 use crate::services::oplog::multilayer::OplogArchiveError;
 use golem_common::model::AgentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -93,6 +94,19 @@ impl OplogReadError {
             OplogArchiveError::Unavailable(detail) => Self::source_unavailable(source, detail),
             OplogArchiveError::Corruption(detail) => Self::corruption(source, detail),
             OplogArchiveError::Failed(detail) => Self::source_failure(source, detail),
+        }
+    }
+
+    /// Identifies the payload entry and retains whether its storage can recover.
+    pub fn of_payload(
+        source: OplogReadSource,
+        index: OplogIndex,
+        error: OplogPayloadDownloadError,
+    ) -> Self {
+        let detail = format!("failed to load payload at oplog index {index}: {error:#}");
+        match error {
+            OplogPayloadDownloadError::Backend(_) => Self::source_unavailable(source, detail),
+            OplogPayloadDownloadError::Corrupt(_) => Self::corruption(source, detail),
         }
     }
 

@@ -462,7 +462,14 @@ impl DurableStreamStore {
                 let mut positions = Vec::new();
                 for page in 0..count.div_ceil(page_size) {
                     let records = service
-                        .read_durable_stream_consumer_page(&owner, *fingerprint, key, reader, page)
+                        .read_durable_stream_consumer_page(
+                            &owner,
+                            *mode,
+                            *fingerprint,
+                            key,
+                            reader,
+                            page,
+                        )
                         .await?;
                     let needed = (count - page * page_size).min(page_size) as usize;
                     if records.len() < needed {

@@ -66,8 +66,7 @@ impl PrimaryOplog {
             key: key.clone(),
             buffer: VecDeque::new(),
             last_committed_idx: last_oplog_idx,
-            last_reported_commit_idx: last_oplog_idx,
-            retained_auto_commits: VecDeque::new(),
+            commit_report: report::initial(last_oplog_idx),
             auto_commit_listener: auto_commit_listener.clone(),
             last_oplog_idx,
             owned_agent_id,
@@ -254,12 +253,14 @@ impl PrimaryOplog {
                             level => state.commit(level).await,
                         };
                         let result = match committed {
-                            Ok(committed) => Ok(state
-                                .committed_since_last_report(
-                                    previously_committed_through,
-                                    committed,
-                                )
-                                .await),
+                            Ok(committed) => {
+                                state
+                                    .committed_since_last_report(
+                                        previously_committed_through,
+                                        committed,
+                                    )
+                                    .await
+                            }
                             Err(error) => Err(error),
                         };
                         let _ = done.send(result);
@@ -611,7 +612,10 @@ impl Oplog for PrimaryOplog {
         let unreadable = |error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error);
         checked_range_end(oplog_index, n).map_err(unreadable)?;
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        let entries = reader.read_source(oplog_index, n).await;
+        let entries = reader
+            .read_source(oplog_index, n)
+            .await
+            .map_err(unreadable)?;
         exact_from_source(OplogReadSource::Primary, oplog_index, n, entries).map_err(unreadable)
     }
 
@@ -621,7 +625,10 @@ impl Oplog for PrimaryOplog {
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        Ok(reader.read_source(oplog_index, n).await)
+        reader
+            .read_source(oplog_index, n)
+            .await
+            .map_err(|error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error))
     }
 
     async fn try_read_source(
@@ -630,12 +637,18 @@ impl Oplog for PrimaryOplog {
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        reader.try_read_source(oplog_index, n).await
+        reader
+            .read_source(oplog_index, n)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, UnreadableOplog> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        Ok(reader.read(oplog_index).await)
+        reader
+            .read(oplog_index)
+            .await
+            .map_err(|error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error))
     }
 
     async fn length(&self) -> Result<u64, UnreadableOplog> {

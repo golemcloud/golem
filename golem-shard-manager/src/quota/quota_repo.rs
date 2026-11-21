@@ -28,7 +28,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use golem_common::error_forwarding;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId};
-use golem_common::serialization::{serialize, try_deserialize};
+use golem_common::serialization::serialize;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
@@ -723,14 +723,12 @@ fn encode<T: desert_rust::BinarySerializer>(value: &T) -> Result<Vec<u8>, QuotaR
 }
 
 fn decode<T: desert_rust::BinaryDeserializer>(kv: &KeyValue) -> Result<T, QuotaRepoError> {
-    try_deserialize(kv.value())
-        .map_err(|err| QuotaRepoError::InternalError(anyhow::anyhow!(err)))?
-        .ok_or_else(|| {
-            QuotaRepoError::InternalError(anyhow::anyhow!(
-                "quota key {} holds an empty value or an unknown serialization version",
-                String::from_utf8_lossy(kv.key())
-            ))
-        })
+    golem_common::serialization::decode(kv.value()).map_err(|error| {
+        QuotaRepoError::InternalError(anyhow::anyhow!(
+            "failed to decode quota key {}: {error}",
+            String::from_utf8_lossy(kv.key())
+        ))
+    })
 }
 
 fn etcd_error(err: etcd_client::Error) -> QuotaRepoError {

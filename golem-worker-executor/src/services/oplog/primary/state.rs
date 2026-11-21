@@ -234,16 +234,16 @@ impl PrimaryOplogState {
     /// unreported entry before the retained ones back from storage.
     pub(super) async fn auto_commit(&mut self) -> Result<(), OplogError> {
         let committed = self.commit(CommitLevel::Always).await?;
-        if committed.is_empty() {
-            return Ok(());
-        }
-        self.retained_auto_commits.push_back(committed);
-        while self.retained_auto_commits.len() > self.max_retained_auto_commit_batches {
-            self.retained_auto_commits.pop_front();
-        }
-        if !self.auto_commit_listener.notify() {
-            self.retained_auto_commits.clear();
-        }
+        let listener_notified = !committed.is_empty() && self.auto_commit_listener.notify();
+        let (report, _) = report::transition(
+            std::mem::take(&mut self.commit_report),
+            report::ReportEvent::AutoCommitted {
+                entries: committed,
+                max_retained: self.max_retained_auto_commit_batches,
+                listener_notified,
+            },
+        );
+        self.commit_report = report;
         Ok(())
     }
 
@@ -302,29 +302,33 @@ impl PrimaryOplogState {
     pub(super) async fn committed_since_last_report(
         &mut self,
         previously_committed_through: OplogIndex,
-        mut newly_committed: BTreeMap<OplogIndex, OplogEntry>,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        newly_committed: BTreeMap<OplogIndex, OplogEntry>,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         let committed_through = self.last_committed_idx;
-        let mut retained: BTreeMap<_, _> = std::mem::take(&mut self.retained_auto_commits)
-            .into_iter()
-            .flatten()
-            .collect();
-        let read_through = retained
-            .first_key_value()
-            .map_or(previously_committed_through, |(first, _)| first.previous());
-        let mut entries = if self.last_reported_commit_idx < read_through {
-            let start = self.last_reported_commit_idx.next();
-            let count = u64::from(read_through) - u64::from(self.last_reported_commit_idx);
-            let entries = self.reader().read_source(start, count).await;
-            exact_from_source(OplogReadSource::Primary, start, count, entries)
-                .unwrap_or_else(|error| panic!("Oplog read failed: {error}"))
-        } else {
-            BTreeMap::new()
+        let prefix = match report::missing_prefix(&self.commit_report, previously_committed_through)
+        {
+            Some((start, count)) => {
+                self.reader()
+                    .read_source(start, count)
+                    .await
+                    .and_then(|entries| {
+                        exact_from_source(OplogReadSource::Primary, start, count, entries)
+                    })
+            }
+            None => Ok(BTreeMap::new()),
         };
-        entries.append(&mut retained);
-        entries.append(&mut newly_committed);
-        self.last_reported_commit_idx = committed_through;
-        entries
+        let (report, result) = report::transition(
+            std::mem::take(&mut self.commit_report),
+            report::ReportEvent::Completed {
+                prefix,
+                explicit: newly_committed,
+                committed_through,
+            },
+        );
+        self.commit_report = report;
+        result.map_err(|error| {
+            OplogError::Unreadable(UnreadableOplog::new(&self.owned_agent_id.agent_id, error))
+        })
     }
 
     /// Trims the entries an archive transfer has copied, asserting the epoch this oplog was opened

@@ -29,7 +29,11 @@ pub(super) async fn read_persisted_oplog_entries(
     join_or_park_at_runtime_shutdown(tokio::task::spawn_blocking(move || {
         entries
             .into_iter()
-            .map(|(idx, bytes)| deserialize(&bytes).map(|entry| (idx, entry)))
+            .map(|(idx, bytes)| {
+                deserialize(&bytes)
+                    .map(|entry| (idx, entry))
+                    .map_err(|error| format!("Failed to decode oplog entry {idx}: {error}"))
+            })
             .collect::<Result<Vec<_>, _>>()
             .map_err(IndexedStorageError::Other)
     }))
@@ -39,8 +43,17 @@ pub(super) async fn read_persisted_oplog_entries(
     })?
 }
 
+pub(super) fn primary_read_error(error: IndexedStorageError) -> OplogReadError {
+    match error {
+        IndexedStorageError::Transient(detail) => {
+            OplogReadError::source_unavailable(OplogReadSource::Primary, detail)
+        }
+        error => OplogReadError::source_failure(OplogReadSource::Primary, error.to_string()),
+    }
+}
+
 impl OplogReader {
-    pub(super) async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+    pub(super) async fn read(&self, oplog_index: OplogIndex) -> Result<OplogEntry, OplogReadError> {
         record_oplog_call("read");
 
         let buffer_start = self.last_committed_idx.next();
@@ -49,7 +62,7 @@ impl OplogReader {
             if let Ok(offset) = usize::try_from(offset)
                 && let Some(entry) = self.buffer.get(offset)
             {
-                return entry.clone();
+                return Ok(entry.clone());
             }
         }
 
@@ -58,24 +71,23 @@ impl OplogReader {
             let namespace = self.namespace.clone();
             let key = self.key.clone();
             let idx: u64 = oplog_index.into();
-            retry_storage_op(&self.retry_config, "read", &key, || {
+            retry_maintenance_storage_op(&self.retry_config, "read", &key, || {
                 let is = is.clone();
                 let ns = namespace.clone();
                 let key = key.clone();
                 async move { read_persisted_oplog_entries(is, ns, key, idx, idx).await }
             })
             .await
+            .map_err(primary_read_error)?
         };
 
         entries
             .into_iter()
             .next()
             .map(|(_, entry)| entry)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Missing oplog entry {oplog_index} for {} in indexed storage",
-                    self.key
-                )
+            .ok_or(OplogReadError::Gap {
+                start: oplog_index,
+                end: oplog_index,
             })
     }
 
@@ -83,22 +95,10 @@ impl OplogReader {
         &self,
         oplog_index: OplogIndex,
         n: u64,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.try_read_source(oplog_index, n)
-            .await
-            .unwrap_or_else(|error| panic!("{error}"))
-    }
-
-    pub(super) async fn try_read_source(
-        &self,
-        oplog_index: OplogIndex,
-        n: u64,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
         record_oplog_call("read_exact");
 
-        let Some(last_idx) =
-            checked_range_end(oplog_index, n).map_err(|error| error.to_string())?
-        else {
+        let Some(last_idx) = checked_range_end(oplog_index, n)? else {
             return Ok(BTreeMap::new());
         };
 
@@ -109,13 +109,14 @@ impl OplogReader {
             let key = self.key.clone();
             let start: u64 = oplog_index.into();
             let end: u64 = min(last_idx, self.last_committed_idx).into();
-            retry_storage_op_result(&self.retry_config, "read_exact", &key, || {
+            retry_maintenance_storage_op(&self.retry_config, "read_exact", &key, || {
                 let is = is.clone();
                 let ns = namespace.clone();
                 let key = key.clone();
                 async move { read_persisted_oplog_entries(is, ns, key, start, end).await }
             })
-            .await?
+            .await
+            .map_err(primary_read_error)?
             .into_iter()
             .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry))
             .collect()

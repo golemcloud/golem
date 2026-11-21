@@ -717,12 +717,11 @@ async fn suffix_discovery_is_fixed_to_its_horizon_and_finds_a_later_marker() {
 }
 
 #[test]
-#[should_panic(expected = "missing oplog entries in range [2..=2]")]
 async fn service_lineage_loader_rejects_a_missing_requested_range() {
     let source = owner("source");
     let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(37));
     let fixture = ServiceFixture::new(&source, fingerprint).await;
-    StreamForkLineage::load_from_service(
+    let error = StreamForkLineage::load_from_service(
         &*fixture.service,
         &source,
         AgentMode::Durable,
@@ -730,7 +729,15 @@ async fn service_lineage_loader_rejects_a_missing_requested_range() {
         OplogIndex::from_u64(2),
     )
     .await
-    .unwrap();
+    .expect_err("the missing range must retain its typed error");
+    assert_eq!(error.agent_id, source.agent_id);
+    assert_eq!(
+        error.error,
+        OplogReadError::Gap {
+            start: OplogIndex::from_u64(2),
+            end: OplogIndex::from_u64(2),
+        }
+    );
 }
 
 #[test]

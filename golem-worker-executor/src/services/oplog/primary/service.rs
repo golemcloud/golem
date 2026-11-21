@@ -752,7 +752,7 @@ impl OplogService for PrimaryOplogService {
             let key = Self::oplog_key(owned_agent_id);
             let start: u64 = idx.into();
             let end: u64 = end.into();
-            retry_storage_op(&self.retry_config, "read", &key, || {
+            retry_maintenance_storage_op(&self.retry_config, "read", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     owned_agent_id: ns_owner.clone(),
@@ -762,6 +762,9 @@ impl OplogService for PrimaryOplogService {
                 async move { read_persisted_oplog_entries(is, ns, key, start, end).await }
             })
             .await
+            .map_err(|error| {
+                UnreadableOplog::new(&owned_agent_id.agent_id, primary_read_error(error))
+            })?
             .into_iter()
             .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
             .collect()

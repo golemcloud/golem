@@ -68,13 +68,14 @@ impl WorkerService for DefaultWorkerService {
     async fn read_durable_stream_consumer_page(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         key: &StreamSessionKey,
         reader: golem_common::model::durable_stream::LocalStreamReaderId,
         page: u64,
     ) -> Result<Vec<OplogIndex>, SessionError> {
         self.stream_session_index
-            .read_consumer_page(owned_agent_id, fingerprint, key, reader, page)
+            .read_consumer_page(owned_agent_id, agent_mode, fingerprint, key, reader, page)
             .await
     }
 
@@ -727,12 +728,12 @@ impl WorkerService for DefaultWorkerService {
                             .await
                             .map_err(WorkerExecutorError::runtime)?;
                         let indexed = match indexed
-                            .map(|value| try_deserialize::<PersistedInvocationResult>(&value))
+                            .map(|value| decode::<PersistedInvocationResult>(&value))
                             .transpose()
                         {
                             Ok(None) => None,
-                            Ok(Some(Some(indexed))) => Some(indexed),
-                            Ok(Some(None)) | Err(_) => {
+                            Ok(Some(indexed)) => Some(indexed),
+                            Err(_) => {
                                 // A field that does not decode makes the whole index suspect.
                                 self.invalidate_invocation_result_index(
                                     &namespace,
@@ -843,8 +844,8 @@ impl WorkerService for DefaultWorkerService {
             let key = key
                 .parse::<InvocationId>()
                 .map_err(|error| error.to_string());
-            let value = try_deserialize::<PersistedInvocationResult>(value);
-            let (Ok(key), Ok(Some(value))) = (key, value) else {
+            let value = decode::<PersistedInvocationResult>(value);
+            let (Ok(key), Ok(value)) = (key, value) else {
                 // A field that does not decode makes the whole index suspect: the next catch-up
                 // rebuilds it from the oplog.
                 self.invalidate_invocation_result_index(&namespace, Some(&raw_metadata))
@@ -901,7 +902,7 @@ impl WorkerService for DefaultWorkerService {
         let Some(value) = values.get(1).and_then(Option::as_ref) else {
             return Ok(InvocationResultIndexLookup::DefinitiveMiss);
         };
-        let Ok(Some(value)) = try_deserialize::<PersistedInvocationResult>(value) else {
+        let Ok(value) = decode::<PersistedInvocationResult>(value) else {
             // A field that does not decode makes the whole index suspect: the next catch-up
             // rebuilds it from the oplog.
             let namespace = Self::invocation_result_index_namespace(owned_agent_id, fingerprint);
