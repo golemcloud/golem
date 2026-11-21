@@ -26,9 +26,9 @@ use crate::worker::status::{
     InvocationRequests, StatusOplogReader, calculate_last_known_status,
     calculate_last_known_status_for_existing_worker,
     calculate_last_known_status_with_checkpoint_reader, calculate_latest_worker_status,
-    calculate_oplog_processor_checkpoints, calculate_status_with_reader,
-    calculate_total_linear_memory_size, fold_committed_status, fold_invocation_result_entries,
-    hydrate_initial_pending_evidence, try_fold_status_from, try_fold_status_from_reader,
+    calculate_plugin_status, calculate_status_with_reader, calculate_total_linear_memory_size,
+    fold_committed_status, fold_invocation_result_entries, hydrate_initial_pending_evidence,
+    try_fold_status_from, try_fold_status_from_reader,
 };
 use crate::worker::status::{RegionFold, fold_regions_from};
 use async_trait::async_trait;
@@ -7312,7 +7312,7 @@ async fn incremental_fold_does_not_download_payload_reverted_in_later_chunk() {
 }
 
 // --------------------------------------------------------------------------
-// U2: Checkpoint state tracking — calculate_oplog_processor_checkpoints
+// U2: Checkpoint state tracking — calculate_plugin_status
 // --------------------------------------------------------------------------
 
 #[test]
@@ -7351,12 +7351,8 @@ fn checkpoint_latest_per_grant_id_wins() {
         ),
     ]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        HashMap::new(),
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-    );
+    let result =
+        calculate_plugin_status(active_plugins, HashMap::new(), &deleted_regions, &entries).1;
 
     assert_eq!(result.len(), 1);
     let state = result.get(&grant_id).unwrap();
@@ -7403,12 +7399,8 @@ fn checkpoint_different_plugins_tracked_independently() {
         ),
     ]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        HashMap::new(),
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-    );
+    let result =
+        calculate_plugin_status(active_plugins, HashMap::new(), &deleted_regions, &entries).1;
 
     assert_eq!(result.len(), 2);
 
@@ -7442,12 +7434,8 @@ fn checkpoint_target_agent_id_preserved() {
         },
     )]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        HashMap::new(),
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-    );
+    let result =
+        calculate_plugin_status(active_plugins, HashMap::new(), &deleted_regions, &entries).1;
 
     let state = result.get(&grant_id).unwrap();
     assert_eq!(state.target_agent_id, Some(target));
@@ -7477,8 +7465,7 @@ fn deactivated_plugin_evicted_from_checkpoints() {
     )]);
 
     let entries = BTreeMap::new();
-    let result =
-        calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+    let result = calculate_plugin_status(active_plugins, initial, &deleted_regions, &entries).1;
 
     assert!(
         !result.contains_key(&grant_id),
@@ -7506,8 +7493,7 @@ fn deactivated_plugin_retained_when_in_flight() {
     )]);
 
     let entries = BTreeMap::new();
-    let result =
-        calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+    let result = calculate_plugin_status(active_plugins, initial, &deleted_regions, &entries).1;
 
     assert!(
         result.contains_key(&grant_id),
@@ -7566,8 +7552,7 @@ fn successful_update_drops_old_grant_retains_new() {
         ),
     ]);
 
-    let result =
-        calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+    let result = calculate_plugin_status(active_plugins, initial, &deleted_regions, &entries).1;
 
     assert!(
         !result.contains_key(&old_grant),
@@ -7598,12 +7583,8 @@ fn activate_plugin_initializes_checkpoint() {
         },
     )]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        HashMap::new(),
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-    );
+    let result =
+        calculate_plugin_status(active_plugins, HashMap::new(), &deleted_regions, &entries).1;
 
     assert_eq!(result.len(), 1);
     let state = result.get(&grant_id).unwrap();
@@ -7648,8 +7629,7 @@ fn activate_plugin_does_not_overwrite_existing_checkpoint() {
         },
     )]);
 
-    let result =
-        calculate_oplog_processor_checkpoints(initial, &active_plugins, &deleted_regions, &entries);
+    let result = calculate_plugin_status(active_plugins, initial, &deleted_regions, &entries).1;
 
     let state = result.get(&grant_id).unwrap();
     assert_eq!(
@@ -7666,7 +7646,7 @@ fn activate_plugin_does_not_overwrite_existing_checkpoint() {
 /// confirmation of the last entries in flight and a new activation, the state starts at the new
 /// activation.
 #[test]
-fn oplog_processor_checkpoint_fold_is_chunk_composable() {
+fn oplog_processor_checkpoints_fold_to_one_result_from_every_baseline_and_in_every_chunk_size() {
     fn fold(
         baseline: AgentStatusRecord,
         entries: BTreeMap<OplogIndex, OplogEntry>,
@@ -7796,12 +7776,13 @@ fn a_confirmed_checkpoint_of_an_inactive_plugin_drops_its_state() {
         },
     )]);
 
-    let result = calculate_oplog_processor_checkpoints(
+    let result = calculate_plugin_status(
+        HashSet::new(),
         in_flight,
-        &HashSet::new(),
         &DeletedRegions::default(),
         &entries,
-    );
+    )
+    .1;
 
     assert_eq!(result, HashMap::new());
 }
@@ -7826,9 +7807,9 @@ fn a_second_activation_keeps_the_progress_of_an_active_plugin() {
         },
     )]);
 
-    let result = calculate_oplog_processor_checkpoints(
+    let (_, result) = calculate_plugin_status(
+        HashSet::from([grant_id]),
         HashMap::from([(grant_id, progress.clone())]),
-        &HashSet::from([grant_id]),
         &DeletedRegions::default(),
         &entries,
     );
@@ -7866,12 +7847,8 @@ fn deactivate_then_reactivate_seeds_new_checkpoint() {
         ),
     ]);
 
-    let result = calculate_oplog_processor_checkpoints(
-        HashMap::new(),
-        &active_plugins,
-        &deleted_regions,
-        &entries,
-    );
+    let result =
+        calculate_plugin_status(active_plugins, HashMap::new(), &deleted_regions, &entries).1;
 
     let state = result.get(&grant_id).unwrap();
     assert_eq!(
@@ -11281,7 +11258,7 @@ fn cancelled_standalone_retention_survives_every_checkpoint_cut() {
 }
 
 pub(crate) mod status_baseline {
-    use super::region_fold::{automatic_admission, failed, idx, succeeded};
+    use super::region_fold::{automatic_admission, failed, idx, revision};
     use super::*;
     use golem_common::model::card::{AgentCardHolder, CardHolder, CardId, StoredCard};
     use golem_common::model::durable_stream::{
@@ -11315,7 +11292,7 @@ pub(crate) mod status_baseline {
         ActivatePlugin(bool),
         DeactivatePlugin(bool),
         AutomaticAdmission,
-        UpdateSucceeded,
+        UpdateSucceeded(u8),
         UpdateFailed,
         Jump(u8),
         Revert(u8),
@@ -11360,7 +11337,7 @@ pub(crate) mod status_baseline {
             any::<bool>().prop_map(Generated::ActivatePlugin),
             any::<bool>().prop_map(Generated::DeactivatePlugin),
             Just(Generated::AutomaticAdmission),
-            Just(Generated::UpdateSucceeded),
+            any::<u8>().prop_map(Generated::UpdateSucceeded),
             Just(Generated::UpdateFailed),
             any::<u8>().prop_map(Generated::Jump),
             any::<u8>().prop_map(Generated::Revert),
@@ -11385,6 +11362,23 @@ pub(crate) mod status_baseline {
             any::<u8>().prop_map(Generated::CardInstalled),
             any::<u8>().prop_map(Generated::CardRevokedCascade),
         ]
+    }
+
+    /// The plugin grants of the generated oplog.
+    const GRANTS: [EnvironmentPluginGrantId; 2] = [
+        EnvironmentPluginGrantId(Uuid::from_u128(1)),
+        EnvironmentPluginGrantId(Uuid::from_u128(2)),
+    ];
+
+    /// The grants that the bits of `choice` select: bit 0 selects the first grant, bit 1 the
+    /// second.
+    fn grants(choice: u8) -> HashSet<EnvironmentPluginGrantId> {
+        GRANTS
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| choice & (1 << bit) != 0)
+            .map(|(_, grant_id)| *grant_id)
+            .collect()
     }
 
     /// A card transfer of the generated oplog: its id, its source card and the derived child.
@@ -11465,10 +11459,6 @@ pub(crate) mod status_baseline {
     /// The entry of `generated` at `index`, and the state after it.
     fn entry(mut state: State, index: u64, generated: &Generated) -> (State, OplogEntry) {
         let timestamp = Timestamp::from(1_000);
-        let grants = [
-            EnvironmentPluginGrantId(Uuid::from_u128(1)),
-            EnvironmentPluginGrantId(Uuid::from_u128(2)),
-        ];
         let retry_policy_names = ["first", "second"];
         let resource_type_id = || ResourceTypeId {
             name: "resource".to_string(),
@@ -11563,14 +11553,21 @@ pub(crate) mod status_baseline {
             Generated::Restarted => OplogEntry::Restart { timestamp },
             Generated::ActivatePlugin(second) => OplogEntry::ActivatePlugin {
                 timestamp,
-                plugin_grant_id: grants[usize::from(*second)],
+                plugin_grant_id: GRANTS[usize::from(*second)],
             },
             Generated::DeactivatePlugin(second) => OplogEntry::DeactivatePlugin {
                 timestamp,
-                plugin_grant_id: grants[usize::from(*second)],
+                plugin_grant_id: GRANTS[usize::from(*second)],
             },
             Generated::AutomaticAdmission => automatic_admission(index + 1),
-            Generated::UpdateSucceeded => succeeded(index + 1),
+            Generated::UpdateSucceeded(choice) => OplogEntry::successful_update(
+                revision(index + 1),
+                10,
+                None,
+                grants(*choice),
+                None,
+                None,
+            ),
             Generated::UpdateFailed => failed(index + 1, None),
             Generated::Jump(choice) => earlier_region(*choice, index).map_or(
                 OplogEntry::Interrupted { timestamp },
@@ -11723,7 +11720,7 @@ pub(crate) mod status_baseline {
             Generated::ProcessorCheckpoint(second, confirmed) => {
                 OplogEntry::OplogProcessorCheckpoint {
                     timestamp,
-                    plugin_grant_id: grants[usize::from(*second)],
+                    plugin_grant_id: GRANTS[usize::from(*second)],
                     target_agent_id: AgentId::from_parts(8, 1),
                     confirmed_up_to: idx((index - 1).saturating_sub(u64::from(*confirmed) % 3)),
                     sending_up_to: idx(index - 1),
@@ -11779,10 +11776,16 @@ pub(crate) mod status_baseline {
         (state, entry.rounded())
     }
 
-    /// The oplog of `generated`: the `Create` of an agent at index 1, then one entry for each
-    /// generated value.
-    pub(crate) fn oplog(generated: &[Generated]) -> BTreeMap<OplogIndex, OplogEntry> {
-        let create = TestCase::builder(1).build().entries[0].oplog_entry.clone();
+    /// The oplog of `generated`: the `Create` of an agent at index 1 with the initial plugins
+    /// that `initial_plugins` selects ([`grants`]), then one entry for each generated value.
+    pub(crate) fn oplog(
+        initial_plugins: u8,
+        generated: &[Generated],
+    ) -> BTreeMap<OplogIndex, OplogEntry> {
+        let mut create = TestCase::builder(1).build().entries[0].oplog_entry.clone();
+        if let OplogEntry::Create { parameters, .. } = &mut create {
+            parameters.initial_active_plugins = grants(initial_plugins);
+        }
         generated
             .iter()
             .zip(2..)
@@ -11815,8 +11818,6 @@ pub(crate) mod status_baseline {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
-
         /// A status baseline at any index folds the rest of the oplog to the status of a fold
         /// of the whole oplog, in every field. A fold refuses a baseline only when a later
         /// `Jump` or `Revert` follows its index; the reader then folds the whole oplog from index
@@ -11824,9 +11825,10 @@ pub(crate) mod status_baseline {
         /// `services::worker::tests`.
         #[test]
         fn a_fold_from_a_status_baseline_equals_a_fold_of_the_whole_oplog(
+            initial_plugins in any::<u8>(),
             generated in proptest::collection::vec(generated(), 1..40),
         ) {
-            let entries = oplog(&generated);
+            let entries = oplog(initial_plugins, &generated);
             let whole = fold(AgentStatusRecord::default(), entries.clone()).unwrap();
 
             entries.keys().try_for_each(|at| {

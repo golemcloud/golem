@@ -40,13 +40,12 @@ pub(crate) use update_queue::request_operation;
 #[cfg(test)]
 pub(crate) use entity_replay::calculate_entity_replay_progress;
 use execution::calculate_latest_worker_status;
-use fields::calculate_active_plugins;
 use fields::calculate_durable_stream_sessions;
 use fields::calculate_export_fork_admissions;
 use fields::calculate_invocation_results;
-use fields::calculate_oplog_processor_checkpoints;
 pub(crate) use fields::calculate_pending_card_events;
 use fields::calculate_pending_invocations;
+use fields::calculate_plugin_status;
 use fields::calculate_received_card_transfers;
 use fields::calculate_revoked_cards;
 use fields::calculate_source_card_transfers;
@@ -262,7 +261,6 @@ fn update_status_with_precomputed_regions(
     } = regions;
     let deleted_regions = &deleted;
     let skipped_regions = &skipped;
-    let active_plugins = last_known.active_plugins.clone();
     let requests = InvocationRequests::of_status(&last_known);
     let mut terminal_failure_at = last_known.terminal_failure_at;
     let mut terminal_failure_index = last_known.terminal_failure_index;
@@ -421,14 +419,12 @@ fn update_status_with_precomputed_regions(
     let owned_resources =
         collect_resources(last_known.owned_resources, skipped_regions, &new_entries);
 
-    let oplog_processor_checkpoints = calculate_oplog_processor_checkpoints(
+    let (active_plugins, oplog_processor_checkpoints) = calculate_plugin_status(
+        last_known.active_plugins,
         last_known.oplog_processor_checkpoints,
-        &active_plugins,
         deleted_regions,
         &new_entries,
     );
-
-    let active_plugins = calculate_active_plugins(active_plugins, deleted_regions, &new_entries);
 
     let revoked_cards = calculate_revoked_cards(last_known.revoked_cards, &new_entries);
 
