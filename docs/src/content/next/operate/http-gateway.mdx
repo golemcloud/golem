@@ -155,7 +155,8 @@ test. Backpressure in either direction can delay Pong processing. Enable it only
 when neither endpoint can remain backpressured longer than the timeout; otherwise
 keep `"0s"`.
 
-MCP sends SSE comment keep-alives on open GET and POST streams;
+MCP sends SSE comment keep-alives on the open POST response streams of the 2025
+revisions. For `2026-07-28`, see [MCP revisions](/next/invoke/mcp#revisions).
 `sse_keep_alive_interval` must be non-zero. Durable Streams SSE emits a `control`
 event after each read, including empty reads. An idle read waits at most
 `long_poll_timeout`, capped at 30 seconds by the executor, so it needs no separate
@@ -167,8 +168,9 @@ and `GOLEM__DURABLE_STREAMS__LONG_POLL_TIMEOUT`.
 
 ## MCP sessions
 
-`initialize` starts an MCP session, and worker-service keeps a record of it in the
-MCP session store. Worker-service defaults are:
+The MCP endpoint keeps no session: `initialize` issues no `Mcp-Session-Id`. See
+[Revisions](/next/invoke/mcp#revisions). Worker-service still reads the MCP session
+settings. Worker-service defaults are:
 
 ```toml
 [mcp]

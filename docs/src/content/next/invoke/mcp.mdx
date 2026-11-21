@@ -30,19 +30,21 @@ mcp:
 
 After `golem deploy`, the MCP server is available at `http://mcp-demo.localhost:9007/mcp` using the streamable HTTP protocol.
 
-## Sessions
+## Revisions
 
-`initialize` starts a session. Its response carries the `Mcp-Session-Id` header, and the client sends that header with every later request of the session. The server keeps the session in a shared store, so the session continues when a server replica stops or restarts.
+The MCP server serves the protocol revisions `2025-03-26`, `2025-06-18`, `2025-11-25` and `2026-07-28`. It keeps no session. It serves each request with the deployment of the request's domain alone, so any server replica can serve any request.
 
-A session ends:
+- `initialize` negotiates the revision from its body. When the client asks for a revision that the server does not serve, for example `2024-11-05`, the result names `2025-11-25`. The client then continues with that revision or stops. When the client asks for `2026-07-28`, the result also names `2025-11-25`, because `2026-07-28` has no `initialize` handshake. A `2026-07-28` client sends its requests without `initialize`.
+- The response to `initialize` has no `Mcp-Session-Id` header. The server ignores an `Mcp-Session-Id` header that a client sends.
+- Every other request uses the revision of its `MCP-Protocol-Version` header, or `2025-03-26` when the request has no header. A request that has no header and whose `_meta` names a different revision gets `400 Bad Request`. Thus, a `2026-07-28` client must send the `MCP-Protocol-Version` header. A request whose header names a revision that the server does not serve gets `400 Bad Request`.
+- `server/discover` returns the served revisions and the capabilities of the server. A `2026-07-28` client starts with `server/discover`, and each of its requests names its revision in `_meta`.
+- The server answers `ping` on `2025-03-26`, `2025-06-18` and `2025-11-25`. On `2026-07-28`, `ping` is an unknown method and gets the JSON-RPC error `-32601`.
+- `GET` and `DELETE` on `/mcp` get `405 Method Not Allowed` with `Allow: POST`. So the server has no stream for notifications, and it does not resume a response stream: it ignores `Last-Event-ID`.
+- On `2025-03-26`, `2025-06-18` and `2025-11-25`, the response stream of a request opens at once. It stays open until the result is ready. On a slow call, the server sends SSE keep-alives at [`mcp.sse_keep_alive_interval`](/next/operate/http-gateway#long-lived-connections). On `2026-07-28`, the server sends the response only when the result is ready. It sends no keep-alive before the response.
+- A closed response stream does not cancel a call. The server accepts `notifications/cancelled` and ignores it. The call runs to its end.
+- The server sends no log notifications and no `notifications/tools/list_changed`.
 
-- When it gets no request for the server's [`mcp.session_idle_timeout`](/next/operate/http-gateway#mcp-sessions), 5 minutes by default. A running tool call keeps its session open, so a call that takes longer than the idle timeout returns its result, and the session stays usable.
-- When the client sends `DELETE` to `/mcp` with the session ID. The server also cancels the running calls of the session.
-- When the server's session store loses the session.
-
-After a session ends, a request with its session ID gets `404 Not Found` with the body `Not Found: Session not found`. The client must send `initialize` again to start a new session.
-
-A session remembers the deployment that served its last `initialize` or list request (`tools/list`, `resources/list`, `resources/templates/list` or `prompts/list`). When the server serves a later `tools/call`, `resources/read` or `prompts/get` with another deployment, it sends a `notifications/tools/list_changed` notification, and the request fails with the JSON-RPC error `-32602` `tool set changed; list tools again`. The client lists again and then repeats the request. Shortly after a deployment, a request can get this error once even when the client listed just before.
+When a native tool call fails and the domain has a different deployment from the one that served the call, the call fails with the JSON-RPC error `-32602` `tool set changed; list tools again`. The client lists again and then repeats the request.
 
 ## Exporting native tools
 
@@ -106,7 +108,7 @@ Structured results are returned as `structuredContent` matching the advertised o
 
 Invalid parameters, constraint violations, and invalid results produce JSON-RPC `-32602` errors. Tool execution and custom errors produce `isError: true`. MCP does not expose native formatter selection, exit-code semantics, repetition modes, the alias graph, or middleware composition; middleware still runs normally.
 
-Listings and calls are tied to a deployment definition. After a deployment changes, an existing session may receive a tool-list-changed notification and must list tools again before calling. Each MCP call has a fresh native idempotency key; repeating a JSON-RPC request ID is not a durable execution retry.
+Listings and calls are tied to a deployment definition. After a deployment changes, a call can fail with `-32602` `tool set changed; list tools again`, and the client must list tools again before it calls. Each MCP call has a fresh native idempotency key; repeating a JSON-RPC request ID is not a durable execution retry.
 
 ## Automatic Mapping
 
