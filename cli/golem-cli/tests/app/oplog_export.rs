@@ -1370,6 +1370,20 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         ])
         .await;
     assert!(!text.success(), "{}", text.stdout_text());
+    assert!(
+        text.stderr_text()
+            .contains("--output writes JSON Lines, not text; pass --format jsonl"),
+        "{}",
+        text.stderr_text()
+    );
+    // The CLI refuses the format before it reads the oplog.
+    assert!(
+        !proxy
+            .take()
+            .iter()
+            .any(|request| request.contains("/oplog")),
+        "the CLI read the oplog for an export in the text format"
+    );
     let reversed_path = ctx.cwd_path_join("export/reversed.jsonl");
     let reversed = ctx
         .cli([

@@ -167,7 +167,7 @@ The `--output` parameter exports the oplog to a file as [JSON Lines](https://jso
 golem agent oplog 'CounterAgent("my-counter")' --format jsonl --output oplog.jsonl
 ```
 
-The export reads the oplog one page at a time, and writes each page before it reads the next page. Thus, the export works for an oplog of any size. The export writes each entry in full, and reads in full the entries that oplog pages omit for their size. If a read fails, the export fails and does not write the file. `--from`, `--to` and `--query` select the entries that the export writes.
+The export reads the oplog one page at a time, and writes each page before it reads the next page. So the export works for an oplog of any size. The export writes each entry in full, and reads in full the entries that oplog pages omit for their size. If a read fails, the export fails and does not write the file. `--from`, `--to` and `--query` select the entries that the export writes.
 
 ### Viewing the oplog in a browser
 

@@ -123,8 +123,9 @@ use tokio::time::{sleep, timeout};
 use tracing::debug;
 use uuid::Uuid;
 
-/// Checks that an oplog read that writes a file with `--output` has the format `jsonl`, from
-/// `--format` or from the profile, so that the format of the file is explicit.
+/// Checks that an oplog read that writes a file with `--output` has the format `jsonl`, so that
+/// the format of the file is explicit. The format comes from `--format`, or else from the default
+/// format of the manifest environment or of the profile.
 fn check_oplog_output_format(output: Option<&Path>, format: Format) -> anyhow::Result<()> {
     match (output, format) {
         (None, _) | (Some(_), Format::Jsonl) => Ok(()),
