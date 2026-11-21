@@ -1115,10 +1115,11 @@ fn apply_plugin_entry(
 /// `active_plugins` and `checkpoints` of the status before `entries`. `deleted_regions` are the
 /// deleted regions of the whole range that the fold covers.
 ///
-/// Before the first entry and after every entry, the result holds a checkpoint state only for a
-/// plugin that is active or has entries in flight. The first filter also makes a start status
-/// from another fold path safe. Thus a fold from any status baseline gives the result of a fold
-/// of the whole oplog. A fold in chunks gives the same result.
+/// After every entry, the result holds a checkpoint state only for a plugin that is active or has
+/// entries in flight. Before the first entry, the fold removes every state of the start status
+/// that this rule does not keep. Thus a fold from a status that this fold gave (an accepted
+/// status baseline) gives the result of a fold of the whole oplog. A fold in chunks gives the
+/// same result.
 ///
 /// A second activation of an active plugin does not reset its progress. After a deactivation, a
 /// confirmation of the last entries in flight and a new activation, the state starts at the new

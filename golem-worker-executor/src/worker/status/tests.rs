@@ -442,10 +442,11 @@ fn successful_update_resets_total_linear_memory_size() {
 }
 
 /// Why `commit_and_update_state` still compares the folded record against the previous one
-/// instead of taking "the commit produced entries" as the answer: the fold drops the
-/// oplog-processor checkpoints that are neither active nor in flight before it applies the
-/// entries, also when there are no entries. So an empty fold can still change the record, and
-/// skipping it would drop that change.
+/// instead of taking "the commit produced entries" as the answer: the comparison guards a start
+/// status that another path built. Before it applies the entries, the fold removes the oplog
+/// processor checkpoints that are neither active nor in flight, also when there are no entries.
+/// A fold never gives such a checkpoint, but a start status that another path built can hold
+/// one. So an empty fold can still change the record, and skipping it would drop that change.
 #[test]
 fn empty_fold_is_not_the_identity() {
     let retry = RetryConfig::default();
@@ -7815,6 +7816,58 @@ fn a_second_activation_keeps_the_progress_of_an_active_plugin() {
     );
 
     assert_eq!(result, HashMap::from([(grant_id, progress)]));
+}
+
+/// A successful update keeps the progress of a plugin that stays active in the new revision,
+/// and gives a fresh state at the update to a plugin that the new revision adds.
+#[test]
+fn a_successful_update_keeps_the_progress_of_a_plugin_that_stays_active() {
+    let staying = EnvironmentPluginGrantId::new();
+    let added = EnvironmentPluginGrantId::new();
+    let progress = OplogProcessorCheckpointState {
+        target_agent_id: Some(AgentId::from_parts(7, 23)),
+        confirmed_up_to: OplogIndex::from_u64(6),
+        sending_up_to: OplogIndex::from_u64(6),
+        last_batch_start: OplogIndex::from_u64(3),
+        delivery: None,
+    };
+    let update = OplogIndex::from_u64(10);
+    let entries = BTreeMap::from([(
+        update,
+        OplogEntry::successful_update(
+            ComponentRevision::new(2).unwrap(),
+            200,
+            None,
+            HashSet::from([staying, added]),
+            None,
+            None,
+        ),
+    )]);
+
+    let (active, result) = calculate_plugin_status(
+        HashSet::from([staying]),
+        HashMap::from([(staying, progress.clone())]),
+        &DeletedRegions::default(),
+        &entries,
+    );
+
+    assert_eq!(active, HashSet::from([staying, added]));
+    assert_eq!(
+        result,
+        HashMap::from([
+            (staying, progress),
+            (
+                added,
+                OplogProcessorCheckpointState {
+                    target_agent_id: None,
+                    confirmed_up_to: update,
+                    sending_up_to: update,
+                    last_batch_start: update,
+                    delivery: None,
+                },
+            ),
+        ])
+    );
 }
 
 #[test]
