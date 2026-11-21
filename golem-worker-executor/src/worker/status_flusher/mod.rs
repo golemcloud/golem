@@ -16,8 +16,8 @@
 //!
 //! Historically the cached status blob was written to the KV store on *every* oplog commit, which
 //! for hot, long-running agents produced an enormous volume of read/write traffic. The blob is,
-//! however, fully derivable from the oplog (which is the single source of truth): a stale blob only
-//! means a cold read has to fold a few more oplog entries forward, never incorrect state.
+//! however, derivable from the status baseline and the oplog after it: a stale blob only means
+//! that a cold read folds more oplog entries, never an incorrect state.
 //!
 //! [`AgentStatusFlusher`] decouples the blob write from the commit. On each status change the
 //! worker is merely marked *dirty* ([`AgentStatusFlusher::mark_dirty`]); a single per-executor
