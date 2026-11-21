@@ -64,7 +64,9 @@ where
             &tool.tool_name,
             &tool.command_path,
         );
-        if !tool.fresh_owner && owned.agent_id.type_tag() == RESERVED_TYPE_TAG {
+        let mode = request.mode();
+        let virtual_lookup = mode == Mode::Lookup && owned.agent_id.type_tag() == RESERVED_TYPE_TAG;
+        if !tool.fresh_owner && owned.agent_id.type_tag() == RESERVED_TYPE_TAG && !virtual_lookup {
             return Err(WorkerExecutorError::invalid_request(
                 "existing tool target must be a real agent",
             ));
@@ -79,12 +81,14 @@ where
         } else {
             None
         };
-        // An existing owner is named by its fingerprint, and the guard pins that incarnation in
-        // every mode. A virtual owner has no incarnation a caller can name.
+        // An existing agent is named by its fingerprint, and the guard pins that incarnation in
+        // every mode. A virtual receipt can also be observed without a fingerprint; its lookup
+        // acquires only an existing owner and never starts it.
         let expected_fingerprint = match (tool.fresh_owner, request.expected_callee_fingerprint) {
             (false, Some(fingerprint)) => {
                 Some(golem_common::model::AgentFingerprint(fingerprint.into()))
             }
+            (false, None) if virtual_lookup => None,
             (true, None) => None,
             (true, Some(_)) => {
                 return Err(WorkerExecutorError::invalid_request(
@@ -106,7 +110,6 @@ where
             .map(TryInto::try_into)
             .transpose()
             .map_err(WorkerExecutorError::permission_denied)?;
-        let mode = request.mode();
         if scope_card.is_some() && mode != Mode::Await {
             return Err(WorkerExecutorError::permission_denied(
                 "scope cards are supported only for invoke-and-await",

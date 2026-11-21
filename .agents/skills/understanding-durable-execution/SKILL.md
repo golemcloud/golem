@@ -1426,10 +1426,11 @@ synthetic warm-cache failures cannot establish a recorded constructor failure. A
 failure cannot replace constructor success. Forks resolve the retained source initialization key.
 Preparation remains suspended and neither starts nor waits for initialization.
 
-`Worker::resolve_old_invocation_result_index` falls back to scanning the worker's open oplog handle,
-bounded by the status oplog index. An ephemeral completion can precede its archive write, so
-storage-only reads can falsely report a gap. The handle includes entries handed to the asynchronous
-writer but not yet stored; result lookup does not need a storage barrier.
+Constructor verification can use the exact terminal position of an unprojected committed completion,
+even with payload caching disabled, or a successful hydrated completion. It validates the terminal
+entry and initialization payload through the open oplog handle, which includes entries handed to
+the asynchronous writer but not yet stored. It neither scans the oplog nor waits for an archive
+write. Synthetic cached failures still require a recorded terminal from the result index.
 Test: `oplog_unreadable::an_ephemeral_constructor_completes_while_its_archive_write_is_pending`
 holds that write until Create returns.
 

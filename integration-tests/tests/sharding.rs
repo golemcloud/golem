@@ -1208,7 +1208,7 @@ mod tests {
         #[allow(dead_code)]
         account_id: String,
         #[allow(dead_code)]
-        component_id: String,
+        agent_type: Option<String>,
         #[allow(dead_code)]
         first_entry_index: u64,
         #[allow(dead_code)]

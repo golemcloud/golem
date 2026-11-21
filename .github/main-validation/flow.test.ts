@@ -211,6 +211,13 @@ test(
           !["main-validation-xfs", "main-validation-docker"].includes(value.name)
         ).map((value) => value.time)
       )
+      const checksEnd = Math.max(
+        ...seen.filter((value) =>
+          value.event === "end" &&
+          !["main-validation-latency", "main-validation-xfs", "main-validation-docker"].includes(value.name)
+        ).map((value) => value.time)
+      )
+      expect(at("main-validation-latency", "start")).toBeGreaterThanOrEqual(checksEnd)
       expect(at("main-validation-xfs", "start")).toBeGreaterThanOrEqual(finalEnd)
       expect(at("main-validation-docker", "start")).toBeGreaterThanOrEqual(at("main-validation-xfs", "end"))
       expect(seen.find((value) => value.name === "main-validation-general-native")?.jobs).toBe("32")

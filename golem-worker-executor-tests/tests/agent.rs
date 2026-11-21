@@ -1028,16 +1028,25 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
             })
             .await;
         let key = IdempotencyKey::fresh();
+        let invocation_id = external_invocation_id(&executor, &worker, &key, method).await?;
         executor
             .invoke_agent_with_key(&component, &agent, &key, method, data_value!())
             .await?;
         gate.entered().await;
-        let invocation_id = external_invocation_id(&executor, &worker, &key, method).await?;
-        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-        let anchor = entries.iter().find(|entry| matches!(
-            &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
-                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
-        )).expect("the gated invocation start must be committed").oplog_index;
+        // The gate holds the status actor's append receipt, so inspect storage directly.
+        let entries = executor.stored_oplog(&worker.agent_id).await;
+        let anchor = OplogIndex::from_u64(
+            entries
+                .iter()
+                .position(|entry| {
+                    matches!(
+                        entry, OplogEntry::AgentInvocationStarted { invocation_id: started, .. }
+                            if *started == invocation_id
+                    )
+                })
+                .expect("the gated invocation start must be committed") as u64
+                + 1,
+        );
         // Deliberately forge an incompatible completed outcome. Reconstruction must not
         // accept a successful body or an actual Wasm trap as the recorded method error.
         let terminal = OplogEntry::agent_invocation_failed(
@@ -3370,6 +3379,7 @@ pub(crate) async fn create_unkeyed_agent_at(
             environment_id: Some(component.environment_id.into()),
             ignore_already_existing: true,
             auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })
         .await?

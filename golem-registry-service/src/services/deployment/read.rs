@@ -148,7 +148,13 @@ impl DeploymentService {
         let environment = self
             .environment_service
             .get(environment_id, false, &AuthCtx::system())
-            .await?;
+            .await
+            .map_err(|error| match error {
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    DeploymentError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
         authorize_environment_permission(auth, &environment, EnvironmentVerb::View)?;
         Ok(())
     }

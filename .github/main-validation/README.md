@@ -194,7 +194,11 @@ does not extend the workflow's 300-minute budget. Compilation and exclusive
 checks retain the workflow deadline rather than the shorter test-task limit.
 
 General workers retain test-r's hardware-derived concurrency. Keep the dedicated
-storage-quota single-thread and tool-streaming eight-thread limits. Service
+storage-quota single-thread and tool-streaming eight-thread limits. The four
+`latency` tests run one at a time after the parallel workloads and checks join,
+before XFS and Docker validation. Their wall-clock assertions must not measure
+unrelated compilation, service tests or memory stress. Their internal fan-out,
+timer races and timing budgets are unchanged. Service
 invocations share fixed dependency ports and include cluster restarts, so their
 single-thread limits are not an invitation to remove them globally. PostgreSQL
 API group 2 uses two threads after repeated full-selection qualification with
