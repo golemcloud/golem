@@ -2919,10 +2919,11 @@ async fn prepare_session(
     completed: bool,
 ) -> anyhow::Result<StreamSessionKey> {
     let oplog = worker.oplog();
-    let pending_index = oplog.current_oplog_index().await.next().next();
+    let pending_index = oplog.current_oplog_index().await.next();
     let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
         method_name: "increment".into(),
-        input: data_value!().value().clone(),
+        allow_streams: false,
+        input: data_value!().value().clone().try_into().unwrap(),
         caller: callers::anonymous(),
         scope_card: None,
     }));
@@ -2943,37 +2944,50 @@ async fn prepare_session(
         &idempotency_key,
     )?;
     let attempt_id = AttemptId::fresh();
-    for record in [
-        StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
+    let prepared = StreamSessionPreparedRecord {
+        format_version: 1,
+        public_session_id: idempotency_key.to_string(),
+        route_scope: None,
+        session_key: idempotency_key,
+        expiry_policy: StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
+        attempt: StartAttemptDescriptor {
             format_version: 1,
-            public_session_id: idempotency_key.to_string(),
-            route_scope: None,
-            session_key: idempotency_key,
-            expiry_policy: StreamSessionExpiryPolicy::None,
-            expiry_deadline_millis: None,
-            attempt: StartAttemptDescriptor {
+            session_key: session_key.clone(),
+            attachment_id,
+            expected_callee_fingerprint: metadata.fingerprint,
+            attempt_id,
+            invocation: PersistedStreamInvocationDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),
-                attachment_id,
-                expected_callee_fingerprint: metadata.fingerprint,
-                attempt_id,
-                invocation: PersistedStreamInvocationDescriptor {
-                    format_version: 1,
-                    session_key: session_key.clone(),
-                    target_component_revision: metadata.last_known_status.component_revision,
-                    target: PersistedInvocationTarget::AgentMethod {
-                        method_name: "increment".into(),
-                    },
-                    invocation_value: vec![],
-                    stream_handles: vec![],
-                    execution_config: vec![],
-                    effective_identity: vec![],
+                target_component_revision: metadata.last_known_status.component_revision,
+                target: PersistedInvocationTarget::AgentMethod {
+                    method_name: "increment".into(),
                 },
+                invocation_value: vec![],
+                stream_handles: vec![],
+                execution_config: vec![],
                 effective_identity: vec![],
-                live_join_buffer_events: 1,
             },
-            stream_mappings: vec![],
-        }),
+            effective_identity: vec![],
+            live_join_buffer_events: 1,
+        },
+        stream_mappings: vec![],
+    };
+    assert_eq!(
+        worker
+            .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
+                None,
+                idempotency_key,
+                payload.clone(),
+                trace_id.clone(),
+                trace_states.clone(),
+                invocation_context.clone(),
+            ))
+            .await?,
+        pending_index
+    );
+    for record in [
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: idempotency_key,
@@ -2981,9 +2995,10 @@ async fn prepare_session(
             attempt_id,
             epoch: 1,
             pending_invocation_oplog_index: pending_index,
+            acceptance: prepared.acceptance(),
         }),
+        StreamSessionRecord::Prepared(prepared),
     ] {
-        let prepared = matches!(record, StreamSessionRecord::Prepared(_));
         worker
             .add_and_commit_oplog(OplogEntry::StreamSession {
                 timestamp: Timestamp::now_utc(),
@@ -2993,22 +3008,6 @@ async fn prepare_session(
             })
             .await
             .unwrap();
-        if prepared {
-            assert_eq!(
-                worker
-                    .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
-                        None,
-                        idempotency_key,
-                        payload.clone(),
-                        trace_id.clone(),
-                        trace_states.clone(),
-                        invocation_context.clone(),
-                    ))
-                    .await
-                    .unwrap(),
-                pending_index
-            );
-        }
     }
     if completed {
         worker
@@ -3061,7 +3060,8 @@ async fn completion_receipt_precedes_fifo_status_fold(
     let idempotency_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
         method_name: "increment".into(),
-        input: data_value!().value().clone(),
+        allow_streams: false,
+        input: data_value!().value().clone().try_into().unwrap(),
         caller: callers::anonymous(),
         scope_card: None,
     }));
@@ -3221,7 +3221,8 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
             invocation_id: key,
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "increment".into(),
-                input: data_value!().value().clone(),
+                allow_streams: false,
+                input: data_value!().value().clone().try_into().unwrap(),
                 caller: callers::anonymous(),
                 scope_card: None,
             })),
@@ -3379,7 +3380,8 @@ async fn jump_projection_finishes_without_its_producer(
                 invocation_id: key,
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "increment".into(),
-                    input: data_value!().value().clone(),
+                    allow_streams: false,
+                    input: data_value!().value().clone().try_into().unwrap(),
                     caller: callers::anonymous(),
                     scope_card: None,
                 })),

@@ -217,7 +217,8 @@ async fn typed_cache_privacy_follows_authentication_not_principal_usage() {
 async fn http_method_arguments_follow_binding_names_not_binding_order() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
-    use golem_common::schema::{AgentMethodSchema, NamedField, SchemaValue};
+    use golem_common::model::agent::{AgentMethodInput, HttpMethodArgumentSource};
+    use golem_common::schema::{AgentMethodSchema, NamedField};
     use golem_service_base::custom_api::{MethodParameter, PathSegmentType, QueryOrHeaderType};
 
     let input = InputSchema::parameters([
@@ -295,20 +296,35 @@ async fn http_method_arguments_follow_binding_names_not_binding_order() {
         "{}",
         response.into_body().into_string().await.unwrap()
     );
+    let inputs = harness.recorded_method_inputs();
+    let Some(AgentMethodInput::Http(input)) = &inputs[0] else {
+        panic!("expected captured HTTP arguments")
+    };
     assert_eq!(
-        harness.recorded_method_params(),
-        SchemaValue::Record {
-            fields: vec![
-                SchemaValue::U32(7),
-                SchemaValue::String("hello".into()),
-                SchemaValue::String("!".into())
-            ],
-        }
+        input
+            .arguments()
+            .iter()
+            .map(|argument| argument.argument_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["count", "message", "suffix"]
     );
+    assert!(
+        matches!(&input.arguments()[0].source, HttpMethodArgumentSource::Query { parameter_name, entries } if parameter_name == "wire" && entries["wire"] == ["7"])
+    );
+    assert!(
+        matches!(&input.arguments()[1].source, HttpMethodArgumentSource::JsonProperty { property_name } if property_name == "text")
+    );
+    assert!(
+        matches!(&input.arguments()[2].source, HttpMethodArgumentSource::JsonProperty { property_name } if property_name == "tail")
+    );
+    let golem_common::model::agent::HttpMethodBody::Json(body) = input.body() else {
+        panic!("expected captured JSON body")
+    };
+    assert_eq!(body.as_str(), r#"{"tail":"!","text":"hello"}"#);
 }
 
 #[test]
-async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
+async fn bound_http_inputs_reach_execution_without_route_schema_validation() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
     use golem_common::schema::NamedField;
@@ -316,7 +332,6 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
     use golem_service_base::custom_api::{MethodParameter, PathSegmentType, QueryOrHeaderType};
     use golem_service_base::model::SafeIndex;
 
-    let mut failures = Vec::new();
     for durable in [false, true] {
         for binding in ["query", "header", "path", "map", "optional-map"] {
             if durable && binding == "path" {
@@ -423,50 +438,26 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
                 harness.worker_service.clone(),
             );
             let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
-            let cases: &[(&str, &[&str], &str, &str)] = match binding {
+            let cases: &[(&str, &[&str])] = match binding {
                 "map" | "optional-map" => &[
-                    ("/run?wire=x", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
-                    (
-                        "/run?w%69re=x&wire[env]=true",
-                        &[],
-                        "REQUEST_VALUE_PARSING_FAILED",
-                        "amount",
-                    ),
+                    ("/run?wire[env]=bad", &[]),
+                    ("/run?wire[env]=true&wire[env]=false", &[]),
                 ],
                 "query" => &[
-                    ("/run", &[], "REQUEST_MISSING_VALUE", "amount"),
-                    (
-                        "/run?wire=3&wire=4",
-                        &[],
-                        "REQUEST_TOO_MANY_VALUES",
-                        "amount",
-                    ),
-                    (
-                        "/run?wire=bad",
-                        &[],
-                        "REQUEST_VALUE_PARSING_FAILED",
-                        "amount",
-                    ),
-                    ("/run?wire=1", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
-                    (
-                        "/run?surprise=3",
-                        &[],
-                        "REQUEST_VALUE_PARSING_FAILED",
-                        "surprise",
-                    ),
+                    ("/run", &[]),
+                    ("/run?wire=3&wire=4", &[]),
+                    ("/run?wire=bad", &[]),
+                    ("/run?wire=1", &[]),
                 ],
                 "header" => &[
-                    ("/run", &[], "REQUEST_MISSING_VALUE", "amount"),
-                    ("/run", &["3", "4"], "REQUEST_TOO_MANY_VALUES", "amount"),
-                    ("/run", &["bad"], "REQUEST_VALUE_PARSING_FAILED", "amount"),
-                    ("/run", &["1"], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    ("/run", &[]),
+                    ("/run", &["3", "4"]),
+                    ("/run", &["bad"]),
+                    ("/run", &["1"]),
                 ],
-                _ => &[
-                    ("/bad", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
-                    ("/1", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
-                ],
+                _ => &[("/bad", &[]), ("/1", &[])],
             };
-            for (target, headers, code, detail) in cases {
+            for (index, (target, headers)) in cases.iter().enumerate() {
                 let mut request = Request::builder()
                     .method(if durable {
                         http::Method::PUT
@@ -479,52 +470,77 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
                     request = request.header("x-wire", *value);
                 }
                 let response = endpoint.execute(request.finish()).await;
-                assert_eq!(
-                    response.status(),
-                    StatusCode::BAD_REQUEST,
-                    "{durable} {binding} {target}"
-                );
                 if durable {
-                    let has_content_type =
-                        response.headers().contains_key(http::header::CONTENT_TYPE);
-                    let body = response.into_body().into_bytes().await.unwrap();
-                    if has_content_type || !body.is_empty() {
-                        failures.push(format!(
-                            "DurableStreams {binding} {target}: expected empty 400, got {body:?}"
-                        ));
-                    }
+                    // The harness deliberately refuses the dispatched session.
+                    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+                    assert_eq!(harness.native_session_keys().len(), index + 1);
                 } else {
-                    let body: serde_json::Value = response.into_body().into_json().await.unwrap();
-                    if body["code"] != *code {
-                        failures.push(format!("{binding} {target}: expected {code}, got {body}"));
-                    }
-                    assert!(
-                        body["errors"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .any(|error| error.as_str().unwrap().contains(detail)),
-                        "{body}"
+                    assert_eq!(
+                        response.status(),
+                        StatusCode::NO_CONTENT,
+                        "{binding} case {index}: {target}"
                     );
-                    if map {
-                        assert!(
-                            body["errors"].as_array().unwrap().iter().any(|error| {
-                                error.as_str().unwrap().contains("maps require name[key]")
-                            }),
-                            "{body}"
-                        );
+                }
+                let inputs = harness.recorded_method_inputs();
+                let Some(golem_common::model::agent::AgentMethodInput::Http(input)) =
+                    &inputs[index]
+                else {
+                    panic!("expected captured HTTP input")
+                };
+                assert_eq!(input.arguments()[0].argument_name, "amount");
+                match &input.arguments()[0].source {
+                    golem_common::model::agent::HttpMethodArgumentSource::Header {
+                        header_name,
+                        values,
+                    } => {
+                        assert_eq!(header_name, "x-wire");
+                        assert_eq!(values, headers);
                     }
+                    golem_common::model::agent::HttpMethodArgumentSource::Path {
+                        path_segment_index,
+                        value,
+                    } => {
+                        assert_eq!(*path_segment_index, 0);
+                        assert_eq!(value, target.trim_start_matches('/'));
+                    }
+                    golem_common::model::agent::HttpMethodArgumentSource::Query {
+                        parameter_name,
+                        entries,
+                    } => {
+                        let expected: &[(&str, &[&str])] = match (binding, index) {
+                            ("query", 0) => &[],
+                            ("query", 1) => &[("wire", &["3", "4"])],
+                            ("query", 2) => &[("wire", &["bad"])],
+                            ("query", 3) => &[("wire", &["1"])],
+                            (_, 0) => &[("wire[env]", &["bad"])],
+                            (_, 1) => &[("wire[env]", &["true", "false"])],
+                            _ => unreachable!(),
+                        };
+                        let expected = expected
+                            .iter()
+                            .map(|(key, values)| {
+                                (
+                                    key.to_string(),
+                                    values
+                                        .iter()
+                                        .map(|value| value.to_string())
+                                        .collect::<Vec<_>>(),
+                                )
+                            })
+                            .collect::<std::collections::BTreeMap<_, _>>();
+                        assert_eq!(parameter_name, "wire");
+                        assert_eq!(entries, &expected);
+                    }
+                    other => panic!("unexpected HTTP source: {other:?}"),
                 }
             }
-            assert!(harness.contexts.lock().unwrap().is_empty());
             assert!(harness.metadata_reads.lock().unwrap().is_empty());
         }
     }
-    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 #[test]
-async fn http_api_request_validation_errors_preserve_json_details_and_cors() {
+async fn http_api_json_syntax_errors_preserve_details_and_cors() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
 
@@ -571,18 +587,11 @@ async fn http_api_request_validation_errors_preserve_json_details_and_cors() {
     );
     let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
 
-    for (body, code, detail) in [
-        (
-            r#"{"email":"ada@example.com","additionalProp1":{}}"#,
-            "REQUEST_JSON_BODY_PARSING_FAILED",
-            "additionalProp1",
-        ),
-        (
-            r#"{"email":"ada@example.com""#,
-            "REQUEST_BODY_INVALID_JSON",
-            "Request body was not valid json",
-        ),
-    ] {
+    for (body, code, detail) in [(
+        r#"{"email":"ada@example.com""#,
+        "REQUEST_BODY_INVALID_JSON",
+        "Request body was not valid json",
+    )] {
         let response = endpoint
             .execute(
                 Request::builder()

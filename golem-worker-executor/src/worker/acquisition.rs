@@ -1282,6 +1282,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .state_actor
                 .append_invocation_if_version(
                     entry,
+                    None,
                     idempotency_key,
                     status.invocation_results.change_generation(),
                     status.invocation_results.revert_generation(),

@@ -13,8 +13,326 @@
 // limitations under the License.
 
 use crate::worker::*;
+use golem_common::model::durable_stream::{AttachmentId, StreamInvocationId};
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(in crate::worker) async fn ensure_matching_stream_attachment(
+        &self,
+        requested: &StreamSessionAttachedRecord,
+    ) -> Result<(), WorkerExecutorError> {
+        let producer = self.durable_stream_producer().await?;
+        let key =
+            producer.qualify_session(&StreamRegistrationInvocation::Local(requested.session_key));
+        if let Some(retained) = self
+            .stream_session_records(&key, None)
+            .await?
+            .into_iter()
+            .find_map(|record| {
+                if let StreamSessionRecord::Attached(record) = record {
+                    Some(record)
+                } else {
+                    None
+                }
+            })
+            && (retained.acceptance != requested.acceptance
+                || (requested.acceptance.route_scope.is_none()
+                    && retained.attempt_id != requested.attempt_id))
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "AttemptConflict: stream acceptance differs from the retained request",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn accept_queued_method(
+        self: &Arc<Self>,
+        invocation: AgentInvocation,
+        mut acceptance: golem_common::model::durable_stream::StreamSessionAcceptance,
+        attempt_id: AttemptId,
+        committed: tokio::sync::oneshot::Sender<()>,
+    ) -> Result<(StreamSessionAttachedRecord, bool), WorkerExecutorError> {
+        let worker = self.clone();
+        self.tasks.finish_on_drop(tokio::spawn(async move {
+            let key = Self::require_idempotency_key(&invocation)?;
+            let producer = worker.durable_stream_producer().await?;
+            let session_key = StreamInvocationId {
+                callee_environment_id: worker.owned_agent_id.environment_id,
+                callee: worker.owned_agent_id.agent_id,
+                callee_fingerprint: worker.initial_worker_metadata.fingerprint,
+                idempotency_key: key,
+            };
+            let _session = producer.session_lock(&session_key).lock_owned().await;
+            let lookup = worker.lookup_matching_invocation(&invocation).await?;
+            if acceptance.public_session_id.is_empty() {
+                acceptance.public_session_id = key.to_string();
+            }
+            let existing = worker.stream_session_records(&session_key, None).await?
+                .into_iter().find_map(|record| if let StreamSessionRecord::Attached(record) = record {
+                    Some(record)
+                } else { None });
+            let (attached, replayed) = if let Some(attached) = existing {
+                if attached.acceptance != acceptance || (acceptance.route_scope.is_none() && attached.attempt_id != attempt_id) {
+                    return Err(WorkerExecutorError::invalid_request("AttemptConflict: stream acceptance does not match the retained request"));
+                }
+                (attached, true)
+            } else {
+                if lookup != LookupResult::New {
+                    return Err(WorkerExecutorError::invalid_request("IdempotencyConflict: retained invocation has no stream attachment"));
+                }
+                if let AgentInvocation::AgentMethod { scope_card: Some(card), .. } = &invocation {
+                    crate::services::card::validate_scope_card(worker.card_service().as_ref(), card).await?;
+                }
+                let attached = StreamSessionAttachedRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: key,
+                    attachment_id: AttachmentId::primary(worker.owned_agent_id.environment_id, &worker.owned_agent_id.agent_id, &key)
+                        .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?,
+                    attempt_id,
+                    epoch: producer.attachment_epoch_floor(),
+                    pending_invocation_oplog_index: OplogIndex::NONE,
+                    acceptance,
+                };
+                worker.schedule_stream_session_expiry(attached.acceptance.public_session_id.clone(), key,
+                    attached.acceptance.expiry_deadline_millis).await?;
+                worker.enqueue_worker_invocation_with_attachment(invocation,
+                    read_only_cache::InvocationEffect::UnknownAssumeMutating, None, Some(attached.clone())).await?;
+                let attached = worker.stream_session_records(&session_key, None).await?
+                    .into_iter().find_map(|record| if let StreamSessionRecord::Attached(attached) = record { Some(attached) } else { None })
+                    .ok_or_else(|| WorkerExecutorError::runtime("committed invocation has no stream attachment"))?;
+                (attached, false)
+            };
+            worker.schedule_stream_session_expiry(attached.acceptance.public_session_id.clone(), key,
+                attached.acceptance.expiry_deadline_millis).await?;
+            let _ = committed.send(());
+            drop(_session);
+            Worker::start_if_needed(worker.clone()).await?;
+            Ok((attached, replayed))
+        })).await.map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+    }
+
+    pub(crate) async fn queued_method_session(
+        &self,
+        key: InvocationId,
+        epoch: u64,
+        attempt: AttemptId,
+    ) -> Result<StreamSession, WorkerExecutorError> {
+        let response_lease = if self.agent_mode() == AgentMode::Ephemeral {
+            Some(
+                self.durable_stream_producer
+                    .retain_response()
+                    .map_err(|error| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    })?,
+            )
+        } else {
+            None
+        };
+        Ok(StreamSession::open(
+            self.durable_stream_producer().await?,
+            self.oplog.clone(),
+            StreamRegistrationInvocation::Local(key),
+            std::iter::empty(),
+        )
+        .await
+        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+        .with_attachment(epoch, attempt)
+        .with_response_lease(response_lease))
+    }
+
+    pub(crate) async fn resume_queued_method(
+        self: &Arc<Self>,
+        attempt: &ResumeAttemptDescriptor,
+    ) -> Result<Option<(StreamSessionAttachedRecord, u64, StreamSession)>, WorkerExecutorError>
+    {
+        let producer = self.durable_stream_producer().await?;
+        let worker = self.clone();
+        let attempt = attempt.clone();
+        let memory = golem_common::serialization::serialize(&attempt)
+            .map_err(WorkerExecutorError::runtime)?
+            .len();
+        producer
+            .run_admitted(None, memory, true, move |producer, admission| async move {
+                Ok::<_, crate::durable_host::durable_stream::SessionError>(
+                    worker
+                        .resume_queued_method_owned(&attempt, producer, &admission)
+                        .await,
+                )
+            })
+            .await
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+    }
+
+    async fn resume_queued_method_owned(
+        &self,
+        attempt: &ResumeAttemptDescriptor,
+        producer: Arc<crate::durable_host::durable_stream::DurableStreamStore>,
+        admission: &Arc<crate::durable_host::durable_stream::StreamWriteAdmission>,
+    ) -> Result<Option<(StreamSessionAttachedRecord, u64, StreamSession)>, WorkerExecutorError>
+    {
+        if self.owner_retirement_requested.is_cancelled() {
+            return Err(self.retirement_error());
+        }
+        let session_guard = producer
+            .session_lock(&attempt.session_key)
+            .lock_owned()
+            .await;
+        let instance_guard = self.lock_non_stopping_worker().await;
+        instance_guard
+            .ensure_not_deleting()
+            .map_err(|_| WorkerExecutorError::invalid_request("Cannot resume a deleting worker"))?;
+        let records = self
+            .stream_session_records(&attempt.session_key, Some(attempt.attempt_id))
+            .await?;
+        if records
+            .iter()
+            .any(|record| matches!(record, StreamSessionRecord::Prepared(_)))
+        {
+            return Ok(None);
+        }
+        let attached = records.iter().find_map(|record| {
+            if let StreamSessionRecord::Attached(record) = record {
+                Some(record.clone())
+            } else {
+                None
+            }
+        });
+        let Some(attached) = attached else {
+            return Ok(None);
+        };
+        if attempt.expected_callee_fingerprint != self.initial_worker_metadata.fingerprint
+            || attached.attachment_id != attempt.attachment_id
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "IncarnationMismatch: resume does not identify the persisted callee attachment",
+            ));
+        }
+        if attached.acceptance.effective_identity != attempt.effective_identity {
+            return Err(WorkerExecutorError::invalid_request(
+                "Unauthorized: resume identity differs from the pinned caller and grant",
+            ));
+        }
+        if attached.attempt_id == attempt.attempt_id {
+            return Err(WorkerExecutorError::invalid_request(
+                "AttemptConflict: Start attempt cannot be reused for resume",
+            ));
+        }
+        if !attempt.cursors.is_empty() {
+            return Err(WorkerExecutorError::invalid_request(
+                "queued invocation has no output cursors",
+            ));
+        }
+        for record in &records {
+            if let StreamSessionRecord::ResumeAttempt(record) = record
+                && record.attempt.attempt_id == attempt.attempt_id
+            {
+                if &record.attempt != attempt {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "AttemptConflict: retained resume attempt differs",
+                    ));
+                }
+                return Ok(Some((
+                    attached,
+                    record.accepted_epoch,
+                    self.queued_method_session(
+                        attempt.session_key.idempotency_key,
+                        record.accepted_epoch,
+                        attempt.attempt_id,
+                    )
+                    .await?,
+                )));
+            }
+        }
+        let epoch = attempt.expected_epoch.checked_add(1).ok_or_else(|| {
+            WorkerExecutorError::invalid_request("ResourceExhausted: attachment epoch cannot wrap")
+        })?;
+        let streams = self
+            .queued_method_session(
+                attempt.session_key.idempotency_key,
+                attempt.expected_epoch,
+                attempt.attempt_id,
+            )
+            .await?;
+        streams
+            .commit_resume_attempt_locked(
+                StreamSessionResumeAttemptRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: attempt.session_key.idempotency_key,
+                    attempt: attempt.clone(),
+                    accepted_epoch: epoch,
+                },
+                session_guard,
+                admission,
+            )
+            .await
+            .map_err(|error| {
+                error.into_worker_executor_error(WorkerExecutorError::invalid_request)
+            })?;
+        Ok(Some((
+            attached,
+            epoch,
+            streams.with_attachment(epoch, attempt.attempt_id),
+        )))
+    }
+
+    pub(crate) async fn wait_method_session_ready(
+        self: Arc<Self>,
+        key: InvocationId,
+    ) -> Result<(StreamSessionPreparedRecord, StreamSession), WorkerExecutorError> {
+        let producer = self.durable_stream_producer().await?;
+        let mut events = self.events().subscribe();
+        loop {
+            let changed = producer.session_records_changed().notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self
+                .durable_stream_session_status(&key)
+                .await?
+                .is_some_and(|status| status.expired || status.cancellation_requested)
+            {
+                return Err(WorkerExecutorError::invalid_request(
+                    "stream session was cancelled or expired",
+                ));
+            }
+            if let Some((prepared, streams)) = self.native_tool_session(&key).await? {
+                let status = self
+                    .durable_stream_session_status(&key)
+                    .await?
+                    .ok_or_else(|| {
+                        WorkerExecutorError::runtime("ready session has no attachment status")
+                    })?;
+                let (graph, elements) = crate::grpc::resumed_input_schema(&prepared)?;
+                let streams = streams
+                    .with_attachment(
+                        status.attachment_epoch.unwrap_or_default(),
+                        status
+                            .attachment_attempt_id
+                            .unwrap_or(prepared.attempt.attempt_id),
+                    )
+                    .with_input_schema(
+                        Arc::new(graph),
+                        prepared.attempt.invocation.target_component_revision,
+                        elements,
+                    );
+                return Ok((prepared, streams));
+            }
+            match self.try_lookup_invocation_result(&key).await? {
+                LookupResult::Complete(Err(error)) => return Err(error),
+                LookupResult::Complete(Ok(_)) | LookupResult::Interrupted => {
+                    return Err(WorkerExecutorError::runtime(
+                        "queued session ended before preparation",
+                    ));
+                }
+                _ => {}
+            }
+            tokio::select! {
+                _ = &mut changed => {},
+                _ = events.wait_for(|_| Some(())) => {},
+                _ = self.owner_retirement_requested.cancelled() => return Err(self.retirement_error()),
+            }
+        }
+    }
+
     pub(in crate::worker) async fn pending_streaming_invocation_entry(
         &self,
         invocation: AgentInvocation,
@@ -549,6 +867,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
             let attached_attempt = prepared.attempt.clone();
+            let attached_acceptance = prepared.acceptance();
             self.oplog
                 .add_pair(
                     pending,
@@ -560,6 +879,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             attempt_id: attached_attempt.attempt_id,
                             epoch: initial_epoch,
                             pending_invocation_oplog_index,
+                            acceptance: attached_acceptance,
                         });
                         let summary = DurableStreamEventSummary::session(&record);
                         OplogEntry::stream_session(
@@ -707,6 +1027,61 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         attempt: ResumeAttemptDescriptor,
     ) -> Result<DurableStreamingResumeAcceptance, WorkerExecutorError> {
+        let producer = self.durable_stream_producer().await?;
+        let worker = self.clone();
+        let memory = golem_common::serialization::serialize(&attempt)
+            .map_err(WorkerExecutorError::runtime)?
+            .len();
+        let acceptance = producer
+            .run_admitted(None, memory, true, move |producer, admission| async move {
+                Ok::<_, crate::durable_host::durable_stream::SessionError>(
+                    worker
+                        .resume_durable_streaming_invocation_owned(attempt, producer, &admission)
+                        .await,
+                )
+            })
+            .await
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))??;
+        if !acceptance.replayed || acceptance.streams.ensure_current_attachment().await.is_ok() {
+            for mapping in &acceptance.mappings {
+                if !producer.owns_handle_identity(&mapping.handle) {
+                    if mapping.role.direction() == SessionStreamRole::Input
+                        && acceptance
+                            .streams
+                            .has_journaled_consumer_terminal(mapping)
+                            .await
+                            .map_err(|error| {
+                                error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            })?
+                    {
+                        continue;
+                    }
+                    acceptance
+                        .streams
+                        .prepare_foreign_mapping(mapping.clone(), acceptance.epoch)
+                        .await
+                        .map_err(|error| {
+                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                        })?;
+                    acceptance
+                        .streams
+                        .activate_foreign_mapping(mapping.clone(), acceptance.epoch)
+                        .await
+                        .map_err(|error| {
+                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                        })?;
+                }
+            }
+        }
+        Ok(acceptance)
+    }
+
+    async fn resume_durable_streaming_invocation_owned(
+        self: &Arc<Self>,
+        attempt: ResumeAttemptDescriptor,
+        producer: Arc<crate::durable_host::durable_stream::DurableStreamStore>,
+        admission: &Arc<crate::durable_host::durable_stream::StreamWriteAdmission>,
+    ) -> Result<DurableStreamingResumeAcceptance, WorkerExecutorError> {
         {
             let instance = self.lock_non_stopping_worker().await;
             if instance.ensure_not_deleting().is_err() {
@@ -718,7 +1093,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return Err(error.clone());
             }
         }
-        let producer = self.durable_stream_producer().await?;
+        let session_guard = producer
+            .session_lock(&attempt.session_key)
+            .lock_owned()
+            .await;
         let instance_guard = self.lock_non_stopping_worker().await;
         if instance_guard.ensure_not_deleting().is_err() {
             return Err(WorkerExecutorError::invalid_request(
@@ -816,39 +1194,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ));
                 }
                 let streams = make_streams(existing.accepted_epoch, attempt.attempt_id)?;
-                if streams.ensure_current_attachment().await.is_ok() {
-                    for (binding, mapping) in mappings.iter().zip(&materialized_mappings) {
-                        if matches!(binding.source, StreamRecordReference::Foreign(_))
-                            && !producer.owns_handle_identity(&mapping.handle)
-                        {
-                            if mapping.role.direction() == SessionStreamRole::Input
-                                && streams
-                                    .has_journaled_consumer_terminal(mapping)
-                                    .await
-                                    .map_err(|error| {
-                                        error.into_worker_executor_error(
-                                            WorkerExecutorError::runtime,
-                                        )
-                                    })?
-                            {
-                                continue;
-                            }
-                            streams
-                                .prepare_foreign_mapping(mapping.clone(), existing.accepted_epoch)
-                                .await
-                                .map_err(|error| {
-                                    error.into_worker_executor_error(WorkerExecutorError::runtime)
-                                })?;
-                            streams
-                                .activate_foreign_mapping(mapping.clone(), existing.accepted_epoch)
-                                .await
-                                .map_err(|error| {
-                                    error.into_worker_executor_error(WorkerExecutorError::runtime)
-                                })?;
-                        }
-                    }
-                }
                 drop(instance_guard);
+                drop(session_guard);
                 return Ok(DurableStreamingResumeAcceptance {
                     prepared,
                     mappings: materialized_mappings,
@@ -914,47 +1261,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
         })?;
         current_streams
-            .commit_resume_attempt(StreamSessionResumeAttemptRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: attempt.session_key.idempotency_key,
-                attempt: attempt.clone(),
-                accepted_epoch,
-            })
+            .commit_resume_attempt_locked(
+                StreamSessionResumeAttemptRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: attempt.session_key.idempotency_key,
+                    attempt: attempt.clone(),
+                    accepted_epoch,
+                },
+                session_guard,
+                admission,
+            )
             .await
             .map_err(|error| {
                 error.into_worker_executor_error(WorkerExecutorError::invalid_request)
             })?;
+        drop(instance_guard);
 
         let streams = make_streams(accepted_epoch, attempt.attempt_id)?;
-        for (binding, mapping) in mappings.iter().zip(&materialized_mappings) {
-            if matches!(binding.source, StreamRecordReference::Foreign(_))
-                && !producer.owns_handle_identity(&mapping.handle)
-            {
-                if mapping.role.direction() == SessionStreamRole::Input
-                    && streams
-                        .has_journaled_consumer_terminal(mapping)
-                        .await
-                        .map_err(|error| {
-                            error.into_worker_executor_error(WorkerExecutorError::runtime)
-                        })?
-                {
-                    continue;
-                }
-                streams
-                    .prepare_foreign_mapping(mapping.clone(), accepted_epoch)
-                    .await
-                    .map_err(|error| {
-                        error.into_worker_executor_error(WorkerExecutorError::runtime)
-                    })?;
-                streams
-                    .activate_foreign_mapping(mapping.clone(), accepted_epoch)
-                    .await
-                    .map_err(|error| {
-                        error.into_worker_executor_error(WorkerExecutorError::runtime)
-                    })?;
-            }
-        }
-        drop(instance_guard);
         Ok(DurableStreamingResumeAcceptance {
             prepared,
             mappings: materialized_mappings,

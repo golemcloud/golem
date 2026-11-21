@@ -381,7 +381,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: invocation_id.id(),
             method_name,
-            input: input_value,
+            allow_streams: false,
+            input: input_value
+                .try_into()
+                .map_err(|error: String| handle.trap(anyhow::anyhow!(error)))?,
             invocation_context: stack,
             caller: Caller::entry(self.self_principal()),
             scope_card: None,

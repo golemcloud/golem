@@ -141,6 +141,9 @@ impl SessionCheckpoint {
                     .context("missing request timing")?
                     .accepted = Some(now);
             }
+            PublicServerMessage::InvocationReady { mappings, .. } => {
+                self.install_mappings(mappings)?;
+            }
             PublicServerMessage::InvocationResult {
                 mappings, result, ..
             } => {

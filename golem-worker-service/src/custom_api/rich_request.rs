@@ -167,6 +167,59 @@ impl RichRequest {
         }
     }
 
+    pub(super) async fn capture_method_body(
+        &mut self,
+        framing: &RequestBodySchema,
+    ) -> Result<golem_common::model::agent::HttpMethodBody, RequestHandlerError> {
+        use golem_common::model::agent::{HttpMethodBody, JsonMethodInput};
+        match framing {
+            RequestBodySchema::Unused => Ok(HttpMethodBody::Absent),
+            RequestBodySchema::JsonBody { .. } => {
+                let bytes = self
+                    .underlying
+                    .take_body()
+                    .into_vec()
+                    .await
+                    .map_err(|error| RequestHandlerError::BodyIsNotValidJson {
+                        error: error.to_string(),
+                    })?;
+                let value = String::from_utf8(bytes).map_err(|error| {
+                    RequestHandlerError::BodyIsNotValidUtf8 {
+                        error: error.to_string(),
+                    }
+                })?;
+                let value = JsonMethodInput::capture(value.as_bytes()).map_err(|error| {
+                    RequestHandlerError::BodyIsNotValidJson {
+                        error: error.to_string(),
+                    }
+                })?;
+                Ok(HttpMethodBody::Json(value))
+            }
+            RequestBodySchema::BinaryBody { .. } => {
+                let ParsedRequestBody::UnstructuredBinary(Some(body)) =
+                    self.parse_binary_body(None).await?
+                else {
+                    unreachable!("binary body parser returns binary data")
+                };
+                Ok(HttpMethodBody::Binary {
+                    value: body.data,
+                    mime_type: body.mime_type,
+                })
+            }
+            RequestBodySchema::TextBody { .. } => {
+                let ParsedRequestBody::UnstructuredText(Some(body)) =
+                    self.parse_text_body(None).await?
+                else {
+                    unreachable!("text body parser returns text data")
+                };
+                Ok(HttpMethodBody::Text {
+                    value: body.data,
+                    language: body.text_type.map(|ty| ty.language_code),
+                })
+            }
+        }
+    }
+
     async fn parse_text_body(
         &mut self,
         allowed_language_codes: Option<&Vec<String>>,

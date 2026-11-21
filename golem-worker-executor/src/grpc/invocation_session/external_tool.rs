@@ -478,6 +478,7 @@ where
                     prepared: Some(acceptance.prepared),
                     durable_replayed: acceptance.replayed,
                     joined_origin_observer: acceptance.joined_origin_observer,
+                    queued: None,
                 })
                 .map_err(|_| {
                     WorkerExecutorError::runtime(

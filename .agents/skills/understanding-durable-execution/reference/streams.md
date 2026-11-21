@@ -23,13 +23,31 @@ from the invocation descriptor. A same-origin retry with a reissued caller-owned
 first acceptance; it does not replace the accepted input binding, even when the attempt ID survived
 the cut. Foreign handles unrelated to the caller still require exact identity.
 
-Initial acceptance commits `Prepared`, `PendingAgentInvocation`, `Attached`, and foreign-input
-`TopologyPrepared` intents in one atomic oplog batch (`DurableStreamProducer::prepare_session`).
-Foreign descriptors and referenced handles are validated before appending. Remote attachment
-prepare/activate runs after that commit; a crash in between leaves the original queued invocation,
-principal, input bindings, and enough topology evidence for `recover_durable_stream_topologies`
-to finish attaching before guest reconstruction. An arriving retry cannot substitute its own
-invocation in that crash window.
+Method Pending and Started payloads retain the original `AgentMethodInput`, not the decoded
+execution value. Request equality uses that carrier. Live lowering and recovery decode it using
+the loaded Store's method schema. Prepared contributes committed stream endpoints and element
+fingerprints only: its scalar values never replace the original request. Native and public JSON
+bindings follow request-local traversal order; HTTP stream arguments match by name so selected
+field reordering cannot exchange their endpoints. Incompatible element schemas or unused bindings
+fail reconstruction. An automatic update uses its candidate Store; reconstruction does not pin
+the previous method schema to make the update succeed. The start hook's secret-hold check inspects
+the lowered execution value before guest effects. Public method diagnostics project the original
+carrier without component metadata, retaining rejected raw fields while redacting native host
+capabilities before opaque encoding.
+
+Method acceptance commits the original `PendingAgentInvocation` and schema-independent `Attached`
+together. Attached retains public session identity, expiry, authority, execution configuration and
+transport correspondence; no revision or stream element schema is selected yet. The loaded Store
+decodes and validates the method, including secret-hold checks, before committing registrations,
+foreign-input `TopologyPrepared`, `Prepared` and `AgentInvocationStarted` in one batch linked to
+that Pending entry. Only after commit are endpoints published and readiness sent. Queued resumes
+use Attached and the existing attachment epochs; slot operations wait for preparation instead of
+guessing a revision. A same-origin observer is accepted against the retained request and authority
+before waiting for readiness, so an execution rejection remains an accepted invocation's failure.
+External tools retain their descriptor-based preparation path. Remote attachment prepare/activate
+runs after preparation commits; recovery uses that topology evidence without replacing the original
+request or input bindings. Resume serialization follows producer admission, session lock, then
+worker instance lock; the instance guard remains held through the resume commit.
 
 Cancelling an asynchronous streaming RPC also terminalizes its open caller-owned
 `AgentHostedInput` streams, including cancellation before target acceptance. The producer checks

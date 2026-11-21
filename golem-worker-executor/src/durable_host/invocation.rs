@@ -694,6 +694,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 return Err(WorkerExecutorError::permission_denied("permission denied"));
             }
 
+            let selected_preparation = self
+                .public_state
+                .worker()
+                .selected_method_preparation(&invocation, input, &self.state.component_metadata)
+                .await?;
             let (idempotency_key, _, _) = invocation.into_parts();
             let _boundary = self.lock_synchronized_card_event_boundary().await?;
             let wallet = self.state.owner_wallet.snapshot();
@@ -712,6 +717,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         pinned_card_ids: wallet.cards.keys().copied().collect(),
                         scope_card_id: scope_card.map(|card| card.scope_card_id),
                     },
+                    selected_preparation,
                 )
                 .await?;
             let Some(start_index) = start_index else {

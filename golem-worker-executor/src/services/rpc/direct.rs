@@ -432,7 +432,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let AgentInvocation::AgentMethod {
             idempotency_key,
             method_name,
-            input,
             caller,
             ..
         } = &invocation
@@ -467,32 +466,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             return Err(RpcError::ProtocolError {
                 details: "scheduled invocation identity does not match its prepared request"
                     .to_string(),
-            });
-        }
-        // This caller holds no task-scope bind, so a deletion may already have stopped the
-        // cached generation's state actor.
-        let status = worker
-            .deleted_incarnation_as_not_found(
-                Some(expected_fingerprint),
-                worker.try_get_last_known_status().await,
-            )
-            .await?;
-        let component = self
-            .component_service()
-            .get_metadata(worker.component_id(), Some(status.component_revision))
-            .await?;
-        let parsed_agent_id = worker
-            .get_initial_worker_metadata()
-            .parse_agent_id(&component.metadata)
-            .map_err(|details| RpcError::ProtocolError { details })?;
-        if validate_agent_method_invocation(
-            &component.metadata,
-            Some(&parsed_agent_id),
-            method_name,
-            input,
-        )? {
-            return Err(RpcError::ProtocolError {
-                details: "live streams cannot be used in scheduled invocations".to_string(),
             });
         }
         let scheduled = worker.schedule_invocation(invocation, scheduled_at).await;
@@ -736,7 +709,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             let invocation = AgentInvocation::AgentMethod {
                 idempotency_key,
                 method_name,
-                input: method_parameters,
+                allow_streams: false,
+                input: method_parameters
+                    .try_into()
+                    .map_err(|details| RpcError::ProtocolError { details })?,
                 invocation_context: self_stack,
                 caller,
                 scope_card,
@@ -853,29 +829,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         )
         .await?;
         worker.ensure_owns_key(target.new_owner.as_ref())?;
-        let status = worker.get_pinned_status().await?;
-        let component = self
-            .component_service()
-            .get_metadata(worker.component_id(), Some(status.component_revision))
-            .await?;
-        let input_encoded_len = method_parameters.encoded_len();
-        let input = decode_invocation_input(method_parameters)
-            .map_err(|details| RpcError::ProtocolError { details })?;
-        let parsed_agent_id = worker
-            .get_initial_worker_metadata()
-            .parse_agent_id(&component.metadata)
-            .map_err(|details| RpcError::ProtocolError { details })?;
-        if !validate_agent_method_invocation(
-            &component.metadata,
-            Some(&parsed_agent_id),
-            &method_name,
-            &input,
-        )? {
-            return Err(RpcError::ProtocolError {
-                details: "durable streaming invocation requires a streaming agent method"
-                    .to_string(),
-            });
-        }
 
         let start = InvocationStart {
             target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
@@ -888,7 +841,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             constructor: None,
             component_id: None,
             method_name: Some(method_name.clone()),
-            input: None,
+            captured_method_input: None,
+            allow_streams: true,
+            input: Some(method_parameters),
             idempotency_key: Some(idempotency_key.clone().into()),
             request_key: Some(InvocationRequestKey::Internal(idempotency_key.clone()).into()),
             context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
@@ -927,37 +882,44 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key,
             method_name,
-            input,
+            allow_streams: true,
+            input: crate::grpc::capture_method_input(&start)?,
             invocation_context: self_stack,
             caller,
             scope_card,
         };
         let (acceptance_committed, accepted) = tokio::sync::oneshot::channel();
-        let request = build_durable_streaming_request(
+        let descriptor = crate::grpc::capture_session_acceptance(
             &start,
-            owned_agent_id.agent_id(),
-            Some(&parsed_agent_id.agent_type),
-            &component.metadata,
-            component.revision,
-            expected_callee_fingerprint,
-            invocation,
-            input_encoded_len,
-            acceptance_committed,
             self.config()
                 .limits
                 .live_stream_event_broadcast_capacity
                 .get(),
         )?;
         let acceptance = worker
-            .clone()
-            .accept_durable_streaming_invocation(request)
+            .accept_queued_method(
+                invocation,
+                descriptor,
+                golem_common::model::durable_stream::AttemptId(attempt_id),
+                acceptance_committed,
+            )
             .await;
-        let acceptance = worker
+        let (_, replayed) = worker
             .deleted_incarnation_as_not_found(Some(expected_callee_fingerprint), acceptance)
             .await?;
         accepted.await.map_err(|_| RpcError::RemoteInternalError {
             details: "durable streaming acceptance was not committed".to_string(),
         })?;
+        let (prepared, streams) = worker
+            .clone()
+            .wait_method_session_ready(idempotency_key)
+            .await?;
+        let acceptance = crate::worker::DurableStreamingInvocationAcceptance {
+            prepared,
+            streams,
+            replayed,
+            joined_origin_observer: false,
+        };
         let input_mappings = worker
             .durable_stream_producer()
             .await?
@@ -969,7 +931,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let _ = accepted_inputs.send(InvocationAccepted {
             agent_id: Some(owned_agent_id.agent_id().into()),
             idempotency_key: Some(idempotency_key.into()),
-            component_revision: Some(component.revision.get()),
+            component_revision: Some(
+                acceptance
+                    .prepared
+                    .attempt
+                    .invocation
+                    .target_component_revision
+                    .get(),
+            ),
             attachment_id: (!acceptance.joined_origin_observer)
                 .then(|| acceptance.prepared.attempt.attachment_id.0.into()),
             attempt_id: (!acceptance.joined_origin_observer)
@@ -1004,6 +973,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             tool_name: None,
             command_path: Vec::new(),
             terminal_cursor_stream_ids: Vec::new(),
+            captured_method_input: None,
         });
         acceptance
             .streams
@@ -1233,7 +1203,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             let invocation = AgentInvocation::AgentMethod {
                 idempotency_key,
                 method_name,
-                input: method_parameters,
+                allow_streams: false,
+                input: method_parameters
+                    .try_into()
+                    .map_err(|details| RpcError::ProtocolError { details })?,
                 invocation_context: self_stack,
                 caller,
                 scope_card: None,

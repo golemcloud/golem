@@ -14,6 +14,7 @@
 
 use desert_rust::BinaryCodec;
 
+use super::AgentMethodInput;
 use super::InvocationStatus;
 use crate::base_model::caller::Caller;
 use crate::model::account::AccountId;
@@ -56,7 +57,8 @@ pub enum AgentInvocation {
     AgentMethod {
         idempotency_key: InvocationId,
         method_name: String,
-        input: SchemaValue,
+        input: AgentMethodInput,
+        allow_streams: bool,
         invocation_context: InvocationContextStack,
         caller: Caller,
         scope_card: Option<ScopeCard>,
@@ -106,7 +108,8 @@ pub enum AgentInvocationPayload {
     },
     AgentMethod {
         method_name: String,
-        input: SchemaValue,
+        input: AgentMethodInput,
+        allow_streams: bool,
         caller: Caller,
         scope_card: Option<ScopeCard>,
     },
@@ -154,20 +157,23 @@ impl AgentInvocationPayload {
                 Self::AgentMethod {
                     method_name,
                     input,
+                    allow_streams,
                     caller,
                     scope_card,
                 },
                 Self::AgentMethod {
                     method_name: other_method,
                     input: other_input,
+                    allow_streams: other_allow_streams,
                     caller: other_caller,
                     scope_card: other_card,
                 },
             ) => {
                 method_name == other_method
+                    && allow_streams == other_allow_streams
                     && caller == other_caller
                     && scope_card == other_card
-                    && schema_value_same_request(input, other_input)
+                    && input == other_input
             }
             (
                 Self::ExternalTool {
@@ -491,12 +497,14 @@ impl AgentInvocation {
             AgentInvocationPayload::AgentMethod {
                 method_name,
                 input,
+                allow_streams,
                 caller,
                 scope_card,
             } => Self::AgentMethod {
                 idempotency_key,
                 method_name,
                 input,
+                allow_streams,
                 invocation_context,
                 caller,
                 scope_card,
@@ -573,6 +581,7 @@ impl AgentInvocation {
                 idempotency_key,
                 method_name,
                 input,
+                allow_streams,
                 invocation_context,
                 caller,
                 scope_card,
@@ -581,6 +590,7 @@ impl AgentInvocation {
                 AgentInvocationPayload::AgentMethod {
                     method_name,
                     input,
+                    allow_streams,
                     caller,
                     scope_card,
                 },
@@ -875,7 +885,8 @@ mod request_equality_tests {
             },
             AgentInvocationPayload::AgentMethod {
                 method_name: "run".to_string(),
-                input: value.clone(),
+                input: value.clone().try_into().unwrap(),
+                allow_streams: true,
                 caller: Caller::anonymous(),
                 scope_card: None,
             },
@@ -901,9 +912,12 @@ mod request_equality_tests {
                     },
                     AgentInvocationPayload::AgentMethod {
                         method_name: "run".to_string(),
+                        allow_streams: false,
                         input: SchemaValue::Tuple {
                             elements: Vec::new(),
-                        },
+                        }
+                        .try_into()
+                        .unwrap(),
                         caller: caller.clone(),
                         scope_card: None,
                     },

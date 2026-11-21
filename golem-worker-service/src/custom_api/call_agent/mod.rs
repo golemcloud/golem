@@ -23,11 +23,11 @@ use self::cache_headers::{
 pub(super) use self::parameter_parsing::validate_query_parameters;
 use self::response_mapping::interpret_agent_response;
 use super::RichRequest;
+use super::RouteExecutionResult;
 use super::cache_headers::{CacheRouteKind, add_vary_headers, apply_response_cache_headers};
 use super::error::RequestHandlerError;
 use super::model::ResponseBody;
 use super::route_resolver::ResolvedRouteEntry;
-use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::{AgentBinding, WorkerService};
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
@@ -36,17 +36,10 @@ use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey,
 use golem_common::model::caller::{Caller, Principal, UserPrincipal};
 use golem_common::model::caller::{Claims, Pair};
 use golem_common::model::{AgentFingerprint, AgentId, InvocationRequestKey, OwnedAgentId};
-use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
-use golem_common::schema::validation::validate_value;
-use golem_common::schema::{
-    BinaryValuePayload, FieldSource, SchemaType, SchemaValue, TextValuePayload, TypedSchemaValue,
-};
-use golem_service_base::custom_api::parameter_parsing::{
-    HttpParameterError, parse_path_segment_value, parse_query_or_header_value,
-    parse_query_parameter,
-};
+use golem_common::schema::{SchemaValue, TypedSchemaValue};
+use golem_service_base::custom_api::parameter_parsing::parse_path_segment_value;
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, MethodParameter, PhantomSelection, RequestBodySchema,
+    CallAgentBehaviour, ConstructorParameter, MethodParameter, PhantomSelection,
 };
 use golem_service_base::model::auth::AuthCtx;
 use http::{Method, StatusCode};
@@ -121,21 +114,11 @@ impl CallAgentHandler {
             return Ok(not_modified);
         }
 
-        let parsed_body = request.parse_request_body(&behaviour.body).await?;
-
-        let method_params =
-            self.resolve_method_arguments(resolved_route, request, behaviour, parsed_body)?;
+        let method_input = self
+            .capture_method_input(resolved_route, request, behaviour)
+            .await?;
 
         debug!("Invoking agent {agent_id}");
-
-        let method_params_value = SchemaValue::Record {
-            fields: method_params,
-        };
-
-        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
-            method_params_value.try_into().map_err(|error| {
-                anyhow!("method parameters cannot cross the worker boundary: {error}")
-            })?;
 
         let invocation_context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
             parent: None,
@@ -153,7 +136,7 @@ impl CallAgentHandler {
                 &component,
                 &target,
                 Some(behaviour.method_name.clone()),
-                Some(proto_method_parameters),
+                Some(method_input),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
                 request_key,
@@ -343,239 +326,76 @@ impl CallAgentHandler {
             .map_err(|e| RequestHandlerError::AgentResponseTypeMismatch { error: e })
     }
 
-    pub(super) fn resolve_method_arguments(
+    pub(super) async fn capture_method_input(
         &self,
-        resolved_route: &ResolvedRouteEntry,
-        request: &RichRequest,
+        route: &ResolvedRouteEntry,
+        request: &mut RichRequest,
         behaviour: &CallAgentBehaviour,
-        mut body: ParsedRequestBody,
-    ) -> Result<Vec<SchemaValue>, RequestHandlerError> {
-        let query_params = request.query_params();
-        let headers = request.headers();
-
-        let mut values = Vec::with_capacity(behaviour.method_parameters.len());
-        let input_fields: Vec<_> = behaviour
-            .method_input
-            .input_schema
-            .fields()
-            .iter()
-            .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-            .filter(|field| {
-                !matches!(
-                    behaviour.method_input.graph.resolve_ref(&field.schema),
-                    Ok(SchemaType::Stream { .. })
-                )
-            })
-            .collect();
-        if input_fields.len() != behaviour.method_parameters.len() {
-            return Err(RequestHandlerError::invariant_violated(
-                "Method bindings do not match input fields",
-            ));
-        }
-        for field in input_fields {
-            let mut bindings = behaviour
-                .method_parameters
-                .iter()
-                .filter(|parameter| parameter.argument_name() == field.name);
-            let param = bindings.next().ok_or_else(|| {
-                RequestHandlerError::invariant_violated("Method input field has no binding")
-            })?;
-            if bindings.next().is_some() {
-                return Err(RequestHandlerError::invariant_violated(
-                    "Method input field has multiple bindings",
-                ));
-            }
-            let invalid = |error: HttpParameterError| RequestHandlerError::ParameterParsingFailed {
-                name: field.name.clone(),
-                error: Box::new(error.into()),
-            };
-            let value = match param {
+    ) -> Result<golem_common::model::agent::AgentMethodInput, RequestHandlerError> {
+        use golem_common::model::agent::{
+            AgentMethodInput, HttpMethodArgument, HttpMethodArgumentSource, HttpMethodInput,
+        };
+        let mut arguments = Vec::with_capacity(behaviour.method_parameters.len());
+        for parameter in &behaviour.method_parameters {
+            let source = match parameter {
                 MethodParameter::Path {
-                    path_segment_index,
-                    parameter_type,
-                    ..
-                } => {
-                    let raw = resolved_route.captured_path_parameters
-                        [usize::from(*path_segment_index)]
-                    .clone();
-
-                    parse_path_segment_value(raw, parameter_type).map_err(&invalid)?
-                }
-
+                    path_segment_index, ..
+                } => HttpMethodArgumentSource::Path {
+                    path_segment_index: usize::from(*path_segment_index) as u32,
+                    value: route.captured_path_parameters[usize::from(*path_segment_index)].clone(),
+                },
                 MethodParameter::Query {
                     query_parameter_name,
-                    parameter_type,
                     ..
-                } => parse_query_parameter(query_parameter_name, query_params, parameter_type)
-                    .map_err(&invalid)?,
-
-                MethodParameter::Header {
-                    header_name,
-                    parameter_type,
-                    ..
-                } => {
-                    let vals = headers
+                } => HttpMethodArgumentSource::Query {
+                    parameter_name: query_parameter_name.clone(),
+                    entries: request
+                        .query_params()
+                        .iter()
+                        .filter(|(name, _)| {
+                            *name == query_parameter_name
+                                || name
+                                    .strip_prefix(query_parameter_name.as_str())
+                                    .is_some_and(|suffix| suffix.starts_with('['))
+                        })
+                        .map(|(name, values)| (name.clone(), values.clone()))
+                        .collect(),
+                },
+                MethodParameter::Header { header_name, .. } => HttpMethodArgumentSource::Header {
+                    header_name: header_name.clone(),
+                    values: request
+                        .headers()
                         .get_all(header_name)
                         .iter()
-                        .map(|h| {
-                            h.to_str().map(String::from).map_err(|_| {
+                        .map(|value| {
+                            value.to_str().map(str::to_owned).map_err(|_| {
                                 RequestHandlerError::HeaderIsNotAscii {
                                     header_name: header_name.clone(),
                                 }
                             })
                         })
-                        .collect::<Result<Vec<_>, _>>()?;
-
-                    parse_query_or_header_value(&vals, parameter_type).map_err(&invalid)?
+                        .collect::<Result<_, _>>()?,
+                },
+                MethodParameter::JsonObjectBodyField { field_name, .. } => {
+                    HttpMethodArgumentSource::JsonProperty {
+                        property_name: field_name.clone(),
+                    }
                 }
-
-                MethodParameter::JsonObjectBodyField { field_name, .. } => match &body {
-                    ParsedRequestBody::JsonBody(SchemaValue::Record { fields }) => {
-                        let RequestBodySchema::JsonBody { expected } = &behaviour.body else {
-                            return Err(RequestHandlerError::invariant_violated(
-                                "JSON body parameter used but no JSON body schema",
-                            ));
-                        };
-                        let SchemaType::Record {
-                            fields: body_fields,
-                            ..
-                        } = expected
-                            .graph
-                            .resolve_ref(&expected.graph.root)
-                            .map_err(|_| {
-                                RequestHandlerError::invariant_violated(
-                                    "JSON body schema reference is invalid",
-                                )
-                            })?
-                        else {
-                            return Err(RequestHandlerError::invariant_violated(
-                                "JSON body schema is not a record",
-                            ));
-                        };
-                        body_fields
-                            .iter()
-                            .position(|field| &field.name == field_name)
-                            .and_then(|index| fields.get(index))
-                            .cloned()
-                            .ok_or_else(|| {
-                                RequestHandlerError::invariant_violated(
-                                    "JSON body property is missing from parsed body",
-                                )
-                            })?
-                    }
-
-                    ParsedRequestBody::JsonBody(_) => {
-                        return Err(RequestHandlerError::invariant_violated(
-                            "Inconsistent API definition: JSON field parameter but body is not an object",
-                        ));
-                    }
-
-                    _ => {
-                        return Err(RequestHandlerError::invariant_violated(
-                            "JSON body parameter used but no JSON body schema",
-                        ));
-                    }
-                },
-
-                MethodParameter::UnstructuredBinaryBody { .. } => match &mut body {
-                    ParsedRequestBody::UnstructuredBinary(binary_source) => {
-                        let binary_source = binary_source.take().ok_or_else(|| {
-                            RequestHandlerError::invariant_violated(
-                                "Parsed body was already consumed",
-                            )
-                        })?;
-
-                        let raw = SchemaValue::Binary(BinaryValuePayload {
-                            bytes: binary_source.data,
-                            mime_type: binary_source.mime_type,
-                        });
-                        // The field schema is either the canonical unstructured
-                        // wrapper (raw body -> `inline` case; DA: url-referenced
-                        // request bodies are not accepted) or a bare `Binary`
-                        // rich scalar (raw value as-is).
-                        wrap_unstructured_body_value(&behaviour.body, raw)?
-                    }
-
-                    _ => {
-                        return Err(RequestHandlerError::invariant_violated(
-                            "Binary body parameter used but no binary body schema",
-                        ));
-                    }
-                },
-
-                MethodParameter::UnstructuredTextBody { .. } => match &mut body {
-                    ParsedRequestBody::UnstructuredText(text_source) => {
-                        let text_source = text_source.take().ok_or_else(|| {
-                            RequestHandlerError::invariant_violated(
-                                "Parsed body was already consumed",
-                            )
-                        })?;
-
-                        let raw = SchemaValue::Text(TextValuePayload {
-                            text: text_source.data,
-                            language: text_source
-                                .text_type
-                                .map(|text_type| text_type.language_code),
-                        });
-                        // The field schema is either the canonical unstructured
-                        // wrapper (raw body -> `inline` case; DA: url-referenced
-                        // request bodies are not accepted) or a bare `Text` rich
-                        // scalar (raw value as-is).
-                        wrap_unstructured_body_value(&behaviour.body, raw)?
-                    }
-
-                    _ => {
-                        return Err(RequestHandlerError::invariant_violated(
-                            "Text body parameter used but no text body schema",
-                        ));
-                    }
-                },
+                MethodParameter::UnstructuredBinaryBody { .. } => {
+                    HttpMethodArgumentSource::BinaryBody
+                }
+                MethodParameter::UnstructuredTextBody { .. } => HttpMethodArgumentSource::TextBody,
             };
-            if matches!(
-                param,
-                MethodParameter::Path { .. }
-                    | MethodParameter::Query { .. }
-                    | MethodParameter::Header { .. }
-            ) {
-                validate_value(&behaviour.method_input.graph, &field.schema, &value).map_err(
-                    |errors| RequestHandlerError::InvalidParameter {
-                        name: field.name.clone(),
-                        error: errors
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    },
-                )?;
-            }
-
-            values.push(value);
+            arguments.push(HttpMethodArgument {
+                argument_name: parameter.argument_name().to_owned(),
+                source,
+            });
         }
-
-        Ok(values)
+        let body = request.capture_method_body(&behaviour.body).await?;
+        HttpMethodInput::capture(arguments, body)
+            .map(AgentMethodInput::Http)
+            .map_err(|error| anyhow!(error).into())
     }
-}
-
-/// Build the method-input value for a raw unstructured request body, wrapping
-/// the decoded `Text` / `Binary` value in the canonical `inline` case when the
-/// bound field schema is an unstructured `variant { inline, url }` wrapper, or
-/// passing it through unchanged for a bare `Text` / `Binary` rich scalar.
-fn wrap_unstructured_body_value(
-    body_schema: &RequestBodySchema,
-    raw: SchemaValue,
-) -> Result<SchemaValue, RequestHandlerError> {
-    let expected = match body_schema {
-        RequestBodySchema::BinaryBody { expected } | RequestBodySchema::TextBody { expected } => {
-            expected
-        }
-        _ => {
-            return Err(RequestHandlerError::invariant_violated(
-                "Unstructured body parameter used but body schema is not a text/binary body",
-            ));
-        }
-    };
-    wrap_unstructured_inline_for_schema(&expected.graph, &expected.graph.root, raw)
-        .map_err(|err| anyhow!("Failed to build unstructured body value: {err}").into())
 }
 
 /// HTTP methods for which the worker-service emits read-only cache headers
@@ -713,7 +533,7 @@ mod tests {
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
     use golem_common::model::agent::AgentMode;
     use golem_common::schema::{InputSchema, SchemaGraph, SchemaType};
-    use golem_service_base::custom_api::{CompiledInputSchema, PathSegmentType};
+    use golem_service_base::custom_api::{CompiledInputSchema, PathSegmentType, RequestBodySchema};
     use test_r::test;
 
     fn oidc_session(issuer: &str, subject: &str) -> crate::custom_api::model::OidcSession {
@@ -931,16 +751,23 @@ mod tests {
                 parameter_type: ty,
             }];
             for (query, valid) in [(good, true), (bad, false)] {
-                let request = RichRequest::new(
+                let mut request = RichRequest::new(
                     poem::Request::builder()
                         .uri(format!("/?{query}").parse().unwrap())
                         .finish(),
                 );
-                let result = handler.resolve_method_arguments(
-                    &route,
-                    &request,
-                    &behaviour,
-                    ParsedRequestBody::Unused,
+                let captured = handler
+                    .capture_method_input(&route, &mut request, &behaviour)
+                    .await
+                    .unwrap();
+                let golem_common::model::agent::AgentMethodInput::Http(captured) = captured else {
+                    panic!("HTTP capture returned a different carrier")
+                };
+                let result = golem_service_base::custom_api::method_input::decode_http_method_input(
+                    &captured,
+                    &behaviour.method_input.graph,
+                    &behaviour.method_input.input_schema,
+                    |_, _| Err("this method has no streams".into()),
                 );
                 assert_eq!(result.is_ok(), valid, "{query}");
                 if let Err(error) = result {

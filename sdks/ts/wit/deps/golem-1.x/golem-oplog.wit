@@ -452,6 +452,9 @@ interface oplog {
     record agent-method-invocation-parameters {
         invocation-id: uuid,
         method-name: string,
+        /// Component-independent original-method-input diagnostic envelope, not the
+        /// executed method's input schema. Includes rejected captured JSON/HTTP fields;
+        /// native host capabilities are redacted before encoding.
         function-input: typed-schema-value,
         trace-id: string,
         trace-states: list<string>,

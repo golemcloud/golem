@@ -33,6 +33,76 @@ use super::{
 };
 use golem_common::model::caller::Caller;
 
+pub(crate) fn capture_session_acceptance(
+    request: &InvocationStart,
+    live_join_buffer_events: usize,
+) -> Result<golem_common::model::durable_stream::StreamSessionAcceptance, WorkerExecutorError> {
+    let transport_stream_ids = request
+        .input
+        .as_ref()
+        .map(golem_common::schema::streaming::preflight_proto_recursive_stream_value)
+        .transpose()
+        .map_err(WorkerExecutorError::invalid_request)?
+        .unwrap_or_default();
+    Ok(
+        golem_common::model::durable_stream::StreamSessionAcceptance {
+            public_session_id: String::new(),
+            route_scope: None,
+            expiry_policy: golem_common::model::durable_stream::StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
+            effective_identity: effective_session_identity(&request.auth_ctx, &request.caller)?,
+            execution_config: session_execution_config(request)?,
+            live_join_buffer_events: u32::try_from(live_join_buffer_events).map_err(|_| {
+                WorkerExecutorError::invalid_request("invalid live join buffer capacity")
+            })?,
+            transport_stream_ids,
+        },
+    )
+}
+
+fn session_execution_config(request: &InvocationStart) -> Result<Vec<u8>, WorkerExecutorError> {
+    let has_stdout = request
+        .external_tool
+        .as_ref()
+        .is_some_and(|tool| tool.stdout);
+    let has_stderr = request
+        .external_tool
+        .as_ref()
+        .is_some_and(|tool| tool.stderr);
+    let mut execution = request.clone();
+    execution.target = None;
+    execution.constructor = None;
+    execution.component_id = None;
+    execution.method_name = None;
+    execution.input = None;
+    execution.captured_method_input = None;
+    execution.external_tool = None;
+    execution.idempotency_key = None;
+    execution.auth_ctx = None;
+    execution.caller = None;
+    execution.environment_id = None;
+    execution.component_owner_account_id = None;
+    execution.attempt_id = None;
+    execution.expected_callee_fingerprint = None;
+    execution.durable_input_mappings.clear();
+    let mut environment = execution.context.as_mut().map(|context| {
+        context.tracing = None;
+        std::mem::take(&mut context.env)
+            .into_iter()
+            .collect::<Vec<_>>()
+    });
+    if let Some(environment) = environment.as_mut() {
+        environment.sort();
+    }
+    golem_common::serialization::serialize(&(
+        execution.encode_to_vec(),
+        environment,
+        has_stdout,
+        has_stderr,
+    ))
+    .map_err(WorkerExecutorError::runtime)
+}
+
 pub(crate) fn decode_invocation_input(
     input: golem_schema::proto::golem::schema::SchemaValue,
 ) -> Result<SchemaValue, String> {
@@ -41,6 +111,38 @@ pub(crate) fn decode_invocation_input(
             stream_id,
         )))
     })
+}
+
+pub(crate) fn capture_method_input(
+    request: &InvocationStart,
+) -> Result<golem_common::model::agent::AgentMethodInput, WorkerExecutorError> {
+    if let Some(captured) = &request.captured_method_input {
+        if request.input.is_some() || !request.durable_input_mappings.is_empty() {
+            return Err(WorkerExecutorError::invalid_request(
+                "captured method input cannot be combined with native input or mappings",
+            ));
+        }
+        return golem_common::serialization::decode(captured)
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()));
+    }
+    let input = request
+        .input
+        .clone()
+        .ok_or_else(|| WorkerExecutorError::invalid_request("invocation start has no input"))?;
+    let mappings = request
+        .durable_input_mappings
+        .iter()
+        .cloned()
+        .map(durable_stream_mapping_from_proto)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(WorkerExecutorError::invalid_request)?;
+    let foreign = mappings
+        .into_iter()
+        .map(|mapping| (mapping.transport_stream_id, mapping.handle))
+        .collect();
+    let (input, _) = golem_common::model::agent::NativeMethodInput::capture(input, foreign)
+        .map_err(WorkerExecutorError::invalid_request)?;
+    Ok(golem_common::model::agent::AgentMethodInput::Native(input))
 }
 
 /// `callee` is the agent that the request's target resolved to, and `callee_agent_type` its
@@ -99,10 +201,18 @@ pub(crate) fn build_durable_streaming_request(
         ),
         _ => None,
     };
+    let method_input = if matches!(invocation, AgentInvocation::AgentMethod { .. }) {
+        Some(
+            decode_invocation_input(request.input.clone().ok_or_else(|| {
+                WorkerExecutorError::invalid_request("invocation start has no input")
+            })?)
+            .map_err(WorkerExecutorError::invalid_request)?,
+        )
+    } else {
+        None
+    };
     let (graph, input_root, invocation_input, target, has_stdout, has_stderr) = match &invocation {
-        AgentInvocation::AgentMethod {
-            method_name, input, ..
-        } => {
+        AgentInvocation::AgentMethod { method_name, .. } => {
             let callee_agent_type = callee_agent_type
                 .ok_or_else(|| WorkerExecutorError::invalid_request("agent type not found"))?;
             let agent_type = component_metadata
@@ -129,7 +239,7 @@ pub(crate) fn build_durable_streaming_request(
             (
                 &agent_type.schema,
                 root,
-                input,
+                method_input.as_ref().expect("method input was decoded"),
                 PersistedInvocationTarget::AgentMethod {
                     method_name: method_name.clone(),
                 },
@@ -420,40 +530,7 @@ pub(crate) fn build_durable_streaming_request(
     .encode_to_vec();
     let input_schema = Arc::new(graph.clone());
 
-    let mut execution = request.clone();
-    execution.target = None;
-    execution.constructor = None;
-    execution.component_id = None;
-    execution.method_name = None;
-    execution.input = None;
-    execution.external_tool = None;
-    execution.idempotency_key = None;
-    execution.auth_ctx = None;
-    execution.caller = None;
-    execution.environment_id = None;
-    execution.component_owner_account_id = None;
-    execution.attempt_id = None;
-    execution.expected_callee_fingerprint = None;
-    execution.durable_input_mappings.clear();
-    // The first accepted invocation retains its tracing context; a new attempt's spans do
-    // not change its logical identity. Environment values do, but protobuf HashMap encoding
-    // is not canonical, so encode them separately in key order.
-    let mut environment = execution.context.as_mut().map(|context| {
-        context.tracing = None;
-        std::mem::take(&mut context.env)
-            .into_iter()
-            .collect::<Vec<_>>()
-    });
-    if let Some(environment) = environment.as_mut() {
-        environment.sort();
-    }
-    let execution_config = golem_common::serialization::serialize(&(
-        execution.encode_to_vec(),
-        environment,
-        has_stdout,
-        has_stderr,
-    ))
-    .map_err(WorkerExecutorError::runtime)?;
+    let execution_config = session_execution_config(request)?;
     let effective_identity = effective_session_identity(&request.auth_ctx, &request.caller)?;
     let attempt = StartAttemptDescriptor {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -490,7 +567,7 @@ pub(crate) fn build_durable_streaming_request(
     })
 }
 
-pub(super) fn resumed_input_schema(
+pub(crate) fn resumed_input_schema(
     prepared: &golem_common::model::durable_stream::StreamSessionPreparedRecord,
 ) -> Result<(SchemaGraph, Vec<(u64, SchemaType)>), WorkerExecutorError> {
     let typed = golem_schema::proto::golem::schema::TypedSchemaValue::decode(
@@ -720,7 +797,7 @@ pub(super) fn require_expected_callee_fingerprint(
     Ok(())
 }
 
-fn stream_element_schema<'a>(
+pub(crate) fn stream_element_schema<'a>(
     graph: &'a SchemaGraph,
     root: &'a SchemaType,
     path: &[StreamValuePathStep],
@@ -798,21 +875,6 @@ fn stream_element_schema<'a>(
 
 fn replace_streams_for_persistence(invocation: AgentInvocation) -> AgentInvocation {
     match invocation {
-        AgentInvocation::AgentMethod {
-            idempotency_key,
-            method_name,
-            input,
-            invocation_context,
-            caller,
-            scope_card,
-        } => AgentInvocation::AgentMethod {
-            idempotency_key,
-            method_name,
-            input: erase_streams(input),
-            invocation_context,
-            caller,
-            scope_card,
-        },
         AgentInvocation::ExternalTool {
             idempotency_key,
             tool_name,

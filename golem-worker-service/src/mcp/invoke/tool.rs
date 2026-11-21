@@ -117,7 +117,14 @@ pub async fn invoke_tool(
                 &component,
                 &target,
                 Some(mcp_tool.method.name.clone()),
-                Some(proto_method_parameters),
+                Some(golem_common::model::agent::AgentMethodInput::Native(
+                    golem_common::model::agent::NativeMethodInput::capture(
+                        proto_method_parameters,
+                        Vec::new(),
+                    )
+                    .map_err(crate::service::worker::WorkerServiceError::TypeChecker)?
+                    .0,
+                )),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
                 request_key,

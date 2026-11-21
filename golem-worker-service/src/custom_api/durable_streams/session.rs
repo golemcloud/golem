@@ -33,10 +33,6 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     StreamSessionExpiryPolicy, StreamSlotReadAdmission,
 };
 use golem_common::model::{AgentId, IdempotencyKey};
-use golem_common::schema::stream::SchemaValueStream;
-use golem_common::schema::{
-    FieldSource, SchemaType, SchemaValue, schema_value_to_proto_with_streams,
-};
 use golem_service_base::custom_api::{
     CallAgentBehaviour, DurableStreamRepresentation, DurableStreamSlot, MethodParameter,
 };
@@ -59,44 +55,10 @@ impl DurableStreamsHandler {
         creation_intent: StreamSessionCreationIntent,
         expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<CreateStreamSessionSuccess, RequestHandlerError> {
-        let body = request.parse_request_body(&behaviour.body).await?;
-        let args = self
+        let input = self
             .call_agent
-            .resolve_method_arguments(route, request, behaviour, body)?;
-        let mut args = args.into_iter();
-        let mut transport_id = 0u64;
-        let fields = behaviour
-            .method_input
-            .input_schema
-            .fields()
-            .iter()
-            .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-            .map(|field| {
-                if matches!(
-                    behaviour
-                        .method_input
-                        .graph
-                        .resolve_ref(&field.schema)
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))?,
-                    SchemaType::Stream { .. }
-                ) {
-                    let value =
-                        SchemaValue::Stream(SchemaValueStream::from_host_endpoint(transport_id));
-                    transport_id += 1;
-                    Ok(value)
-                } else {
-                    args.next()
-                        .ok_or_else(|| anyhow::anyhow!("missing non-stream method argument"))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if args.next().is_some() {
-            return Err(anyhow::anyhow!("too many non-stream method arguments").into());
-        }
-        let input = schema_value_to_proto_with_streams(SchemaValue::Record { fields }, |stream| {
-            stream.take_host_endpoint::<u64>()
-        })
-        .map_err(|e| anyhow::anyhow!("invalid durable stream input: {e}"))?;
+            .capture_method_input(route, request, behaviour)
+            .await?;
         let caller = caller_from_request(request)?;
         let mut start = InvocationStart {
             target: None,
@@ -104,7 +66,11 @@ impl DurableStreamsHandler {
             component_id: None,
             method_name: Some(behaviour.method_name.clone()),
             external_tool: None,
-            input: Some(input),
+            captured_method_input: Some(
+                golem_common::serialization::serialize(&input).map_err(anyhow::Error::msg)?,
+            ),
+            allow_streams: true,
+            input: None,
             idempotency_key: Some(IdempotencyKey::new(session.to_owned()).into()),
             request_key: Some(
                 golem_common::model::invocation_id::InvocationRequestKey::RouteSession {
@@ -387,7 +353,7 @@ impl DurableStreamsHandler {
             return Ok(response(StatusCode::NOT_FOUND));
         };
         let mut streams = Vec::new();
-        let mut closed = true;
+        let mut closed = !read.queued;
         for slot in &read.slots {
             let declared_slot = behaviour
                 .durable_streams

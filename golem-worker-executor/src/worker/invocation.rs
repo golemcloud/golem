@@ -59,6 +59,56 @@ pub(crate) const INVOCATION_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 impl<Ctx: WorkerCtx> super::Worker<Ctx> {
     pub(crate) async fn start_pending_invocation(
+        self: &std::sync::Arc<Self>,
+        idempotency_key: InvocationId,
+        payload: golem_common::model::oplog::OplogPayload<
+            golem_common::model::AgentInvocationPayload,
+        >,
+        context: golem_common::model::invocation_context::InvocationContextStack,
+        wallet_pin: golem_common::model::card::InvocationWalletPin,
+        selected_preparation: Option<(super::DurableStreamingInvocationRequest, Option<String>)>,
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+        if let Some((request, _)) = &selected_preparation {
+            let memory = golem_common::serialization::serialize(&(
+                &payload,
+                &request.attempt,
+                &request.foreign_mappings,
+            ))
+            .map_err(WorkerExecutorError::runtime)?
+            .len();
+            let worker = self.clone();
+            return self
+                .durable_stream_producer()
+                .await?
+                .run_admitted(None, memory, false, move |_, admission| async move {
+                    Ok::<_, crate::durable_host::durable_stream::SessionError>(
+                        worker
+                            .start_pending_invocation_owned(
+                                idempotency_key,
+                                payload,
+                                context,
+                                wallet_pin,
+                                selected_preparation,
+                                Some(admission),
+                            )
+                            .await,
+                    )
+                })
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        }
+        self.start_pending_invocation_owned(
+            idempotency_key,
+            payload,
+            context,
+            wallet_pin,
+            None,
+            None,
+        )
+        .await
+    }
+
+    async fn start_pending_invocation_owned(
         &self,
         idempotency_key: InvocationId,
         payload: golem_common::model::oplog::OplogPayload<
@@ -66,9 +116,24 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
         >,
         context: golem_common::model::invocation_context::InvocationContextStack,
         wallet_pin: golem_common::model::card::InvocationWalletPin,
+        selected_preparation: Option<(super::DurableStreamingInvocationRequest, Option<String>)>,
+        admission: Option<
+            std::sync::Arc<crate::durable_host::durable_stream::StreamWriteAdmission>,
+        >,
     ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
         use crate::services::oplog::{CommitLevel, OplogOps};
 
+        let session_guard = if selected_preparation.is_some() {
+            let producer = self.durable_stream_producer().await?;
+            let key = producer.qualify_session(
+                &golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
+                    idempotency_key,
+                ),
+            );
+            Some(producer.session_lock(&key).lock_owned().await)
+        } else {
+            None
+        };
         // The running loop must not wait for a stopping instance to join this loop.
         let instance = self.instance.lock().await;
         if !matches!(instance.state(), super::WorkerInstance::Running(_))
@@ -83,6 +148,121 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
             .any(|pending| pending.has_idempotency_key(&idempotency_key))
         {
             return Ok(None);
+        }
+        if session_guard.is_some()
+            && self
+                .durable_stream_session_status(&idempotency_key)
+                .await?
+                .is_some_and(|status| {
+                    status.expired
+                        || status.cancellation_requested
+                        || status.expiry_deadline_millis.is_some_and(|deadline| {
+                            deadline <= golem_common::model::Timestamp::now_utc().to_millis()
+                        })
+                })
+        {
+            self.add_and_commit_oplog_internal(
+                &instance,
+                golem_common::model::oplog::OplogEntry::cancel_pending_invocation(idempotency_key),
+                Some(super::WorkerCommand::WorkAvailable),
+            )
+            .await?;
+            return Ok(None);
+        }
+        if let Some((request, route_scope)) = selected_preparation {
+            use golem_common::model::durable_stream::{
+                DURABLE_STREAM_FORMAT_VERSION, StreamBindingRecord, StreamRegistrationInvocation,
+                StreamSessionPreparedRecord, StreamTopologyPreparedRecord,
+            };
+            let producer = self.durable_stream_producer().await?;
+            let streams = crate::durable_host::durable_session::StreamSession::new(
+                producer.clone(),
+                self.oplog.clone(),
+                StreamRegistrationInvocation::Local(idempotency_key),
+                std::iter::empty(),
+            );
+            let topologies = request
+                .foreign_mappings
+                .iter()
+                .filter(|mapping| !producer.owns_handle_identity(&mapping.handle))
+                .map(|mapping| {
+                    Ok(StreamTopologyPreparedRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: request.attempt.session_key.clone(),
+                        attachment: streams
+                            .attachment_key(&mapping.handle, producer.attachment_epoch_floor())
+                            .map_err(|error| {
+                                error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            })?,
+                        mapping: mapping.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>, WorkerExecutorError>>()?;
+            let foreign = request
+                .foreign_mappings
+                .iter()
+                .map(StreamBindingRecord::foreign)
+                .collect::<Vec<_>>();
+            let mut attempt = request.attempt;
+            attempt.invocation.stream_handles = request
+                .foreign_mappings
+                .iter()
+                .map(|mapping| mapping.handle.clone())
+                .collect();
+            let started = self.oplog.agent_invocation_started_entry_from_payload(
+                idempotency_key,
+                payload,
+                context,
+                wallet_pin,
+            );
+            let admission = admission.expect("selected preparation holds producer admission");
+            admission
+                .submit(move |producer, write_context| async move {
+                    producer
+                        .prepare_session(
+                            Some(&write_context),
+                            request.registrations,
+                            topologies,
+                            started,
+                            request.acceptance_committed,
+                            move |bindings| StreamSessionPreparedRecord {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: idempotency_key,
+                                public_session_id: request.public_session_id,
+                                route_scope,
+                                expiry_policy: request.expiry_policy,
+                                expiry_deadline_millis: request.expiry_deadline_millis,
+                                stream_mappings: if foreign.is_empty() {
+                                    bindings
+                                } else {
+                                    foreign
+                                },
+                                attempt,
+                            },
+                        )
+                        .await
+                })
+                .await
+                .map_err(
+                    |error: crate::durable_host::durable_stream::StreamStoreError| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    },
+                )?;
+            drop(instance);
+            drop(session_guard);
+            admission
+                .wait_published()
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+            let status = self.get_repaired_status().await?;
+            return status
+                .current_invocation_started_at
+                .map(Some)
+                .ok_or_else(|| {
+                    WorkerExecutorError::runtime(
+                        "committed streaming start is absent from agent status",
+                    )
+                });
         }
         let index = self
             .oplog
@@ -122,7 +302,7 @@ pub(crate) async fn with_invocation_stack<F: std::future::Future>(future: F) -> 
 
 /// Admits a pending invocation before executing it. `None` means admission declined to start.
 pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
-    lowered: LoweredInvocation,
+    mut lowered: LoweredInvocation,
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     invocation: crate::worker::HydratedInvocation,
@@ -130,6 +310,16 @@ pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
 ) -> Result<Option<InvokeResult>, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
+    let worker = store.data().get_public_state().worker();
+    let original = invocation.invocation.clone();
+    let needs_binding_restore = if matches!(original, AgentInvocation::AgentMethod { .. }) {
+        worker
+            .prepared_stream_session(original.idempotency_key().expect("method invocation key"))
+            .await?
+            .is_none()
+    } else {
+        false
+    };
     let started = async {
         store
             .data_mut()
@@ -139,9 +329,39 @@ pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
     .instrument(span!(Level::INFO, "on_agent_invocation_started"))
     .await;
     match started {
-        Ok(true) => invoke_observed_and_traced(lowered, &mut store, instance, stream_session)
-            .await
-            .map(Some),
+        Ok(true) => {
+            if needs_binding_restore
+                && worker
+                    .prepared_stream_session(
+                        original.idempotency_key().expect("method invocation key"),
+                    )
+                    .await?
+                    .is_some()
+            {
+                let execution_input = worker
+                    .rehydrate_durable_streaming_input(&original)
+                    .await
+                    .map_err(|error| {
+                        WorkerExecutorError::runtime(format!(
+                            "committed input reconstruction failed: {error}"
+                        ))
+                    })?;
+                lowered = lower_invocation(
+                    original,
+                    &store.data().component_metadata().metadata,
+                    &worker.owner_context,
+                    execution_input,
+                )
+                .map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "committed invocation lowering failed: {error}"
+                    ))
+                })?;
+            }
+            invoke_observed_and_traced(lowered, &mut store, instance, stream_session)
+                .await
+                .map(Some)
+        }
         Ok(false) => {
             store.data_mut().on_agent_invocation_finished().await;
             Ok(None)
@@ -2312,6 +2532,7 @@ pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
     owner_context: &ResolvedOwnerContext,
+    execution_input: Option<TypedSchemaValue>,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
     let agent_id = owner_context.agent();
     match invocation {
@@ -2334,14 +2555,11 @@ pub fn lower_invocation(
         AgentInvocation::AgentMethod {
             method_name,
             input,
+            allow_streams,
             caller,
             ..
         } => {
             let agent_type = resolve_agent_type(component_metadata, agent_id)?;
-            // The method is resolved only to classify read-only methods; the
-            // input carrier is already the schema-native parameter record.
-            // Encoding to the wire tree (which may mint owned capability
-            // handles) is deferred to `materialize_call`.
             let method = agent_type
                 .methods
                 .iter()
@@ -2353,6 +2571,22 @@ pub fn lower_invocation(
                     ))
                 })?;
 
+            if matches!(&input, golem_common::model::agent::AgentMethodInput::Native(input) if input.is_external_rest())
+                && let Some(output) = method.output_schema.schema()
+                && let Some(occurrence) =
+                    golem_schema::schema::host_managed::find_host_managed_type(
+                        &agent_type.schema,
+                        output,
+                    )
+                    .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?
+            {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Agent method output schema contains host-managed capability {} at {}; this method cannot be invoked through external REST",
+                    occurrence.kind.kind_name(),
+                    occurrence.path,
+                )));
+            }
+            let input = decode_method_input(&input, agent_type, method, execution_input.as_ref())?;
             let read_only_method = method.read_only.is_some().then(|| method_name.clone());
             let stream_metadata = validate_method_invocation(
                 component_metadata,
@@ -2361,6 +2595,11 @@ pub fn lower_invocation(
                 &input,
                 &method_name,
             )?;
+            if !allow_streams && stream_metadata.uses_streams() {
+                return Err(WorkerExecutorError::invalid_request(
+                    "the selected method requires a streaming invocation",
+                ));
+            }
 
             let expected_output = Box::new(ExpectedInvokeOutput {
                 graph: agent_type.schema.clone(),
@@ -2399,7 +2638,7 @@ pub fn lower_invocation(
                 activation,
                 tool_name,
                 command_path,
-                input,
+                input: execution_input.map(Box::new).unwrap_or(input),
                 stdin,
                 stdout,
                 stderr,
@@ -2470,6 +2709,182 @@ pub fn lower_invocation(
             })
         }
     }
+}
+
+pub(crate) fn decode_method_input(
+    input: &golem_common::model::agent::AgentMethodInput,
+    agent_type: &AgentTypeSchema,
+    method: &AgentMethodSchema,
+    prepared: Option<&TypedSchemaValue>,
+) -> Result<SchemaValue, WorkerExecutorError> {
+    use crate::grpc::stream_element_schema;
+    use golem_common::model::agent::AgentMethodInput;
+    use golem_common::model::durable_stream::StreamValuePathStep;
+    use golem_common::model::invocation_session_public::PublicErrorCode;
+    use golem_common::schema::public_json::{
+        PublicSchemaValueError, PublicStreamReferencePolicy, decode_public_schema_value,
+    };
+    use golem_common::schema::streaming::encode_recursive_stream_value_with_schema;
+    use golem_common::schema::{FieldSource, NamedFieldType};
+    use golem_schema::schema::fingerprint::schema_fingerprint_v1;
+
+    let graph = SchemaGraph {
+        defs: agent_type.schema.defs.clone(),
+        root: SchemaType::record(
+            method
+                .input_schema
+                .fields()
+                .iter()
+                .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                .map(|field| NamedFieldType {
+                    name: field.name.clone(),
+                    body: field.schema.clone(),
+                    metadata: field.metadata.clone(),
+                })
+                .collect(),
+        ),
+    };
+    let mut bindings = Vec::new();
+    if let Some(prepared) = prepared {
+        encode_recursive_stream_value_with_schema(
+            prepared.value(),
+            prepared.graph(),
+            prepared.root_type(),
+            |stream, path| {
+                let element = stream_element_schema(prepared.graph(), prepared.root_type(), path)?;
+                let fingerprint = schema_fingerprint_v1(prepared.graph(), element)
+                    .map_err(|error| error.to_string())?;
+                let ordinal = bindings.len() as u64;
+                let position = if matches!(input, AgentMethodInput::Http(_)) {
+                    let SchemaType::Record { fields, .. } = prepared
+                        .graph()
+                        .resolve_ref(prepared.root_type())
+                        .map_err(|error| error.to_string())?
+                    else {
+                        return Err("recorded HTTP method input is not a record".into());
+                    };
+                    let [StreamValuePathStep::RecordField(index)] = path else {
+                        return Err("recorded HTTP input stream is not an argument".into());
+                    };
+                    let name = &fields[*index as usize].name;
+                    method
+                        .input_schema
+                        .fields()
+                        .iter()
+                        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                        .position(|field| &field.name == name)
+                        .ok_or_else(|| format!("recorded HTTP input stream '{name}' was removed"))?
+                } else {
+                    bindings.len()
+                };
+                bindings.push((stream.clone(), fingerprint, position));
+                Ok(ordinal)
+            },
+        )
+        .map_err(WorkerExecutorError::invalid_request)?;
+    }
+    if matches!(input, AgentMethodInput::Http(_)) {
+        bindings.sort_by_key(|(_, _, position)| *position);
+    }
+    let value = match input {
+        AgentMethodInput::Native(input) => input.decode(|ordinal, _| {
+            if prepared.is_none() {
+                return Ok(
+                    golem_common::schema::stream::SchemaValueStream::from_host_endpoint(
+                        crate::grpc::TransportStreamId(ordinal as u64),
+                    ),
+                );
+            }
+            bindings
+                .get(ordinal)
+                .map(|(stream, _, _)| stream.clone())
+                .ok_or_else(|| "stream-bearing input requires committed execution bindings".into())
+        }),
+        AgentMethodInput::PublicJson(input) => {
+            let json = serde_json::from_str(input.as_str())
+                .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            let mut streams = bindings.iter();
+            let mut ordinal = 0u64;
+            decode_public_schema_value(
+                &graph,
+                &graph.root,
+                &json,
+                PublicStreamReferencePolicy::Provisional,
+                |_, _| {
+                    if prepared.is_none() {
+                        let stream =
+                            golem_common::schema::stream::SchemaValueStream::from_host_endpoint(
+                                crate::grpc::TransportStreamId(ordinal),
+                            );
+                        ordinal += 1;
+                        return Ok(stream);
+                    }
+                    streams
+                        .next()
+                        .map(|(stream, _, _)| stream.clone())
+                        .ok_or_else(|| {
+                            PublicSchemaValueError::new(
+                                PublicErrorCode::ValidationError,
+                                "stream-bearing input requires committed execution bindings",
+                            )
+                        })
+                },
+            )
+            .map_err(|error| error.to_string())
+        }
+        AgentMethodInput::Http(input) => {
+            let mut streams = bindings.iter();
+            let mut ordinal = 0u64;
+            golem_service_base::custom_api::method_input::decode_http_method_input(
+                input,
+                &agent_type.schema,
+                &method.input_schema,
+                |_, _| {
+                    if prepared.is_none() {
+                        let stream =
+                            golem_common::schema::stream::SchemaValueStream::from_host_endpoint(
+                                crate::grpc::TransportStreamId(ordinal),
+                            );
+                        ordinal += 1;
+                        return Ok(stream);
+                    }
+                    streams
+                        .next()
+                        .map(|(stream, _, _)| stream.clone())
+                        .ok_or_else(|| {
+                            "stream-bearing input requires committed execution bindings".into()
+                        })
+                },
+            )
+        }
+    };
+    let value = value.map_err(WorkerExecutorError::invalid_request)?;
+    if !bindings.is_empty() {
+        let mut ordinal = 0;
+        encode_recursive_stream_value_with_schema(&value, &graph, &graph.root, |_, path| {
+            let element = stream_element_schema(&graph, &graph.root, path)?;
+            let fingerprint =
+                schema_fingerprint_v1(&graph, element).map_err(|error| error.to_string())?;
+            if bindings
+                .get(ordinal)
+                .map(|(_, fingerprint, _)| *fingerprint)
+                != Some(fingerprint)
+            {
+                return Err(
+                    "recorded input stream is incompatible with the selected method".into(),
+                );
+            }
+            ordinal += 1;
+            Ok((ordinal - 1) as u64)
+        })
+        .map_err(WorkerExecutorError::invalid_request)?;
+        if ordinal != bindings.len() {
+            return Err(WorkerExecutorError::invalid_request(
+                "selected method does not use every recorded input stream",
+            ));
+        }
+    }
+    Ok(value)
 }
 
 pub fn validate_agent_method_invocation(
@@ -3037,10 +3452,21 @@ mod tests {
     }
 
     fn method_invocation(input: SchemaValue) -> AgentInvocation {
+        let mut ordinal = 0;
+        let proto =
+            golem_common::schema::streaming::encode_recursive_stream_value(&input, |_, _| {
+                let result = ordinal;
+                ordinal += 1;
+                Ok(result)
+            })
+            .unwrap();
+        let (input, _) =
+            golem_common::model::agent::NativeMethodInput::capture(proto, Vec::new()).unwrap();
         AgentInvocation::AgentMethod {
             idempotency_key: InvocationId(Uuid::from_u128(1)),
             method_name: METHOD_NAME.to_string(),
-            input,
+            input: golem_common::model::agent::AgentMethodInput::Native(input),
+            allow_streams: true,
             invocation_context: InvocationContextStack::fresh(),
             caller: Caller::anonymous(),
             scope_card: None,
@@ -3058,10 +3484,276 @@ mod tests {
             method_invocation(input),
             &metadata,
             &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+            None,
         )
         .expect("valid input should lower");
         assert_eq!(lowered.display_name, METHOD_NAME);
         assert!(lowered.read_only_method.is_none());
+    }
+
+    #[test]
+    fn restored_stream_bindings_do_not_replace_the_original_request() {
+        use golem_common::schema::stream::SchemaValueStream;
+
+        let tail = NamedField::user_supplied(
+            "tail",
+            SchemaType::option(SchemaType::list(SchemaType::stream(Some(
+                SchemaType::string(),
+            )))),
+        );
+        let method = AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![
+                NamedField::user_supplied("count", SchemaType::u32()),
+                NamedField::user_supplied("items", SchemaType::stream(Some(SchemaType::u32()))),
+                tail.clone(),
+            ]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: Vec::new(),
+            read_only: None,
+        };
+        let original = method_invocation(SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U32(7),
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(())),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::List {
+                        elements: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                            (),
+                        ))],
+                    })),
+                },
+            ],
+        });
+        let prepared = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(
+                method
+                    .input_schema
+                    .fields()
+                    .iter()
+                    .map(|field| golem_common::schema::NamedFieldType {
+                        name: field.name.clone(),
+                        body: field.schema.clone(),
+                        metadata: field.metadata.clone(),
+                    })
+                    .collect(),
+            )),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::U32(999),
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(42_u64)),
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::List {
+                            elements: vec![SchemaValue::Stream(
+                                SchemaValueStream::from_host_endpoint(91_u64),
+                            )],
+                        })),
+                    },
+                ],
+            },
+        );
+        let mut public_original = original.clone();
+        let AgentInvocation::AgentMethod { input, .. } = &mut public_original else {
+            unreachable!()
+        };
+        *input = golem_common::model::agent::AgentMethodInput::PublicJson(
+            golem_common::model::agent::JsonMethodInput::capture(
+                br#"{"kind":"record","value":{"fields":[
+                    {"kind":"u32","value":7},
+                    {"kind":"stream","value":{"provisionalRef":"00000000-0000-4000-8000-000000000011"}},
+                    {"kind":"option","value":{"inner":{"kind":"list","value":{"elements":[
+                        {"kind":"stream","value":{"provisionalRef":"00000000-0000-4000-8000-000000000012"}}
+                    ]}}}}
+                ]}}"#,
+            )
+            .unwrap(),
+        );
+        for original in [original, public_original] {
+            let metadata = metadata_with_method(method.clone());
+            let lowered = lower_invocation(
+                original.clone(),
+                &metadata,
+                &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+                Some(prepared.clone()),
+            )
+            .unwrap();
+            let LoweredCall::Invoke {
+                input: SchemaValue::Record { fields },
+                ..
+            } = lowered.call
+            else {
+                panic!("expected method input");
+            };
+            assert_eq!(fields[0], SchemaValue::U32(7));
+            let SchemaValue::Stream(stream) = &fields[1] else {
+                panic!("expected restored stream")
+            };
+            assert_eq!(
+                stream
+                    .with_host_endpoint::<u64, _>(|endpoint| *endpoint)
+                    .unwrap(),
+                42
+            );
+            let SchemaValue::Option {
+                inner: Some(nested),
+            } = &fields[2]
+            else {
+                panic!("expected the original optional tail")
+            };
+            let SchemaValue::List { elements } = nested.as_ref() else {
+                panic!("expected the original nested list")
+            };
+            let [SchemaValue::Stream(stream)] = elements.as_slice() else {
+                panic!("expected the second restored stream")
+            };
+            assert_eq!(
+                stream
+                    .with_host_endpoint::<u64, _>(|endpoint| *endpoint)
+                    .unwrap(),
+                91
+            );
+
+            let mut changed = method.clone();
+            changed.input_schema = InputSchema::Parameters(vec![
+                NamedField::user_supplied("count", SchemaType::u32()),
+                NamedField::user_supplied("items", SchemaType::stream(Some(SchemaType::string()))),
+                tail.clone(),
+            ]);
+            let error = lower_invocation(
+                original,
+                &metadata_with_method(changed),
+                &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+                Some(prepared.clone()),
+            )
+            .err()
+            .unwrap();
+            assert!(
+                error
+                    .to_string()
+                    .contains("incompatible with the selected method"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn http_method_input_uses_raw_arguments_and_selected_stream_bindings() {
+        use golem_common::model::agent::{
+            AgentMethodInput, HttpMethodArgument, HttpMethodArgumentSource, HttpMethodBody,
+            HttpMethodInput,
+        };
+        use golem_common::schema::stream::SchemaValueStream;
+
+        let method = AgentMethodSchema {
+            name: METHOD_NAME.to_string(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::Parameters(vec![
+                NamedField::user_supplied("count", SchemaType::u32()),
+                NamedField::user_supplied("items", SchemaType::stream(Some(SchemaType::u32()))),
+                NamedField::user_supplied("labels", SchemaType::stream(Some(SchemaType::string()))),
+            ]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: Vec::new(),
+            read_only: None,
+        };
+        let mut original = method_invocation(SchemaValue::Record { fields: Vec::new() });
+        let AgentInvocation::AgentMethod { input, .. } = &mut original else {
+            unreachable!()
+        };
+        *input = AgentMethodInput::Http(
+            HttpMethodInput::capture(
+                vec![HttpMethodArgument {
+                    argument_name: "count".into(),
+                    source: HttpMethodArgumentSource::Path {
+                        path_segment_index: 3,
+                        value: "7".into(),
+                    },
+                }],
+                HttpMethodBody::Absent,
+            )
+            .unwrap(),
+        );
+        let prepared = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(
+                method
+                    .input_schema
+                    .fields()
+                    .iter()
+                    .map(|field| golem_common::schema::NamedFieldType {
+                        name: field.name.clone(),
+                        body: field.schema.clone(),
+                        metadata: field.metadata.clone(),
+                    })
+                    .collect(),
+            )),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::U32(999),
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(42_u64)),
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(91_u64)),
+                ],
+            },
+        );
+        let owner = ResolvedOwnerContext::Agent(Box::new(agent_id()));
+        let metadata = metadata_with_method(method.clone());
+        let provisional = lower_invocation(original.clone(), &metadata, &owner, None).unwrap();
+        let LoweredCall::Invoke {
+            input: SchemaValue::Record { fields },
+            ..
+        } = provisional.call
+        else {
+            panic!("expected provisional method input")
+        };
+        assert_eq!(fields[0], SchemaValue::U32(7));
+        for (ordinal, field) in fields[1..].iter().enumerate() {
+            let SchemaValue::Stream(stream) = field else {
+                panic!("expected provisional stream")
+            };
+            assert_eq!(
+                stream
+                    .with_host_endpoint::<crate::grpc::TransportStreamId, _>(|endpoint| endpoint.0)
+                    .unwrap(),
+                ordinal as u64
+            );
+        }
+        for reversed in [false, true] {
+            let mut selected = method.clone();
+            if reversed {
+                let InputSchema::Parameters(fields) = &mut selected.input_schema;
+                fields.swap(1, 2);
+            }
+            let metadata = metadata_with_method(selected);
+            let lowered =
+                lower_invocation(original.clone(), &metadata, &owner, Some(prepared.clone()))
+                    .unwrap();
+            let LoweredCall::Invoke {
+                input: SchemaValue::Record { fields },
+                ..
+            } = lowered.call
+            else {
+                panic!("expected method input")
+            };
+            assert_eq!(fields[0], SchemaValue::U32(7));
+            let expected = if reversed {
+                [91_u64, 42_u64]
+            } else {
+                [42_u64, 91_u64]
+            };
+            for (field, expected) in fields[1..].iter().zip(expected) {
+                let SchemaValue::Stream(stream) = field else {
+                    panic!("expected restored stream")
+                };
+                assert_eq!(
+                    stream
+                        .with_host_endpoint::<u64, _>(|endpoint| *endpoint)
+                        .unwrap(),
+                    expected
+                );
+            }
+        }
     }
 
     fn load_snapshot_invocation() -> AgentInvocation {
@@ -3091,6 +3783,7 @@ mod tests {
             load_snapshot_invocation(),
             &metadata(),
             &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+            None,
         )
         .expect("snapshot load should lower");
 
@@ -3108,6 +3801,7 @@ mod tests {
             load_snapshot_invocation(),
             &metadata(),
             &ResolvedOwnerContext::ComponentBaseline,
+            None,
         ) else {
             panic!("an owner without constructor parameters cannot load a snapshot");
         };
@@ -3139,6 +3833,7 @@ mod tests {
             load_snapshot_invocation(),
             &metadata,
             &ResolvedOwnerContext::OplogProcessor,
+            None,
         )
         .expect("a snapshot-capable processor must be able to restore its snapshot");
         let LoweredCall::LoadSnapshot { input, .. } = lowered.call else {
@@ -3168,6 +3863,7 @@ mod tests {
             },
             &metadata(),
             &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+            None,
         )
         .expect("snapshot save should lower");
 
@@ -3183,6 +3879,7 @@ mod tests {
             method_invocation(SchemaValue::U32(1)),
             &metadata,
             &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+            None,
         ) else {
             panic!("non-record input must be rejected");
         };
@@ -3204,6 +3901,7 @@ mod tests {
             method_invocation(input),
             &metadata,
             &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+            None,
         ) else {
             panic!("arity mismatch must be rejected");
         };
@@ -3225,6 +3923,7 @@ mod tests {
             method_invocation(input),
             &metadata,
             &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+            None,
         ) else {
             panic!("field type mismatch must be rejected");
         };
@@ -3251,6 +3950,7 @@ mod tests {
             method_invocation(SchemaValue::Record { fields: Vec::new() }),
             &metadata,
             &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+            None,
         );
         if let Err(error) = result {
             panic!("unexpected error: {error}");
@@ -3393,6 +4093,7 @@ mod tests {
                 invocation,
                 &metadata,
                 &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+                None,
             )
             .unwrap();
             let LoweredCall::Invoke {

@@ -163,6 +163,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &self.store.data().component_metadata().metadata,
             self.parent.parsed_agent_id.as_ref(),
         );
+        if matches!(invocation.invocation, AgentInvocation::AgentMethod { .. }) {
+            match self
+                .parent
+                .durable_stream_session_status(&idempotency_key)
+                .await
+            {
+                Ok(Some(_)) => self.uses_streams = true,
+                Ok(None) => {}
+                Err(error) => return self.invocation_failure_recovery(&error),
+            }
+        }
         let admission =
             monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode());
         if admission != MonthlyResourceAdmission::Admit {
@@ -337,17 +348,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await;
             }
 
-            let invocation_for_lowering = if self.uses_streams {
-                self.parent
-                    .rehydrate_durable_streaming_invocation(invocation.invocation.clone())
-                    .await?
-            } else {
-                invocation.invocation.clone()
-            };
+            let execution_input = self
+                .parent
+                .rehydrate_durable_streaming_input(&invocation.invocation)
+                .await?;
             let lowered = lower_invocation(
-                invocation_for_lowering,
+                invocation.invocation.clone(),
                 &self.store.data().component_metadata().metadata,
                 &self.parent.owner_context,
+                execution_input,
             )?;
 
             Ok::<_, WorkerExecutorError>((lowered, local_span_ids, inherited_span_ids))

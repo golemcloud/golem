@@ -416,7 +416,7 @@ struct RecordingWorkerClient {
     metadata: Arc<Mutex<HashMap<AgentId, AgentMetadataDto>>>,
     metadata_reads: Arc<Mutex<Vec<AgentId>>>,
     prepared_agent_ids: Arc<Mutex<Vec<AgentId>>>,
-    method_params: Arc<Mutex<Vec<Option<golem_schema::proto::golem::schema::SchemaValue>>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_common::model::agent::AgentMethodInput>>>>,
     durable_stream_controls: Arc<Mutex<Vec<
         golem_api_grpc::proto::golem::workerexecutor::v1::DurableStreamAttachmentControlRequest,
     >>>,
@@ -742,7 +742,7 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         target: &RoutedTarget,
         method_name: Option<String>,
-        method_params: Option<golem_schema::proto::golem::schema::SchemaValue>,
+        method_params: Option<golem_common::model::agent::AgentMethodInput>,
         _: i32,
         _: Option<::prost_types::Timestamp>,
         request_key: golem_common::model::InvocationRequestKey,
@@ -773,6 +773,29 @@ impl WorkerClient for RecordingWorkerClient {
         Ok(self.invocation_output.clone())
     }
 
+    async fn create_stream_session(
+        &self,
+        _: &AgentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionRequest,
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionSuccess>
+    {
+        let start = request.invocation.expect("session invocation");
+        assert!(start.input.is_none());
+        let input = start
+            .captured_method_input
+            .as_ref()
+            .expect("captured input");
+        self.method_params.lock().unwrap().push(Some(
+            golem_common::serialization::deserialize(input).unwrap(),
+        ));
+        let mut log = self.native_sessions.lock().unwrap();
+        log.keys.push(Arc::from(request.public_session_id));
+        log.starts.push(start);
+        Err(WorkerServiceError::Internal(
+            "durable stream sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
     async fn invoke_agent_session(
         &self,
         _: &AgentId,
@@ -784,6 +807,11 @@ impl WorkerClient for RecordingWorkerClient {
                 Some(golem_api_grpc::proto::golem::worker::invocation_request::Request::Start(start)),
         }) = &start
         {
+            if let Some(input) = &start.captured_method_input {
+                self.method_params.lock().unwrap().push(Some(
+                    golem_common::serialization::deserialize(input).unwrap(),
+                ));
+            }
             self.native_sessions
                 .lock()
                 .unwrap()
@@ -905,7 +933,7 @@ pub(crate) struct InvocationHarness {
     pub(crate) metadata_reads: Arc<Mutex<Vec<AgentId>>>,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
     pub(crate) targets: Arc<Mutex<Vec<RoutedTarget>>>,
-    method_params: Arc<Mutex<Vec<Option<golem_schema::proto::golem::schema::SchemaValue>>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_common::model::agent::AgentMethodInput>>>>,
     durable_stream_controls: Arc<Mutex<Vec<
         golem_api_grpc::proto::golem::workerexecutor::v1::DurableStreamAttachmentControlRequest,
     >>>,
@@ -1261,14 +1289,24 @@ impl InvocationHarness {
         }
     }
 
-    /// The method parameters recorded for the first invocation, decoded back
-    /// from the gRPC carrier into the runtime `SchemaValue`.
+    pub(crate) fn recorded_method_inputs(
+        &self,
+    ) -> Vec<Option<golem_common::model::agent::AgentMethodInput>> {
+        self.method_params.lock().unwrap().clone()
+    }
+
+    /// The native method parameters recorded for the first invocation.
     pub(crate) fn recorded_method_params(&self) -> golem_common::schema::SchemaValue {
-        self.method_params.lock().unwrap()[0]
-            .clone()
-            .expect("method params were recorded")
-            .try_into()
-            .expect("method params decode back into SchemaValue")
+        let golem_common::model::agent::AgentMethodInput::Native(input) =
+            self.method_params.lock().unwrap()[0]
+                .clone()
+                .expect("method params were recorded")
+        else {
+            panic!("expected native MCP input")
+        };
+        input
+            .decode(|_, _| Err("unexpected MCP stream".into()))
+            .unwrap()
     }
 
     pub(crate) fn recorded_durable_stream_controls(

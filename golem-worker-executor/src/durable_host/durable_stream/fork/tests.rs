@@ -797,6 +797,8 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
                 Box::new(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: session.idempotency_key,
+                    acceptance: crate::services::worker_fork::lineage::tests::prepared(&session)
+                        .acceptance(),
                     attachment_id: AttachmentId::primary(
                         target.environment_id,
                         &target.agent_id,
@@ -847,6 +849,7 @@ async fn revert_epoch_fences_a_deleted_session_prepared_again_under_the_same_key
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: identity.invocation.idempotency_key,
+            acceptance: prepared(&identity.invocation).acceptance(),
             attachment_id: AttachmentId::primary(
                 owner.environment_id,
                 &owner.agent_id,

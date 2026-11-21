@@ -276,6 +276,29 @@ impl Debug for TestOplog {
 }
 
 impl TestOplog {
+    pub(crate) fn session_acceptance(
+        &self,
+        key: &golem_common::model::InvocationId,
+    ) -> golem_common::model::durable_stream::StreamSessionAcceptance {
+        self.entries()
+            .into_iter()
+            .rev()
+            .find_map(|entry| {
+                if let OplogEntry::StreamSession {
+                    record: OplogPayload::Inline(record),
+                    ..
+                } = entry
+                    && let StreamSessionRecord::Prepared(prepared) = *record
+                    && prepared.session_key == *key
+                {
+                    Some(prepared.acceptance())
+                } else {
+                    None
+                }
+            })
+            .expect("fixture must prepare its session before attaching")
+    }
+
     pub(crate) fn take_read_ranges(&self) -> Vec<(OplogIndex, u64)> {
         std::mem::take(&mut *self.read_ranges.lock().unwrap())
     }

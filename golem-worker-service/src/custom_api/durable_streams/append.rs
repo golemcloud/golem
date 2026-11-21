@@ -19,7 +19,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     StreamSessionExpiryPolicy, TypedStreamSlotItems, append_to_stream_slot_request::Payload,
     append_to_stream_slot_response::Result as Outcome,
 };
-use golem_common::schema::{FieldSource, SchemaGraph, SchemaType};
+use golem_common::schema::SchemaGraph;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::render::from_untrusted_json_value;
 use golem_service_base::custom_api::CallAgentBehaviour;
@@ -63,7 +63,7 @@ impl DurableStreamsHandler {
         if let Err(rejection) = self.limiter.check_append(&route_key, route_limit) {
             return Ok(rejection_response(rejection));
         }
-        let metadata = self
+        let mut metadata = self
             .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
             .await?;
         if metadata.is_none() && !allow_create {
@@ -72,17 +72,12 @@ impl DurableStreamsHandler {
         if metadata.as_ref().is_some_and(|m| m.tombstoned) {
             return Ok(response(StatusCode::GONE));
         }
-        if metadata.as_ref().is_some_and(|m| !m.writable) {
-            return Ok(read_only_response(allow));
-        }
-        let graph: SchemaGraph = match &metadata {
-            Some(metadata) => metadata
-                .element_schema
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("input stream schema missing"))?
-                .try_into()
-                .map_err(anyhow::Error::msg)?,
-            None => {
+        let _waiting = if metadata.as_ref().is_none_or(|metadata| metadata.queued) {
+            let permit = match self.limiter.try_acquire_reader(&route_key, None) {
+                Ok(permit) => permit,
+                Err(rejection) => return Ok(rejection_response(rejection)),
+            };
+            if metadata.is_none() {
                 if self
                     .read_slot(route, agent_id, session, "", Vec::new(), 0, 0)
                     .await?
@@ -90,28 +85,6 @@ impl DurableStreamsHandler {
                 {
                     return Ok(response(StatusCode::NOT_FOUND));
                 }
-                let Some(field) =
-                    behaviour
-                        .method_input
-                        .input_schema
-                        .fields()
-                        .iter()
-                        .find(|field| {
-                            field.name == slot && matches!(field.source, FieldSource::UserSupplied)
-                        })
-                else {
-                    return Ok(read_only_response(allow));
-                };
-                let SchemaType::Stream {
-                    inner: Some(inner), ..
-                } = behaviour
-                    .method_input
-                    .graph
-                    .resolve_ref(&field.schema)
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?
-                else {
-                    return Ok(response(StatusCode::NOT_FOUND));
-                };
                 if !arguments_come_from_url(behaviour) {
                     let path = request
                         .underlying
@@ -129,11 +102,38 @@ impl DurableStreamsHandler {
                         ),
                     ));
                 }
-                let mut graph = behaviour.method_input.graph.clone();
-                graph.root = (**inner).clone();
-                graph
+                self.create(
+                    request,
+                    route,
+                    behaviour,
+                    target,
+                    session,
+                    StreamSessionCreationIntent::LazyPost,
+                    expiry_policy,
+                )
+                .await?;
             }
+            metadata = self.read_slot_admitted(route, agent_id, session, slot, Vec::new(), 0, 0,
+                golem_api_grpc::proto::golem::workerexecutor::v1::StreamSlotReadAdmission::WaitReady, None).await?;
+            Some(permit)
+        } else {
+            None
         };
+        let Some(metadata) = metadata else {
+            return Ok(response(StatusCode::NOT_FOUND));
+        };
+        if metadata.tombstoned {
+            return Ok(response(StatusCode::GONE));
+        }
+        if !metadata.writable {
+            return Ok(read_only_response(allow));
+        }
+        let graph: SchemaGraph = metadata
+            .element_schema
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("ready input stream schema missing"))?
+            .try_into()
+            .map_err(anyhow::Error::msg)?;
         let producer = match producer_headers(request.headers()) {
             Ok(producer) => producer,
             Err(message) => return Ok(problem(StatusCode::BAD_REQUEST, "$headers", &message)),
@@ -168,7 +168,7 @@ impl DurableStreamsHandler {
                 ));
             }
             if content_type_mismatch(request, &declared_slot.content_type)? {
-                if let Some(metadata) = metadata.as_ref().filter(|metadata| metadata.closed) {
+                if metadata.closed {
                     return append_response(
                         Outcome::Closed(Default::default()),
                         producer.as_ref(),
@@ -192,18 +192,6 @@ impl DurableStreamsHandler {
                 "$",
                 &format!("An append may contain at most {MAX_ITEMS} JSON messages"),
             ));
-        }
-        if metadata.is_none() {
-            self.create(
-                request,
-                route,
-                behaviour,
-                target,
-                session,
-                StreamSessionCreationIntent::LazyPost,
-                expiry_policy,
-            )
-            .await?;
         }
         let append = self
             .worker_service
@@ -420,7 +408,7 @@ fn problem(status: StatusCode, path: &str, detail: &str) -> RouteExecutionResult
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::schema::SchemaValue;
+    use golem_common::schema::{SchemaType, SchemaValue};
     use golem_schema::schema::render::to_json_value;
     use test_r::test;
 

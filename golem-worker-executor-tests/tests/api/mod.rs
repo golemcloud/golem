@@ -8555,7 +8555,8 @@ async fn invoke_with_non_existing_function(
     let invocation = |key, method_name: &str| AgentInvocation::AgentMethod {
         idempotency_key: key,
         method_name: method_name.to_string(),
-        input: SchemaValue::Record { fields: vec![] },
+        allow_streams: false,
+        input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller: Caller::anonymous(),
         scope_card: None,
@@ -9116,7 +9117,8 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
         |key: &golem_common::model::InvocationId, value, scope_card| AgentInvocation::AgentMethod {
             idempotency_key: *key,
             method_name: "inc_global_by".to_string(),
-            input: data_value!(value).into_parts().1,
+            allow_streams: false,
+            input: data_value!(value).into_parts().1.try_into().unwrap(),
             invocation_context: InvocationContextStack::fresh(),
             caller: callers::anonymous(),
             scope_card,
@@ -9395,7 +9397,7 @@ async fn grpc_schedule_commits_pending_without_loading_target(
             unreachable!()
         };
         assert_eq!(
-            method.function_input.clone().into_parts().1,
+            golem_test_framework::dsl::original_native_method_input(&method.function_input)?,
             data_value!(101u64).into_parts().1
         );
     }
@@ -9756,7 +9758,8 @@ async fn local_schedule_rejects_recreated_cached_target(
             AgentInvocation::AgentMethod {
                 idempotency_key: accepted_id,
                 method_name: "inc_global_by".to_string(),
-                input: data_value!(91u64).into_parts().1,
+                allow_streams: false,
+                input: data_value!(91u64).into_parts().1.try_into().unwrap(),
                 invocation_context: InvocationContextStack::fresh(),
                 caller: callers::anonymous(),
                 scope_card: None,
@@ -9816,7 +9819,8 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
                 AgentInvocation::AgentMethod {
                     idempotency_key: key,
                     method_name: "inc_global_by".to_string(),
-                    input: data_value!(value).into_parts().1,
+                    allow_streams: false,
+                    input: data_value!(value).into_parts().1.try_into().unwrap(),
                     invocation_context: InvocationContextStack::fresh(),
                     caller: callers::agent(
                         owner.agent_id,
@@ -9997,7 +10001,8 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         |key: &golem_common::model::InvocationId, value: u64| AgentInvocation::AgentMethod {
             idempotency_key: *key,
             method_name: "inc_global_by".to_string(),
-            input: data_value!(value).into_parts().1,
+            allow_streams: false,
+            input: data_value!(value).into_parts().1.try_into().unwrap(),
             invocation_context: InvocationContextStack::fresh(),
             caller: callers::agent(
                 owner.agent_id,
@@ -10224,7 +10229,8 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
                 AgentInvocation::AgentMethod {
                     idempotency_key: key,
                     method_name: "inc_global_by".to_string(),
-                    input: data_value!(91u64).into_parts().1,
+                    allow_streams: false,
+                    input: data_value!(91u64).into_parts().1.try_into().unwrap(),
                     invocation_context: InvocationContextStack::fresh(),
                     caller: callers::agent(caller_id.agent_id, caller.agent_type.clone()),
                     scope_card: None,

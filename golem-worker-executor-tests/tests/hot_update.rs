@@ -2661,7 +2661,8 @@ async fn queued_methods_validate_against_the_selected_update_revision(
     let invocation = |method_name: &str| AgentInvocation::AgentMethod {
         idempotency_key: InvocationId(uuid::Uuid::new_v4()),
         method_name: method_name.to_string(),
-        input: SchemaValue::Record { fields: vec![] },
+        allow_streams: false,
+        input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller: Caller::anonymous(),
         scope_card: None,
@@ -2674,6 +2675,29 @@ async fn queued_methods_validate_against_the_selected_update_revision(
             worker.clone().invoke(request.clone()).await?,
             ResultOrSubscription::Pending(_)
         ));
+    }
+    // Both observations use revision one's read-only policy while the update is
+    // pending. Revision two makes the method mutating, so neither caller may
+    // borrow the other key's execution result.
+    let mut reads = [
+        Box::pin(
+            worker
+                .clone()
+                .invoke_and_await(invocation("revision_cache_probe")),
+        ),
+        Box::pin(
+            worker
+                .clone()
+                .invoke_and_await(invocation("revision_cache_probe")),
+        ),
+    ];
+    for read in &mut reads {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), read)
+                .await
+                .is_err(),
+            "a cache miss cannot complete while the gate is held"
+        );
     }
     assert!(!held.is_finished());
     control.resume();
@@ -2692,12 +2716,26 @@ async fn queued_methods_validate_against_the_selected_update_revision(
             output: SchemaValue::U32(2)
         }
     ));
+    let mut values = Vec::new();
+    for read in reads {
+        let output = read.await?;
+        assert_eq!(output.component_revision, Some(target.revision));
+        let golem_common::model::AgentInvocationResult::AgentMethod {
+            output: SchemaValue::U32(value),
+        } = output.result
+        else {
+            panic!("expected the selected revision's counter result");
+        };
+        values.push(value);
+    }
+    values.sort();
+    assert_eq!(values, vec![101, 102]);
     assert_eq!(
         executor
             .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
             .await?
             .into_typed::<u32>()?,
-        100
+        102
     );
     http_server.abort();
     Ok(())

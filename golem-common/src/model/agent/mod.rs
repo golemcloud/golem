@@ -26,7 +26,7 @@ mod status;
 pub use key::AgentKey;
 pub use method_input::{
     AgentMethodInput, HttpMethodArgument, HttpMethodArgumentSource, HttpMethodBody,
-    HttpMethodInput, JsonMethodInput, NativeMethodInput,
+    HttpMethodInput, JsonMethodInput, NativeMethodInput, PublicHttpMethodBody, PublicMethodInput,
 };
 pub use resolved_names::{
     FollowedLookups, MAX_RESOLVED_NAME_LINKS, OpenLookup, ResolvedNameIndex, ResolvedNames,

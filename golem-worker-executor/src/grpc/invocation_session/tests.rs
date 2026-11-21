@@ -173,6 +173,7 @@ async fn routed_stream_session(
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: identity.invocation.idempotency_key,
+                acceptance: oplog.session_acceptance(&identity.invocation.idempotency_key),
                 attachment_id,
                 attempt_id,
                 epoch: 1,

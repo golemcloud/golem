@@ -1486,9 +1486,7 @@ mod resource_release_tests;
 
 pub use acquisition::merge_agent_env_with_default_env;
 pub(crate) use ingress::{await_scalar_invocation, require_expected_tool_deployment_revision};
-use ingress::{
-    inactive_ephemeral_agent_error, replace_invocation_input, validate_resolved_invocation_identity,
-};
+use ingress::{inactive_ephemeral_agent_error, validate_resolved_invocation_identity};
 use interrupt::register_interrupt_request;
 use lifecycle::retirement::owned_shard_epoch;
 pub(crate) use lifecycle::retirement::retired_by_assignment;
@@ -1501,6 +1499,6 @@ use streaming::sessions::{
     validate_stream_session_record,
 };
 pub(crate) use streaming::sessions::{
-    same_origin_stream_invocation, stream_session_record_key, stream_session_record_keys,
-    stream_session_record_reference,
+    same_origin_queued_request, same_origin_stream_invocation, stream_session_record_key,
+    stream_session_record_keys, stream_session_record_reference,
 };

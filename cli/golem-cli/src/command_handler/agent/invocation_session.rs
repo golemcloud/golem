@@ -685,18 +685,25 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 if let ServerFrame::Message(PublicServerMessage::InvocationAccepted {
                     agent_id,
                     idempotency_key,
+                    mappings,
+                    ..
+                } | PublicServerMessage::InvocationReady {
+                    agent_id,
+                    idempotency_key,
+                    mappings,
                     ..
                 }) = &server_frame
                 {
                     accepted = true;
                     accepted_key = idempotency_key.to_string();
-                    if let Some(live_output) = &args.live_output {
+                    let ready = matches!(&server_frame, ServerFrame::Message(PublicServerMessage::InvocationReady { .. }));
+                    if let Some(live_output) = &args.live_output && !ready {
                         live_output
                             .accepted(agent_id, &args.selected_agent_name, *idempotency_key)
                             .await?;
                     }
                     output_streams.clear();
-                    if let Some(binding) = input_binding.as_mut() {
+                    if let Some(binding) = input_binding.as_mut() && (ready || !mappings.is_empty()) {
                         let (channel, stream_token) = session
                             .input_binding(&input_buffer)
                             .ok_or_else(|| anyhow!("invocation acceptance omitted the stdin stream mapping"))?;
@@ -1081,6 +1088,7 @@ pub(super) async fn invoke_scalar(
                 }
                 accepted_key = Some(idempotency_key);
             }
+            PublicServerMessage::InvocationReady { .. } => {}
             PublicServerMessage::InvocationResult { result: value, .. } => {
                 result = match *value {
                     PublicInvocationResult::Value {
@@ -1867,6 +1875,7 @@ fn cancel_announced_outputs(
 ) -> Vec<PublicClientMessage> {
     let ServerFrame::Message(
         PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. }
         | PublicServerMessage::InvocationResult { mappings, .. }
         | PublicServerMessage::OutputStreamItem { mappings, .. }
         | PublicServerMessage::InputStreamAck { mappings, .. },
@@ -2033,6 +2042,7 @@ async fn handle_response(
 ) -> anyhow::Result<bool> {
     let mut failed = false;
     match response {
+        ServerFrame::Message(PublicServerMessage::InvocationReady { .. }) => {}
         ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. }) => {
             if structured {
                 let mut event = event(AgentInvocationSessionEventKind::Accepted, idempotency_key);

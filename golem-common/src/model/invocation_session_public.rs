@@ -757,6 +757,19 @@ pub enum PublicInvocationOutcome {
 #[allow(clippy::large_enum_variant)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum PublicServerMessage {
+    #[serde(rename = "invocationReady")]
+    InvocationReady {
+        #[serde(rename = "attemptId")]
+        attempt_id: Uuid,
+        #[serde(rename = "agentId")]
+        agent_id: AgentId,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: InvocationId,
+        mappings: Vec<PublicStreamMapping>,
+        #[serde(rename = "sessionToken")]
+        session_token: String,
+        version: u8,
+    },
     #[serde(rename = "invocationAccepted")]
     InvocationAccepted {
         #[serde(rename = "attemptId")]
@@ -1397,6 +1410,13 @@ fn contains_public_stream_reference(value: &Value) -> bool {
 fn validate_server_message(message: &PublicServerMessage) -> Result<(), PublicProtocolError> {
     match message {
         PublicServerMessage::InvocationAccepted {
+            attempt_id,
+            agent_id,
+            mappings,
+            session_token,
+            ..
+        }
+        | PublicServerMessage::InvocationReady {
             attempt_id,
             agent_id,
             mappings,

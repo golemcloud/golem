@@ -201,7 +201,7 @@ pub(in crate::worker) async fn fold_committed_status<T>(
     agent_mode: AgentMode,
     commit_level: CommitLevel,
     appended_through: OplogIndex,
-    baseline: AgentStatusRecord,
+    mut baseline: AgentStatusRecord,
     mut entries: BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
     Result<Option<AgentStatusRecord>, StatusError>,
@@ -253,8 +253,18 @@ where
         .await
         {
             Ok(()) => {
-                update_status_with_new_entries(agent_mode, baseline, entries, &this.config().retry)
-                    .map_err(StatusError::from)
+                let reader =
+                    StatusOplogReader::new(this, owned_agent_id, agent_mode, Some(oplog), horizon);
+                match hydrate_initial_pending_evidence(&reader, &mut baseline, &entries).await {
+                    Ok(()) => update_status_with_new_entries(
+                        agent_mode,
+                        baseline,
+                        entries,
+                        &this.config().retry,
+                    )
+                    .map_err(StatusError::from),
+                    Err(error) => Err(error),
+                }
             }
             Err(error) => Err(error),
         };
@@ -638,13 +648,11 @@ pub(super) async fn hydrate_initial_pending_evidence(
         let StreamSessionRecord::Attached(attached) = record.as_ref() else {
             continue;
         };
-        let Some(status) = baseline
+        let status = baseline
             .durable_stream_sessions
             .get(&attached.session_key)
             .cloned()
-        else {
-            continue;
-        };
+            .unwrap_or_default();
         if status.lifecycle_error.is_some() || status.validated_initial_pending_invocation.is_some()
         {
             continue;

@@ -302,6 +302,10 @@ impl StreamSession {
         self.response_lease.clone()
     }
 
+    pub(crate) fn session_key(&self) -> &StreamInvocationId {
+        &self.session_key
+    }
+
     /// Binds this runtime to one attachment epoch and attempt.
     pub fn with_attachment(mut self, epoch: u64, attempt_id: AttemptId) -> Self {
         self.recovered_mappings_through = Arc::new(Mutex::new(OplogIndex::NONE));

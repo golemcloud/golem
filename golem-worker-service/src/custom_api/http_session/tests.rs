@@ -352,6 +352,7 @@ pub(in crate::custom_api) fn accepted(epoch: u64, high_water: Option<u64>) -> In
             command_path: vec![],
             joined_origin_observer: false,
             terminal_cursor_stream_ids: vec![],
+            captured_method_input: None,
         },
     ))
 }

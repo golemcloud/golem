@@ -1563,7 +1563,10 @@ mod tests {
             invocation_id: test_invocation_id("fork-wallet-pin".to_string()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "test".to_string(),
-                input: SchemaValue::Record { fields: Vec::new() },
+                allow_streams: false,
+                input: SchemaValue::Record { fields: Vec::new() }
+                    .try_into()
+                    .unwrap(),
                 caller: Caller::anonymous(),
                 scope_card: None,
             })),

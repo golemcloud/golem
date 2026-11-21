@@ -2556,6 +2556,23 @@ handoff, without waiting for storage). Completion does not await the status fold
 reads queued on the same state actor wait behind it. Actual traps and constructor errors go through
 `on_invocation_failure`; decoded outer method errors take the separate path below.
 
+Method Pending and Started share the original `AgentMethodInput` payload: Native values with
+request-local stream ordinals and foreign handles, PublicJson, or named raw HTTP arguments/body.
+Do not validate or replace it with a schema selected from deployment metadata or a pending update.
+The loaded Store owns method/input/output schemas and authorization of the lowered input. Recorded
+Prepared bindings restore endpoints, not scalar values; HTTP bindings follow argument names.
+Same-key matching compares the original request. Public oplog projection needs no method metadata
+and redacts Native host capabilities before encoding the diagnostic envelope.
+
+Read-only cache observations are a resident exception, not durable admission for each follower.
+Establish hits and joins under the existing lifecycle boundary after rechecking the captured
+resident revision and cache epoch. An executing miss still validates against the loaded Store.
+Share and populate only when its selected revision matches the immutable observation revision,
+which also pins the read-only/cache/principal policy. A mismatch or failed owner sends an
+unpersisted follower through its own cache-bypassing durable admission; recheck its own key first.
+Do not copy an owner's failure or durable identity to a follower. Release lifecycle exclusion
+before waiting for admission or completion. Cache hits/followers persist no invocation or alias.
+
 ### Invocation-local method errors
 
 A valid outer guest `agent-error` from an agent method becomes `InvokeResult::MethodFailed`, not
@@ -3706,8 +3723,16 @@ fails the reader deferred with the same error; the scope finalizer remains best-
 ## Streaming invocations
 
 A streaming RPC is an ordinary durable RPC whose method carries input or output streams
-(`remote_method_uses_streams`, `wasm_rpc/mod.rs`). Three facts prevent most mistakes:
+(`remote_method_uses_streams`, `wasm_rpc/mod.rs`). Preserve these contracts:
 
+- **Acceptance and preparation have different owners.** Method acceptance commits Pending and
+  schema-independent Attached together. Attached owns session identity, expiry, authority and
+  transport correspondence. Selected start commits registrations, topology, Prepared and Started
+  against that existing Pending before publishing bindings and Ready. Queued resumes use existing
+  attachment epochs; slots wait for preparation. Same-origin observers validate retained authority
+  and receive acceptance before readiness, including a failure before Prepared. Acquire producer
+  admission before session then instance exclusion; retain exclusion through commit, not through
+  publication waits or foreign activation. External tools keep descriptor-based preparation.
 - **Two owner-relative journals are authoritative, nothing else.** A producer records
   `StreamRegistered`/`StreamItems`/`StreamTerminal` in its own oplog. Its persisted
   `LocalStreamId` is the registration oplog index, not a globally meaningful handle. Every

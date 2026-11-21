@@ -461,7 +461,10 @@ fn wit_projection_preserves_invocation_wallet_pins() {
         invocation_id: uuid::Uuid::from_u128(2).into(),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "test".to_string(),
-            input: SchemaValue::Record { fields: Vec::new() },
+            allow_streams: false,
+            input: SchemaValue::Record { fields: Vec::new() }
+                .try_into()
+                .unwrap(),
             caller: Caller::anonymous(),
             scope_card: None,
         })),

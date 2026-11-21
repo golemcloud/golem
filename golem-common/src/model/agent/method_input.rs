@@ -9,7 +9,8 @@ use crate::schema::streaming::{
     preflight_proto_recursive_stream_value, remap_recursive_stream_references,
 };
 use crate::schema::{
-    IntoSchema, IntoTypedSchemaValue, SchemaValue, TypedSchemaValue, stream::SchemaValueStream,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaValue, TypedSchemaValue,
+    stream::SchemaValueStream,
 };
 use desert_rust::BinaryCodec;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
@@ -27,12 +28,22 @@ pub enum AgentMethodInput {
     Http(HttpMethodInput),
 }
 
+impl TryFrom<SchemaValue> for AgentMethodInput {
+    type Error = String;
+
+    fn try_from(value: SchemaValue) -> Result<Self, Self::Error> {
+        let value = value.try_into().map_err(|error| format!("{error}"))?;
+        let (input, _) = NativeMethodInput::capture(value, Vec::new())?;
+        Ok(Self::Native(input))
+    }
+}
+
 /// Component-independent public oplog representation of the original request.
 /// Native values use the public golem.schema.SchemaValue protobuf with stream IDs
 /// replaced by request-local ordinals. Capability leaves are redacted before encoding.
-#[derive(IntoSchema)]
+#[derive(IntoSchema, FromSchema)]
 #[schema(named = "original-method-input")]
-enum PublicMethodInput {
+pub enum PublicMethodInput {
     Native {
         /// Encoded golem.schema.SchemaValue. Decoders must support structural depth
         /// 128, including the additional protobuf container messages; the default
@@ -47,9 +58,9 @@ enum PublicMethodInput {
     },
 }
 
-#[derive(IntoSchema)]
+#[derive(IntoSchema, FromSchema)]
 #[schema(named = "original-http-method-body")]
-enum PublicHttpMethodBody {
+pub enum PublicHttpMethodBody {
     Absent,
     Json(String),
     Binary {
@@ -110,6 +121,7 @@ impl AgentMethodInput {
 pub struct NativeMethodInput {
     value: Vec<u8>,
     streams: Vec<Option<DurableStreamHandle>>,
+    external_rest: bool,
 }
 
 impl Debug for NativeMethodInput {
@@ -162,6 +174,7 @@ impl NativeMethodInput {
             Self {
                 value: crate::serialization::serialize(&value)?,
                 streams,
+                external_rest: false,
             },
             transport_ids,
         ))
@@ -169,6 +182,21 @@ impl NativeMethodInput {
 
     pub fn streams(&self) -> &[Option<DurableStreamHandle>] {
         &self.streams
+    }
+
+    /// Compares the captured value and stream ordinals, excluding foreign handle identities.
+    pub fn same_unbound_value(&self, other: &Self) -> bool {
+        self.value == other.value && self.external_rest == other.external_rest
+    }
+
+    /// Retains the external REST restriction on host-managed result capabilities.
+    pub fn for_external_rest(mut self) -> Self {
+        self.external_rest = true;
+        self
+    }
+
+    pub fn is_external_rest(&self) -> bool {
+        self.external_rest
     }
 
     pub fn decode(
@@ -197,14 +225,14 @@ pub struct HttpMethodInput {
     body: HttpMethodBody,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec, IntoSchema, FromSchema)]
 #[desert(evolution())]
 pub struct HttpMethodArgument {
     pub argument_name: String,
     pub source: HttpMethodArgumentSource,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec, IntoSchema, FromSchema)]
 #[desert(evolution())]
 pub enum HttpMethodArgumentSource {
     Path {

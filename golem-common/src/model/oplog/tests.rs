@@ -2876,7 +2876,10 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
         invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543216).into(),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "test".to_string(),
-            input: SchemaValue::Record { fields: Vec::new() },
+            allow_streams: false,
+            input: SchemaValue::Record { fields: Vec::new() }
+                .try_into()
+                .unwrap(),
             caller: caller.clone(),
             scope_card: None,
         })),

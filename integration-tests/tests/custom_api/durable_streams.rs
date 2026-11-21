@@ -2188,7 +2188,8 @@ async fn websocket_and_http_sessions_have_isolated_identities(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     use crate::api::streaming_rpc::{
-        connect_public_invocation_socket, receive_public_response, send_public_request,
+        connect_public_invocation_socket, receive_public_response, receive_public_stream_readiness,
+        send_public_request,
     };
     use golem_common::model::invocation_session_public::{
         DecimalU64, INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage,
@@ -2220,17 +2221,17 @@ async fn websocket_and_http_sessions_have_isolated_identities(
         },
     )
     .await?;
-    let accepted = receive_public_response(&mut socket).await?;
-    let input_channel = match accepted {
-        PublicServerMessage::InvocationAccepted { mappings, .. } => {
-            mappings
-                .iter()
-                .find(|mapping| mapping.provisional_ref == Some(input_reference))
-                .ok_or_else(|| anyhow::anyhow!("missing input mapping"))?
-                .channel
-        }
+    let accepted = receive_public_stream_readiness(&mut socket).await?;
+    let mappings = match accepted {
+        PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. } => mappings,
         other => anyhow::bail!("invocation was not accepted: {other:?}"),
     };
+    let input_channel = mappings
+        .iter()
+        .find(|mapping| mapping.provisional_ref == Some(input_reference))
+        .ok_or_else(|| anyhow::anyhow!("missing input mapping"))?
+        .channel;
     send_public_request(
         &mut socket,
         &PublicClientMessage::InputStreamItem {

@@ -151,6 +151,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             load_snapshot_invocation,
             &component_metadata,
             store.as_context().data().durable_ctx().owner_context(),
+            None,
         )
         .map_err(|err| {
             ManualLoadResult::Failed(format!(
@@ -437,6 +438,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             load_snapshot_invocation,
             &component_metadata,
             store.as_context().data().durable_ctx().owner_context(),
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {

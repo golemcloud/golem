@@ -1647,6 +1647,7 @@ pub struct InvocationSession {
     deliveries: DeliveryTracker,
     inputs: Vec<RegisteredInput>,
     attachment_state: AttachmentState,
+    execution_ready: bool,
     /// How many times the session has left a connection for a new one.
     reconnects: u64,
     reconnect: ReconnectClock,
@@ -1821,6 +1822,7 @@ impl InvocationSession {
             attachment_state: AttachmentState::Pending {
                 exact_retry: pending_operation_is_retry,
             },
+            execution_ready: false,
             reconnects: 0,
             reconnect,
         })
@@ -2073,7 +2075,8 @@ impl InvocationSession {
                         return Err(SessionTransportError::UnexpectedAttempt);
                     }
                     self.deliveries.begin_connection(mappings)?;
-                    self.install_input_mappings(mappings, true)?;
+                    self.execution_ready = !mappings.is_empty();
+                    self.install_input_mappings(mappings, self.execution_ready)?;
                     self.deliveries.set_attachment_state(
                         None,
                         Some(session_token.clone()),
@@ -2084,6 +2087,31 @@ impl InvocationSession {
                         attempt_id: *attempt_id,
                         replay_revocation_eligible: exact_retry,
                     };
+                }
+                PublicServerMessage::InvocationReady {
+                    attempt_id,
+                    agent_id,
+                    idempotency_key,
+                    mappings,
+                    session_token,
+                    ..
+                } => {
+                    if self.execution_ready
+                        || !matches!(self.attachment_state,
+                        AttachmentState::Accepted { attempt_id: accepted, .. } if accepted == *attempt_id)
+                        || self.deliveries.snapshot().accepted_invocation.as_ref()
+                            != Some(&OwnedInvocationId::new(*agent_id, *idempotency_key))
+                    {
+                        return Err(SessionTransportError::UnexpectedAttempt);
+                    }
+                    self.deliveries.begin_connection(mappings)?;
+                    self.install_input_mappings(mappings, true)?;
+                    self.deliveries.set_attachment_state(
+                        None,
+                        Some(session_token.clone()),
+                        None,
+                    )?;
+                    self.execution_ready = true;
                 }
                 PublicServerMessage::InvocationRejected {
                     attempt_id,
@@ -2284,6 +2312,7 @@ impl InvocationSession {
 
     async fn connect_pending(&mut self, exact_retry: bool) -> Result<(), SessionTransportError> {
         self.attachment_state = AttachmentState::Pending { exact_retry };
+        self.execution_ready = false;
         self.deliveries.begin_connection(&[])?;
         for input in &mut self.inputs {
             input.channel = None;
@@ -3184,6 +3213,7 @@ fn operation_attempt_id(operation: &PublicClientMessage) -> Option<uuid::Uuid> {
 fn server_mappings(message: &PublicServerMessage) -> &[PublicStreamMapping] {
     match message {
         PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. }
         | PublicServerMessage::InvocationResult { mappings, .. }
         | PublicServerMessage::OutputStreamItem { mappings, .. }
         | PublicServerMessage::InputStreamAck { mappings, .. } => mappings,
@@ -3854,6 +3884,7 @@ where
 {
     match frame.frame() {
         ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
+        | ServerFrame::Message(PublicServerMessage::InvocationReady { .. })
         | ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => Ok(false),
         ServerFrame::Message(PublicServerMessage::InvocationRejected {
             code,
