@@ -1,0 +1,6 @@
+{
+  "agents": {},
+  "calls": [
+    { "target": { "kind": "tool", "component": "size-fixture:provider", "tool": "ts-streaming" }, "arguments": { "argv": ["echo"], "stdin": [65, 0, 255, 90] }, "expected": { "result": "4", "stdout": [65, 0, 255, 90], "stderr": [] } }
+  ]
+}

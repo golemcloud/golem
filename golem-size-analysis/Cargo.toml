@@ -35,6 +35,7 @@ analysis = [
     "dep:sha2",
     "dep:twiggy-ir",
     "dep:twiggy-parser",
+    "dep:wasm-encoder",
     "dep:wasmparser",
     "dep:wasmprinter",
     "dep:wit-component",
@@ -52,6 +53,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true, optional = true }
 twiggy-ir = { workspace = true, optional = true }
 twiggy-parser = { workspace = true, optional = true }
+wasm-encoder = { workspace = true, optional = true, features = ["wasmparser"] }
 wasmparser = { workspace = true, optional = true }
 wasmprinter = { workspace = true, optional = true }
 wit-component = { workspace = true, optional = true }

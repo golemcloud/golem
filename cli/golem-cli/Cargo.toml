@@ -159,6 +159,7 @@ goldenfile = { workspace = true }
 golem-common = { workspace = true, features = ["proptest"] }
 golem-model-mock = { workspace = true }
 golem-native-tool = { workspace = true }
+golem-size-analysis = { workspace = true, features = ["analysis"] }
 log = { workspace = true }
 poem = { workspace = true, features = ["rustls"] }
 pretty_assertions = { workspace = true }

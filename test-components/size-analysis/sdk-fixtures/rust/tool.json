@@ -1,0 +1,6 @@
+{
+  "agents": {},
+  "calls": [
+    { "target": { "kind": "tool", "component": "size-fixture:provider", "tool": "streaming" }, "arguments": { "argv": ["no-stream", "size-fixture"], "stdin": [] }, "expected": { "result": "no-stream:size-fixture", "stdout": [], "stderr": [] } }
+  ]
+}

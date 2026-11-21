@@ -1,0 +1,6 @@
+{
+  "agents": {},
+  "calls": [
+    { "target": { "kind": "tool", "component": "size-fixture:provider", "tool": "stdin-probe" }, "arguments": { "argv": ["ignore"], "stdin": [] }, "expected": { "result": null, "stdout": [], "stderr": [] } }
+  ]
+}
