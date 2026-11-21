@@ -1371,7 +1371,7 @@ async fn test_streaming_invocation_cli_end_to_end() {
                     [
                         cmd::AGENT,
                         cmd::INVOKE,
-                        &interrupted_agent,
+                        interrupted_agent,
                         "transform",
                         "-",
                         flag::FORMAT,
