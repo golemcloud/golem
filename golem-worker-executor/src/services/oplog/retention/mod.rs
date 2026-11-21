@@ -17,7 +17,8 @@
 //! Oplog indexes never renumber. A cut of the oplog removes the entries before the retained start,
 //! and the start only moves forward. The `Create` entry at index 1 is the identity of the agent.
 //! When the start is above 1, an empty read and a read of the `Create` entry alone are the only
-//! reads below the start that are allowed. A read of a range or a page from index 1 is expired.
+//! reads below the start that are allowed. A read of more than the `Create` entry from index 1 is
+//! expired.
 //!
 //! The rules here are pure functions over the retained start. Every reader of the retained
 //! entries uses them: a walk in chunks reads with [`OplogRetention::chunk`], a public page reads
@@ -76,7 +77,8 @@ impl OplogRange {
     /// cut to `max` entries. A `max` of 0 reads one entry, so that the walk always moves forward.
     /// `None` when `from` is after `last`, which ends the walk. Unlike
     /// [`OplogRetention::chunk`], the range keeps `from`: a walk that must not skip an entry reads
-    /// from where it is, and the oplog refuses a read below the retained start.
+    /// from where it is, and the oplog refuses a read below the retained start. The count is exact
+    /// only while `last` is below `u64::MAX`; oplog indexes stay far below it.
     pub fn within(from: OplogIndex, last: OplogIndex, max: u64) -> Option<Self> {
         (from <= last).then(|| Self {
             start: from,
@@ -86,7 +88,8 @@ impl OplogRange {
         })
     }
 
-    /// The index after the last entry of the range.
+    /// The index after the last entry of the range. The last entry must be below `u64::MAX`,
+    /// because the index after it does not exist otherwise.
     pub fn end(self) -> OplogIndex {
         OplogIndex::from_u64(self.start.as_u64() + self.count)
     }

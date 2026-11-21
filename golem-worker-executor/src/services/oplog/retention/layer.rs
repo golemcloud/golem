@@ -65,8 +65,8 @@ impl RetentionOplog {
 }
 
 /// Reads `n` entries from `idx` with `read`, by the rules of `retention`: the check of the read
-/// comes first, and a failed read goes through [`OplogRetention::classify`]. The open handle and
-/// the service both read through it.
+/// comes first, and a failed read goes through [`OplogRetention::classify_unreadable`]. The open
+/// handle and the service both read through it.
 async fn read_retained<Fut>(
     retention: OplogRetention,
     agent_id: &AgentId,
