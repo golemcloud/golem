@@ -15,6 +15,8 @@
 use super::super::name_comparison::{
     NativeNameComparisonMode, NativeNameCoordinationKey, SandboxNameComparisonKey,
 };
+#[cfg(target_os = "linux")]
+use super::super::object_identity::NativeFileIdentity;
 use super::super::object_identity::{SandboxDirectoryId, directory_identity, native_file_identity};
 use super::super::open_handles::{NativeDirectoryHandle, SandboxDirectory, SandboxFilePermissions};
 use super::super::sandbox_paths::{
