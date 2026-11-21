@@ -717,6 +717,24 @@ mod tests {
         assert_eq!(json_body(refused).await["error"]["code"], -32601);
     }
 
+    #[test]
+    async fn a_request_without_a_header_is_2025_03_26_also_when_its_meta_names_a_revision() {
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let served = Served::new(&harness).await;
+        let meta_2025 = json!({"_meta": {"io.modelcontextprotocol/protocolVersion": "2025-03-26"}});
+        let listed =
+            streamed_messages(served.post(&[], rpc(1, "tools/list", meta_2025)).await).await;
+        let expected: std::collections::BTreeSet<String> =
+            [AGENT_TOOL, NATIVE_TOOL].map(String::from).into();
+        assert_eq!(tool_names(&listed), expected, "{listed:?}");
+
+        let refused = served
+            .post(&[], rpc(2, "tools/list", json!({"_meta": meta_2026()})))
+            .await;
+        assert_eq!(refused.status(), http::StatusCode::BAD_REQUEST);
+        assert_eq!(json_body(refused).await["error"]["code"], -32020);
+    }
+
     /// Starts a native call that answers when the test releases it, and waits until its tool
     /// session is open. Returns the call's response and the rest of the session's request
     /// stream, which ends when the call returns.
