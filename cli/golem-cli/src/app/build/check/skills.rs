@@ -168,16 +168,7 @@ pub(crate) fn resolve_claude_skills_context(
     let claude_path = application_path.join(".claude");
     let path_state = resolve_claude_path_state(&claude_path);
 
-    let mode = if cfg!(windows) {
-        ClaudeSkillsSyncMode::SyncAll
-    } else {
-        match path_state {
-            ClaudePathState::Directory => ClaudeSkillsSyncMode::SyncAll,
-            ClaudePathState::Missing | ClaudePathState::Symlink | ClaudePathState::File => {
-                ClaudeSkillsSyncMode::ClaudeSymlink
-            }
-        }
-    };
+    let mode = platform::sync_mode(path_state);
 
     Ok(ClaudeSkillsContext { mode, path_state })
 }
@@ -224,27 +215,59 @@ fn ensure_claude_symlink_or_warn(
         }
     }
 
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(".agents", &claude_link).with_context(|| {
-            format!(
-                "Failed to create Claude symlink at {}",
-                claude_link.display()
-            )
-        })?;
-    }
-
-    #[cfg(windows)]
-    {
-        std::os::windows::fs::symlink_dir(".agents", &claude_link).with_context(|| {
-            format!(
-                "Failed to create Claude symlink at {}",
-                claude_link.display()
-            )
-        })?;
-    }
+    platform::symlink(&claude_link).with_context(|| {
+        format!(
+            "Failed to create Claude symlink at {}",
+            claude_link.display()
+        )
+    })?;
 
     Ok(())
+}
+
+#[cfg(unix)]
+mod platform {
+    use super::{ClaudePathState, ClaudeSkillsSyncMode};
+    pub(super) fn sync_mode(path_state: ClaudePathState) -> ClaudeSkillsSyncMode {
+        match path_state {
+            ClaudePathState::Directory => ClaudeSkillsSyncMode::SyncAll,
+            ClaudePathState::Missing | ClaudePathState::Symlink | ClaudePathState::File => {
+                ClaudeSkillsSyncMode::ClaudeSymlink
+            }
+        }
+    }
+    pub(super) fn symlink(path: &std::path::Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(".agents", path)
+    }
+}
+
+#[cfg(windows)]
+mod platform {
+    use super::{ClaudePathState, ClaudeSkillsSyncMode};
+    pub(super) fn sync_mode(_path_state: ClaudePathState) -> ClaudeSkillsSyncMode {
+        ClaudeSkillsSyncMode::SyncAll
+    }
+    pub(super) fn symlink(path: &std::path::Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(".agents", path)
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+mod platform {
+    use super::{ClaudePathState, ClaudeSkillsSyncMode};
+
+    pub(super) fn sync_mode(path_state: ClaudePathState) -> ClaudeSkillsSyncMode {
+        match path_state {
+            ClaudePathState::Directory => ClaudeSkillsSyncMode::SyncAll,
+            ClaudePathState::Missing | ClaudePathState::Symlink | ClaudePathState::File => {
+                ClaudeSkillsSyncMode::ClaudeSymlink
+            }
+        }
+    }
+
+    pub(super) fn symlink(_path: &std::path::Path) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub(crate) fn warn_claude_path_is_file(

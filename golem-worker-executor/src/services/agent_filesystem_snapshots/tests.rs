@@ -22,8 +22,6 @@ use crate::filesystem_snapshot::{
 };
 use crate::services::agent_filesystem::{RestoreClass, RestoreTree};
 use crate::services::golem_config::FilesystemSnapshotUploadValues;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use crate::services::golem_config::FilesystemStorageMode;
 use async_trait::async_trait;
 use futures::FutureExt as _;
 use futures::StreamExt as _;
@@ -3389,80 +3387,96 @@ fn a_dropped_fork_keeps_both_incarnations_busy_until_its_copy_returns() {
     })
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[test_r::timeout("60s")]
-async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload() {
-    let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
-        .map(std::path::PathBuf::from)
-        .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
-    a_volume_below_the_pressure_target_admits_no_periodic_upload(
-        FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
-            root: root.into(),
-        },
-        "managed-xfs-pressure",
-    )
-    .await;
-}
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod native_pressure {
+    use super::*;
+    use crate::services::golem_config::FilesystemStorageMode;
 
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the unprivileged reflink XFS test runner"]
-#[test_r::timeout("60s")]
-async fn reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload() {
-    let root = std::env::var_os("GOLEM_REFLINK_XFS_TEST_ROOT")
+    #[cfg(target_os = "linux")]
+    mod linux {
+        use super::*;
+        use test_r::test;
+
+        #[test]
+        #[ignore = "requires the privileged managed XFS test runner"]
+        #[test_r::timeout("60s")]
+        async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload() {
+            let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
+                .map(std::path::PathBuf::from)
+                .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
+            a_volume_below_the_pressure_target_admits_no_periodic_upload(
+                FilesystemStorageMode::ManagedXfs {
+                    xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
+                    root: root.into(),
+                },
+                "managed-xfs-pressure",
+            )
+            .await;
+        }
+
+        #[test]
+        #[ignore = "requires the unprivileged reflink XFS test runner"]
+        #[test_r::timeout("60s")]
+        async fn reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload() {
+            let root = std::env::var_os("GOLEM_REFLINK_XFS_TEST_ROOT")
         .map(std::path::PathBuf::from)
         .expect("GOLEM_REFLINK_XFS_TEST_ROOT must name the mounted XFS test root without quotas");
-    a_volume_below_the_pressure_target_admits_no_periodic_upload(
-        FilesystemStorageMode::ReflinkXfs { root: root.into() },
-        "reflink-xfs-pressure",
-    )
-    .await;
-}
+            a_volume_below_the_pressure_target_admits_no_periodic_upload(
+                FilesystemStorageMode::ReflinkXfs { root: root.into() },
+                "reflink-xfs-pressure",
+            )
+            .await;
+        }
+    }
 
-#[cfg(target_os = "macos")]
-#[test]
-#[test_r::timeout("60s")]
-#[test_r::tag(native_apfs)]
-async fn apfs_a_volume_below_the_pressure_target_admits_no_periodic_upload() {
-    let root = tempfile::tempdir().unwrap();
-    a_volume_below_the_pressure_target_admits_no_periodic_upload(
-        FilesystemStorageMode::Apfs {
-            root: root.path().into(),
-        },
-        "apfs-pressure",
-    )
-    .await;
-}
+    #[cfg(target_os = "macos")]
+    mod macos {
+        use super::*;
+        use test_r::test;
 
-/// Binds `storage` on a real volume, sets pressure targets that no volume reaches, and checks
-/// that the volume has no room for the periodic upload of the agent `name`.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-async fn a_volume_below_the_pressure_target_admits_no_periodic_upload(
-    storage: FilesystemStorageMode,
-    name: &str,
-) {
-    let provisioning = crate::filesystem::sandbox::SandboxFilesystemProvisioning::new(
-        &storage,
-        crate::services::golem_config::FilesystemStorageConfig::default().cleanup_retry,
-    )
-    .unwrap();
-    let pressure = FilesystemPressureConfig::new(1, u64::MAX, 1, 2, 1, Duration::ZERO).unwrap();
-    let snapshots = AgentFilesystemSnapshots::enabled(
-        StoreOf::Given(Arc::new(InMemorySnapshotStore::new()) as Arc<dyn FilesystemSnapshotStore>),
-        settings(4, 4),
-        VolumeRoom::Pressure {
-            volume: provisioning.volume().clone(),
-            pressure,
-        },
-        CancellationToken::new(),
-    );
+        #[test]
+        #[test_r::timeout("60s")]
+        #[test_r::tag(native_apfs)]
+        async fn apfs_a_volume_below_the_pressure_target_admits_no_periodic_upload() {
+            let root = tempfile::tempdir().unwrap();
+            a_volume_below_the_pressure_target_admits_no_periodic_upload(
+                FilesystemStorageMode::Apfs {
+                    root: root.path().into(),
+                },
+                "apfs-pressure",
+            )
+            .await;
+        }
+    }
 
-    let admitted = snapshots.admit_periodic(&agent_snapshots(name)).await;
+    /// Binds `storage` on a real volume, sets pressure targets that no volume reaches, and checks
+    /// that the volume has no room for the periodic upload of the agent `name`.
+    async fn a_volume_below_the_pressure_target_admits_no_periodic_upload(
+        storage: FilesystemStorageMode,
+        name: &str,
+    ) {
+        let provisioning = crate::filesystem::sandbox::SandboxFilesystemProvisioning::new(
+            &storage,
+            crate::services::golem_config::FilesystemStorageConfig::default().cleanup_retry,
+        )
+        .unwrap();
+        let pressure = FilesystemPressureConfig::new(1, u64::MAX, 1, 2, 1, Duration::ZERO).unwrap();
+        let snapshots = AgentFilesystemSnapshots::enabled(
+            StoreOf::Given(
+                Arc::new(InMemorySnapshotStore::new()) as Arc<dyn FilesystemSnapshotStore>
+            ),
+            settings(4, 4),
+            VolumeRoom::Pressure {
+                volume: provisioning.volume().clone(),
+                pressure,
+            },
+            CancellationToken::new(),
+        );
 
-    assert_eq!(admitted.err(), Some(SnapshotSkip::VolumeUnderPressure));
+        let admitted = snapshots.admit_periodic(&agent_snapshots(name)).await;
+
+        assert_eq!(admitted.err(), Some(SnapshotSkip::VolumeUnderPressure));
+    }
 }
 
 /// Whether the job of `agent` waits for its next run after a failed run.

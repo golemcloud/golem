@@ -454,16 +454,21 @@ async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
 /// The invocation writes its first byte and then waits. Only the watch of stdout can end it
 /// after the reader has left, because the command writes nothing more.
 #[cfg(unix)]
-#[test]
-#[timeout("15 minutes")]
-async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
- {
-    let ctx = streaming_invocation_context().await;
-    assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
-        &ctx,
-        &["produce_byte_then_wait"],
-    )
-    .await;
+mod reader_watch_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    #[timeout("15 minutes")]
+    async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
+     {
+        let ctx = streaming_invocation_context().await;
+        assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+            &ctx,
+            &["produce_byte_then_wait"],
+        )
+        .await;
+    }
 }
 
 /// The invocation goes on writing after the reader has left, so a failed write of the output
@@ -525,30 +530,35 @@ async fn test_rejected_agent_invoke_ends_with_the_exit_code_of_sigpipe_when_stde
 }
 
 #[cfg(unix)]
-#[test]
-#[timeout("15 minutes")]
-async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
-    let ctx = streaming_invocation_context().await;
-    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+mod idle_stream_tests {
+    use super::*;
+    use test_r::test;
 
-    let created = ctx
-        .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
-        .await;
-    assert!(created.success_or_dump());
+    #[test]
+    #[timeout("15 minutes")]
+    async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
+        let ctx = streaming_invocation_context().await;
+        let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
 
-    let stream = tokio::time::timeout(
-        Duration::from_secs(40),
-        ctx.cli_closing_stdout_when_quiet([cmd::AGENT, "stream", &agent]),
-    )
-    .await
-    .expect("an idle agent stream kept running with a closed stdout");
-    assert_eq!(
-        stream.exit_code(),
-        Some(CLOSED_OUTPUT_EXIT),
-        "the idle agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
-        stream.stderr_text()
-    );
-    assert!(!stream.stderr_text().contains("panicked"));
+        let created = ctx
+            .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
+            .await;
+        assert!(created.success_or_dump());
+
+        let stream = tokio::time::timeout(
+            Duration::from_secs(40),
+            ctx.cli_closing_stdout_when_quiet([cmd::AGENT, "stream", &agent]),
+        )
+        .await
+        .expect("an idle agent stream kept running with a closed stdout");
+        assert_eq!(
+            stream.exit_code(),
+            Some(CLOSED_OUTPUT_EXIT),
+            "the idle agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
+            stream.stderr_text()
+        );
+        assert!(!stream.stderr_text().contains("panicked"));
+    }
 }
 
 #[test]
@@ -1353,67 +1363,74 @@ async fn test_streaming_invocation_cli_end_to_end() {
 
     let interrupted_agent = streaming_agent(&Uuid::new_v4().to_string());
     #[cfg(unix)]
-    {
-        let exit_code = ctx
-            .cli_ctrl_c_after(
+    mod interruption {
+        use super::*;
+        pub(super) async fn run(ctx: &TestContext, interrupted_agent: &str) {
+            let exit_code = ctx
+                .cli_ctrl_c_after(
+                    [
+                        cmd::AGENT,
+                        cmd::INVOKE,
+                        &interrupted_agent,
+                        "transform",
+                        "-",
+                        flag::FORMAT,
+                        "json",
+                        "--no-stream",
+                    ],
+                    "\"kind\":\"accepted\"",
+                    Duration::ZERO,
+                )
+                .await;
+            assert_eq!(exit_code, 130);
+
+            let backpressured_agent = streaming_agent(&Uuid::new_v4().to_string());
+            let exit_code = ctx
+                .cli_ctrl_c_after(
+                    [
+                        cmd::AGENT,
+                        cmd::INVOKE,
+                        &backpressured_agent,
+                        "produce_many_bytes",
+                        "200000",
+                        flag::FORMAT,
+                        "json",
+                        "--no-stream",
+                    ],
+                    "\"kind\":\"accepted\"",
+                    Duration::from_secs(1),
+                )
+                .await;
+            assert_eq!(exit_code, 130);
+        }
+    }
+    #[cfg(not(unix))]
+    mod interruption {
+        use super::*;
+        pub(super) async fn run(ctx: &TestContext, interrupted_agent: &str) {
+            let interactive_agent = interrupted_agent.to_string();
+            ctx.cli_interactive(
                 [
                     cmd::AGENT,
                     cmd::INVOKE,
-                    &interrupted_agent,
+                    &interactive_agent,
                     "transform",
                     "-",
                     flag::FORMAT,
                     "json",
                     "--no-stream",
                 ],
-                "\"kind\":\"accepted\"",
-                Duration::ZERO,
+                |session| {
+                    session.set_expect_timeout(Some(Duration::from_secs(30)));
+                    session.expect_str("\"kind\":\"accepted\"")?;
+                    session.send("\u{3}")?;
+                    session.expect_eof()
+                },
             )
             .await;
-        assert_eq!(exit_code, 130);
-
-        let backpressured_agent = streaming_agent(&Uuid::new_v4().to_string());
-        let exit_code = ctx
-            .cli_ctrl_c_after(
-                [
-                    cmd::AGENT,
-                    cmd::INVOKE,
-                    &backpressured_agent,
-                    "produce_many_bytes",
-                    "200000",
-                    flag::FORMAT,
-                    "json",
-                    "--no-stream",
-                ],
-                "\"kind\":\"accepted\"",
-                Duration::from_secs(1),
-            )
-            .await;
-        assert_eq!(exit_code, 130);
+        }
     }
-    #[cfg(not(unix))]
-    {
-        let interactive_agent = interrupted_agent.clone();
-        ctx.cli_interactive(
-            [
-                cmd::AGENT,
-                cmd::INVOKE,
-                &interactive_agent,
-                "transform",
-                "-",
-                flag::FORMAT,
-                "json",
-                "--no-stream",
-            ],
-            |session| {
-                session.set_expect_timeout(Some(Duration::from_secs(30)));
-                session.expect_str("\"kind\":\"accepted\"")?;
-                session.send("\u{3}")?;
-                session.expect_eof()
-            },
-        )
-        .await;
-    }
+    interruption::run(&ctx, &interrupted_agent).await;
 
     let after_interrupt = ctx
         .cli([

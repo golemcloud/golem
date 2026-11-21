@@ -422,91 +422,98 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
 }
 
 #[cfg(unix)]
-#[test]
-#[timeout("60s")]
-async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mtime_and_a_full_save_reads_it()
- {
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let rewrite = |tree: &Path| {
-        let path = tree.join("a.txt");
-        let old = modified(&path);
-        let old_change_time = changed_at(&path);
-        wait_past_change_times(std::slice::from_ref(&path));
-        std::fs::write(&path, b"A.TXT").unwrap();
-        set_modified(&path, old);
-        assert_ne!(
-            changed_at(&path),
-            old_change_time,
-            "the rewrite kept the change time of the file"
+mod unix_change_detection {
+    use super::change_times::{changed_at, wait_past_change_times};
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("60s")]
+    async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mtime_and_a_full_save_reads_it()
+     {
+        let storage = Arc::new(InMemoryBlobStorage::new());
+        let rewrite = |tree: &Path| {
+            let path = tree.join("a.txt");
+            let old = modified(&path);
+            let old_change_time = changed_at(&path);
+            wait_past_change_times(std::slice::from_ref(&path));
+            std::fs::write(&path, b"A.TXT").unwrap();
+            set_modified(&path, old);
+            assert_ne!(
+                changed_at(&path),
+                old_change_time,
+                "the rewrite kept the change time of the file"
+            );
+        };
+        let changed = async |detection: StoreChangeDetection| {
+            let tree = three_file_tree();
+            let scope = new_scope();
+            let store_with_deadline = store_with_deadline(storage.clone(), STORAGE_CALL_DEADLINE);
+            store_with_deadline
+                .save(
+                    &scope,
+                    &name("p-first"),
+                    tree.path(),
+                    None,
+                    never_cancelled(),
+                    &Unlimited,
+                )
+                .await
+                .unwrap();
+            rewrite(tree.path());
+            store_with_deadline
+                .save(
+                    &scope,
+                    &name("p-second"),
+                    tree.path(),
+                    Some((&name("p-first"), detection)),
+                    never_cancelled(),
+                    &Unlimited,
+                )
+                .await
+                .unwrap();
+            let into = Scratch::new();
+            store_with_deadline
+                .restore(&scope, &name("p-second"), into.path(), &Unlimited)
+                .await
+                .unwrap();
+            let counts = with_existing_repository(
+                storage.clone(),
+                &scope,
+                STORAGE_CALL_DEADLINE,
+                |repository| {
+                    repository
+                        .get_all_snapshots()?
+                        .into_iter()
+                        .find(|snapshot| snapshot.label == "p-second")
+                        .and_then(|snapshot| snapshot.summary)
+                        .map(|summary| {
+                            (
+                                summary.files_new,
+                                summary.files_changed,
+                                summary.files_unmodified,
+                            )
+                        })
+                        .context("the second snapshot has no summary")
+                },
+            )
+            .await
+            .unwrap();
+            (counts, std::fs::read(into.path().join("a.txt")).unwrap())
+        };
+
+        let missed = changed(StoreChangeDetection::SizeMtime).await;
+        let seen = changed(StoreChangeDetection::Full).await;
+
+        assert_eq!(
+            (missed, seen),
+            (
+                ((0, 0, 3), b"a.txt".to_vec()),
+                ((3, 0, 0), b"A.TXT".to_vec())
+            )
         );
-    };
-    let changed = async |detection: StoreChangeDetection| {
-        let tree = three_file_tree();
-        let scope = new_scope();
-        let store_with_deadline = store_with_deadline(storage.clone(), STORAGE_CALL_DEADLINE);
-        store_with_deadline
-            .save(
-                &scope,
-                &name("p-first"),
-                tree.path(),
-                None,
-                never_cancelled(),
-                &Unlimited,
-            )
-            .await
-            .unwrap();
-        rewrite(tree.path());
-        store_with_deadline
-            .save(
-                &scope,
-                &name("p-second"),
-                tree.path(),
-                Some((&name("p-first"), detection)),
-                never_cancelled(),
-                &Unlimited,
-            )
-            .await
-            .unwrap();
-        let into = Scratch::new();
-        store_with_deadline
-            .restore(&scope, &name("p-second"), into.path(), &Unlimited)
-            .await
-            .unwrap();
-        let counts = with_existing_repository(
-            storage.clone(),
-            &scope,
-            STORAGE_CALL_DEADLINE,
-            |repository| {
-                repository
-                    .get_all_snapshots()?
-                    .into_iter()
-                    .find(|snapshot| snapshot.label == "p-second")
-                    .and_then(|snapshot| snapshot.summary)
-                    .map(|summary| {
-                        (
-                            summary.files_new,
-                            summary.files_changed,
-                            summary.files_unmodified,
-                        )
-                    })
-                    .context("the second snapshot has no summary")
-            },
-        )
-        .await
-        .unwrap();
-        (counts, std::fs::read(into.path().join("a.txt")).unwrap())
-    };
-
-    let missed = changed(StoreChangeDetection::SizeMtime).await;
-    let seen = changed(StoreChangeDetection::Full).await;
-
-    assert_eq!(
-        (missed, seen),
-        (
-            ((0, 0, 3), b"a.txt".to_vec()),
-            ((3, 0, 0), b"A.TXT".to_vec())
-        )
-    );
+    }
 }
 
 #[test]
@@ -557,56 +564,62 @@ fn a_save_time_is_the_first_whole_millisecond_that_is_not_before_the_call() {
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-#[timeout("60s")]
-async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
-    use crate::filesystem_snapshot::backend::rustic::repository::open_existing;
-    use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::repository_snapshots;
-    use crate::filesystem_snapshot::backend::rustic::test_support::{backend_of, key};
-    use std::os::fd::AsRawFd;
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let store = store(
-        storage.clone(),
-        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-    );
-    let scope = new_scope();
-    let tree = fixture_tree();
-    let directory = std::fs::File::open(tree.path()).unwrap();
-    let through_fd = format!("/proc/self/fd/{}", directory.as_raw_fd());
+mod linux {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use test_r::{test, timeout};
 
-    store
-        .save(
-            &scope,
-            &name("p-fd"),
-            Path::new(&through_fd),
-            None,
-            never_cancelled(),
-            &Unlimited,
-        )
+    #[test]
+    #[timeout("60s")]
+    async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
+        use crate::filesystem_snapshot::backend::rustic::repository::open_existing;
+        use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::repository_snapshots;
+        use crate::filesystem_snapshot::backend::rustic::test_support::{backend_of, key};
+        use std::os::fd::AsRawFd;
+        let storage = Arc::new(InMemoryBlobStorage::new());
+        let store = store(
+            storage.clone(),
+            policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+        );
+        let scope = new_scope();
+        let tree = fixture_tree();
+        let directory = std::fs::File::open(tree.path()).unwrap();
+        let through_fd = format!("/proc/self/fd/{}", directory.as_raw_fd());
+
+        store
+            .save(
+                &scope,
+                &name("p-fd"),
+                Path::new(&through_fd),
+                None,
+                never_cancelled(),
+                &Unlimited,
+            )
+            .await
+            .unwrap();
+        let backend = backend_of(storage, &scope, LONG_DEADLINE);
+        let paths = tokio::task::spawn_blocking(move || {
+            let repository = open_existing(backend.clone(), &key()).unwrap().unwrap();
+            repository_snapshots(&repository, &backend)
+                .unwrap()
+                .readable
+                .iter()
+                .map(|snapshot| snapshot.paths.to_string())
+                .collect::<Vec<_>>()
+        })
         .await
         .unwrap();
-    let backend = backend_of(storage, &scope, LONG_DEADLINE);
-    let paths = tokio::task::spawn_blocking(move || {
-        let repository = open_existing(backend.clone(), &key()).unwrap().unwrap();
-        repository_snapshots(&repository, &backend)
-            .unwrap()
-            .readable
-            .iter()
-            .map(|snapshot| snapshot.paths.to_string())
-            .collect::<Vec<_>>()
-    })
-    .await
-    .unwrap();
 
-    assert_eq!(
-        (
-            paths,
-            restored_listing(&store, &scope, &name("p-fd"))
-                .await
-                .unwrap()
-        ),
-        (vec!["/".to_string()], listing(tree.path()))
-    );
+        assert_eq!(
+            (
+                paths,
+                restored_listing(&store, &scope, &name("p-fd"))
+                    .await
+                    .unwrap()
+            ),
+            (vec!["/".to_string()], listing(tree.path()))
+        );
+    }
 }
 
 #[test]
@@ -800,46 +813,52 @@ async fn a_second_save_of_an_unchanged_tree_writes_no_pack() {
 }
 
 #[cfg(unix)]
-#[test]
-#[timeout("60s")]
-async fn a_save_of_a_file_without_read_permission_gives_source_with_permission_denied() {
-    use std::os::unix::fs::PermissionsExt;
-    // SAFETY: `geteuid` has no preconditions.
-    let uid = unsafe { libc::geteuid() };
-    assert_ne!(
-        uid, 0,
-        "this test needs a user other than root, because permissions do not stop root from a read"
-    );
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let store = store(
-        storage.clone(),
-        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-    );
-    let scope = new_scope();
-    let tree = one_file_tree("readable");
-    let locked = tree.path().join("locked.txt");
-    std::fs::write(&locked, b"locked").unwrap();
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+mod unix_permissions {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use test_r::{test, timeout};
 
-    let saved = store
-        .save(
-            &scope,
-            &name("p-locked"),
-            tree.path(),
-            None,
-            never_cancelled(),
-            &Unlimited,
-        )
-        .await;
+    #[test]
+    #[timeout("60s")]
+    async fn a_save_of_a_file_without_read_permission_gives_source_with_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: `geteuid` has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        assert_ne!(
+            uid, 0,
+            "this test needs a user other than root, because permissions do not stop root from a read"
+        );
+        let storage = Arc::new(InMemoryBlobStorage::new());
+        let store = store(
+            storage.clone(),
+            policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+        );
+        let scope = new_scope();
+        let tree = one_file_tree("readable");
+        let locked = tree.path().join("locked.txt");
+        std::fs::write(&locked, b"locked").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
 
-    assert!(
-        matches!(&saved, Err(SaveError::Source(error)) if error.kind() == std::io::ErrorKind::PermissionDenied),
-        "{saved:?}"
-    );
-    assert_eq!(
-        blobs(&*storage, scope.namespace(), "snapshots/").await,
-        Vec::<String>::new()
-    );
+        let saved = store
+            .save(
+                &scope,
+                &name("p-locked"),
+                tree.path(),
+                None,
+                never_cancelled(),
+                &Unlimited,
+            )
+            .await;
+
+        assert!(
+            matches!(&saved, Err(SaveError::Source(error)) if error.kind() == std::io::ErrorKind::PermissionDenied),
+            "{saved:?}"
+        );
+        assert_eq!(
+            blobs(&*storage, scope.namespace(), "snapshots/").await,
+            Vec::<String>::new()
+        );
+    }
 }
 
 #[test]
@@ -1046,8 +1065,7 @@ async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_unchanged_file() {
     let scope = new_scope();
     let tree = three_file_tree();
     let copy = Scratch::new();
-    #[cfg(unix)]
-    wait_past_change_times(&entries(tree.path()));
+    change_times::wait_before_copy(tree.path());
     copy_flat_tree(tree.path(), copy.path());
 
     store
@@ -3536,48 +3554,59 @@ fn copy_flat_tree(from: &Path, to: &Path) {
 
 /// Gives the change time of the file as seconds and nanoseconds.
 #[cfg(unix)]
-fn changed_at(path: &Path) -> (i64, i64) {
-    use std::os::unix::fs::MetadataExt;
-    let metadata = std::fs::symlink_metadata(path).unwrap();
-    (metadata.ctime(), metadata.ctime_nsec())
+mod change_times {
+    use super::*;
+
+    pub(super) fn wait_before_copy(directory: &Path) {
+        wait_past_change_times(&entries(directory));
+    }
+
+    pub(super) fn changed_at(path: &Path) -> (i64, i64) {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(path).unwrap();
+        (metadata.ctime(), metadata.ctime_nsec())
+    }
+
+    /// The longest time that [`wait_past_change_times`] waits.
+    const CHANGE_TIME_WAIT: Duration = Duration::from_secs(10);
+
+    /// Waits until a file that changes now gets a later change time than each of the files.
+    ///
+    /// The kernel takes the change time from a clock that moves in ticks of some milliseconds, so two
+    /// changes within one tick get the same change time. The wait changes a probe file in its own
+    /// directory until the change time of the probe is later than the latest change time of the
+    /// files. It fails the test when that does not happen within [`CHANGE_TIME_WAIT`].
+    pub(super) fn wait_past_change_times(files: &[PathBuf]) {
+        let latest = files.iter().map(|file| changed_at(file)).max().unwrap();
+        let probe_directory = Scratch::new();
+        let probe = probe_directory.path().join("probe");
+        let started = std::time::Instant::now();
+        let passed = std::iter::repeat_with(|| {
+            std::fs::write(&probe, b"probe").unwrap();
+            changed_at(&probe)
+        })
+        .take_while(|_| started.elapsed() < CHANGE_TIME_WAIT)
+        .find(|probe_time| *probe_time > latest);
+        assert!(
+            passed.is_some(),
+            "the change time of a new change did not pass {latest:?} within {CHANGE_TIME_WAIT:?}"
+        );
+    }
+
+    /// Gives the path of each entry of the directory, in the order of the names.
+    fn entries(directory: &Path) -> Vec<PathBuf> {
+        let mut paths = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths
+    }
 }
 
-/// The longest time that [`wait_past_change_times`] waits.
-#[cfg(unix)]
-const CHANGE_TIME_WAIT: Duration = Duration::from_secs(10);
-
-/// Waits until a file that changes now gets a later change time than each of the files.
-///
-/// The kernel takes the change time from a clock that moves in ticks of some milliseconds, so two
-/// changes within one tick get the same change time. The wait changes a probe file in its own
-/// directory until the change time of the probe is later than the latest change time of the
-/// files. It fails the test when that does not happen within [`CHANGE_TIME_WAIT`].
-#[cfg(unix)]
-fn wait_past_change_times(files: &[PathBuf]) {
-    let latest = files.iter().map(|file| changed_at(file)).max().unwrap();
-    let probe_directory = Scratch::new();
-    let probe = probe_directory.path().join("probe");
-    let started = std::time::Instant::now();
-    let passed = std::iter::repeat_with(|| {
-        std::fs::write(&probe, b"probe").unwrap();
-        changed_at(&probe)
-    })
-    .take_while(|_| started.elapsed() < CHANGE_TIME_WAIT)
-    .find(|probe_time| *probe_time > latest);
-    assert!(
-        passed.is_some(),
-        "the change time of a new change did not pass {latest:?} within {CHANGE_TIME_WAIT:?}"
-    );
-}
-
-/// Gives the path of each entry of the directory, in the order of the names.
-fn entries(directory: &Path) -> Vec<PathBuf> {
-    let mut paths = std::fs::read_dir(directory)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths
+#[cfg(not(unix))]
+mod change_times {
+    pub(super) fn wait_before_copy(_directory: &std::path::Path) {}
 }
 
 /// Writes a tree of three files into a new directory, and gives the directory.

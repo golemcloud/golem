@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::StorageVolumeError;
-use super::{FilesystemIdentity, FilesystemVolume, space_from_values};
+use super::capacity::space_from_values;
+use super::{FilesystemIdentity, FilesystemVolume};
 use crate::filesystem::errors::OperationContext;
 
 use crate::filesystem::path_removal;

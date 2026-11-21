@@ -47,9 +47,7 @@ use crate::filesystem::sandbox::open_handles::AppendCoordinationCounts;
 use crate::filesystem::sandbox::open_handles::SandboxDirectory;
 use crate::filesystem::sandbox::open_handles::SandboxHandle;
 use crate::filesystem::sandbox::sandbox_paths::SandboxPath;
-#[cfg(target_os = "linux")]
-use crate::filesystem::volume::FilesystemIdentity;
-use crate::filesystem::volume::FilesystemVolume;
+use crate::filesystem::volume::copy_on_write_volume_for_test;
 use crate::services::golem_config::FilesystemStorageMode;
 use bytes::Bytes;
 use golem_common::model::RetryConfig;
@@ -86,25 +84,11 @@ async fn only_bounded_work_on_known_local_storage_can_run_in_place() {
 
     // Only the volume mode is read by the scheduling policy.
     let root = tempfile::NamedTempFile::new().unwrap();
-    filesystem.volume = FilesystemVolume::copy_on_write(
-        Arc::new(root.reopen().unwrap()),
-        #[cfg(target_os = "linux")]
-        FilesystemIdentity { device: 1 },
-    );
+    filesystem.volume = copy_on_write_volume_for_test(Arc::new(root.reopen().unwrap()));
     assert_eq!(filesystem.short_task(), BlockingTask::InPlace);
     assert_eq!(filesystem.transfer_task(0), BlockingTask::InPlace);
     assert_eq!(filesystem.transfer_task(64 * 1024), BlockingTask::InPlace);
     assert_eq!(filesystem.transfer_task(64 * 1024 + 1), BlockingTask::Spawn);
-
-    async fn spawned<F: Future>(future: F) -> F::Output {
-        let (result, modes) = crate::filesystem::blocking::record_tasks(future).await;
-        assert!(!modes.is_empty(), "the operation must dispatch native work");
-        assert!(
-            modes.iter().all(|mode| *mode == BlockingTask::Spawn),
-            "{modes:?}"
-        );
-        result
-    }
 
     let directory = filesystem
         .open(
@@ -142,8 +126,43 @@ async fn only_bounded_work_on_known_local_storage_can_run_in_place() {
     filesystem.close(file).await.unwrap();
     filesystem.close(directory).await.unwrap();
 
-    #[cfg(target_os = "linux")]
-    {
+    target.discard().await.unwrap();
+    filesystem.delete_and_verify().await.unwrap();
+}
+
+async fn spawned<F: Future>(future: F) -> F::Output {
+    let (result, modes) = crate::filesystem::blocking::record_tasks(future).await;
+    assert!(!modes.is_empty(), "the operation must dispatch native work");
+    assert!(
+        modes.iter().all(|mode| *mode == BlockingTask::Spawn),
+        "{modes:?}"
+    );
+    result
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::*;
+    use std::num::{NonZeroU32, NonZeroU64};
+    use test_r::test;
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn quota_operations_always_dispatch_blocking_work() {
+        let provisioning = SandboxFilesystemProvisioning::new(
+            &FilesystemStorageMode::Temporary,
+            RetryConfig::default(),
+        )
+        .unwrap();
+        let name = SandboxFilesystemName::new(
+            "environment".to_string(),
+            "component".to_string(),
+            "scheduling".to_string(),
+        )
+        .unwrap();
+        let mut filesystem = provisioning.create_fresh(name).await.unwrap();
+        let root = tempfile::NamedTempFile::new().unwrap();
+        filesystem.volume = copy_on_write_volume_for_test(Arc::new(root.reopen().unwrap()));
         // The synthetic volume has no quota client. The calls fail after dispatch without issuing
         // a quota syscall, which still verifies the scheduling of all three quota entry points.
         filesystem.quota_authority = QuotaAuthority::Project {
@@ -167,9 +186,8 @@ async fn only_bounded_work_on_known_local_storage_can_run_in_place() {
             .is_err()
         );
         filesystem.quota_authority = QuotaAuthority::Unsupported;
+        filesystem.delete_and_verify().await.unwrap();
     }
-    target.discard().await.unwrap();
-    filesystem.delete_and_verify().await.unwrap();
 }
 
 fn existing_open(expected: SandboxObjectKind, access: SandboxAccessMode) -> SandboxOpenOptions {
@@ -919,73 +937,78 @@ async fn empty_root_path_attributes_address_root() {
 }
 
 #[cfg(unix)]
-#[test]
-async fn attribute_path_follow_mode_is_precise() {
-    let parent = tempfile::tempdir().unwrap();
-    let provisioning = directory_sandbox_provisioning(parent.path().to_path_buf());
-    let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
-        provisioning,
-        sandbox_name(),
-        None,
-    )
-    .await
-    .unwrap();
-    std::fs::write(filesystem.root().join("target"), b"contents").unwrap();
-    std::os::unix::fs::symlink("target", filesystem.root().join("link")).unwrap();
+mod unix_attributes {
+    use super::*;
+    use test_r::test;
 
-    let link_attributes = filesystem
-        .get_path_attributes(SandboxPath::at_root("link"), SandboxFollow::No)
-        .await
-        .unwrap();
-    let followed_attributes = filesystem
-        .get_path_attributes(SandboxPath::at_root("link"), SandboxFollow::Yes)
-        .await
-        .unwrap();
-    assert_eq!(link_attributes.kind, SandboxObjectKind::Symlink);
-    assert_eq!(followed_attributes.kind, SandboxObjectKind::File);
-
-    let target_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10_000);
-    let link_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20_000);
-    filesystem
-        .set_path_times(
-            SandboxPath::at_root("link"),
-            SandboxFollow::Yes,
-            SandboxTimeChanges {
-                accessed: SandboxTimeChange::Keep,
-                modified: SandboxTimeChange::Set(target_time),
-            },
+    #[test]
+    async fn attribute_path_follow_mode_is_precise() {
+        let parent = tempfile::tempdir().unwrap();
+        let provisioning = directory_sandbox_provisioning(parent.path().to_path_buf());
+        let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
+            provisioning,
+            sandbox_name(),
+            None,
         )
         .await
         .unwrap();
-    filesystem
-        .set_path_times(
-            SandboxPath::at_root("link"),
-            SandboxFollow::No,
-            SandboxTimeChanges {
-                accessed: SandboxTimeChange::Keep,
-                modified: SandboxTimeChange::Set(link_time),
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        std::fs::metadata(filesystem.root().join("target"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        target_time
-    );
-    assert_eq!(
-        std::fs::symlink_metadata(filesystem.root().join("link"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        link_time
-    );
+        std::fs::write(filesystem.root().join("target"), b"contents").unwrap();
+        std::os::unix::fs::symlink("target", filesystem.root().join("link")).unwrap();
 
-    <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
-        .await
-        .unwrap();
+        let link_attributes = filesystem
+            .get_path_attributes(SandboxPath::at_root("link"), SandboxFollow::No)
+            .await
+            .unwrap();
+        let followed_attributes = filesystem
+            .get_path_attributes(SandboxPath::at_root("link"), SandboxFollow::Yes)
+            .await
+            .unwrap();
+        assert_eq!(link_attributes.kind, SandboxObjectKind::Symlink);
+        assert_eq!(followed_attributes.kind, SandboxObjectKind::File);
+
+        let target_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10_000);
+        let link_time = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20_000);
+        filesystem
+            .set_path_times(
+                SandboxPath::at_root("link"),
+                SandboxFollow::Yes,
+                SandboxTimeChanges {
+                    accessed: SandboxTimeChange::Keep,
+                    modified: SandboxTimeChange::Set(target_time),
+                },
+            )
+            .await
+            .unwrap();
+        filesystem
+            .set_path_times(
+                SandboxPath::at_root("link"),
+                SandboxFollow::No,
+                SandboxTimeChanges {
+                    accessed: SandboxTimeChange::Keep,
+                    modified: SandboxTimeChange::Set(link_time),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(filesystem.root().join("target"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            target_time
+        );
+        assert_eq!(
+            std::fs::symlink_metadata(filesystem.root().join("link"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            link_time
+        );
+
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+            .await
+            .unwrap();
+    }
 }
 
 #[test]

@@ -29,25 +29,20 @@ use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
 mod apfs;
+#[cfg(not(target_os = "linux"))]
+mod non_linux;
+#[cfg(target_os = "linux")]
+#[path = "linux.rs"]
+mod platform;
+#[cfg(target_os = "macos")]
+#[path = "macos.rs"]
+mod platform;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[path = "other.rs"]
+mod platform;
 #[cfg(target_os = "linux")]
 mod xfs;
-#[cfg(target_os = "macos")]
-pub(crate) use apfs::clone_file_at;
-#[cfg(all(test, target_os = "linux"))]
-pub(crate) use xfs::in_process_xfs_quotad;
-#[cfg(target_os = "linux")]
-pub(crate) use xfs::{
-    ProjectQuotas, ValidatedXfsNameMode, install_project_limits, project_allocation,
-};
-#[cfg(target_os = "linux")]
-pub(crate) use xfs::{
-    assign_project, clone_file_contents, clone_file_contents_into_project, stale_project,
-};
-#[cfg(all(test, target_os = "linux"))]
-pub(crate) use xfs::{
-    cow_extent_size_hint, file_project_id, get_fsxattr, has_project_identity, set_fsxattr,
-    validated_xfs_name_mode_for_test,
-};
+pub(crate) use platform::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FilesystemAllocation {
@@ -91,30 +86,14 @@ struct VolumeState {
     root: Option<Arc<Path>>,
     accounting: AgentAccounting,
     host_directory_check: HostDirectoryCheck,
-    #[cfg(target_os = "linux")]
-    projects: Option<ProjectQuotas>,
-    #[cfg(target_os = "linux")]
-    name_mode: Option<ValidatedXfsNameMode>,
+    platform: PlatformState,
 }
 
 #[derive(Clone)]
 enum FilesystemVolumeMode {
     UnmanagedDevelopment,
     /// The checked XFS root on Linux, or the probed APFS development root on macOS.
-    CopyOnWrite {
-        root: Arc<File>,
-        #[cfg(target_os = "linux")]
-        identity: FilesystemIdentity,
-        /// The quota helper of a managed XFS volume.
-        #[cfg(target_os = "linux")]
-        project_quotas: Option<Arc<golem_xfs_quotad::XfsQuotadClient>>,
-    },
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FilesystemIdentity {
-    pub(crate) device: u64,
+    CopyOnWrite(CopyOnWrite),
 }
 
 impl FilesystemVolume {
@@ -143,67 +122,6 @@ impl FilesystemVolume {
         Ok(volume)
     }
 
-    #[cfg(target_os = "linux")]
-    fn open_managed(
-        root: &Path,
-        socket: &Path,
-        retry: &RetryConfig,
-    ) -> Result<Self, StorageVolumeError> {
-        let projects = ProjectQuotas::new(xfs::XfsRoot::open(root)?, socket, retry)?;
-        let mut volume = Self::copy_on_write(
-            Arc::clone(&projects.root_fd),
-            projects.validated_name_mode.identity,
-        )
-        .with_project_quotas(Arc::clone(&projects.quotas));
-        let state = volume.unique();
-        state.root = Some(Arc::clone(projects.root()));
-        state.name_mode = Some(projects.validated_name_mode);
-        state.projects = Some(projects);
-        Ok(volume)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn open_managed(
-        root: &Path,
-        _socket: &Path,
-        _retry: &RetryConfig,
-    ) -> Result<Self, StorageVolumeError> {
-        Err(StorageVolumeError::from(OperationContext::verification(
-            "initialize XFS storage on a non-Linux platform",
-            Some(root),
-        )))
-    }
-
-    #[cfg(target_os = "linux")]
-    fn open_reflink(root: &Path) -> Result<Self, StorageVolumeError> {
-        let (mut volume, root, name_mode) = xfs::bind_reflink(xfs::XfsRoot::open(root)?)?;
-        let state = volume.unique();
-        state.root = Some(root);
-        state.name_mode = Some(name_mode);
-        Ok(volume)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn open_reflink(root: &Path) -> Result<Self, StorageVolumeError> {
-        Err(StorageVolumeError::from(OperationContext::verification(
-            "initialize XFS storage on a non-Linux platform",
-            Some(root),
-        )))
-    }
-
-    #[cfg(target_os = "macos")]
-    fn open_apfs(root: &Path) -> Result<Self, StorageVolumeError> {
-        apfs::bind(root)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn open_apfs(root: &Path) -> Result<Self, StorageVolumeError> {
-        Err(StorageVolumeError::from(OperationContext::verification(
-            "initialize APFS storage on a non-macOS platform",
-            Some(root),
-        )))
-    }
-
     pub(crate) fn unmanaged_development() -> Self {
         Self {
             state: Arc::new(VolumeState {
@@ -211,10 +129,7 @@ impl FilesystemVolume {
                 root: None,
                 accounting: AgentAccounting::Development,
                 host_directory_check: HostDirectoryCheck::None,
-                #[cfg(target_os = "linux")]
-                projects: None,
-                #[cfg(target_os = "linux")]
-                name_mode: None,
+                platform: PlatformState::default(),
             }),
         }
     }
@@ -223,39 +138,12 @@ impl FilesystemVolume {
         Arc::get_mut(&mut self.state).expect("volume construction must precede sharing")
     }
 
-    #[cfg(any(test, target_os = "linux", target_os = "macos"))]
-    pub(crate) fn copy_on_write(
-        root: Arc<File>,
-        #[cfg(target_os = "linux")] identity: FilesystemIdentity,
-    ) -> Self {
+    fn with_copy_on_write(mode: CopyOnWrite) -> Self {
         let mut volume = Self::unmanaged_development();
         let state = volume.unique();
-        state.mode = FilesystemVolumeMode::CopyOnWrite {
-            root,
-            #[cfg(target_os = "linux")]
-            identity,
-            #[cfg(target_os = "linux")]
-            project_quotas: None,
-        };
+        state.mode = FilesystemVolumeMode::CopyOnWrite(mode);
         state.accounting = AgentAccounting::Unaccounted;
         volume
-    }
-
-    /// The volume with the quota helper `quotas`, which serves its project quotas.
-    #[cfg(target_os = "linux")]
-    fn with_project_quotas(mut self, quotas: Arc<golem_xfs_quotad::XfsQuotadClient>) -> Self {
-        if let FilesystemVolumeMode::CopyOnWrite { project_quotas, .. } = &mut self.unique().mode {
-            *project_quotas = Some(quotas);
-        }
-        self
-    }
-
-    #[cfg(target_os = "linux")]
-    fn quota_client(&self) -> Option<&golem_xfs_quotad::XfsQuotadClient> {
-        match &self.state.mode {
-            FilesystemVolumeMode::CopyOnWrite { project_quotas, .. } => project_quotas.as_deref(),
-            FilesystemVolumeMode::UnmanagedDevelopment => None,
-        }
     }
 
     /// Whether the volume makes copy-on-write copies of files: `copy_contents` and `seed` then
@@ -272,10 +160,9 @@ impl FilesystemVolume {
         volume_facts(&self.state.mode).file_copy_mode
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn copy_on_write_root(&self) -> Option<&Arc<File>> {
         match &self.state.mode {
-            FilesystemVolumeMode::CopyOnWrite { root, .. } => Some(root),
+            FilesystemVolumeMode::CopyOnWrite(mode) => mode.root(),
             FilesystemVolumeMode::UnmanagedDevelopment => None,
         }
     }
@@ -286,10 +173,7 @@ impl FilesystemVolume {
 
     /// The selected storage path and its descriptor owner. Temporary storage has no shared root.
     pub(crate) fn root_location(&self) -> (Option<Arc<Path>>, Option<Arc<File>>) {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let anchor = self.copy_on_write_root().cloned();
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        let anchor = None;
         (self.state.root.clone(), anchor)
     }
 
@@ -297,34 +181,7 @@ impl FilesystemVolume {
         if self.state.host_directory_check == HostDirectoryCheck::None {
             return Ok(());
         }
-        #[cfg(target_os = "linux")]
-        {
-            xfs::verify_host_directory_has_no_project(path)
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = path;
-            Ok(())
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) fn project_quotas(&self) -> Option<&ProjectQuotas> {
-        self.state.projects.as_ref()
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) fn validated_name_mode(&self) -> Option<ValidatedXfsNameMode> {
-        self.state.name_mode
-    }
-
-    #[cfg(all(test, target_os = "linux"))]
-    pub(crate) fn descriptor_rooted_for_test(root: Arc<File>) -> Self {
-        use std::os::fd::AsRawFd;
-        let path = Arc::from(Path::new(&format!("/proc/self/fd/{}", root.as_raw_fd())));
-        let mut volume = Self::copy_on_write(root, FilesystemIdentity { device: 0 });
-        volume.unique().root = Some(path);
-        volume
+        self.state.platform.verify_host_directory(path)
     }
 }
 
@@ -380,7 +237,7 @@ struct VolumeFacts {
 /// The storage of other development volumes is unknown, and their files are copied by bytes.
 fn volume_facts(mode: &FilesystemVolumeMode) -> VolumeFacts {
     match mode {
-        FilesystemVolumeMode::CopyOnWrite { .. } => VolumeFacts {
+        FilesystemVolumeMode::CopyOnWrite(_) => VolumeFacts {
             copies_on_write: true,
             storage_profile: NativeStorageProfile::KnownLocal,
             file_copy_mode: FileCopyMode::Reflink,
@@ -391,12 +248,6 @@ fn volume_facts(mode: &FilesystemVolumeMode) -> VolumeFacts {
             file_copy_mode: FileCopyMode::Buffered,
         },
     }
-}
-
-/// Flushes pending changes on the filesystem containing `root`.
-#[cfg(target_os = "linux")]
-pub(crate) fn sync_volume(root: &Path) -> std::io::Result<()> {
-    rustix::fs::syncfs(&File::open(root)?).map_err(std::io::Error::from)
 }
 
 pub(crate) async fn observe_space(
@@ -427,26 +278,7 @@ pub(crate) fn observe_space_blocking(
 ) -> Result<FilesystemSpace, StorageVolumeError> {
     let observed = match &volume.state.mode {
         FilesystemVolumeMode::UnmanagedDevelopment => Ok(FilesystemSpace::Unlimited),
-        FilesystemVolumeMode::CopyOnWrite {
-            root,
-            #[cfg(target_os = "linux")]
-            identity,
-            ..
-        } => {
-            #[cfg(target_os = "linux")]
-            {
-                xfs::observe_space(root, *identity)
-            }
-            #[cfg(target_os = "macos")]
-            {
-                apfs::observe_space(root)
-            }
-            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-            {
-                let _ = root;
-                unreachable!("copy-on-write storage is unavailable on this platform")
-            }
-        }
+        FilesystemVolumeMode::CopyOnWrite(mode) => mode.observe_space(),
     };
     observed.map_err(|error| {
         StorageVolumeError::from(OperationContext::io(
@@ -458,31 +290,35 @@ pub(crate) fn observe_space_blocking(
 }
 
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
-fn space_from_values(
-    blocks: u64,
-    available_blocks: u64,
-    fragment_size: u64,
-    filesystem_objects: u64,
-    available_filesystem_objects: u64,
-) -> std::io::Result<FilesystemSpace> {
-    let total_bytes = blocks.checked_mul(fragment_size).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "filesystem total capacity exceeds u64",
-        )
-    })?;
-    let available_bytes = available_blocks.checked_mul(fragment_size).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "filesystem available capacity exceeds u64",
-        )
-    })?;
-    Ok(FilesystemSpace::Observed {
-        total_bytes,
-        available_bytes,
-        total_filesystem_objects: filesystem_objects,
-        available_filesystem_objects,
-    })
+mod capacity {
+    use super::FilesystemSpace;
+
+    pub(super) fn space_from_values(
+        blocks: u64,
+        available_blocks: u64,
+        fragment_size: u64,
+        filesystem_objects: u64,
+        available_filesystem_objects: u64,
+    ) -> std::io::Result<FilesystemSpace> {
+        let total_bytes = blocks.checked_mul(fragment_size).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "filesystem total capacity exceeds u64",
+            )
+        })?;
+        let available_bytes = available_blocks.checked_mul(fragment_size).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "filesystem available capacity exceeds u64",
+            )
+        })?;
+        Ok(FilesystemSpace::Observed {
+            total_bytes,
+            available_bytes,
+            total_filesystem_objects: filesystem_objects,
+            available_filesystem_objects,
+        })
+    }
 }
 
 #[cfg(test)]

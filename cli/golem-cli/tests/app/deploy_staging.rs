@@ -20,6 +20,20 @@ use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(Tracing);
 
+#[cfg(not(windows))]
+mod platform {
+    pub(super) fn app_root(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+        std::fs::canonicalize(path)
+    }
+}
+
+#[cfg(windows)]
+mod platform {
+    pub(super) fn app_root(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+        Ok(path.to_path_buf())
+    }
+}
+
 #[test]
 #[timeout("15 minutes")]
 async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::Result<()> {
@@ -103,10 +117,7 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
         fs::create_dir_all(path.parent().unwrap())?;
         std::fs::copy(&archive, path)?;
     }
-    #[cfg(not(windows))]
-    let app_root = std::fs::canonicalize(ctx.cwd_path())?;
-    #[cfg(windows)]
-    let app_root = ctx.cwd_path();
+    let app_root = platform::app_root(ctx.cwd_path())?;
 
     let registry = RegistryServiceClientLive {
         context: Context {
