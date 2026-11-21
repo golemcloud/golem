@@ -169,15 +169,15 @@ async fn unmanaged_creation_serializes_the_same_native_name() {
     let parent = tempfile::tempdir().unwrap();
     let provisioning = unmanaged_provisioning(parent.path().to_path_buf());
     let first = provisioning.create_fresh(name()).await.unwrap();
-    let second = tokio::spawn({
-        let provisioning = provisioning.clone();
-        async move { provisioning.create_fresh(name()).await }
-    });
-    tokio::task::yield_now().await;
-    assert!(!second.is_finished());
+    let probe = FilesystemLeaseProbe::install(first.root());
+    let mut second = Box::pin(provisioning.create_fresh(name()));
+    assert!(futures::poll!(second.as_mut()).is_pending());
+    assert_eq!(probe.state.attempted.available_permits(), 1);
+    assert!(probe.acquisition_is_pending());
 
     SandboxFilesystem::delete_and_verify(first).await.unwrap();
-    let second = second.await.unwrap().unwrap();
+    let second = second.await.unwrap();
+    probe.wait_acquired().await;
     SandboxFilesystem::delete_and_verify(second).await.unwrap();
 }
 

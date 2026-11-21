@@ -755,12 +755,8 @@ mod value_rules {
 
     #[test]
     fn two_threads_that_miss_one_pack_make_one_storage_read() {
-        // The first read waits at the gate. The second thread signals just before it asks for the same
-        // pack, and the test then waits 200 ms with the gate closed. At the end of that time, no second
-        // read reached the storage and the second thread has not returned. A thread that waits for the
-        // first read fits both. So does a thread that the OS holds off for more than 200 ms between its
-        // signal and its call. Then the checks of the hold pass without a wait. The value tests of
-        // `want` hold the rule that the second thread waits.
+        // The first read holds the storage gate. Observe the second reader's cache wait decision
+        // before opening it, so a thread descheduled before entering the cache cannot pass the test.
         let fixture = PackFixture::new(1024, |op_label, _| {
             if op_label == "read" {
                 Script::WaitForGate
@@ -776,16 +772,12 @@ mod value_rules {
             std::thread::sleep(Duration::from_millis(10));
             !fixture.pack_calls().is_empty()
         });
-        let (asking, asked) = std::sync::mpsc::channel();
+        let waiting = fixture.backend.tree_pack_cache.observe_waits();
         let second = on_own_thread({
             let backend = fixture.backend.clone();
-            move || {
-                let _ = asking.send(());
-                tree_range(&backend, 50, 10).ok()
-            }
+            move || tree_range(&backend, 50, 10).ok()
         });
-        let second_asks = asked.recv_timeout(LIMIT).is_ok();
-        std::thread::sleep(Duration::from_millis(200));
+        let second_waiting = waiting.recv_timeout(LIMIT).is_ok();
         let second_read_during_the_hold = fixture.pack_calls().len() > 1;
         let second_waits = matches!(second.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
         fixture.storage.open_gate();
@@ -793,7 +785,7 @@ mod value_rules {
         assert_eq!(
             (
                 first_read_started,
-                second_asks,
+                second_waiting,
                 second_read_during_the_hold,
                 second_waits,
                 first.recv_timeout(LIMIT).ok().flatten(),
