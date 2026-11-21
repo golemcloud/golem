@@ -718,7 +718,7 @@ mod tests {
     }
 
     #[test]
-    async fn a_request_without_a_header_is_2025_03_26_also_when_its_meta_names_a_revision() {
+    async fn headerless_request_is_served_as_2025_03_26_unless_its_meta_names_another_revision() {
         let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
         let served = Served::new(&harness).await;
         let meta_2025 = json!({"_meta": {"io.modelcontextprotocol/protocolVersion": "2025-03-26"}});

@@ -13,12 +13,13 @@
 // limitations under the License.
 
 //! The MCP protocol revisions that the endpoint serves, the rule that refuses a request that
-//! names another revision, and the rule that gives a request with no revision the revision
-//! 2025-03-26.
+//! names another revision, and the rule that gives a request with no `MCP-Protocol-Version`
+//! header the revision 2025-03-26.
 
 use poem::http::{HeaderValue, Method, StatusCode};
 use poem::{Endpoint, IntoResponse, Middleware, Request, Response};
 use rmcp::model::ProtocolVersion;
+use rmcp::transport::common::http_header::HEADER_MCP_PROTOCOL_VERSION;
 use serde::Deserialize;
 use std::borrow::Cow;
 
@@ -47,14 +48,16 @@ fn check_header(header: Option<&[u8]>) -> Result<(), Box<str>> {
 }
 
 /// Checks a `POST` with the JSON-RPC `body` and the `MCP-Protocol-Version` `header`. A body that
-/// does not parse as a JSON object passes with no change, so that rmcp answers it. An
-/// `initialize` passes with any header and with no change, because its body negotiates the
-/// revision. Every other JSON-RPC message passes when [`check_header`] accepts the header.
+/// is not a JSON object, or that does not parse as a JSON-RPC message, passes with no change, so
+/// that rmcp answers it. An `initialize` passes with any header and with no change, because its
+/// body negotiates the revision. Every other JSON-RPC message passes when [`check_header`]
+/// accepts the header.
 ///
-/// `Ok` holds the `MCP-Protocol-Version` header to add before the request goes to rmcp. A
-/// JSON-RPC message other than `initialize` that has no header is 2025-03-26, so it gets the
-/// header `2025-03-26`. rmcp then reads the request as 2025-03-26 also when its `_meta` names a
-/// revision. Each other request gets no header.
+/// `Ok` holds the `MCP-Protocol-Version` header to add before the request goes to rmcp. A body
+/// that is a JSON object with no `method`, a `null` `method`, or a string `method` other than
+/// `initialize`, and that has no header, is 2025-03-26. Thus it gets the header `2025-03-26`.
+/// rmcp then serves a request whose `_meta` names 2025-03-26, and answers `400` to a request
+/// whose `_meta` names another revision. Each other request gets no header.
 fn admit_post(body: &[u8], header: Option<&[u8]>) -> Result<Option<HeaderValue>, Box<str>> {
     let is_object = body
         .iter()
@@ -93,7 +96,8 @@ struct JsonRpcMethod<'a> {
 /// the added header `MCP-Protocol-Version: 2025-03-26`.
 ///
 /// Every other request goes on unchanged to rmcp. This includes each `GET` and `DELETE`, each
-/// `initialize`, and each `POST` with a body that does not parse.
+/// `initialize`, and each `POST` with a body that is not a JSON object, or that does not parse as
+/// a JSON-RPC message.
 ///
 /// The middleware reads the whole body of a `POST`, so it must sit inside the request body limit.
 pub(crate) struct ServedRevisions;
@@ -116,7 +120,7 @@ impl<E: Endpoint> Endpoint for ServedRevisionsEndpoint<E> {
             let body = request.take_body().into_bytes().await?;
             let header = request
                 .headers()
-                .get("MCP-Protocol-Version")
+                .get(HEADER_MCP_PROTOCOL_VERSION)
                 .map(|value| value.as_bytes());
             let added = match admit_post(&body, header) {
                 Ok(added) => added,
@@ -127,7 +131,9 @@ impl<E: Endpoint> Endpoint for ServedRevisionsEndpoint<E> {
                 }
             };
             if let Some(value) = added {
-                request.headers_mut().insert("MCP-Protocol-Version", value);
+                request
+                    .headers_mut()
+                    .insert(HEADER_MCP_PROTOCOL_VERSION, value);
             }
             request.set_body(body);
         }
@@ -199,7 +205,7 @@ mod tests {
         assert!(admit_post(notification, old).is_err());
         assert!(admit_post(br#"{"jsonrpc":"2.0","id":1,"result":{}}"#, old).is_err());
         assert_eq!(admit_post(LIST, Some(b"2025-06-18")), Ok(None));
-        assert_eq!(admit_post(LIST, None), Ok(Some(default_header())));
+        assert_eq!(admit_post(LIST, None), Ok(Some(header_2025_03_26())));
         assert_eq!(admit_post(b"not json", old), Ok(None));
         assert_eq!(admit_post(br#"{"jsonrpc":"#, old), Ok(None));
         assert_eq!(admit_post(b"[]", old), Ok(None));
@@ -208,11 +214,11 @@ mod tests {
     #[test]
     fn other_requests_are_admitted_with_a_served_revision_or_no_header() {
         assert_eq!(check_header(None), Ok(()));
-        assert_eq!(admit_post(LIST, None), Ok(Some(default_header())));
+        assert_eq!(admit_post(LIST, None), Ok(Some(header_2025_03_26())));
         assert_eq!(admit_post(LIST, Some(b"2026-07-28")), Ok(None));
     }
 
-    fn default_header() -> HeaderValue {
+    fn header_2025_03_26() -> HeaderValue {
         HeaderValue::from_static("2025-03-26")
     }
 
@@ -220,9 +226,12 @@ mod tests {
     fn a_message_without_a_header_gets_the_2025_03_26_header_unless_it_is_initialize() {
         let notification = br#"{"jsonrpc":"2.0","method":"notifications/cancelled"}"#;
         let response = br#"{"jsonrpc":"2.0","id":1,"result":{}}"#;
-        assert_eq!(admit_post(LIST, None), Ok(Some(default_header())));
-        assert_eq!(admit_post(notification, None), Ok(Some(default_header())));
-        assert_eq!(admit_post(response, None), Ok(Some(default_header())));
+        assert_eq!(admit_post(LIST, None), Ok(Some(header_2025_03_26())));
+        assert_eq!(
+            admit_post(notification, None),
+            Ok(Some(header_2025_03_26()))
+        );
+        assert_eq!(admit_post(response, None), Ok(Some(header_2025_03_26())));
         assert_eq!(admit_post(INITIALIZE, None), Ok(None));
         SERVED_REVISIONS.iter().for_each(|revision| {
             assert_eq!(
