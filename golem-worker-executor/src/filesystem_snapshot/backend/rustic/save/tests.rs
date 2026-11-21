@@ -560,6 +560,9 @@ fn a_save_time_is_the_first_whole_millisecond_that_is_not_before_the_call() {
 #[test]
 #[timeout("60s")]
 async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
+    use crate::filesystem_snapshot::backend::rustic::repository::open_existing;
+    use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::repository_snapshots;
+    use crate::filesystem_snapshot::backend::rustic::test_support::{backend_of, key};
     use std::os::fd::AsRawFd;
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
