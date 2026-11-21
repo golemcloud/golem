@@ -221,9 +221,8 @@ impl ReplayState {
         let mut start_invocation_ids = StartsByInvocationId::new();
         let mut invocation_boundaries = InvocationBoundaries::new();
         let mut next = from;
-        while next <= to {
-            let available = u64::from(to) - u64::from(next) + 1;
-            let entries = oplog.read_exact(next, CHUNK_SIZE.min(available)).await?;
+        while let Some(chunk) = OplogRange::within(next, to, CHUNK_SIZE) {
+            let entries = oplog.read_exact(chunk.start, chunk.count).await?;
             let last_read = *entries.last_key_value().unwrap().0;
             for (marker_idx, entry) in entries {
                 if marker_idx > to {

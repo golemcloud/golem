@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::services::oplog::retention::OplogRetention;
+use crate::services::oplog::retention::{OplogRange, OplogRetention};
 
 impl ForwardingOplogState {
     async fn while_forwarding<F: std::future::Future>(&self, future: F) -> Option<F::Output> {
@@ -243,10 +243,11 @@ impl ForwardingOplogState {
             self.inner.retention(),
         );
 
-        let (batch_start, batch_end, is_retry) = match batch {
-            Some(b) => b,
-            None => return,
+        let Some((batch, is_retry)) = batch else {
+            return;
         };
+        let batch_start = batch.start;
+        let batch_end = batch.end().previous();
 
         tracing::info!(
             plugin_name = plugin.plugin_name,
@@ -307,8 +308,7 @@ impl ForwardingOplogState {
             s.send_in_progress = true;
         }
 
-        let batch_count = (batch_end.as_u64() - batch_start.as_u64() + 1) as usize;
-        let entries = match self.read_batch(batch_start, batch_count).await {
+        let entries = match self.read_batch(batch_start, batch.count as usize).await {
             Ok(entries) => entries,
             Err(error) => {
                 tracing::error!(
@@ -957,8 +957,8 @@ impl ForwardingOplogState {
     }
 }
 
-/// The next batch for a plugin: its first and last index, and whether it repeats a batch that was
-/// sent and not confirmed. A repeated batch has the exact range that was sent, never a wider one.
+/// The next batch for a plugin: its range, and whether it repeats a batch that was sent and not
+/// confirmed. A repeated batch has the exact range that was sent, never a wider one.
 /// A new batch goes from the entry after the confirmed index to the committed tail; when the
 /// entries after the confirmed index are gone, it starts at the retained start instead. `None`
 /// when no entry waits.
@@ -967,13 +967,14 @@ fn next_batch(
     sending_up_to: OplogIndex,
     committed_tail: OplogIndex,
     retention: OplogRetention,
-) -> Option<(OplogIndex, OplogIndex, bool)> {
+) -> Option<(OplogRange, bool)> {
     if sending_up_to > confirmed_up_to {
-        Some((confirmed_up_to.next(), sending_up_to, true))
+        OplogRange::within(confirmed_up_to.next(), sending_up_to, u64::MAX)
+            .map(|range| (range, true))
     } else {
         retention
             .range(confirmed_up_to.next(), committed_tail)
-            .map(|range| (range.start, committed_tail, false))
+            .map(|range| (range, false))
     }
 }
 
@@ -984,17 +985,25 @@ mod tests {
 
     use crate::services::oplog::retention::test_oplog::{at, idx};
 
+    /// The batch from `start` to `last`, both included.
+    fn batch(start: u64, last: u64) -> OplogRange {
+        OplogRange {
+            start: idx(start),
+            count: last + 1 - start,
+        }
+    }
+
     /// A cut does not pass the confirmed index of a plugin, so a repeated batch starts at or after
     /// the retained start.
     #[test]
     fn a_repeated_batch_keeps_the_range_that_was_sent() {
         assert_eq!(
             next_batch(idx(3), idx(5), idx(10), at(4)),
-            Some((idx(4), idx(5), true))
+            Some((batch(4, 5), true))
         );
         assert_eq!(
             next_batch(idx(3), idx(4), idx(10), OplogRetention::FULL),
-            Some((idx(4), idx(4), true))
+            Some((batch(4, 4), true))
         );
     }
 
@@ -1002,24 +1011,24 @@ mod tests {
     fn a_new_batch_starts_after_the_confirmed_index_or_at_the_retained_start() {
         assert_eq!(
             next_batch(idx(3), idx(3), idx(10), OplogRetention::FULL),
-            Some((idx(4), idx(10), false))
+            Some((batch(4, 10), false))
         );
         assert_eq!(
             next_batch(idx(3), idx(3), idx(10), at(4)),
-            Some((idx(4), idx(10), false))
+            Some((batch(4, 10), false))
         );
         assert_eq!(
             next_batch(idx(3), idx(3), idx(10), at(5)),
-            Some((idx(5), idx(10), false))
+            Some((batch(5, 10), false))
         );
         assert_eq!(
             next_batch(idx(3), idx(3), idx(10), at(10)),
-            Some((idx(10), idx(10), false))
+            Some((batch(10, 10), false))
         );
         assert_eq!(next_batch(idx(3), idx(3), idx(10), at(11)), None);
         assert_eq!(
             next_batch(idx(9), idx(9), idx(10), OplogRetention::FULL),
-            Some((idx(10), idx(10), false))
+            Some((batch(10, 10), false))
         );
         assert_eq!(
             next_batch(idx(10), idx(10), idx(10), OplogRetention::FULL),

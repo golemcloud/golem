@@ -582,9 +582,7 @@ impl CursorTx<'_> {
         region: &OplogRegion,
     ) -> Result<(), UnreadableOplog> {
         let mut next = region.start;
-        while let Some(chunk) =
-            crate::services::oplog::retention::OplogRange::within(next, region.end, CHUNK_SIZE)
-        {
+        while let Some(chunk) = OplogRange::within(next, region.end, CHUNK_SIZE) {
             let entries = self
                 .cursor
                 .oplog
