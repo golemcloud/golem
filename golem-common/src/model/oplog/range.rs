@@ -451,6 +451,12 @@ mod tests {
                 (range(None, None), u64::MAX - 2, 2),
                 Some(range(Some(u64::MAX - 2), Some(u64::MAX - 1))),
             ),
+            // The oplog starts at the end of the range, so the page holds that one index.
+            ((range(None, Some(9)), 9, 50), Some(range(Some(9), Some(9)))),
+            (
+                (range(Some(5), Some(5)), 1, 3),
+                Some(range(Some(5), Some(5))),
+            ),
             // The oplog starts after the end of the range, so the range has no page in it.
             ((range(None, Some(9)), 10, 50), None),
         ]

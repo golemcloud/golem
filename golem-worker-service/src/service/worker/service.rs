@@ -6292,6 +6292,7 @@ mod tests {
             ((range(None, None), None, 50, 1), pattern(1, Some(50))),
             ((range(None, None), None, 50, 40), pattern(40, Some(89))),
             ((range(None, Some(60)), None, 50, 40), pattern(40, Some(60))),
+            ((range(None, Some(60)), None, 50, 60), pattern(60, Some(60))),
             // The page starts after the end of the range, so it reads no entry.
             ((range(None, Some(60)), None, 50, 70), None),
             ((range(None, None), None, 50, 0), pattern(1, Some(50))),

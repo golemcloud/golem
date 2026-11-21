@@ -3099,6 +3099,13 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
     oplog.commit(CommitLevel::Always).await.unwrap();
     assert_eq!(matching[0], first_index.next());
 
+    // The time budget is long, so that a search that does not stop when its result is full
+    // hangs instead of ending at the time budget with the same result.
+    let budget = ScanBudget {
+        time: std::time::Duration::from_secs(600),
+        ..ScanBudget::default()
+    };
+
     // A first chunk of two entries finds one match. The search then reads only the one entry
     // that it still needs, not a full chunk, which would find two more matches.
     let page = |from: OplogIndex| {
@@ -3119,7 +3126,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
                 max_entry_bytes: 1_000_000,
             },
             "needle",
-            ScanBudget::default(),
+            budget,
         )
     };
     let first = page(OplogIndex::INITIAL).await.unwrap();
@@ -3135,7 +3142,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
     );
 
     // A guest search has the same limit, and still reads no entry after its pinned end.
-    let guest = |from: OplogIndex| {
+    let guest_with_revision = |from: OplogIndex, revision: ComponentRevision| {
         search_public_oplog(
             Arc::new(PanicComponentService),
             oplog_service.clone(),
@@ -3144,14 +3151,15 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             owned_agent_id.component_id(),
             OwnerKind::ComponentAgent,
             None,
-            ComponentRevision::INITIAL,
+            revision,
             from,
             Some(matching[2]),
             2,
             "needle",
-            ScanBudget::default(),
+            budget,
         )
     };
+    let guest = |from: OplogIndex| guest_with_revision(from, ComponentRevision::INITIAL);
     let first = guest(OplogIndex::INITIAL).await.unwrap();
     let indices = |entries: &[PublicOplogEntryWithIndex]| {
         entries
@@ -3180,6 +3188,16 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             ComponentRevision::INITIAL,
             matching[2]
         )
+    );
+    // The search from after the pinned end keeps the revision that the guest passes.
+    let revision = ComponentRevision::new(3).unwrap();
+    let after_the_end_at_a_revision = guest_with_revision(second.next_oplog_index, revision)
+        .await
+        .unwrap();
+    assert!(after_the_end_at_a_revision.entries.is_empty());
+    assert_eq!(
+        after_the_end_at_a_revision.current_component_revision,
+        revision
     );
 }
 

@@ -1730,6 +1730,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_jsonl_writer_refuses_to_finish_before_the_end_of_the_range() {
+        let writer = || {
+            OplogJsonlWriter::new(
+                Vec::new(),
+                crate::model::masking::MaskingConfig::hide_secrets(),
+                every_entry(Some(1), None),
+            )
+        };
+        // The writer wrote entries 1 and 2, but the range ends at 3.
+        let mut short = writer();
+        [(1, "a"), (2, "b")]
+            .into_iter()
+            .try_for_each(|(index, message)| short.write(log_view(index, message)))
+            .unwrap();
+        assert!(short.finish(OplogIndex::from_u64(3)).is_err());
+        // The writer wrote no entry, but the range ends at 3.
+        assert!(writer().finish(OplogIndex::from_u64(3)).is_err());
+    }
+
     fn agent_metadata(agent_id: &str) -> AgentMetadataView {
         AgentMetadataView {
             component_name: ComponentName("shop:cart".to_string()),
