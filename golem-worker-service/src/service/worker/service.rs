@@ -832,15 +832,21 @@ impl WorkerService {
             return Ok(());
         }
         let denied = || WorkerServiceError::AgentAccessDenied(agent_id.agent_id);
-        self.agent_types
+        // The registry reports a missing environment to every caller alike, so its agents are
+        // not found without telling anyone whether one of them existed.
+        match self
+            .agent_types
             .authorize_environment(agent_id.environment_id, auth_ctx)
             .await
-            .map_err(|error| match error {
+        {
+            Ok(()) => {}
+            Err(RegistryServiceError::NotFound(_)) => return Ok(()),
+            Err(
                 RegistryServiceError::Unauthorized(_)
-                | RegistryServiceError::NotFound(_)
-                | RegistryServiceError::CouldNotAuthenticate(_) => denied(),
-                other => other.into(),
-            })?;
+                | RegistryServiceError::CouldNotAuthenticate(_),
+            ) => return Err(denied()),
+            Err(other) => return Err(other.into()),
+        }
         let Some(tagged) = self
             .agent_types
             .tagged(agent_id.environment_id, agent_id.agent_id)
@@ -4161,6 +4167,21 @@ impl WorkerService {
         let (target, component, freshness_disposition) =
             match (request.agent_id, request.parameters) {
                 (Some(agent_id), None) => {
+                    let retained = self
+                        .retained_agent_types(environment_id, agent_type_name, &auth)
+                        .await
+                        .map_err(|error| match error {
+                            WorkerServiceError::RegistryServiceError(
+                                RegistryServiceError::NotFound(_),
+                            ) => WorkerServiceError::AgentNotFound(agent_id),
+                            other => other,
+                        })?;
+                    if !retained
+                        .iter()
+                        .any(|(registered, _)| agent_id.type_id() == Some(registered.type_id))
+                    {
+                        return Err(WorkerServiceError::AgentNotFound(agent_id));
+                    }
                     let agent = self
                         .managed_agent(
                             &OwnedAgentId::new(environment_id, &agent_id),
