@@ -15,7 +15,9 @@
 use crate::agent_id_display::SourceLanguage;
 use crate::agent_id_display::render_type_for_language;
 use crate::log::LogColorize;
-use crate::model::app::{ComponentLayerId, ComponentLayerProperties, InitialComponentFile};
+use crate::model::app::{
+    AgentLayerProperties, ComponentLayerId, ComponentLayerProperties, InitialComponentFile,
+};
 use crate::model::app_raw;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::environment::ResolvedEnvironmentIdentity;
@@ -1528,6 +1530,10 @@ impl StructuredOutput for ComponentGetView {
 pub struct ComponentManifestTraceView {
     pub component_name: ComponentName,
     pub properties: ComponentLayerProperties,
+    /// The resolved layers of each agent type of the component. Empty when the component is not
+    /// built, because the agent types come from the built component.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<AgentTypeName, AgentLayerProperties>,
 }
 
 impl StructuredOutput for ComponentManifestTraceView {
@@ -1546,6 +1552,10 @@ impl StructuredOutput for ComponentManifestTraceView {
 impl TextOutput for ComponentManifestTraceView {
     fn log(&self) {
         log_manifest_trace_properties(&self.properties);
+        for (agent_type_name, properties) in &self.agents {
+            log_manifest_trace_agent_header(agent_type_name);
+            log_manifest_trace_properties(properties);
+        }
     }
 
     fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
@@ -1555,6 +1565,12 @@ impl TextOutput for ComponentManifestTraceView {
             let mut properties = serde_json::to_value(&self.properties)?;
             mask_component_layer_properties(&mut properties);
             log_manifest_trace_value(&properties);
+            for (agent_type_name, properties) in &self.agents {
+                let mut properties = serde_json::to_value(properties)?;
+                mask_component_layer_properties(&mut properties);
+                log_manifest_trace_agent_header(agent_type_name);
+                log_manifest_trace_value(&properties);
+            }
         }
         Ok(())
     }
@@ -1564,17 +1580,30 @@ impl ComponentManifestTraceView {
     fn to_masked_value(&self, config: MaskingConfig) -> anyhow::Result<Value> {
         let mut value = serde_json::to_value(self)?;
         if !config.show_secrets
-            && let Some(properties) = value
-                .as_object_mut()
-                .and_then(|object| object.get_mut("properties"))
+            && let Some(object) = value.as_object_mut()
         {
-            mask_component_layer_properties(properties);
+            if let Some(properties) = object.get_mut("properties") {
+                mask_component_layer_properties(properties);
+            }
+            if let Some(agents) = object.get_mut("agents").and_then(Value::as_object_mut) {
+                for properties in agents.values_mut() {
+                    mask_component_layer_properties(properties);
+                }
+            }
         }
         Ok(value)
     }
 }
 
-fn log_manifest_trace_properties(properties: &ComponentLayerProperties) {
+fn log_manifest_trace_agent_header(agent_type_name: &AgentTypeName) {
+    logln("");
+    logln(format!(
+        "Agent type {}:",
+        agent_type_name.0.log_color_highlight()
+    ));
+}
+
+fn log_manifest_trace_properties(properties: &impl Serialize) {
     let rendered = if SHOULD_COLORIZE.should_colorize() {
         to_colored_json(properties)
     } else {

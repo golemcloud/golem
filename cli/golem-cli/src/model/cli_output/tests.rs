@@ -1196,6 +1196,10 @@ fn component_manifest_trace_structured_output_masks_secret_payloads() {
     let value = hidden_structured_output(crate::model::component::ComponentManifestTraceView {
         component_name: golem_common::model::component::ComponentName("component".to_string()),
         properties: sample_component_layer_properties(),
+        agents: std::collections::BTreeMap::from([(
+            golem_common::model::agent::AgentTypeName("Agent".to_string()),
+            sample_agent_layer_properties(),
+        )]),
     });
 
     assert_no_plaintext(
@@ -1204,7 +1208,13 @@ fn component_manifest_trace_structured_output_masks_secret_payloads() {
             "manifest-config-secret",
             "manifest-env-secret",
             "manifest-plugin-secret",
+            "agent-config-secret",
+            "agent-env-secret",
         ],
+    );
+    assert!(
+        value.to_string().contains("FROM_AGENT"),
+        "the agent initial card is not a secret and stays visible"
     );
     assert!(value.to_string().contains("***"));
 }
@@ -1500,6 +1510,43 @@ fn typed_schema_string(value: &str) -> golem_common::schema::TypedSchemaValue {
         golem_common::schema::SchemaGraph::anonymous(golem_common::schema::SchemaType::string()),
         golem_common::schema::SchemaValue::String(value.to_string()),
     )
+}
+
+fn sample_agent_layer_properties() -> crate::model::app::AgentLayerProperties {
+    use crate::model::cascade::property::Property;
+
+    let layer = crate::model::app::AgentLayerId::AgentCommon(
+        golem_common::model::agent::AgentTypeName("Agent".to_string()),
+    );
+    let mut properties = crate::model::app::AgentLayerProperties::default();
+    properties.config.apply_layer(
+        &layer,
+        None,
+        Some(json!({ "db": { "password": "agent-config-secret" } })),
+    );
+    properties.env.apply_layer(
+        &layer,
+        None,
+        (
+            crate::model::cascade::property::map::MapMergeMode::Upsert,
+            indexmap::IndexMap::from_iter([(
+                "API_TOKEN".to_string(),
+                "agent-env-secret".to_string(),
+            )]),
+        ),
+    );
+    properties.initial_card.apply_layer(
+        &layer,
+        None,
+        Some(crate::model::app_raw::ManifestInitialCard {
+            lower_bound: crate::model::app_raw::ManifestInitialCardBound {
+                positive: vec!["env(?agent) @ ?agent : read : FROM_AGENT".to_string()],
+                negative: Vec::new(),
+            },
+            upper_bound: Default::default(),
+        }),
+    );
+    properties
 }
 
 fn sample_component_layer_properties() -> crate::model::app::ComponentLayerProperties {
@@ -6031,13 +6078,122 @@ fn arb_component_list_result() -> OutputDocumentStrategy {
 
 fn arb_component_manifest_trace_result() -> OutputDocumentStrategy {
     serialized_output(
-        (arb_small_string(), arb_component_layer_properties()).prop_map(
-            |(component_name, properties)| crate::model::component::ComponentManifestTraceView {
-                component_name: golem_common::model::component::ComponentName(component_name),
-                properties,
-            },
-        ),
+        (
+            arb_small_string(),
+            arb_component_layer_properties(),
+            proptest::collection::btree_map(
+                arb_small_string().prop_map(golem_common::model::agent::AgentTypeName),
+                arb_agent_layer_properties(),
+                0..3,
+            ),
+        )
+            .prop_map(|(component_name, properties, agents)| {
+                crate::model::component::ComponentManifestTraceView {
+                    component_name: golem_common::model::component::ComponentName(component_name),
+                    properties,
+                    agents,
+                }
+            }),
     )
+}
+
+fn arb_agent_layer_id() -> BoxedStrategy<crate::model::app::AgentLayerId> {
+    let agent_type = || arb_small_string().prop_map(golem_common::model::agent::AgentTypeName);
+    prop_oneof![
+        arb_small_string().prop_map(|name| {
+            crate::model::app::AgentLayerId::Component(
+                golem_common::model::component::ComponentName(name),
+            )
+        }),
+        (agent_type(), arb_small_string()).prop_map(|(agent_type, template)| {
+            crate::model::app::AgentLayerId::AgentTemplate(agent_type, template)
+        }),
+        agent_type().prop_map(crate::model::app::AgentLayerId::AgentCommon),
+        agent_type().prop_map(crate::model::app::AgentLayerId::AgentEnvironmentPresets),
+        agent_type().prop_map(crate::model::app::AgentLayerId::AgentCustomPresets),
+    ]
+    .boxed()
+}
+
+fn arb_agent_layer_properties() -> BoxedStrategy<crate::model::app::AgentLayerProperties> {
+    (
+        arb_agent_layer_id(),
+        arb_agent_layer_id(),
+        proptest::option::of(arb_small_string()),
+        arb_json_value(1),
+        proptest::collection::vec(arb_small_string(), 0..3),
+        proptest::collection::hash_map(arb_small_string(), arb_small_string(), 1..3),
+        proptest::collection::vec(arb_manifest_plugin_installation(), 1..3),
+        proptest::collection::vec(arb_manifest_initial_component_file(), 1..3),
+    )
+        .prop_map(
+            |(layer_id, second_layer_id, selection, config, grants, env, plugins, files)| {
+                use crate::model::cascade::property::Property;
+
+                let mut properties = crate::model::app::AgentLayerProperties::default();
+                let selection = selection.as_ref();
+                properties
+                    .applied_layers
+                    .push((layer_id.clone(), selection.cloned()));
+                properties
+                    .config
+                    .apply_layer(&layer_id, selection, Some(config));
+                properties.initial_card.apply_layer(
+                    &layer_id,
+                    selection,
+                    Some(crate::model::app_raw::ManifestInitialCard {
+                        lower_bound: crate::model::app_raw::ManifestInitialCardBound {
+                            positive: grants.clone(),
+                            negative: Vec::new(),
+                        },
+                        upper_bound: crate::model::app_raw::ManifestInitialCardBound {
+                            positive: Vec::new(),
+                            negative: grants,
+                        },
+                    }),
+                );
+                properties
+                    .initial_card
+                    .apply_layer(&second_layer_id, selection, None);
+                properties.env.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::map::MapMergeMode::Upsert,
+                        env.into_iter().collect(),
+                    ),
+                );
+                properties.plugins.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::vec::VecMergeMode::Append,
+                        plugins,
+                    ),
+                );
+                properties.files.apply_layer(
+                    &second_layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::vec::VecMergeMode::Prepend,
+                        files,
+                    ),
+                );
+                properties.tool_bindings.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::map::MapMergeMode::Upsert,
+                        indexmap::IndexMap::from([(
+                            "search".to_string(),
+                            crate::model::app_raw::ToolBinding::default(),
+                        )]),
+                    ),
+                );
+                properties
+            },
+        )
+        .boxed()
 }
 
 fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::ComponentLayerProperties> {
@@ -6310,6 +6466,20 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                     )]),
                 ),
             );
+            properties.initial_card.apply_layer(
+                &layer_id,
+                selection,
+                Some(crate::model::app_raw::ManifestInitialCard {
+                    lower_bound: crate::model::app_raw::ManifestInitialCardBound {
+                        positive: vec!["env(?agent) @ ?agent : read : GOLEM_AGENT_ID".to_string()],
+                        negative: Vec::new(),
+                    },
+                    upper_bound: Default::default(),
+                }),
+            );
+            properties
+                .initial_card
+                .apply_layer(&second_layer_id, selection, None);
 
             properties
         })

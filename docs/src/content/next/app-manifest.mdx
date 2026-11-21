@@ -194,7 +194,7 @@ agents:
 
 This tool-permission fragment permits `status` with a matching `cwd`, including additional flags, but rejects calls containing both `short` and `null` regardless of their order or other flags. It does not grant filesystem access; supply the separate resource permissions required by the tool. Initial cards must also fit the deployer's delegable authority.
 
-The `env` grants let the agent read its own `GOLEM_AGENT_ID` and `GOLEM_AGENT_TYPE`, which the Rust, TypeScript, Go, MoonBit and Effect SDKs read. An explicit card replaces the default card, so it must contain these grants, and an upper bound with positive grants must contain them too. See [Default and explicit permissions](/next/concepts/permissions#default-and-explicit-permissions).
+The `env` grants let the agent read its own `GOLEM_AGENT_ID` and `GOLEM_AGENT_TYPE`, which the Rust, TypeScript, Go, MoonBit and Effect SDKs read. An explicit card replaces the default card, so it must contain these grants, and an upper bound with positive grants must contain them too. This also applies to a card on a component, a component template or a component preset, because every agent of the component that sets no card of its own gets that card. See [Default and explicit permissions](/next/concepts/permissions#default-and-explicit-permissions).
 
 Use primary command and long-option names in manifests. Runtime derivation can resolve aliases against durably selected metadata, but initial-card validation has no such definition context. Values are attached with `=`; `*` and `**` are anchored value globs, while an entire resource of `*` permits any command. Positive repeated-option constraints require a matching occurrence, not that all occurrences are allowed. See [Tool permission patterns](/next/develop/tool-security#tool-permission-patterns) for quoting, positional prefixes, denials, and opaque streams.
 
@@ -1241,7 +1241,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "components.<component-name>.initialCard",
   }}>
-    ***Optional initial permission card***. The `lowerBound` and `upperBound` objects each accept `positive` and `negative` lists of permission strings. Omitted bounds and lists are empty. See [Initial tool permissions](#initial-tool-permissions) for an example and validation rules.
+    ***Optional initial permission card***. The `lowerBound` and `upperBound` objects each accept `positive` and `negative` lists of permission strings. Omitted bounds and lists are empty. Component templates and presets can also set this field. Every agent of the component that sets no card of its own gets this card. The card of the most specific layer replaces the cards of the layers above it completely; cards are never merged. See [Initial tool permissions](#initial-tool-permissions) for an example and validation rules.
   </Field>
 
   <Field meta={{
@@ -1984,7 +1984,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "agents.<agent-type-name>.initialCard",
   }}>
-    ***Optional initial permission card*** with the same shape as <FieldLink path="components.<component-name>.initialCard"/>. Agent templates and presets can also set this field.
+    ***Optional initial permission card*** with the same shape as <FieldLink path="components.<component-name>.initialCard"/>. Agent templates and presets can also set this field. The layers apply in this order: component template, component, component preset, agent template, agent, agent preset. The most specific layer that sets a card wins, and its card replaces the inherited card completely; cards are never merged. When no layer sets a card, the agent gets the default card. `golem component manifest-trace` shows which layer set the card of each agent type of a built component; pass `--build` to build the component first.
   </Field>
 
   <Field meta={{
