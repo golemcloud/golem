@@ -82,7 +82,7 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Durable-call `Start`/`End`/`Cancelled` and `CompletionDelivered`/`CompletionDiscarded` markers | `DurableCallSession`, `ReplayableOneshot`, spawned store tasks |
 | `PendingUpdate` / `SuccessfulUpdate` / `FailedUpdate`, `Snapshot` hints, snapshot blobs | In-flight update decision, loaded snapshot bytes |
 | Validated operator revert/fork cuts and retained history | Replay cursor and runtime handles |
-| Agent status **folded from the durable status baseline and the oplog after it** (`worker/status.rs`, `AgentStatusCheckpoint`) | Status cache (a disposable start of the fold) |
+| Agent status **folded from the durable status baseline and the oplog after it** (`worker/status.rs`, `AgentStatusCheckpoint`) | Status cache (a disposable start status of the fold) |
 | Persisted promises and scheduler actions (`WakeupScheduler`), `RunningWorkers` recovery index | Tokio timers, in-memory wake channels |
 
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
