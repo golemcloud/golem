@@ -68,7 +68,7 @@ jobs:
         with:
           python-version: '3.14'
       - name: Install the test runner
-        run: cargo binstall --force --locked cargo-test-r@2.2.11
+        run: cargo binstall --force --locked cargo-test-r@2.2.14
       - uses: ./.github/actions/check-published-sdks
         with:
           prepare-binaries: 'true'
