@@ -5285,6 +5285,7 @@ async fn non_existing_oplog() {
         payload_unavailable: false,
         unreadable_from: None,
         unavailable_from: None,
+        ends_at: None,
     };
 
     let result = calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
@@ -6778,6 +6779,7 @@ impl TestCaseBuilder {
             payload_unavailable: false,
             unreadable_from: None,
             unavailable_from: None,
+            ends_at: None,
         }
     }
 }
@@ -6812,6 +6814,9 @@ struct TestCase {
     unreadable_from: Option<u64>,
     /// The first index whose archive storage does not answer, as in an outage.
     unavailable_from: Option<u64>,
+    /// The last index that a read gives. A read past it gives only the entries up to it and
+    /// reports no error, as a source that loses the end of the oplog.
+    ends_at: Option<u64>,
 }
 
 impl TestCase {
@@ -6976,7 +6981,7 @@ impl OplogService for TestCase {
                 },
             });
         }
-        for i in idx_u64..=end {
+        for i in idx_u64..=end.min(self.ends_at.unwrap_or(u64::MAX)) {
             let entry = i
                 .checked_sub(1)
                 .and_then(|offset| self.entries.get(offset as usize))
@@ -11394,5 +11399,33 @@ async fn skipped_regions_at_reads_from_the_retained_start() {
             })
         ),
         "a read from index 1 is expired: {error:?}"
+    );
+}
+
+/// A source that gives fewer entries than the horizon asks for leaves the history incomplete: the
+/// region read reports it as missing, and the skipped regions of a fork source fail, instead of
+/// giving the regions of the part that the source gave.
+#[test]
+async fn a_region_read_that_ends_before_the_horizon_is_missing_history() {
+    let mut case = retained_test_case();
+    let owned_agent_id = case.owned_agent_id.clone();
+    let horizon = OplogIndex::from_u64(case.entries.len() as u64);
+    case.ends_at = Some(2);
+
+    let reader =
+        super::StatusOplogReader::new(&case, &owned_agent_id, AgentMode::Durable, None, horizon);
+    assert_eq!(
+        super::reconstruction::read_region_entries(&reader, OplogIndex::INITIAL, 1024, false)
+            .await
+            .unwrap(),
+        None
+    );
+
+    let error = super::skipped_regions_at(&case, &owned_agent_id, OplogRetention::FULL, horizon)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, super::StatusError::Other(text) if text == "Missing fork source history"),
+        "{error:?}"
     );
 }

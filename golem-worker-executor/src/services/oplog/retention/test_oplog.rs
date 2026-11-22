@@ -89,8 +89,13 @@ fn execution_status() -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
 
 impl RetainedOplog {
     pub async fn new() -> Self {
-        let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
-            Arc::new(InMemoryKeyValueStorage::new());
+        Self::with_key_value_storage(Arc::new(InMemoryKeyValueStorage::new())).await
+    }
+
+    /// The stack with `key_value_storage` as the storage of the retention record.
+    pub async fn with_key_value_storage(
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Self {
         let primary = PrimaryOplogService::new(
             Arc::new(InMemoryIndexedStorage::new()),
             Arc::new(InMemoryBlobStorage::new()),

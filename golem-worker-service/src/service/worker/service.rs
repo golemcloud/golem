@@ -7289,6 +7289,30 @@ mod tests {
         );
     }
 
+    /// The check of the entries that a page without a start gives asks for exactly the range of
+    /// those entries: from the first index of the page, `count` entries. One grant covers the
+    /// requested range and another grant covers the given entries, so the read is allowed.
+    #[test]
+    async fn an_oplog_page_without_a_start_needs_permission_only_for_the_entries_it_gives() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        let auth_ctx = auth_ctx_with_permissions(vec![
+            oplog_target(&agent_id, OplogResourcePattern::range(Some(1), Some(3))),
+            oplog_target(&agent_id, OplogResourcePattern::range(Some(10), Some(12))),
+        ]);
+
+        *harness.worker_client.oplog_page_first_index.lock().unwrap() = 10;
+        let page = harness
+            .worker_service
+            .get_oplog(&agent_id, None, None, 3, auth_ctx)
+            .await
+            .unwrap();
+        assert_eq!(page.first_index_in_chunk, 10);
+    }
+
     #[test]
     async fn oplog_entry_reads_require_permission_for_the_exact_oplog_index() {
         let harness = RestHarness::new(AgentMode::Durable);

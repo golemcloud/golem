@@ -796,6 +796,42 @@ mod tests {
         );
     }
 
+    /// A delete whose removal of the retention record fails reports the failure, so the caller
+    /// does not take the delete as complete while the record keeps the old start.
+    #[test]
+    async fn a_failed_removal_of_the_retention_record_fails_the_delete() {
+        use crate::storage::keyvalue::KeyValueStorageError;
+        use crate::storage::keyvalue::fault_injecting::{
+            FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+        };
+        use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+
+        let faults = KeyValueStorageFaults::default();
+        let oplog =
+            RetainedOplog::with_key_value_storage(Arc::new(FaultInjectingKeyValueStorage::new(
+                Arc::new(InMemoryKeyValueStorage::new()),
+                faults.clone(),
+            )))
+            .await;
+        let handle = oplog.create(jump(1), ShardEpoch(5)).await;
+        handle.add_and_commit(jump(2)).await.unwrap();
+        drop(handle);
+        oplog.advance(2).await;
+        faults.fail(
+            "remove_retention",
+            1,
+            KeyValueStorageError::Other("unavailable".to_string()),
+        );
+
+        let failed = oplog.delete(Some(ShardEpoch(5))).await;
+        assert!(
+            matches!(failed, Err(OplogError::Maintenance(_))),
+            "{failed:?}"
+        );
+        assert_eq!(faults.calls("remove_retention"), 1);
+        assert_eq!(oplog.start().await, idx(2), "the record keeps the start");
+    }
+
     /// The retained range read of the handle and of the service reads the retained entries from
     /// the retained start to the last index, and reads nothing when the last index is below the
     /// start. The deletion scan and the consumer probe read through it.

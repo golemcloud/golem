@@ -1300,7 +1300,8 @@ async fn the_error_count_reads_from_the_retry_point_or_the_retained_start() {
     oplog
         .add((1..=10).map(|index| match index {
             3 | 5 | 9 => error(index, 2),
-            7 => error(index, 6),
+            // The last entry is an error, as when the count follows the write of an error.
+            7 | 10 => error(index, 6),
             _ => jump(index),
         }))
         .await;
@@ -1312,7 +1313,7 @@ async fn the_error_count_reads_from_the_retry_point_or_the_retained_start() {
             .map_err(|unreadable| unreadable.error)
     };
     assert_eq!(count(2).await, Ok(3));
-    assert_eq!(count(6).await, Ok(1));
+    assert_eq!(count(6).await, Ok(2), "the count includes the last entry");
     oplog.advance(5).await;
     assert_eq!(
         count(2).await,
@@ -1321,7 +1322,7 @@ async fn the_error_count_reads_from_the_retry_point_or_the_retained_start() {
     );
     oplog.advance(6).await;
     assert_eq!(count(2).await, Ok(1));
-    assert_eq!(count(6).await, Ok(1));
+    assert_eq!(count(6).await, Ok(2));
     oplog.advance(11).await;
     assert_eq!(count(2).await, Ok(0), "no retained entry is left");
 }

@@ -4803,3 +4803,179 @@ async fn an_entity_whose_ancestor_is_below_the_retained_start_keeps_its_attribut
     );
     assert_eq!(owned_log, child.next());
 }
+
+/// The `Create` entry of the agent of `owned_agent_id`, with `component_revision` as the revision
+/// that the agent starts with.
+fn create_entry_with_revision(
+    owned_agent_id: &OwnedAgentId,
+    component_revision: ComponentRevision,
+) -> OplogEntry {
+    OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+        agent_id: owned_agent_id.agent_id.clone(),
+        component_id: owned_agent_id.component_id(),
+        agent_type_name: None,
+        canonical_key: None,
+        owner_kind: OwnerKind::ComponentAgent,
+        agent_mode: AgentMode::Durable,
+        component_revision,
+        env: Vec::new(),
+        environment_id: owned_agent_id.environment_id,
+        created_by: AccountId::new(),
+        parent: None,
+        component_size: 100,
+        initial_total_linear_memory_size: 100,
+        initial_active_plugins: HashSet::new(),
+        local_agent_config: Vec::new(),
+        original_phantom_id: None,
+        instance_id: Uuid::new_v4(),
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+            None,
+            Principal::anonymous(),
+            &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
+    }))
+}
+
+/// No retained entry names a component revision, so the revision in effect after the start is
+/// the one that the `Create` entry below the start names.
+#[test]
+async fn the_revision_lookup_reads_the_create_entry_below_the_retained_start() {
+    use futures::{StreamExt, TryStreamExt};
+
+    let retained = RetainedAttribution::new("retained-create-revision").await;
+    let created_revision = ComponentRevision::new(3).unwrap();
+    retained
+        .oplog
+        .add(create_entry_with_revision(
+            &retained.owned_agent_id,
+            created_revision,
+        ))
+        .await
+        .unwrap();
+    futures::stream::iter(2..=6)
+        .then(|index| retained.oplog.add(log_entry(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    retained.oplog.commit(CommitLevel::Always).await.unwrap();
+    let retained_start = OplogIndex::from_u64(4);
+    retained.advance(retained_start).await;
+    let retention = retained
+        .oplog_service
+        .retention(&retained.owned_agent_id, AgentMode::Durable)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        find_component_revision_at(
+            retained.oplog_service.clone(),
+            &retained.owned_agent_id,
+            AgentMode::Durable,
+            retention,
+            OplogIndex::from_u64(6),
+        )
+        .await,
+        Ok(created_revision)
+    );
+    assert_eq!(
+        oplog_page_start(
+            retained.oplog_service.clone(),
+            &retained.owned_agent_id,
+            AgentMode::Durable,
+            retention,
+            None,
+            None,
+        )
+        .await,
+        Ok((retained_start, created_revision))
+    );
+}
+
+/// On an oplog that keeps every entry, a page from index 0 reads from index 1, and the single
+/// entry read of index 0 is an invalid request, not an expired read.
+#[test]
+async fn a_read_from_index_0_of_a_full_oplog_starts_at_index_1() {
+    use futures::{StreamExt, TryStreamExt};
+
+    let retained = RetainedAttribution::new("full-from-0").await;
+    futures::stream::iter(1..=3)
+        .then(|index| retained.oplog.add(log_entry(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    retained.oplog.commit(CommitLevel::Always).await.unwrap();
+
+    assert_eq!(
+        oplog_page_start(
+            retained.oplog_service.clone(),
+            &retained.owned_agent_id,
+            AgentMode::Durable,
+            OplogRetention::FULL,
+            None,
+            Some(OplogIndex::NONE),
+        )
+        .await,
+        Ok((OplogIndex::INITIAL, ComponentRevision::INITIAL))
+    );
+    let entry = get_public_oplog_entry(
+        Arc::new(PanicComponentService),
+        retained.oplog_service.clone(),
+        &retained.owned_agent_id,
+        AgentMode::Durable,
+        retained.owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        OplogIndex::NONE,
+        None,
+    )
+    .await;
+    assert!(
+        matches!(entry, Err(WorkerExecutorError::InvalidRequest { .. })),
+        "{entry:?}"
+    );
+}
+
+/// A guest search whose end is before its start reads no entry, also when the entry at the start
+/// matches the query.
+#[test]
+async fn a_guest_search_that_ends_before_its_start_reads_nothing() {
+    use futures::{StreamExt, TryStreamExt};
+
+    let retained = RetainedAttribution::new("search-past-its-end").await;
+    futures::stream::iter(1..=6)
+        .then(|index| retained.oplog.add(log_entry(index)))
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    retained.oplog.commit(CommitLevel::Always).await.unwrap();
+    let start = OplogIndex::from_u64(5);
+
+    let search = search_public_oplog(
+        Arc::new(PanicComponentService),
+        retained.oplog_service.clone(),
+        &retained.owned_agent_id,
+        AgentMode::Durable,
+        OplogRetention::FULL,
+        retained.owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        ComponentRevision::INITIAL,
+        start,
+        Some(OplogIndex::from_u64(4)),
+        10,
+        "context",
+        ScanBudget::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        search
+            .entries
+            .iter()
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>(),
+        Vec::<OplogIndex>::new()
+    );
+    assert_eq!(search.next_oplog_index, start);
+}

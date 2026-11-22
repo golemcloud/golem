@@ -18850,3 +18850,36 @@ async fn a_driven_call_numbered_under_a_custom_root_of_a_closed_invocation_repla
         "a driven call numbered under a closed custom root replays, got {result:?}"
     );
 }
+
+#[test]
+#[test_r::timeout("30s")]
+async fn a_scan_that_ends_at_index_0_reads_nothing() {
+    let (rs, oplog) = replay_state_and_oplog_over(vec![start_now()]).await;
+    let reads = oplog.reads.lock().unwrap().clone();
+
+    let result = rs
+        .cursor
+        .scan_oplog(
+            OplogIndex::INITIAL,
+            OplogIndex::NONE,
+            &DeletedRegions::default(),
+            None,
+            OplogIndex::INITIAL,
+            |_, _, _| true,
+            |_, _, _| true,
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        result,
+        OplogEntryLookupResult::NotFound {
+            violates_for_all: false
+        }
+    ));
+    assert_eq!(
+        *oplog.reads.lock().unwrap(),
+        reads,
+        "a scan with no index before its end reads no entry"
+    );
+}

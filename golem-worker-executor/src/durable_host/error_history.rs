@@ -277,6 +277,11 @@ mod tests {
 
     use crate::services::golem_config::GolemConfig;
     use crate::services::oplog::retention::test_oplog::{RetainedOplog, at, idx, jump};
+    use crate::storage::keyvalue::KeyValueStorageError;
+    use crate::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::payload::OplogPayload;
@@ -290,12 +295,46 @@ mod tests {
 
     impl Retained {
         async fn new(entries: Vec<OplogEntry>) -> Self {
-            let oplog = RetainedOplog::new().await;
+            Self::with_oplog(RetainedOplog::new().await, entries).await
+        }
+
+        /// The services over a retention record whose reads fail as `faults` decides.
+        async fn with_faults(entries: Vec<OplogEntry>) -> (Self, KeyValueStorageFaults) {
+            let faults = KeyValueStorageFaults::default();
+            let oplog = RetainedOplog::with_key_value_storage(Arc::new(
+                FaultInjectingKeyValueStorage::new(
+                    Arc::new(InMemoryKeyValueStorage::new()),
+                    faults.clone(),
+                ),
+            ))
+            .await;
+            (Self::with_oplog(oplog, entries).await, faults)
+        }
+
+        async fn with_oplog(oplog: RetainedOplog, entries: Vec<OplogEntry>) -> Self {
             oplog.add(entries).await;
             Self {
                 oplog,
                 config: Arc::new(GolemConfig::default()),
             }
+        }
+    }
+
+    fn unavailable() -> KeyValueStorageError {
+        KeyValueStorageError::Other("the retention record does not read".to_string())
+    }
+
+    fn error(index: u64, retry_from: u64) -> OplogEntry {
+        OplogEntry::Error {
+            timestamp: Timestamp::from(index),
+            entity_parent_start_index: None,
+            kind: OplogErrorKind::Invocation,
+            invocation_id: None,
+            error: AgentError::Unknown("failed".to_string()),
+            retry_from: idx(retry_from),
+            retry_policy_state: None,
+            retry_at: None,
+            retrying_start_index: None,
         }
     }
 
@@ -408,6 +447,83 @@ mod tests {
         assert_eq!(logs().await, "newtail");
         retained.oplog.advance(4).await;
         assert_eq!(logs().await, "tail");
+    }
+
+    /// When the retention of the oplog does not read, the last error is the read failure: the walk
+    /// does not guess a start, because the oplog may not keep index 1.
+    #[test]
+    async fn a_retention_that_does_not_read_is_the_last_error() {
+        let (retained, faults) = Retained::with_faults(vec![jump(1), error(2, 1)]).await;
+        let status = AgentStatusRecord {
+            status: AgentStatus::Failed,
+            ..Default::default()
+        };
+        faults.fail("read_retention", 1, unavailable());
+
+        let last = last_error(
+            &retained,
+            &retained.oplog.owned_agent_id,
+            AgentMode::Durable,
+            &status,
+        )
+        .await
+        .expect("a failed agent has a last error");
+        assert!(
+            matches!(&last.error, AgentError::InternalError(text) if text.contains("the retention record does not read")),
+            "{:?}",
+            last.error
+        );
+        assert_eq!(last.retry_from, OplogIndex::NONE);
+    }
+
+    /// When the retention of the oplog does not read, the stderr walk reads no entry and gives no
+    /// stderr.
+    #[test]
+    async fn a_retention_that_does_not_read_gives_no_stderr() {
+        let (retained, faults) =
+            Retained::with_faults(vec![jump(1), started(), stderr("tail")]).await;
+        faults.fail("read_retention", 1, unavailable());
+
+        assert_eq!(
+            recover_stderr_logs(
+                &retained,
+                &retained.oplog.owned_agent_id,
+                AgentMode::Durable,
+                idx(3),
+            )
+            .await,
+            ""
+        );
+    }
+
+    /// The stderr walk keeps the stderr of the windows that it read when a later window does not
+    /// read.
+    #[test]
+    async fn a_window_that_does_not_read_keeps_the_stderr_of_the_later_windows() {
+        let last = BACKWARD_OPLOG_SCAN_WINDOW + 2;
+        let (retained, faults) = Retained::with_faults(
+            (1..=last - 2)
+                .map(jump)
+                .chain([started(), stderr("tail")])
+                .collect(),
+        )
+        .await;
+        // The walk reads the record for its retention and once for each window read, so the
+        // third read is the read of the second window.
+        faults.fail_after("read_retention", 2, 1, unavailable());
+        let reads_before = faults.calls("read_retention");
+
+        assert_eq!(
+            recover_stderr_logs(
+                &retained,
+                &retained.oplog.owned_agent_id,
+                AgentMode::Durable,
+                idx(last),
+            )
+            .await,
+            "tail"
+        );
+        assert_eq!(faults.calls("read_retention") - reads_before, 3);
     }
 
     fn window(start: u64, count: u64) -> Option<OplogRange> {
