@@ -832,21 +832,15 @@ impl WorkerService {
             return Ok(());
         }
         let denied = || WorkerServiceError::AgentAccessDenied(agent_id.agent_id);
-        // The registry reports a missing environment to every caller alike, so its agents are
-        // not found without telling anyone whether one of them existed.
-        match self
-            .agent_types
+        self.agent_types
             .authorize_environment(agent_id.environment_id, auth_ctx)
             .await
-        {
-            Ok(()) => {}
-            Err(RegistryServiceError::NotFound(_)) => return Ok(()),
-            Err(
+            .map_err(|error| match error {
                 RegistryServiceError::Unauthorized(_)
-                | RegistryServiceError::CouldNotAuthenticate(_),
-            ) => return Err(denied()),
-            Err(other) => return Err(other.into()),
-        }
+                | RegistryServiceError::NotFound(_)
+                | RegistryServiceError::CouldNotAuthenticate(_) => denied(),
+                other => other.into(),
+            })?;
         let Some(tagged) = self
             .agent_types
             .tagged(agent_id.environment_id, agent_id.agent_id)
