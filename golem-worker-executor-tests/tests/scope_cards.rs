@@ -6163,13 +6163,16 @@ async fn guest_oplog_search_stops_at_the_granted_window(
         .component_dep(&context.default_environment_id, host_api_tests)
         .without_default_host_permissions("GolemHostApi")
         .try_update_agent_provision_config("GolemHostApi", |config| {
-            config
-                .initial_permissions
-                .lower_bound
-                .positive
-                .push(parse_polymorphic_permission(
-                    "oplog(?env/*/*) @ * : read : start=1:end=100",
-                )?);
+            for grant in [
+                "oplog(?env/*/*) @ * : read : start=1:end=100",
+                "oplog(?env/*/*) @ * : read : start=51:end=150",
+            ] {
+                config
+                    .initial_permissions
+                    .lower_bound
+                    .positive
+                    .push(parse_polymorphic_permission(grant)?);
+            }
             Ok::<_, golem_common::model::card::CardParseError>(())
         })?
         .store()
@@ -6354,6 +6357,25 @@ async fn guest_oplog_search_stops_at_the_granted_window(
         executor.oplog_service_reads(&target.agent_id()),
         [window; 3]
     );
+
+    // A read from a later index takes the component revision at its start from the status of
+    // the agent, so it reads no entry before its start.
+    let tip = executor.get_oplog_last_index(&target).await?;
+    let reads = executor.oplog_service_reads(&target.agent_id()).len();
+    let later = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "read_oplog_batch_size",
+            data_value!(target.agent_id(), 51u64),
+        )
+        .await?
+        .into_typed::<Result<Option<u64>, String>>()?;
+    assert_eq!(
+        executor.oplog_service_reads(&target.agent_id())[reads..],
+        [(OplogIndex::from_u64(51), tip - 50)]
+    );
+    assert_eq!(later, Ok(Some(tip - 50)));
     Ok(())
 }
 
