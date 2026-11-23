@@ -3736,7 +3736,9 @@ impl WorkerService {
     }
 
     /// Creates an unkeyed agent for an authenticated mount using the shared REST create policy.
-    /// HTTP route authentication does not provide an idempotency scope.
+    /// `caller` is the caller of the route's verified session, and it is the scope of the
+    /// idempotency key: the retry of a signed-in caller reaches the agent that its first attempt
+    /// made. An anonymous caller has no scope, so its key is ignored.
     pub(crate) async fn create_mounted_agent(
         &self,
         component_id: ComponentId,
@@ -3759,13 +3761,13 @@ impl WorkerService {
                 "The component does not belong to the route's environment".into(),
             ));
         }
-        // A route caller has no caller scope, so the key of a create route never deduplicates.
+        let scope = IdempotencyScope::of(&caller);
         self.create_resolved_agent(
             &registered,
             &component,
             request,
             idempotency_key,
-            None,
+            scope,
             AuthCtx::System,
             caller,
         )
@@ -7616,6 +7618,61 @@ mod tests {
         assert_eq!(
             *harness.worker_client.created_callers.lock().unwrap(),
             vec![Caller::anonymous()]
+        );
+    }
+
+    /// A create route gives the worker service the caller of the verified session. That caller
+    /// is the scope of the route's idempotency key: a signed-in caller's retry names the first
+    /// agent, another caller gets another agent, and an anonymous caller has no scope.
+    #[test]
+    async fn a_create_route_scopes_the_idempotency_key_by_its_caller() {
+        use golem_common::model::Timestamp;
+        use golem_common::model::caller::{Claims, Pair, UserPrincipal};
+
+        let harness = RestHarness::new(AgentMode::Durable);
+        let key = IdempotencyKey::new("create-key".to_string());
+        let user = |subject: &str| {
+            Caller::entry(Principal::User(UserPrincipal {
+                pair: Pair::new("https://idp.example", subject),
+                claims: Claims::from_json(format!(r#"{{"sub":"{subject}"}}"#)).unwrap(),
+                authenticated_at: "2026-01-02T03:04:05.678Z".parse::<Timestamp>().unwrap(),
+            }))
+        };
+        let create = |caller: Caller| {
+            let harness = &harness;
+            let key = key.clone();
+            async move {
+                harness
+                    .worker_service
+                    .create_mounted_agent(
+                        harness.component_id,
+                        harness.environment_id,
+                        &harness.agent_type_name,
+                        harness.create_request(false),
+                        Some(key),
+                        caller,
+                    )
+                    .await
+                    .unwrap()
+                    .agent_id
+            }
+        };
+
+        let of_alice = create(user("alice")).await;
+        assert_eq!(
+            of_alice,
+            AgentId::idempotent_create(
+                harness.environment_id,
+                test_type_id(),
+                &IdempotencyScope::of(&user("alice")).expect("a user has a pair"),
+                &key,
+            )
+        );
+        assert_eq!(of_alice, create(user("alice")).await);
+        assert_ne!(of_alice, create(user("bob")).await);
+        assert_ne!(
+            create(Caller::anonymous()).await,
+            create(Caller::anonymous()).await
         );
     }
 
