@@ -5,7 +5,6 @@ use test_r::test;
 
 macro_rules! repeated_stop_case {
     ($name:ident, $mode:ident, $user_stop:expr) => {
-        #[cfg(target_os = "linux")]
         #[test]
         #[ignore = "requires the privileged managed XFS test runner"]
         #[timeout("2m")]

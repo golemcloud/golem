@@ -5,7 +5,7 @@ use test_r::test;
 
 macro_rules! handshake_case {
     ($name:ident, Storage, $mode:ident) => {
-        handshake_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+        handshake_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
         $(#[$attr])*
@@ -45,16 +45,23 @@ handshake_case!(
     Compute,
     Ephemeral
 );
-handshake_case!(
-    durable_websocket_handshake_managed_xfs_storage_quota,
-    Storage,
-    Durable
-);
-handshake_case!(
-    ephemeral_websocket_handshake_managed_xfs_storage_quota,
-    Storage,
-    Ephemeral
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    handshake_case!(
+        durable_websocket_handshake_managed_xfs_storage_quota,
+        Storage,
+        Durable
+    );
+    handshake_case!(
+        ephemeral_websocket_handshake_managed_xfs_storage_quota,
+        Storage,
+        Ephemeral
+    );
+}
+
 async fn pending_handshake(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

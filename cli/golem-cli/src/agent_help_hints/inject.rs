@@ -151,10 +151,20 @@ fn file_url(path: &Path) -> String {
     // Minimal manual encoding: escape spaces only. Skill paths under
     // .agents/skills/ are normally ASCII-safe.
     let s = abs.to_string_lossy().replace(' ', "%20");
-    if cfg!(windows) {
-        format!("file:///{}", s.replace('\\', "/"))
-    } else {
-        format!("file://{}", s)
+    platform::file_url(&s)
+}
+
+#[cfg(windows)]
+mod platform {
+    pub(super) fn file_url(path: &str) -> String {
+        format!("file:///{}", path.replace('\\', "/"))
+    }
+}
+
+#[cfg(not(windows))]
+mod platform {
+    pub(super) fn file_url(path: &str) -> String {
+        format!("file://{}", path)
     }
 }
 
