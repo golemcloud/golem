@@ -2294,7 +2294,9 @@ fn wallet_derivation_parent_selection_lists_the_reason_of_every_card() {
     );
     assert_eq!(
         message,
-        format!("no wallet card permits the requested derivation: {first}; {second}")
+        format!(
+            "no wallet card permits the requested derivation: across the whole wallet, {combined}; {first}; {second}"
+        )
     );
 
     let many: Vec<_> = (1..=5)
@@ -2307,6 +2309,67 @@ fn wallet_derivation_parent_selection_lists_the_reason_of_every_card() {
     assert!(message.contains(&format!("card {}:", Uuid::from_u128(3))));
     assert!(!message.contains(&format!("card {}:", Uuid::from_u128(4))));
     assert!(message.ends_with("; +2 more"), "{message}");
+}
+
+/// A wallet card that grants `/data/<granted>` and, if given, denies `/data/<granted>/<denied>` in
+/// its upper bound.
+fn wallet_card_granting(card_id: u128, granted: &str, denied: Option<&str>) -> Card {
+    let mut wallet_card = card(vec![data_grant(&["data", granted])], Vec::new());
+    wallet_card.card_id = CardId(Uuid::from_u128(card_id));
+    wallet_card.upper_negative = denied
+        .map(|denied| vec![data_grant(&["data", granted, denied])])
+        .unwrap_or_default();
+    wallet_card
+}
+
+#[test]
+fn wallet_derivation_message_leads_with_the_whole_wallet_reason() {
+    let surface = DelegationSurface::from_cards(&[
+        wallet_card_granting(1, "a", None),
+        wallet_card_granting(2, "b", Some("secret")),
+    ]);
+    let request = [data_grant(&["data", "a"]), data_grant(&["data", "b"])];
+
+    let error = surface
+        .select_wallet_derivation_parent(&request, &[], &[], &[])
+        .unwrap_err();
+    let denial = data_grant(&["data", "b", "secret"]).render().unwrap();
+    let message = error.wallet_derivation_message();
+    assert!(
+        message.starts_with(&format!(
+            "no wallet card permits the requested derivation: across the whole wallet, the child card must keep the parent's upper-bound denial `{denial}`; card {}: no parent card grants",
+            Uuid::from_u128(1)
+        )),
+        "{message}"
+    );
+    assert!(
+        message.ends_with("restate this denial in the upper-negative grants of the request"),
+        "{message}"
+    );
+
+    assert_eq!(
+        surface.select_wallet_derivation_parent(
+            &request,
+            &[],
+            &[],
+            &[data_grant(&["data", "b", "secret"])]
+        ),
+        Ok(WalletDerivationParent::MultipleRequired)
+    );
+}
+
+#[test]
+fn wallet_derivation_message_has_no_restate_hint_when_no_card_grants_the_request() {
+    let surface = DelegationSurface::from_cards(&[
+        wallet_card_granting(1, "a", Some("secret")),
+        wallet_card_granting(2, "b", None),
+    ]);
+
+    let error = surface
+        .select_wallet_derivation_parent(&[data_grant(&["data", "c"])], &[], &[], &[])
+        .unwrap_err();
+    assert_matches!(&error, CardAlgebraError::NoWalletCardFits { .. });
+    assert_eq!(error.wallet_derivation_message(), error.to_string());
 }
 
 #[test]

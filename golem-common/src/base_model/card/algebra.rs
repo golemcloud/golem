@@ -71,24 +71,29 @@ const LISTED_WALLET_CARD_FAILURES: usize = 3;
 
 impl CardAlgebraError {
     /// The message for a failed wallet derivation. A wallet derivation takes complete bounds and
-    /// inherits nothing from the wallet card, so the message also says what to restate.
+    /// inherits nothing from the wallet card, so when restating a denial or a ceiling fixes the
+    /// request, the message also says what to restate.
     pub fn wallet_derivation_message(&self) -> String {
-        let hint = match self {
-            Self::LowerDenialNotKept { .. } => {
-                "derive-from-wallet takes complete bounds, so restate this denial in the lower-negative grants of the request"
-            }
-            Self::UpperDenialNotKept { .. } => {
-                "derive-from-wallet takes complete bounds, so restate this denial in the upper-negative grants of the request"
-            }
-            Self::UpperCeilingNotKept { .. } => {
-                "derive-from-wallet takes complete bounds, so restate this ceiling or a narrower one in the upper-positive grants of the request"
-            }
-            Self::NoWalletCardFits { .. } => {
-                "derive-from-wallet takes complete bounds, so restate the denials and the ceiling of the card to derive from"
-            }
-            _ => return self.to_string(),
-        };
-        format!("{self}; {hint}")
+        match self.wallet_derivation_hint() {
+            Some(hint) => format!("{self}; {hint}"),
+            None => self.to_string(),
+        }
+    }
+
+    fn wallet_derivation_hint(&self) -> Option<&'static str> {
+        match self {
+            Self::LowerDenialNotKept { .. } => Some(
+                "derive-from-wallet takes complete bounds, so restate this denial in the lower-negative grants of the request",
+            ),
+            Self::UpperDenialNotKept { .. } => Some(
+                "derive-from-wallet takes complete bounds, so restate this denial in the upper-negative grants of the request",
+            ),
+            Self::UpperCeilingNotKept { .. } => Some(
+                "derive-from-wallet takes complete bounds, so restate this ceiling or a narrower one in the upper-positive grants of the request",
+            ),
+            Self::NoWalletCardFits { combined, .. } => combined.wallet_derivation_hint(),
+            _ => None,
+        }
     }
 }
 
@@ -133,11 +138,13 @@ impl std::fmt::Display for CardAlgebraError {
                 "the upper-bound grant `{}` is broader than the parent card's ceiling",
                 grant(child)
             ),
-            Self::NoWalletCardFits { cards, .. } => {
-                write!(f, "no wallet card permits the requested derivation")?;
-                for (index, failure) in cards.iter().take(LISTED_WALLET_CARD_FAILURES).enumerate() {
-                    let separator = if index == 0 { ": " } else { "; " };
-                    write!(f, "{separator}card {}: {}", failure.card_id, failure.error)?;
+            Self::NoWalletCardFits { combined, cards } => {
+                write!(
+                    f,
+                    "no wallet card permits the requested derivation: across the whole wallet, {combined}"
+                )?;
+                for failure in cards.iter().take(LISTED_WALLET_CARD_FAILURES) {
+                    write!(f, "; card {}: {}", failure.card_id, failure.error)?;
                 }
                 if cards.len() > LISTED_WALLET_CARD_FAILURES {
                     write!(f, "; +{} more", cards.len() - LISTED_WALLET_CARD_FAILURES)?;
