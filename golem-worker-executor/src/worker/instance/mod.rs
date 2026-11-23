@@ -964,11 +964,13 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
     ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
         let owner = self.owner()?;
         let mut store = StoreFuelGuard::new(self.create_store(context)?);
+        tracing::debug!(target: "golem_worker_executor::worker::startup_timing", phase = "store_created", "Worker instance creation phase");
 
         let linker = (*owner.linker()).clone();
         let instance_pre = linker
             .instantiate_pre(component)
             .map_err(|error| self.creation_error(error.into()))?;
+        tracing::debug!(target: "golem_worker_executor::worker::startup_timing", phase = "linker_prepared", "Worker instance creation phase");
         let instance = instance_pre
             .instantiate_async(&mut *store)
             .await
@@ -976,6 +978,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 instantiation_failure(&self.runtime, &error)
                     .unwrap_or_else(|| self.creation_error(error.into()))
             })?;
+        tracing::debug!(target: "golem_worker_executor::worker::startup_timing", phase = "wasm_instantiated", "Worker instance creation phase");
 
         let current_level = store.get_fuel().unwrap_or(0);
         let agent_mode = store.data().agent_mode();

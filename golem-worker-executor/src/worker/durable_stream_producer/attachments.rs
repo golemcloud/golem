@@ -543,13 +543,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(WorkerExecutorError::runtime)
             .map_err(Into::into)
     }
-    #[tracing::instrument(name = "durable_stream.read_request", level = "debug", skip_all)]
+    #[tracing::instrument(
+        name = "durable_stream.read_request",
+        level = "debug",
+        skip_all,
+        fields(
+            attachment_id = %request.attachment.attachment_id.0,
+            stream_id = %request.attachment.stream_id,
+            epoch = request.attachment.epoch,
+            wait_for_events = request.wait_for_events,
+            has_cursor = request.after.is_some()
+        )
+    )]
     pub(crate) async fn read_durable_stream_segment(
         &self,
         request: AttachedStreamSegmentRequest,
     ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamRemoteError<WorkerExecutorError>>
     {
         if !request.is_well_formed() {
+            debug!(outcome = "malformed_request", "Durable stream read failed");
             return Err(WorkerExecutorError::invalid_request(
                 "malformed durable stream segment request",
             )
@@ -560,28 +572,51 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             || key.producer != self.owned_agent_id.agent_id
             || key.expected_producer_fingerprint != self.initial_worker_metadata.fingerprint
         {
+            debug!(outcome = "producer_mismatch", "Durable stream read failed");
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream segment does not match the producer incarnation",
             )
             .into());
         }
-        let producer = self.load_durable_stream_producer().await.map_err(|error| {
-            DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
-        })?;
-        producer
-            .validate_handle(&request.mapping.handle)
-            .await
-            .map_err(|error| {
-                DurableStreamRemoteError::from_producer(error, WorkerExecutorError::invalid_request)
+        let producer = async {
+            let producer = self.load_durable_stream_producer().await.map_err(|error| {
+                DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
             })?;
+            producer
+                .validate_handle(&request.mapping.handle)
+                .await
+                .map_err(|error| {
+                    DurableStreamRemoteError::from_producer(
+                        error,
+                        WorkerExecutorError::invalid_request,
+                    )
+                })?;
+            Ok::<_, DurableStreamRemoteError<WorkerExecutorError>>(producer)
+        }
+        .instrument(tracing::debug_span!("durable_stream.resolve_producer"))
+        .await
+        .inspect_err(|_| {
+            debug!(outcome = "resolve_failed", "Durable stream read failed");
+        })?;
         let probe =
             DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
         if probe
             .status_exact(key, Some(&request.mapping))
+            .instrument(tracing::debug_span!(
+                "durable_stream.authorize_consumer",
+                stage = "before_read"
+            ))
             .await
-            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+            .map_err(|error| {
+                debug!(
+                    outcome = "authorization_failed",
+                    "Durable stream read failed"
+                );
+                error.into_worker_executor_error(WorkerExecutorError::runtime)
+            })?
             != ConsumerAttachmentStatus::Active
         {
+            debug!(outcome = "unauthorized", "Durable stream read failed");
             return Err(WorkerExecutorError::invalid_request(
                 "consumer durable topology does not authorize this stream read",
             )
@@ -609,33 +644,68 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await
             }
         };
-        let mut events = read().await;
+        let mut events = read()
+            .instrument(tracing::debug_span!(
+                "durable_stream.attached_read",
+                attempt = "initial"
+            ))
+            .await;
         if matches!(events, Err(StreamStoreError::InvalidAttachmentState)) {
             // Consumer activation can commit before its producer RPC arrives. Repair only this
             // gap from the exact authority checked above; healthy reads never enter the writer.
+            debug!(phase = "repair_begin", "Durable stream read phase");
             producer
                 .activate_attachment(key.clone(), Timestamp::now_utc().to_millis())
                 .await
                 .map_err(|error| {
+                    debug!(outcome = "repair_failed", "Durable stream read failed");
                     DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
                 })?;
-            events = read().await;
+            debug!(phase = "repair_complete", "Durable stream read phase");
+            events = read()
+                .instrument(tracing::debug_span!(
+                    "durable_stream.attached_read",
+                    attempt = "after_repair"
+                ))
+                .await;
         }
         let events = events.map_err(|error| {
+            debug!(outcome = "read_failed", "Durable stream read failed");
             DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
         })?;
         if request.wait_for_events
             && probe
                 .status_exact(key, Some(&request.mapping))
+                .instrument(tracing::debug_span!(
+                    "durable_stream.authorize_consumer",
+                    stage = "after_wait"
+                ))
                 .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+                .map_err(|error| {
+                    debug!(
+                        outcome = "authorization_failed",
+                        "Durable stream read failed"
+                    );
+                    error.into_worker_executor_error(WorkerExecutorError::runtime)
+                })?
                 != ConsumerAttachmentStatus::Active
         {
+            debug!(
+                outcome = "authorization_revoked",
+                "Durable stream read failed"
+            );
             return Err(WorkerExecutorError::invalid_request(
                 "consumer durable topology no longer authorizes this stream read",
             )
             .into());
         }
+        debug!(
+            outcome = "success",
+            event_count = events.len(),
+            first_offset = ?events.first().map(|event| event.offset),
+            last_offset = ?events.last().map(|event| event.offset),
+            "Durable stream read completed"
+        );
         Ok(events)
     }
     pub(crate) fn start_durable_stream_attachment_reconciler(this: &Arc<Self>) {

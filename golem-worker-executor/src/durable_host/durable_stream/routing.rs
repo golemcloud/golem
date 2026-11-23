@@ -48,20 +48,55 @@ impl RoutedAttachedStreamSegmentSource {
         }
     }
 
+    #[tracing::instrument(
+        name = "durable_stream.read_routed",
+        level = "debug",
+        skip_all,
+        fields(
+            attachment_id = %request.attachment.attachment_id.0,
+            stream_id = %request.attachment.stream_id,
+            epoch = request.attachment.epoch,
+            wait_for_events = request.wait_for_events,
+            has_cursor = request.after.is_some()
+        )
+    )]
     async fn read_routed(
         &self,
         request: AttachedStreamSegmentRequest,
     ) -> Result<Vec<u8>, StreamStoreError> {
+        let mut attempt = 0_u64;
         DurableStreamRemoteError::retry_while_unavailable(|| {
-            self.rpc.read_durable_stream_segment(
-                golem_common::model::durable_stream::DurableStreamReadRequest::AttachedConsumer(
-                    Box::new(request.clone()),
-                ),
-                &self.auth_ctx,
-            )
+            attempt += 1;
+            let attempt = attempt;
+            let request = request.clone();
+            async move {
+                tracing::debug!(attempt, phase = "begin", "Routed stream read attempt");
+                let result = self.rpc.read_durable_stream_segment(
+                    golem_common::model::durable_stream::DurableStreamReadRequest::AttachedConsumer(
+                        Box::new(request),
+                    ),
+                    &self.auth_ctx,
+                ).await;
+                tracing::debug!(
+                    attempt,
+                    outcome = match &result {
+                        Ok(_) => "success",
+                        Err(DurableStreamRemoteError::Unavailable) => "unavailable",
+                        Err(DurableStreamRemoteError::Other(_)) => "error",
+                    },
+                    "Routed stream read attempt completed"
+                );
+                result
+            }
         })
         .await
-        .map_err(|error| StreamStoreError::Oplog(error.to_string()))
+        .inspect(|_| {
+            tracing::debug!(outcome = "success", "Routed stream read completed");
+        })
+        .map_err(|error| {
+            tracing::debug!(outcome = "error", "Routed stream read failed");
+            StreamStoreError::Oplog(error.to_string())
+        })
     }
 }
 

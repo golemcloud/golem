@@ -459,6 +459,16 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         self.read_segment(handle, after, through).await
     }
 
+    #[tracing::instrument(
+        name = "durable_stream.wait_for_attached_segment",
+        level = "debug",
+        skip_all,
+        fields(
+            attachment_id = %attachment.attachment_id.0,
+            stream_id = %attachment.stream_id,
+            epoch = attachment.epoch
+        )
+    )]
     async fn wait_for_attached_segment(
         &self,
         attachment: &StreamAttachmentKey,
@@ -470,11 +480,21 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         let events = self
             .read_attached_segment(attachment, handle, now_millis, after, None)
             .await?;
+        tracing::debug!(
+            phase = "initial_read_complete",
+            event_count = events.len(),
+            "Attached stream wait phase"
+        );
         if !events.is_empty() {
+            tracing::debug!(
+                return_path = "initial_history",
+                "Attached stream wait completed"
+            );
             return Ok(events);
         }
         let bus = self.stream_bus(handle.stream_id).await?;
         let subscription = bus.subscribe().await?;
+        tracing::debug!(phase = "subscription_ready", "Attached stream wait phase");
         let mut reader = DurableCatchUpReader {
             bus,
             subscription: Some(subscription),
@@ -487,13 +507,35 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         let events = self
             .read_attached_segment(attachment, handle, now_millis, after, None)
             .await?;
+        tracing::debug!(
+            phase = "subscribed_read_complete",
+            event_count = events.len(),
+            "Attached stream wait phase"
+        );
         if !events.is_empty() {
+            tracing::debug!(
+                return_path = "subscribed_history",
+                "Attached stream wait completed"
+            );
             return Ok(events);
         }
-        if let Ok(event) =
-            tokio::time::timeout(std::time::Duration::from_secs(1), reader.next()).await
-        {
-            event?;
+        tracing::debug!(phase = "live_wait_begin", "Attached stream wait phase");
+        match tokio::time::timeout(std::time::Duration::from_secs(1), reader.next()).await {
+            Ok(event) => {
+                tracing::debug!(
+                    phase = "live_wait_end",
+                    outcome = if event.is_ok() { "wake" } else { "error" },
+                    "Attached stream wait phase"
+                );
+                event?;
+            }
+            Err(_) => {
+                tracing::debug!(
+                    phase = "live_wait_end",
+                    outcome = "timeout",
+                    "Attached stream wait phase"
+                );
+            }
         }
         // The attachment may have been finalized or replaced while the long poll was
         // asleep. Re-read it authoritatively and drain the full available segment rather than
@@ -501,6 +543,14 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         let now_millis = now_millis.saturating_add(started.elapsed().as_millis() as u64);
         self.read_attached_segment(attachment, handle, now_millis, after, None)
             .await
+            .inspect(|events| {
+                tracing::debug!(
+                    phase = "final_read_complete",
+                    return_path = "final_reread",
+                    event_count = events.len(),
+                    "Attached stream wait phase"
+                );
+            })
     }
 }
 

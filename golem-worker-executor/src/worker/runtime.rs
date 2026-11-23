@@ -441,8 +441,11 @@ impl RunningWorker {
 
         // Transport-owned bodies and custom begin coordinators can outlive their Stores. Seal
         // their old admission handle permanently before fixing the committed replay horizon.
+        debug!(target: "golem_worker_executor::worker::startup_timing", phase = "append_drain_begin", %start_attempt, "Worker instance creation phase");
         parent.runtime_append_tasks().seal_and_wait().await;
+        debug!(target: "golem_worker_executor::worker::startup_timing", phase = "append_drain_complete", "Worker instance creation phase");
         let wallet_installation_guard = parent.card_event_boundary_lock.clone().lock_owned().await;
+        debug!(target: "golem_worker_executor::worker::startup_timing", phase = "wallet_lock_acquired", "Worker instance creation phase");
 
         // Drain buffered work from the previous runtime before constructing its replacement.
         parent
@@ -510,6 +513,7 @@ impl RunningWorker {
             }
             StartDecision::Start(selection) => selection,
         };
+        debug!(target: "golem_worker_executor::worker::startup_timing", phase = "start_selection_complete", "Worker instance creation phase");
         debug!("Creating instance with parent metadata {worker_metadata:?}");
         let role = selection.baseline.role();
         let pending_update_ref = worker_metadata
@@ -655,6 +659,7 @@ impl RunningWorker {
             }
         };
 
+        debug!(target: "golem_worker_executor::worker::startup_timing", phase = "component_lookup_complete", "Worker instance creation phase");
         if let Some(reason) = component_support_error(&component_metadata.metadata) {
             if let Some(head) = &pending_update_ref {
                 let action = Self::start_action(
@@ -788,6 +793,7 @@ impl RunningWorker {
                     ))
                 }),
             })?;
+        debug!(target: "golem_worker_executor::worker::startup_timing", phase = "filesystem_created", "Worker instance creation phase");
         created.observe_release(&parent.release_scope());
         let retained_memory_grant = parent.linear_memory_grant();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
@@ -916,6 +922,7 @@ impl RunningWorker {
                     .await);
                 }
             };
+        debug!(target: "golem_worker_executor::worker::startup_timing", phase = "filesystem_prepared", "Worker instance creation phase");
         let install_wallet = async {
             parent
                 .commit_oplog_and_update_state(CommitLevel::Always)
@@ -959,6 +966,7 @@ impl RunningWorker {
                 );
             }
         };
+        debug!(target: "golem_worker_executor::worker::startup_timing", phase = "wallet_installed", "Worker instance creation phase");
         let initializer = replay.initializer_replay(horizon);
         let bootstrap_regions = replay.bootstrap_skipped_regions(
             &worker_metadata.last_known_status.skipped_regions,
@@ -1039,6 +1047,7 @@ impl RunningWorker {
             }
         };
 
+        debug!(target: "golem_worker_executor::worker::startup_timing", phase = "context_created", "Worker instance creation phase");
         let instance_host = match instance::InstanceHost::new(
             &parent,
             OwnerRuntime::Agent,
@@ -1088,9 +1097,11 @@ impl RunningWorker {
             .durable_ctx_mut()
             .enter_bootstrap_phase(cursor)
             .await;
+        debug!(target: "golem_worker_executor::worker::startup_timing", phase = "bootstrap_entered", "Worker instance creation phase");
         let runtime = async {
             let mut hosted = instance_host.instantiate(context, &component).await?;
             instance_host.reconcile_linear_memories(&mut hosted).await?;
+            debug!(target: "golem_worker_executor::worker::startup_timing", phase = "linear_memory_reconciled", "Worker instance creation phase");
             Ok::<_, WorkerExecutorError>(hosted.into_parts())
         }
         .await;

@@ -25,7 +25,10 @@ JAEGER = 'jaegertracing/all-in-one@sha256:968b31672178558da8a0c1bfc86336647d756e
 TRACE_FILTER = ('info,golem_worker_executor::worker::durable_stream_producer=debug,'
                 'golem_worker_executor::services::stream_session_index=debug,'
                 'golem_worker_executor::durable_host::rpc=debug,'
-                'golem_worker_executor::durable_host::durable_session=debug')
+                'golem_worker_executor::durable_host::durable_session=debug,'
+                'golem_worker_executor::durable_host::durable_stream::catch_up=debug,'
+                'golem_worker_executor::durable_host::durable_stream::routing=debug,'
+                'golem_worker_executor::worker::startup_timing=debug')
 REQUIRED = {
     'latency-small': ['cold-invocation', 'hot-invocation'],
     'throughput-cpu-intensive': ['rust-agent-invocation', 'ts-agent-invocation'],
