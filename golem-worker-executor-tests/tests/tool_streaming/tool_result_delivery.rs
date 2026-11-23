@@ -873,7 +873,7 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
                 expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
                 request_key: Some(
                     golem_common::model::InvocationRequestKey::external(
-                        executor.auth_ctx().idempotency_scope(),
+                        executor.idempotency_scope(),
                         Some(&key),
                     )
                     .into(),

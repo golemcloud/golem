@@ -25,17 +25,33 @@ message ExternalInvocationRequestKey {
   IdempotencyKey key = 2;
 }
 
+// Who sent a keyed request: the namespace of the caller's idempotency keys.
 message CallerIdempotencyScope {
+  reserved 1, 2;
   oneof value {
-    golem.common.AccountId user = 1;
-    golem.common.AccountId agent = 2;
     AdminImpersonationIdempotencyScope admin_impersonation = 3;
+    PairIdempotencyScope pair = 4;
+    TokenSetIdempotencyScope tokens = 5;
   }
 }
 
+// The pair of the original caller.
+message PairIdempotencyScope {
+  string issuer = 1;
+  string subject = 2;
+}
+
+// An admin that acts as another account: the admin's account, and the pair of the original
+// caller that the request records.
 message AdminImpersonationIdempotencyScope {
+  reserved 2;
   golem.common.AccountId admin = 1;
-  golem.common.AccountId target = 2;
+  PairIdempotencyScope target = 3;
+}
+
+// An anonymous caller: the IDs of the tokens that the request presented.
+message TokenSetIdempotencyScope {
+  repeated golem.common.UUID ids = 1;
 }
 
 message RouteSessionInvocationRequestKey {

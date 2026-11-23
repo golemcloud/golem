@@ -1097,6 +1097,17 @@ impl TestWorkerExecutor {
         })
     }
 
+    /// The caller scope of the idempotency keys of this executor's DSL requests: the scope that
+    /// the worker service gives a REST request with this authority, which is the scope of the
+    /// account's pair. A system request has no scope.
+    pub fn idempotency_scope(&self) -> Option<golem_common::model::IdempotencyScope> {
+        let auth = self.auth_ctx();
+        match &auth {
+            AuthCtx::System => None,
+            _ => auth.idempotency_scope(&callers::account(auth.account_id())),
+        }
+    }
+
     /// The ID of the keyed agent of `key` in `environment_id`, as the executor issues it. Worker
     /// executor tests run without a registry, so the type ID is the executor's local one. The
     /// agent need not exist.
@@ -1131,7 +1142,7 @@ impl TestWorkerExecutor {
         operation: &str,
     ) -> OwnedAgentId {
         let request_key = golem_common::model::InvocationRequestKey::external(
-            self.auth_ctx().idempotency_scope(),
+            self.idempotency_scope(),
             Some(idempotency_key),
         );
         let agent_id = AgentId::ephemeral_invocation(
@@ -1151,7 +1162,7 @@ impl TestWorkerExecutor {
         operation: &str,
     ) -> anyhow::Result<golem_common::model::InvocationId> {
         let request_key = golem_common::model::InvocationRequestKey::external(
-            self.auth_ctx().idempotency_scope(),
+            self.idempotency_scope(),
             Some(key),
         );
         self.finalized_invocation_key(agent_id, &request_key, operation)

@@ -699,6 +699,9 @@ message LookupInvocationsRequest {
   golem.worker.IdempotencyKey idempotency_key = 4;
   // Only the invocation of this operation.
   optional string operation = 5;
+  // The caller scope of the key, which the worker service builds from the verified authority
+  // of the request. A request without a scope finds no invocation.
+  golem.worker.CallerIdempotencyScope scope = 6;
 }
 
 message LookupInvocationsSuccess {

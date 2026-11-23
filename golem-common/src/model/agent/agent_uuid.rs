@@ -31,7 +31,9 @@ use crate::base_model::agent_id::H_MASK;
 use crate::base_model::component::ComponentId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::type_id::TypeId;
-use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, RESERVED_TYPE_TAG};
+use crate::base_model::{
+    AgentFingerprint, AgentId, IdempotencyKey, IdempotencyScope, RESERVED_TYPE_TAG,
+};
 
 const KEYED_DOMAIN: &str = "golem:agent-id:keyed:v1";
 const IDEMPOTENT_CREATE_DOMAIN: &str = "golem:agent-id:idempotent-create:v1";
@@ -62,7 +64,7 @@ impl AgentId {
     pub fn idempotent_create(
         environment_id: EnvironmentId,
         type_id: TypeId,
-        caller_scope: &str,
+        caller_scope: &IdempotencyScope,
         idempotency_key: &IdempotencyKey,
     ) -> Self {
         Self::typed(
@@ -70,7 +72,7 @@ impl AgentId {
             HashInput::new(IDEMPOTENT_CREATE_DOMAIN)
                 .environment(environment_id)
                 .type_id(type_id)
-                .variable(caller_scope.as_bytes())
+                .variable(&caller_scope.encoded())
                 .variable(idempotency_key.value.as_bytes()),
         )
     }

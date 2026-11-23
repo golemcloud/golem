@@ -81,8 +81,8 @@ use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
-    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, InvocationRequestKey, OwnedAgentId,
-    PromiseId, ScanCursor,
+    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, IdempotencyScope, InvocationRequestKey,
+    OwnedAgentId, PromiseId, ScanCursor,
 };
 use golem_common::schema::ExternalSchemaValue;
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
@@ -757,6 +757,18 @@ impl WorkerService {
             account_id: auth.account_id(),
             authentication: AccountAuthentication::ApiToken,
         }))
+    }
+
+    /// The caller scope of the idempotency keys of a request that an account token
+    /// authenticated: the scope of [`Self::rest_caller`]. This service builds it from the
+    /// verified authority of the request, never from a caller that the request carries. A
+    /// system request has no account behind it, so it has no scope, and its keys never
+    /// deduplicate.
+    pub fn rest_idempotency_scope(&self, auth: &AuthCtx) -> Option<IdempotencyScope> {
+        match auth {
+            AuthCtx::System => None,
+            _ => auth.idempotency_scope(&self.rest_caller(auth)),
+        }
     }
 
     /// Reads the agent that a request names by its ID; this never creates the agent. When it
@@ -2535,7 +2547,10 @@ impl WorkerService {
             .transpose()
             .map_err(WorkerServiceError::TypeChecker)?
             .unwrap_or_else(|| {
-                InvocationRequestKey::external(auth_ctx.idempotency_scope(), raw_key.as_ref())
+                InvocationRequestKey::external(
+                    self.rest_idempotency_scope(&auth_ctx),
+                    raw_key.as_ref(),
+                )
             });
         let expected_fingerprint = start
             .expected_callee_fingerprint
@@ -2803,8 +2818,10 @@ impl WorkerService {
         let agent_type_name = AgentTypeName(start.selector.agent_type);
         let method_name = start.selector.method;
         let idempotency_key = IdempotencyKey::new(start.idempotency_key);
-        let request_key =
-            InvocationRequestKey::external(auth.idempotency_scope(), Some(&idempotency_key));
+        let request_key = InvocationRequestKey::external(
+            self.rest_idempotency_scope(&auth),
+            Some(&idempotency_key),
+        );
         let resolved = self
             .agent_resolution_cache
             .resolve(&app_name, &env_name, &agent_type_name, None, &auth)
@@ -3144,7 +3161,7 @@ impl WorkerService {
     ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
         let caller = self.rest_caller(&auth);
         let request_key = InvocationRequestKey::external(
-            auth.idempotency_scope(),
+            self.rest_idempotency_scope(&auth),
             Some(&IdempotencyKey::new(start.idempotency_key.clone())),
         );
         self.invoke_internal_tool_session_v1(
@@ -3612,18 +3629,17 @@ impl WorkerService {
             )));
         }
         let constructor = Self::rest_constructor(&registered, request.parameters)?;
-        let request_key =
-            InvocationRequestKey::external(auth.idempotency_scope(), idempotency_key.as_ref());
+        let request_key = InvocationRequestKey::external(
+            self.rest_idempotency_scope(&auth),
+            idempotency_key.as_ref(),
+        );
         let target = if request.keyed {
             RoutedTarget::keyed(environment_id, registered.type_id, &component, &constructor)?
         } else {
             let agent_id = match &request_key {
-                InvocationRequestKey::External { scope, key } => AgentId::idempotent_create(
-                    environment_id,
-                    registered.type_id,
-                    &scope.to_string(),
-                    key,
-                ),
+                InvocationRequestKey::External { scope, key } => {
+                    AgentId::idempotent_create(environment_id, registered.type_id, scope, key)
+                }
                 _ => AgentId::random(registered.type_id),
             };
             RoutedTarget::unkeyed(agent_id, &component, &constructor)?
@@ -3891,8 +3907,10 @@ impl WorkerService {
                     .value,
             )?;
         }
-        let request_key =
-            InvocationRequestKey::external(auth.idempotency_scope(), idempotency_key.as_ref());
+        let request_key = InvocationRequestKey::external(
+            self.rest_idempotency_scope(&auth),
+            idempotency_key.as_ref(),
+        );
         let proto_mode = match request.mode {
             NativeToolInvocationMode::Await => {
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32
@@ -4152,8 +4170,10 @@ impl WorkerService {
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32
             }
         };
-        let request_key =
-            InvocationRequestKey::external(auth.idempotency_scope(), idempotency_key.as_ref());
+        let request_key = InvocationRequestKey::external(
+            self.rest_idempotency_scope(&auth),
+            idempotency_key.as_ref(),
+        );
         let permission = AgentPermission::Agent(
             AgentVerb::Invoke,
             AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
@@ -4474,7 +4494,6 @@ mod tests {
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::base_model::plugin_registration::PluginRegistrationId;
-    use golem_common::model::AgentInvocationOutput;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
         AgentConfigEntryDto, AgentMetadataDto, AgentTarget, AgentUpdateMode, ResolvedRevert,
@@ -4513,6 +4532,7 @@ mod tests {
         AgentFilter, AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, InvocationRequestKey,
         OwnedAgentId, ScanCursor, Timestamp,
     };
+    use golem_common::model::{AgentInvocationOutput, IdempotencyScope};
     use golem_common::schema::agent::AgentConfigDeclarationSchema;
     use golem_common::schema::public_json::PublicStreamReference;
     use golem_common::schema::stream::SchemaValueStream;
@@ -5557,6 +5577,7 @@ mod tests {
         async fn lookup_invocations(
             &self,
             _: &AgentId,
+            _: &IdempotencyScope,
             _: &IdempotencyKey,
             _: Option<String>,
             _: EnvironmentId,
@@ -7352,7 +7373,10 @@ mod tests {
     async fn create_agent_rest_without_a_key_derives_a_retry_stable_id_from_the_idempotency_key() {
         let harness = RestHarness::new(AgentMode::Durable);
         let auth = scoped_invocation_auth();
-        let scope = auth.idempotency_scope().unwrap();
+        let scope = harness
+            .worker_service
+            .rest_idempotency_scope(&auth)
+            .unwrap();
         let key = IdempotencyKey::new("create-key".to_string());
 
         let mut created = Vec::new();
@@ -7372,12 +7396,8 @@ mod tests {
                     .agent_id,
             );
         }
-        let expected = AgentId::idempotent_create(
-            harness.environment_id,
-            test_type_id(),
-            &scope.to_string(),
-            &key,
-        );
+        let expected =
+            AgentId::idempotent_create(harness.environment_id, test_type_id(), &scope, &key);
         assert_eq!(created, vec![expected, expected]);
         assert_ne!(expected, harness.keyed_agent_id());
 
@@ -7411,6 +7431,102 @@ mod tests {
                 .iter()
                 .all(RoutedTarget::creates)
         );
+    }
+
+    /// The scope of the idempotency key of a create is the pair of the original caller, which
+    /// for a REST request is the pair of the account.
+    #[test]
+    async fn create_agent_rest_scopes_the_idempotency_key_by_the_original_caller() {
+        use golem_common::model::auth::AccountRole;
+        use golem_common::model::plan::PlanId;
+        use golem_service_base::model::auth::UserAuthCtx;
+        use std::collections::BTreeSet;
+
+        let harness = RestHarness::new(AgentMode::Durable);
+        let key = IdempotencyKey::new("create-key".to_string());
+        let surface = || EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![GrantSurface {
+                positive: vec![PermissionTarget::Agent(ClassPermissionTarget {
+                    owner: AgentOwnerPattern::AnyAgents,
+                    verb: None,
+                    resource: AgentResourcePattern::Any,
+                })],
+                negative: Vec::new(),
+            }],
+            upper: Vec::new(),
+        };
+        let email = || AccountEmail::new("caller@golem");
+        let as_user = |account_id| {
+            AuthCtx::User(UserAuthCtx {
+                account_id,
+                account_email: email(),
+                account_plan_id: PlanId(uuid::Uuid::nil()),
+                account_roles: BTreeSet::<AccountRole>::new(),
+                effective_surface: surface(),
+                delegation_surface: None,
+            })
+        };
+        let as_agent =
+            |account_id| AuthCtx::agent_with_effective_surface(account_id, email(), surface());
+        let as_admin = |admin, target| {
+            AuthCtx::admin_impersonation(
+                admin,
+                target,
+                email(),
+                BTreeSet::new(),
+                PlanId(uuid::Uuid::nil()),
+                surface(),
+            )
+        };
+        let create = |auth: AuthCtx| {
+            let harness = &harness;
+            let key = key.clone();
+            async move {
+                harness
+                    .worker_service
+                    .create_agent_rest(
+                        harness.environment_id,
+                        &harness.agent_type_name,
+                        harness.create_request(false),
+                        Some(key),
+                        auth,
+                    )
+                    .await
+                    .unwrap()
+                    .agent_id
+            }
+        };
+        let account = AccountId::new();
+        let admin = AccountId::new();
+
+        let first = create(as_user(account)).await;
+        let expected = AgentId::idempotent_create(
+            harness.environment_id,
+            test_type_id(),
+            &IdempotencyScope::of(&harness.worker_service.rest_caller(&as_user(account)))
+                .expect("an account has a pair"),
+            &key,
+        );
+        assert_eq!(first, expected);
+        // One original caller gets one agent, whatever kind of authority its request has.
+        assert_eq!(first, create(as_user(account)).await);
+        assert_eq!(first, create(as_agent(account)).await);
+        // Two original callers never share a key.
+        assert_ne!(first, create(as_user(AccountId::new())).await);
+        // An admin that acts as the account does not get the agent of the account, and two
+        // admins do not share an agent.
+        let of_the_admin = create(as_admin(admin, account)).await;
+        assert_ne!(first, of_the_admin);
+        assert_eq!(of_the_admin, create(as_admin(admin, account)).await);
+        assert_ne!(
+            of_the_admin,
+            create(as_admin(AccountId::new(), account)).await
+        );
+        // A system request has no caller scope: the key is ignored, and each create is new.
+        let of_the_system = create(AuthCtx::system()).await;
+        assert_ne!(of_the_system, create(AuthCtx::system()).await);
+        assert_ne!(first, of_the_system);
     }
 
     #[test]
@@ -8715,8 +8831,11 @@ mod tests {
         let harness = RestHarness::new(AgentMode::Ephemeral);
         let idempotency_key = IdempotencyKey::new("caller-selected-key".to_string());
         let auth = scoped_invocation_auth();
-        let seed = InvocationRequestKey::external(auth.idempotency_scope(), Some(&idempotency_key))
-            .owner_key("run");
+        let seed = InvocationRequestKey::external(
+            harness.worker_service.rest_idempotency_scope(&auth),
+            Some(&idempotency_key),
+        )
+        .owner_key("run");
         let request = harness.invoke_request();
 
         harness
@@ -8749,8 +8868,11 @@ mod tests {
         let harness = RestHarness::new(AgentMode::Ephemeral);
         let idempotency_key = IdempotencyKey::new("scheduled-tool-call".to_string());
         let auth = scoped_invocation_auth();
-        let seed = InvocationRequestKey::external(auth.idempotency_scope(), Some(&idempotency_key))
-            .owner_key("run");
+        let seed = InvocationRequestKey::external(
+            harness.worker_service.rest_idempotency_scope(&auth),
+            Some(&idempotency_key),
+        )
+        .owner_key("run");
         let schedule_at = Utc::now();
         let expected_schedule_at = ::prost_types::Timestamp {
             seconds: schedule_at.timestamp(),
@@ -8813,7 +8935,9 @@ mod tests {
         let harness = RestHarness::new(AgentMode::Ephemeral);
         let idempotency_key = IdempotencyKey::new("session-tool-call".to_string());
         let request_key = InvocationRequestKey::external(
-            scoped_invocation_auth().idempotency_scope(),
+            harness
+                .worker_service
+                .rest_idempotency_scope(&scoped_invocation_auth()),
             Some(&idempotency_key),
         );
         let seed = request_key.owner_key("run");
@@ -9009,25 +9133,28 @@ mod tests {
     async fn prepared_session_owners_are_scoped_by_caller_and_operation_and_survive_retry() {
         let harness = RestHarness::new(AgentMode::Ephemeral);
         let raw = IdempotencyKey::from("shared-raw-key");
-        let account = AccountId::new();
+        let scope = |subject: &str| IdempotencyScope::Pair {
+            issuer: "https://issuer.example".to_string(),
+            subject: subject.to_string(),
+        };
         let requests = [
             (
                 InvocationRequestKey::External {
-                    scope: golem_common::model::IdempotencyScope::User(account),
+                    scope: scope("caller"),
                     key: raw.clone(),
                 },
                 "run",
             ),
             (
                 InvocationRequestKey::External {
-                    scope: golem_common::model::IdempotencyScope::User(AccountId::new()),
+                    scope: scope("another-caller"),
                     key: raw.clone(),
                 },
                 "run",
             ),
             (
                 InvocationRequestKey::External {
-                    scope: golem_common::model::IdempotencyScope::User(account),
+                    scope: scope("caller"),
                     key: raw.clone(),
                 },
                 "other",

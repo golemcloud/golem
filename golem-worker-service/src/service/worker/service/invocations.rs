@@ -143,16 +143,22 @@ impl WorkerService {
             AgentResourcePattern::Any,
         )
         .await?;
-        let invocations = self
-            .worker_client
-            .lookup_invocations(
-                agent_id,
-                idempotency_key,
-                operation,
-                environment_id,
-                auth_ctx,
-            )
-            .await?;
+        // A caller without a scope never started an invocation with a key.
+        let invocations = match self.rest_idempotency_scope(&auth_ctx) {
+            Some(scope) => {
+                self.worker_client
+                    .lookup_invocations(
+                        agent_id,
+                        &scope,
+                        idempotency_key,
+                        operation,
+                        environment_id,
+                        auth_ctx,
+                    )
+                    .await?
+            }
+            None => Vec::new(),
+        };
         if invocations.is_empty() {
             return Err(WorkerServiceError::InvocationNotFound(format!(
                 "no invocation of {agent_id} has this idempotency key"

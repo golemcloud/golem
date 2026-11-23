@@ -810,6 +810,7 @@ impl WorkerClient for RecordingWorkerClient {
     async fn lookup_invocations(
         &self,
         _: &AgentId,
+        _: &golem_common::model::IdempotencyScope,
         _: &IdempotencyKey,
         _: Option<String>,
         _: EnvironmentId,

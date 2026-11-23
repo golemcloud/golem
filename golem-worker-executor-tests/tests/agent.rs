@@ -104,7 +104,7 @@ async fn external_invocation_id(
 ) -> anyhow::Result<InvocationId> {
     let fingerprint = executor.get_worker_metadata(worker).await?.fingerprint;
     Ok(
-        InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(key))
+        InvocationRequestKey::external(executor.idempotency_scope(), Some(key))
             .finalize(worker.agent_id, fingerprint, method)
             .id(),
     )
@@ -327,8 +327,7 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
     let metadata = executor.get_worker_metadata(&worker).await?;
     let invocation_id =
         external_invocation_id(&executor, &worker, &key, "fail_stream_after_http").await?;
-    let request_key =
-        InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key));
+    let request_key = InvocationRequestKey::external(executor.idempotency_scope(), Some(&key));
     let (_, input) = data_value!(url).into_parts();
     let invocation = InvocationStart {
         target: Some(id_target(&worker)),
@@ -1853,10 +1852,8 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
         .into_typed::<String>()?;
     assert_eq!(initial_result, "immediate-schedule-retry!");
 
-    let request_key = InvocationRequestKey::external(
-        executor.auth_ctx().idempotency_scope(),
-        Some(&idempotency_key),
-    );
+    let request_key =
+        InvocationRequestKey::external(executor.idempotency_scope(), Some(&idempotency_key));
     let worker_id = ephemeral_agent_id(
         &executor,
         component.environment_id,
@@ -1982,10 +1979,8 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
         .store()
         .await?;
     let idempotency_key = IdempotencyKey::fresh();
-    let request_key = InvocationRequestKey::external(
-        executor.auth_ctx().idempotency_scope(),
-        Some(&idempotency_key),
-    );
+    let request_key =
+        InvocationRequestKey::external(executor.idempotency_scope(), Some(&idempotency_key));
     let logical_agent_id = agent_key!("EphemeralEchoAgent", "scheduled-revision");
     let worker_id = ephemeral_agent_id(
         &executor,
@@ -3329,11 +3324,9 @@ pub(crate) fn ephemeral_agent_id(
     idempotency_key: &IdempotencyKey,
     method: &str,
 ) -> OwnedAgentId {
-    let owner_key = InvocationRequestKey::external(
-        executor.auth_ctx().idempotency_scope(),
-        Some(idempotency_key),
-    )
-    .owner_key(method);
+    let owner_key =
+        InvocationRequestKey::external(executor.idempotency_scope(), Some(idempotency_key))
+            .owner_key(method);
     OwnedAgentId::new(
         environment_id,
         &AgentId::ephemeral_invocation(
@@ -3428,11 +3421,8 @@ pub(crate) async fn invoke_and_await_agent_by_id(
             origin_invocation: None,
             external_tool: None,
             request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    idempotency_key,
-                )
-                .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), idempotency_key)
+                    .into(),
             ),
         })
         .await?;

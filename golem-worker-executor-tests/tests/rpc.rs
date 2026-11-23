@@ -1753,8 +1753,7 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
             method_name: Some("produce_siblings".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&key)).into(),
             ),
             idempotency_key: Some(key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -1936,11 +1935,7 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
                 method_name: Some("observe_input_terminal".into()),
                 input: Some(input),
                 request_key: Some(
-                    InvocationRequestKey::external(
-                        executor.auth_ctx().idempotency_scope(),
-                        Some(&key),
-                    )
-                    .into(),
+                    InvocationRequestKey::external(executor.idempotency_scope(), Some(&key)).into(),
                 ),
                 idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
@@ -2168,10 +2163,7 @@ async fn agent_input_terminal_failure_is_not_eof_and_survives_replay(
         let invocation_id = executor
             .finalized_invocation_key(
                 &worker.agent_id,
-                &InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&key),
-                ),
+                &InvocationRequestKey::external(executor.idempotency_scope(), Some(&key)),
                 "observe_input_terminal",
             )
             .await?;
@@ -2279,10 +2271,7 @@ async fn guest_output_drop_unblocks_writer_and_retains_terminal_after_replay(
     let caller_invocation_id = executor
         .finalized_invocation_key(
             &caller_worker.agent_id,
-            &InvocationRequestKey::external(
-                executor.auth_ctx().idempotency_scope(),
-                Some(&caller_key),
-            ),
+            &InvocationRequestKey::external(executor.idempotency_scope(), Some(&caller_key)),
             "drop_gated_output",
         )
         .await?;
@@ -2386,11 +2375,8 @@ async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
             method_name: Some("produce_after_timer".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&start_key))
+                    .into(),
             ),
             idempotency_key: Some(start_key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -2652,11 +2638,8 @@ async fn output_prefix_survives_autonomous_suspension(
             ),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&start_key))
+                    .into(),
             ),
             idempotency_key: Some(start_key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -3165,8 +3148,7 @@ async fn interrupt_output_producer_after_result(
                 })),
             }),
             request_key: Some(
-                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                    .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&key)).into(),
             ),
             idempotency_key: Some(key.clone().into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -3474,11 +3456,8 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
             method_name: Some("produce_sibling_error".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&start_key))
+                    .into(),
             ),
             idempotency_key: Some(start_key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -4171,7 +4150,7 @@ async fn streaming_output_resume_restores_exact_cursors(
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
                 InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
+                    executor.idempotency_scope(),
                     Some(&idempotency_key),
                 )
                 .into(),
@@ -4898,7 +4877,7 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
             }),
             request_key: Some(
                 InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
+                    executor.idempotency_scope(),
                     Some(&idempotency_key),
                 )
                 .into(),
@@ -5226,11 +5205,8 @@ async fn concurrent_nested_sibling_output_replays_after_executor_restart(
             method_name: Some("produce_nested_siblings".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&start_key))
+                    .into(),
             ),
             idempotency_key: Some(start_key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -5312,11 +5288,8 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
             method_name: Some("transform".to_string()),
             input: Some(input),
             request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&start_key))
+                    .into(),
             ),
             idempotency_key: Some(start_key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -5445,8 +5418,7 @@ fn origin_observer_start(
             })),
         }),
         request_key: Some(
-            InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(key))
-                .into(),
+            InvocationRequestKey::external(executor.idempotency_scope(), Some(key)).into(),
         ),
         idempotency_key: Some(key.clone().into()),
         context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
@@ -5591,10 +5563,8 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
     // let the failed terminal hide the result's durable stream handles.
     let mut fresh = observer.clone();
     let fresh_key = IdempotencyKey::fresh();
-    fresh.request_key = Some(
-        InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&fresh_key))
-            .into(),
-    );
+    fresh.request_key =
+        Some(InvocationRequestKey::external(executor.idempotency_scope(), Some(&fresh_key)).into());
     fresh.idempotency_key = Some(fresh_key.into());
     let (_observer_tx, mut observer_rx, observer_accepted) =
         open_raw_session(&executor, observer).await?;
@@ -5878,7 +5848,7 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
             input: Some(input),
             request_key: Some(
                 InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
+                    executor.idempotency_scope(),
                     Some(&idempotency_key),
                 )
                 .into(),
@@ -6605,11 +6575,8 @@ async fn consumed_input_boundary(
                 })),
             }),
             request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&start_key))
+                    .into(),
             ),
             idempotency_key: Some(start_key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -7045,7 +7012,7 @@ async fn durable_streaming_input_recovers_after_executor_restart(
             input: Some(input),
             request_key: Some(
                 InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
+                    executor.idempotency_scope(),
                     Some(&idempotency_key),
                 )
                 .into(),
@@ -7413,11 +7380,8 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
             method_name: Some("drop_input".to_string()),
             input: Some(input),
             request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&start_key))
+                    .into(),
             ),
             idempotency_key: Some(start_key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -8509,11 +8473,8 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
             method_name: Some("increment_stream".into()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&start_key))
+                    .into(),
             ),
             idempotency_key: Some(start_key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -8706,8 +8667,7 @@ async fn reverted_retained_stream_start(
             })),
         }),
         request_key: Some(
-            InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
-                .into(),
+            InvocationRequestKey::external(executor.idempotency_scope(), Some(&key)).into(),
         ),
         idempotency_key: Some(key.clone().into()),
         auth_ctx: Some(executor.auth_ctx().into()),
@@ -9015,11 +8975,8 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
             method_name: Some("consume".into()),
             input: Some(input),
             request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&start_key))
+                    .into(),
             ),
             idempotency_key: Some(start_key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -9307,7 +9264,7 @@ async fn open_invocation_session_with_key(
             external_tool: None,
             request_key: Some(
                 golem_common::model::InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
+                    executor.idempotency_scope(),
                     Some(idempotency_key),
                 )
                 .into(),
@@ -9419,11 +9376,8 @@ async fn typescript_streaming_guest_abi_e2e(
             method_name: Some("transform".to_string()),
             input: Some(input),
             request_key: Some(
-                InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&start_key),
-                )
-                .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&start_key))
+                    .into(),
             ),
             idempotency_key: Some(start_key.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -9673,7 +9627,7 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
                     input: Some(input),
                     request_key: Some(
                         InvocationRequestKey::external(
-                            executor.auth_ctx().idempotency_scope(),
+                            executor.idempotency_scope(),
                             Some(&start_key),
                         )
                         .into(),

@@ -13,16 +13,22 @@
 // limitations under the License.
 
 use super::account::AccountId;
+use super::caller::Caller;
 use super::{AgentFingerprint, AgentId, IdempotencyKey, InvocationId};
+use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
 
-/// The authenticated caller's idempotency namespace, not an authorization grant.
-/// System and route external callers have no caller scope.
+/// The caller scope of an idempotency key: who sent the keyed request. It is a namespace for
+/// the caller's keys, not an authorization grant. A request has a scope only when Golem knows
+/// its original caller, see [`IdempotencyScope::of`].
+///
+/// [`IdempotencyScope::encoded`] is the only encoding of a scope. Every derivation that depends
+/// on the caller hashes it: invocation IDs, the agent IDs of creates with an idempotency key,
+/// ephemeral agent IDs and external-tool-owner agent IDs.
 #[derive(
     Clone,
-    Copy,
     Debug,
     PartialEq,
     Eq,
@@ -34,20 +40,98 @@ use uuid::Uuid;
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum IdempotencyScope {
-    User(AccountId),
-    Agent(AccountId),
-    AdminImpersonation { admin: AccountId, target: AccountId },
+    /// The pair of the original caller.
+    Pair { issuer: String, subject: String },
+    /// An admin that acts as another account. The request records the other account as its
+    /// original caller, so the admin's account keeps the admin's keys apart from the keys that
+    /// the account sends itself.
+    AdminImpersonation {
+        admin: AccountId,
+        issuer: String,
+        subject: String,
+    },
+    /// An anonymous caller: the IDs of the tokens that the request presented, in ascending
+    /// order, each ID one time.
+    Tokens(Vec<Uuid>),
 }
 
-impl Display for IdempotencyScope {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl IdempotencyScope {
+    const PAIR_TAG: u8 = 1;
+    const ADMIN_IMPERSONATION_TAG: u8 = 2;
+    const TOKENS_TAG: u8 = 3;
+
+    /// The scope of the keys that `caller` sends: the pair of its original principal. An
+    /// anonymous caller has the set of its presented tokens as its scope, and without a token
+    /// it has no scope, so its keys never deduplicate. The immediate principal, the kind of a
+    /// principal and its claims are not part of the scope.
+    pub fn of(caller: &Caller) -> Option<Self> {
+        match caller.original.pair() {
+            Some(pair) => Some(Self::Pair {
+                issuer: pair.issuer,
+                subject: pair.subject,
+            }),
+            None => Self::tokens(caller.tokens.iter().map(|token| token.id)),
+        }
+    }
+
+    /// The scope of an admin with the account `admin` that acts as another account, where
+    /// `caller` is the caller that the request records.
+    pub fn admin_impersonation(admin: AccountId, caller: &Caller) -> Option<Self> {
+        let pair = caller.original.pair()?;
+        Some(Self::AdminImpersonation {
+            admin,
+            issuer: pair.issuer,
+            subject: pair.subject,
+        })
+    }
+
+    /// The scope of an anonymous caller that presented the tokens `ids`, or none when it
+    /// presented no token.
+    pub fn tokens(ids: impl IntoIterator<Item = Uuid>) -> Option<Self> {
+        let ids: BTreeSet<Uuid> = ids.into_iter().collect();
+        (!ids.is_empty()).then(|| Self::Tokens(ids.into_iter().collect()))
+    }
+
+    /// The bytes that stand for this scope in every derivation: a tag byte, then the fields.
+    /// A string has a u64 big-endian byte length before its UTF-8 bytes, and an ID is its 16
+    /// bytes. A token set has a u64 big-endian count before its IDs, which are in ascending
+    /// order, each one time.
+    ///
+    /// The other request kinds have a text tag in the place of a scope (`internal`, `route:`
+    /// and `unkeyed`). A scope starts with a control byte, so it is never equal to one of them.
+    pub fn encoded(&self) -> Vec<u8> {
+        fn string(bytes: &mut Vec<u8>, value: &str) {
+            bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
+            bytes.extend_from_slice(value.as_bytes());
+        }
+
+        let mut bytes = Vec::new();
         match self {
-            Self::User(account) => write!(f, "user:{account}"),
-            Self::Agent(account) => write!(f, "agent:{account}"),
-            Self::AdminImpersonation { admin, target } => {
-                write!(f, "admin:{admin}:as:{target}")
+            Self::Pair { issuer, subject } => {
+                bytes.push(Self::PAIR_TAG);
+                string(&mut bytes, issuer);
+                string(&mut bytes, subject);
+            }
+            Self::AdminImpersonation {
+                admin,
+                issuer,
+                subject,
+            } => {
+                bytes.push(Self::ADMIN_IMPERSONATION_TAG);
+                bytes.extend_from_slice(admin.0.as_bytes());
+                string(&mut bytes, issuer);
+                string(&mut bytes, subject);
+            }
+            Self::Tokens(ids) => {
+                let ids: BTreeSet<&Uuid> = ids.iter().collect();
+                bytes.push(Self::TOKENS_TAG);
+                bytes.extend_from_slice(&(ids.len() as u64).to_be_bytes());
+                for id in ids {
+                    bytes.extend_from_slice(id.as_bytes());
+                }
             }
         }
+        bytes
     }
 }
 
@@ -102,7 +186,7 @@ impl InvocationRequestKey {
                 agent_id,
                 fingerprint,
                 operation,
-                Some(*scope),
+                Some(scope.clone()),
                 Some(key),
             ),
             Self::Internal(key) => {
@@ -120,17 +204,21 @@ impl InvocationRequestKey {
     /// requests use their retained UUID as the seed, not a fresh random value.
     pub fn owner_key(&self, operation: &str) -> IdempotencyKey {
         let (scope, key) = match self {
-            Self::External { scope, key } => (scope.to_string(), key.value.as_bytes()),
-            Self::Internal(key) => ("internal".to_string(), key.value.as_bytes()),
-            Self::RouteSession { scope, key } => (route_scope(scope), key.value.as_bytes()),
-            Self::Unkeyed(uuid) => ("unkeyed".to_string(), uuid.as_bytes().as_slice()),
+            Self::External { scope, key } => (scope.encoded(), key.value.as_bytes()),
+            Self::Internal(key) => (INTERNAL_SCOPE.to_vec(), key.value.as_bytes()),
+            Self::RouteSession { scope, key } => {
+                (route_scope(scope).into_bytes(), key.value.as_bytes())
+            }
+            Self::Unkeyed(uuid) => (b"unkeyed".to_vec(), uuid.as_bytes().as_slice()),
         };
         derive_key(
             "golem-invocation-owner-key",
-            &[scope.as_bytes(), operation.as_bytes(), key],
+            &[&scope, operation.as_bytes(), key],
         )
     }
 }
+
+const INTERNAL_SCOPE: &[u8] = b"internal";
 
 fn route_scope(scope: &str) -> String {
     format!("route:{scope}")
@@ -193,7 +281,7 @@ impl OwnedInvocationId {
     ) -> Self {
         match (scope, key) {
             (Some(scope), Some(key)) => {
-                Self::derive(agent_id, fingerprint, &scope.to_string(), operation, key)
+                Self::derive(agent_id, fingerprint, &scope.encoded(), operation, key)
             }
             _ => Self::new(agent_id, InvocationId(Uuid::new_v4())),
         }
@@ -206,7 +294,7 @@ impl OwnedInvocationId {
         operation: &str,
         key: &IdempotencyKey,
     ) -> Self {
-        Self::derive(agent_id, fingerprint, "internal", operation, key)
+        Self::derive(agent_id, fingerprint, INTERNAL_SCOPE, operation, key)
     }
 
     /// Durable route sessions require an explicit route namespace. This does not
@@ -221,20 +309,21 @@ impl OwnedInvocationId {
         Self::derive(
             agent_id,
             fingerprint,
-            &self::route_scope(route_scope),
+            self::route_scope(route_scope).as_bytes(),
             operation,
             key,
         )
     }
 
     // Each field has a u64 big-endian byte length followed by its bytes. The
-    // fingerprint is the raw 16-byte UUID; the other fields are UTF-8. Field order
-    // is fingerprint, tagged scope, operation, key. The fixed base key supplies
-    // the UUIDv5 namespace through IdempotencyKey::derived_from_bytes.
+    // fingerprint is the raw 16-byte UUID. The scope is the encoding of a caller scope
+    // (`IdempotencyScope::encoded`) or the text tag of another request kind. The operation
+    // and the key are UTF-8. Field order is fingerprint, scope, operation, key. The fixed
+    // base key supplies the UUIDv5 namespace through IdempotencyKey::derived_from_bytes.
     fn derive(
         agent_id: AgentId,
         fingerprint: AgentFingerprint,
-        scope: &str,
+        scope: &[u8],
         operation: &str,
         key: &IdempotencyKey,
     ) -> Self {
@@ -242,7 +331,7 @@ impl OwnedInvocationId {
             "golem-invocation-id",
             &[
                 fingerprint.0.as_bytes().as_slice(),
-                scope.as_bytes(),
+                scope,
                 operation.as_bytes(),
                 key.value.as_bytes(),
             ],
@@ -280,6 +369,13 @@ impl FromStr for OwnedInvocationId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::base_model::Timestamp;
+    use crate::base_model::caller::test_support::{
+        account_principal, agent_principal, sample_caller, user_principal,
+    };
+    use crate::base_model::caller::{
+        Claims, Pair, Principal, PrincipalRef, TokenProvenance, UserPrincipal,
+    };
     use test_r::test;
 
     fn owner() -> AgentId {
@@ -290,23 +386,61 @@ mod tests {
         AgentFingerprint(Uuid::from_u128(2))
     }
 
+    fn pair(issuer: &str, subject: &str) -> IdempotencyScope {
+        IdempotencyScope::Pair {
+            issuer: issuer.to_string(),
+            subject: subject.to_string(),
+        }
+    }
+
+    fn alice() -> IdempotencyScope {
+        pair("https://issuer.example", "alice")
+    }
+
+    fn admin_as_alice(admin: u128) -> IdempotencyScope {
+        IdempotencyScope::AdminImpersonation {
+            admin: AccountId(Uuid::from_u128(admin)),
+            issuer: "https://issuer.example".to_string(),
+            subject: "alice".to_string(),
+        }
+    }
+
+    fn tokens(ids: &[u128]) -> IdempotencyScope {
+        IdempotencyScope::tokens(ids.iter().copied().map(Uuid::from_u128))
+            .expect("a caller with a token has a scope")
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn anonymous_with_tokens(ids: &[u128]) -> Caller {
+        Caller {
+            original: Principal::Anonymous,
+            immediate: Principal::Anonymous,
+            tokens: ids
+                .iter()
+                .map(|id| TokenProvenance {
+                    id: Uuid::from_u128(*id),
+                    maker: None,
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn prepared_request_retains_unkeyed_uuid_and_ignores_unscoped_keys() {
         let key = IdempotencyKey::from("same supplied key");
-        for (scope, supplied) in [
-            (None, Some(&key)),
-            (
-                Some(IdempotencyScope::User(AccountId(Uuid::from_u128(10)))),
-                None,
-            ),
-            (None, None),
-        ] {
-            let prepared = InvocationRequestKey::external(scope, supplied);
+        for (scope, supplied) in [(None, Some(&key)), (Some(alice()), None), (None, None)] {
+            let prepared = InvocationRequestKey::external(scope.clone(), supplied);
             let InvocationRequestKey::Unkeyed(seed) = prepared else {
                 panic!("missing scope or key must prepare an unkeyed request")
             };
             assert_eq!(seed.get_version_num(), 4);
-            assert_ne!(prepared, InvocationRequestKey::external(scope, supplied));
+            assert_ne!(
+                prepared,
+                InvocationRequestKey::external(scope.clone(), supplied)
+            );
             let first = prepared.finalize(owner(), fingerprint(), "雪");
             assert_eq!(first.uuid(), seed);
             assert_eq!(first, prepared.finalize(owner(), fingerprint(), "雪"));
@@ -332,34 +466,40 @@ mod tests {
 
     #[test]
     fn prepared_request_finalizes_with_existing_factories_and_normalizes_without_fingerprint() {
-        let account = AccountId(Uuid::from_u128(10));
         let key = IdempotencyKey::from("key/雪🦀");
-        let scope = IdempotencyScope::User(account);
+        let scope = alice();
         let requests = [
-            InvocationRequestKey::external(Some(scope), Some(&key)),
+            InvocationRequestKey::external(Some(scope.clone()), Some(&key)),
             InvocationRequestKey::Internal(key.clone()),
             InvocationRequestKey::RouteSession {
                 scope: "internal".to_string(),
                 key: key.clone(),
             },
             InvocationRequestKey::External {
-                scope: IdempotencyScope::Agent(account),
+                scope: pair("https://issuer.example", "bob"),
                 key: key.clone(),
             },
             InvocationRequestKey::External {
-                scope: IdempotencyScope::User(AccountId(Uuid::from_u128(11))),
+                scope: pair("https://other.example", "alice"),
                 key: key.clone(),
             },
             InvocationRequestKey::External {
-                scope: IdempotencyScope::AdminImpersonation {
-                    admin: account,
-                    target: account,
-                },
+                scope: admin_as_alice(10),
+                key: key.clone(),
+            },
+            InvocationRequestKey::External {
+                scope: tokens(&[5, 7]),
                 key: key.clone(),
             },
         ];
         let expected = [
-            OwnedInvocationId::external(owner(), fingerprint(), "method", Some(scope), Some(&key)),
+            OwnedInvocationId::external(
+                owner(),
+                fingerprint(),
+                "method",
+                Some(scope.clone()),
+                Some(&key),
+            ),
             OwnedInvocationId::internal(owner(), fingerprint(), "method", &key),
             OwnedInvocationId::route_session(owner(), fingerprint(), "method", "internal", &key),
         ];
@@ -420,19 +560,13 @@ mod tests {
     fn prepared_request_serde_roundtrip_preserves_identity() {
         let key = IdempotencyKey::from("雪");
         for request in [
-            InvocationRequestKey::external(
-                Some(IdempotencyScope::User(AccountId(Uuid::from_u128(10)))),
-                Some(&key),
-            ),
+            InvocationRequestKey::external(Some(pair("https://雪.example", "雪🦀")), Some(&key)),
             InvocationRequestKey::External {
-                scope: IdempotencyScope::Agent(AccountId(Uuid::from_u128(10))),
+                scope: admin_as_alice(10),
                 key: key.clone(),
             },
             InvocationRequestKey::External {
-                scope: IdempotencyScope::AdminImpersonation {
-                    admin: AccountId(Uuid::from_u128(10)),
-                    target: AccountId(Uuid::from_u128(11)),
-                },
+                scope: tokens(&[5, 7]),
                 key: key.clone(),
             },
             InvocationRequestKey::Internal(key.clone()),
@@ -498,47 +632,64 @@ mod tests {
         }
     }
 
+    /// The expected IDs were computed independently of this module, from the layout in the
+    /// documentation of [`IdempotencyScope::encoded`] and of `OwnedInvocationId::derive`.
     #[test]
     fn invocation_id_external_derivation_separates_all_fields_and_scopes() {
-        let account = AccountId(Uuid::from_u128(10));
-        let scope = IdempotencyScope::User(account);
+        let scope = alice();
         let key = IdempotencyKey::from("c");
-        let derive = |fingerprint, scope, operation, key: &IdempotencyKey| {
-            OwnedInvocationId::external(owner(), fingerprint, operation, Some(scope), Some(key))
+        let derive = |fingerprint, scope: &IdempotencyScope, operation, key: &IdempotencyKey| {
+            OwnedInvocationId::external(
+                owner(),
+                fingerprint,
+                operation,
+                Some(scope.clone()),
+                Some(key),
+            )
         };
-        let id = derive(fingerprint(), scope, "ab", &key);
-        assert_eq!(id, derive(fingerprint(), scope, "ab", &key));
+        let id = derive(fingerprint(), &scope, "ab", &key);
+        assert_eq!(id, derive(fingerprint(), &scope, "ab", &key));
         assert_eq!(id.uuid().get_version_num(), 5);
         assert_eq!(
             id.uuid().to_string(),
-            "3915410d-393e-5715-bb09-82c9bd3416f3"
+            "8215ed03-b675-5fb0-8706-739c412f60b0"
+        );
+        assert_eq!(
+            derive(fingerprint(), &admin_as_alice(10), "ab", &key)
+                .uuid()
+                .to_string(),
+            "559b0013-1130-5f4d-9ad6-e7b8e9dcd24e"
+        );
+        assert_eq!(
+            derive(fingerprint(), &tokens(&[7, 5]), "ab", &key)
+                .uuid()
+                .to_string(),
+            "6a5dac75-59b5-5b5d-a55e-6642c39bdd22"
         );
         for other in [
-            derive(AgentFingerprint(Uuid::from_u128(3)), scope, "ab", &key),
-            derive(fingerprint(), scope, "a", &IdempotencyKey::from("bc")),
-            derive(fingerprint(), scope, "ab", &IdempotencyKey::from("d")),
+            derive(AgentFingerprint(Uuid::from_u128(3)), &scope, "ab", &key),
+            derive(fingerprint(), &scope, "a", &IdempotencyKey::from("bc")),
+            derive(fingerprint(), &scope, "ab", &IdempotencyKey::from("d")),
             derive(
                 fingerprint(),
-                IdempotencyScope::User(AccountId(Uuid::from_u128(11))),
+                &pair("https://issuer.example", "bob"),
                 "ab",
                 &key,
             ),
-            derive(fingerprint(), IdempotencyScope::Agent(account), "ab", &key),
             derive(
                 fingerprint(),
-                IdempotencyScope::AdminImpersonation {
-                    admin: account,
-                    target: account,
-                },
+                &pair("https://other.example", "alice"),
                 "ab",
                 &key,
             ),
+            derive(fingerprint(), &admin_as_alice(10), "ab", &key),
+            derive(fingerprint(), &tokens(&[5, 7]), "ab", &key),
             OwnedInvocationId::internal(owner(), fingerprint(), "ab", &key),
             OwnedInvocationId::route_session(
                 owner(),
                 fingerprint(),
                 "ab",
-                "user:00000000-0000-0000-0000-00000000000a",
+                r#"("https://issuer.example","alice")"#,
                 &key,
             ),
         ] {
@@ -553,10 +704,11 @@ mod tests {
         for (scope, key) in [
             (None, Some(&key)),
             (None, Some(&derived)),
-            (Some(IdempotencyScope::User(AccountId(Uuid::nil()))), None),
+            (Some(alice()), None),
             (None, None),
         ] {
-            let first = OwnedInvocationId::external(owner(), fingerprint(), "method", scope, key);
+            let first =
+                OwnedInvocationId::external(owner(), fingerprint(), "method", scope.clone(), key);
             let second = OwnedInvocationId::external(owner(), fingerprint(), "method", scope, key);
             assert_ne!(first, second);
             assert_eq!(first.uuid().get_version_num(), 4);
@@ -621,23 +773,38 @@ mod tests {
         );
     }
 
+    /// The expected bytes were written by hand from the layout in the documentation of
+    /// [`IdempotencyScope::encoded`].
     #[test]
-    fn invocation_id_scope_encoding_and_admin_boundaries() {
-        let admin = AccountId(Uuid::from_u128(10));
-        let target = AccountId(Uuid::from_u128(11));
+    fn scope_encoding_has_a_tag_and_length_prefixed_fields() {
         assert_eq!(
-            IdempotencyScope::User(admin).to_string(),
-            "user:00000000-0000-0000-0000-00000000000a"
+            hex(&pair("ab", "c").encoded()),
+            "0100000000000000026162000000000000000163"
         );
         assert_eq!(
-            IdempotencyScope::Agent(admin).to_string(),
-            "agent:00000000-0000-0000-0000-00000000000a"
+            hex(&IdempotencyScope::AdminImpersonation {
+                admin: AccountId(Uuid::from_u128(10)),
+                issuer: "ab".to_string(),
+                subject: "c".to_string(),
+            }
+            .encoded()),
+            "020000000000000000000000000000000a00000000000000026162000000000000000163"
         );
-        let scope = IdempotencyScope::AdminImpersonation { admin, target };
         assert_eq!(
-            scope.to_string(),
-            "admin:00000000-0000-0000-0000-00000000000a:as:00000000-0000-0000-0000-00000000000b"
+            hex(&tokens(&[7, 5]).encoded()),
+            "0300000000000000020000000000000000000000000000000500000000000000000000000000000007"
         );
+        assert_ne!(pair("ab", "c").encoded(), pair("a", "bc").encoded());
+        assert_ne!(pair("", "ab").encoded(), pair("ab", "").encoded());
+        // The other request kinds have a text tag (`internal`, `route:` and `unkeyed`). A scope
+        // starts with a control byte, so it is never equal to a text tag.
+        for scope in [alice(), admin_as_alice(10), tokens(&[5])] {
+            assert!(scope.encoded()[0].is_ascii_control());
+        }
+    }
+
+    #[test]
+    fn admin_scope_depends_on_the_admin_and_on_the_target() {
         let derive = |scope| {
             OwnedInvocationId::external(
                 owner(),
@@ -647,38 +814,137 @@ mod tests {
                 Some(&IdempotencyKey::from("key")),
             )
         };
+        let scope = admin_as_alice(10);
+        assert_eq!(derive(scope.clone()), derive(admin_as_alice(10)));
+        assert_ne!(derive(scope.clone()), derive(admin_as_alice(11)));
         assert_ne!(
-            derive(scope),
+            derive(scope.clone()),
             derive(IdempotencyScope::AdminImpersonation {
-                admin: target,
-                target
+                admin: AccountId(Uuid::from_u128(10)),
+                issuer: "https://issuer.example".to_string(),
+                subject: "bob".to_string(),
             })
         );
+        // The admin and the account that it acts as never share a key.
+        assert_ne!(derive(scope), derive(alice()));
+    }
+
+    #[test]
+    fn token_scope_ignores_the_order_and_the_repeats_of_the_tokens() {
+        assert_eq!(tokens(&[7, 5, 7]), tokens(&[5, 7]));
+        assert_ne!(tokens(&[5, 7]), tokens(&[5]));
+        assert_eq!(IdempotencyScope::tokens(std::iter::empty()), None);
+        // A value that some other code built has the same encoding as the normal form.
+        let unordered = IdempotencyScope::Tokens(vec![
+            Uuid::from_u128(7),
+            Uuid::from_u128(5),
+            Uuid::from_u128(7),
+        ]);
+        assert_eq!(unordered.encoded(), tokens(&[5, 7]).encoded());
+    }
+
+    #[test]
+    fn the_scope_of_a_caller_is_the_pair_of_its_original_principal() {
+        let user = Caller::entry(user_principal());
+        let account = Caller::entry(account_principal());
+        assert_eq!(
+            IdempotencyScope::of(&user),
+            Some(pair("https://idp.example/", "user-1"))
+        );
+        let key = IdempotencyKey::from("key");
+        let id = |caller: &Caller| {
+            OwnedInvocationId::external(
+                owner(),
+                fingerprint(),
+                "method",
+                IdempotencyScope::of(caller),
+                Some(&key),
+            )
+        };
+        // Two original callers never share a key.
+        assert_ne!(id(&user), id(&account));
+        // One original caller has one scope at every entry point and through every chain: the
+        // immediate principal, the tokens, the claims and the sign-in time are not part of it.
+        assert_eq!(id(&user), id(&user.propagate(agent_principal())));
+        assert_eq!(id(&user), id(&sample_caller()));
+        let signed_in_again = Caller::entry(Principal::User(UserPrincipal {
+            pair: Pair::new("https://idp.example/", "user-1"),
+            claims: Claims::from_json(r#"{"sub":"user-1","email":"other@b.example"}"#.to_string())
+                .unwrap(),
+            authenticated_at: "2027-01-02T03:04:05.678Z".parse::<Timestamp>().unwrap(),
+        }));
+        assert_eq!(id(&user), id(&signed_in_again));
+        // The pair is compared byte for byte.
+        let other_subject = Caller::entry(Principal::User(UserPrincipal {
+            pair: Pair::new("https://idp.example/", "User-1"),
+            claims: Claims::from_json(r#"{"sub":"User-1"}"#.to_string()).unwrap(),
+            authenticated_at: "2026-01-02T03:04:05.678Z".parse::<Timestamp>().unwrap(),
+        }));
+        assert_ne!(id(&user), id(&other_subject));
+    }
+
+    #[test]
+    fn an_anonymous_caller_has_the_scope_of_its_tokens() {
+        let key = IdempotencyKey::from("key");
+        // Without a token there is no scope: the key is ignored, and each request is new.
+        assert_eq!(IdempotencyScope::of(&Caller::anonymous()), None);
+        assert!(matches!(
+            InvocationRequestKey::external(IdempotencyScope::of(&Caller::anonymous()), Some(&key)),
+            InvocationRequestKey::Unkeyed(_)
+        ));
+        assert_eq!(
+            IdempotencyScope::of(&anonymous_with_tokens(&[7, 5])),
+            Some(tokens(&[5, 7]))
+        );
+        assert_eq!(
+            IdempotencyScope::of(&anonymous_with_tokens(&[7, 5])),
+            IdempotencyScope::of(&anonymous_with_tokens(&[5, 7, 5]))
+        );
         assert_ne!(
-            derive(scope),
-            derive(IdempotencyScope::AdminImpersonation {
-                admin,
-                target: admin
-            })
+            IdempotencyScope::of(&anonymous_with_tokens(&[5])),
+            IdempotencyScope::of(&anonymous_with_tokens(&[5, 7]))
+        );
+        // The maker of a token is not part of the scope.
+        let mut with_a_maker = anonymous_with_tokens(&[5]);
+        with_a_maker.tokens[0].maker = Some(PrincipalRef::new(Pair::new("https://m", "maker")));
+        assert_eq!(
+            IdempotencyScope::of(&with_a_maker),
+            IdempotencyScope::of(&anonymous_with_tokens(&[5]))
+        );
+        // A caller with a pair has the scope of the pair, whatever tokens the request presented.
+        let mut user_with_a_token = Caller::entry(user_principal());
+        user_with_a_token.tokens = anonymous_with_tokens(&[5]).tokens;
+        assert_eq!(
+            IdempotencyScope::of(&user_with_a_token),
+            IdempotencyScope::of(&Caller::entry(user_principal()))
+        );
+    }
+
+    #[test]
+    fn an_admin_that_acts_as_an_account_has_a_scope_of_its_own() {
+        let target = Caller::entry(account_principal());
+        let admin = AccountId(Uuid::from_u128(10));
+        let scope = IdempotencyScope::admin_impersonation(admin, &target)
+            .expect("the target account has a pair");
+        assert_ne!(Some(scope.clone()), IdempotencyScope::of(&target));
+        assert_ne!(
+            Some(scope),
+            IdempotencyScope::admin_impersonation(AccountId(Uuid::from_u128(11)), &target)
+        );
+        assert_eq!(
+            IdempotencyScope::admin_impersonation(admin, &Caller::anonymous()),
+            None
         );
     }
 
     #[test]
     fn invocation_id_all_scope_roles_are_disjoint_even_for_derived_key_text() {
-        let account = AccountId(Uuid::from_u128(10));
         let key = IdempotencyKey::derived_from_bytes(&IdempotencyKey::from("internal"), b"key");
         let mut ids = vec![
             OwnedInvocationId::internal(owner(), fingerprint(), "method", &key),
             OwnedInvocationId::route_session(owner(), fingerprint(), "method", "internal", &key),
         ];
-        for scope in [
-            IdempotencyScope::User(account),
-            IdempotencyScope::Agent(account),
-            IdempotencyScope::AdminImpersonation {
-                admin: account,
-                target: account,
-            },
-        ] {
+        for scope in [alice(), admin_as_alice(10), tokens(&[5])] {
             ids.push(OwnedInvocationId::external(
                 owner(),
                 fingerprint(),

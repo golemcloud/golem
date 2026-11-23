@@ -15258,7 +15258,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
             }),
             request_key: Some(
                 golem_common::model::InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
+                    executor.idempotency_scope(),
                     Some(&key),
                 )
                 .into(),
@@ -23426,7 +23426,7 @@ async fn start_external_tool_command(
                 }),
                 request_key: Some(
                     golem_common::model::InvocationRequestKey::external(
-                        executor.auth_ctx().idempotency_scope(),
+                        executor.idempotency_scope(),
                         Some(&key),
                     )
                     .into(),

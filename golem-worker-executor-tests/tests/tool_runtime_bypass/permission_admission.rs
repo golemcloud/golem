@@ -1404,7 +1404,7 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
 
     let key = IdempotencyKey::fresh();
     let request_key = golem_common::model::InvocationRequestKey::external(
-        fixture.executor.auth_ctx().idempotency_scope(),
+        fixture.executor.idempotency_scope(),
         Some(&key),
     );
     let stored_key = fixture

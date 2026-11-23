@@ -253,19 +253,27 @@ impl AuthCtx {
         AuthCtx::System
     }
 
-    /// The authenticated caller namespace for external invocation idempotency.
-    /// System requests have no caller scope and must not gain internal trust here.
-    pub fn idempotency_scope(&self) -> Option<golem_common::model::IdempotencyScope> {
+    /// The caller scope of the idempotency keys of a request with this authority, where
+    /// `caller` is the caller that the entry point built for the request: the scope of the
+    /// caller's original principal. The authority alone never gives a scope, so a request
+    /// without a known original caller has none, and its keys never deduplicate.
+    ///
+    /// An admin that acts as another account has a scope of its own, because the request
+    /// records the other account as its caller.
+    ///
+    /// `caller` must come from the verified authority of the request, never from a field that
+    /// the client sends: the scope decides whose invocation a key finds.
+    pub fn idempotency_scope(
+        &self,
+        caller: &golem_common::model::caller::Caller,
+    ) -> Option<golem_common::model::IdempotencyScope> {
         use golem_common::model::IdempotencyScope;
 
         match self {
-            Self::System => None,
-            Self::User(ctx) => Some(IdempotencyScope::User(ctx.account_id)),
-            Self::Agent(ctx) => Some(IdempotencyScope::Agent(ctx.account_id)),
-            Self::AdminImpersonation(ctx) => Some(IdempotencyScope::AdminImpersonation {
-                admin: ctx.admin_account_id,
-                target: ctx.target_account_id,
-            }),
+            Self::AdminImpersonation(ctx) => {
+                IdempotencyScope::admin_impersonation(ctx.admin_account_id, caller)
+            }
+            Self::System | Self::User(_) | Self::Agent(_) => IdempotencyScope::of(caller),
         }
     }
 
@@ -436,11 +444,12 @@ fn authorize_effective_surface_permission(
 mod invocation_scope_tests {
     use super::*;
     use golem_common::model::IdempotencyScope;
+    use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Caller, Principal};
     use test_r::test;
     use uuid::Uuid;
 
     #[test]
-    fn invocation_id_auth_scope_mapping() {
+    fn the_idempotency_scope_comes_from_the_caller_and_not_from_the_authority() {
         let account = AccountId(Uuid::from_u128(10));
         let target = AccountId(Uuid::from_u128(11));
         let surface = EffectiveSurface {
@@ -466,22 +475,27 @@ mod invocation_scope_tests {
             PlanId(Uuid::nil()),
             surface,
         );
-        assert_eq!(AuthCtx::system().idempotency_scope(), None);
+        let caller = Caller::entry(Principal::Account(AccountPrincipal {
+            issuer: "https://issuer.example".to_string(),
+            account_id: target,
+            authentication: AccountAuthentication::ApiToken,
+        }));
+        let of_the_caller = IdempotencyScope::of(&caller);
+        assert!(of_the_caller.is_some());
+        // The kind of authority is not part of the scope.
+        for auth in [&AuthCtx::system(), &user, &agent] {
+            assert_eq!(auth.idempotency_scope(&caller), of_the_caller);
+        }
+        // Without a known original caller there is no scope, whatever the authority is.
+        for auth in [&AuthCtx::system(), &user, &agent, &admin] {
+            assert_eq!(auth.idempotency_scope(&Caller::anonymous()), None);
+        }
+        // An admin that acts as the account never shares the keys of the account.
         assert_eq!(
-            user.idempotency_scope(),
-            Some(IdempotencyScope::User(account))
+            admin.idempotency_scope(&caller),
+            IdempotencyScope::admin_impersonation(account, &caller)
         );
-        assert_eq!(
-            agent.idempotency_scope(),
-            Some(IdempotencyScope::Agent(account))
-        );
-        assert_eq!(
-            admin.idempotency_scope(),
-            Some(IdempotencyScope::AdminImpersonation {
-                admin: account,
-                target
-            })
-        );
+        assert_ne!(admin.idempotency_scope(&caller), of_the_caller);
     }
 }
 

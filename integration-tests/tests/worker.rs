@@ -23,11 +23,12 @@ use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_client::api::{AgentClient, AgentError, RegistryServiceClient};
 use golem_client::model::WorkersMetadataRequest;
-use golem_common::model::account::{AccountRevision, AccountSetPlan};
+use golem_common::model::account::{AccountId, AccountRevision, AccountSetPlan};
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind, AgentMode, AgentTypeName,
     OwnedAgentId,
 };
+use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Caller, Principal};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
@@ -422,7 +423,7 @@ async fn remote_rpc_create_waits_for_constructor_and_reports_rejection(
         assert_eq!(started.len(), 1, "the child must run its constructor once");
         assert_eq!(pending, started);
         let parent_invocation_id = InvocationRequestKey::external(
-            Some(IdempotencyScope::User(*user.account_id())),
+            Some(rest_idempotency_scope(*user.account_id())),
             Some(&invocation_key),
         )
         .finalize(
@@ -443,6 +444,17 @@ async fn remote_rpc_create_waits_for_constructor_and_reports_rejection(
         );
     }
     Ok(())
+}
+
+/// The caller scope of the idempotency keys that an account sends through REST: the scope of
+/// the account's pair, which is the pair of the original caller of such a request.
+fn rest_idempotency_scope(account_id: AccountId) -> IdempotencyScope {
+    IdempotencyScope::of(&Caller::entry(Principal::Account(AccountPrincipal {
+        issuer: golem_test_framework::components::TEST_GOLEM_ISSUER.to_string(),
+        account_id,
+        authentication: AccountAuthentication::ApiToken,
+    })))
+    .expect("an account has a pair")
 }
 
 /// A REST invocation authenticated with an account token reaches the agent as that account, in
@@ -1177,7 +1189,7 @@ async fn get_running_workers(
         let name = agent_key!("EphemeralHttpClient4");
         let key = IdempotencyKey::fresh();
         let owner_key = InvocationRequestKey::external(
-            Some(IdempotencyScope::User(*user.account_id())),
+            Some(rest_idempotency_scope(*user.account_id())),
             Some(&key),
         )
         .owner_key("get_for_quota_wait");
