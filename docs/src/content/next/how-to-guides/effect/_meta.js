@@ -13,7 +13,7 @@ export default {
   "golem-add-cors-effect": "Configuring CORS for Effect HTTP Endpoints",
   "golem-retry-policies-effect": "Configuring Retry Policies in Effect Golem Applications",
   "golem-create-agent-instance-effect":
-    "Creating an Effect Golem Agent Instance with `golem agent new`",
+    "Creating an Effect Golem Agent Instance with `golem agent create`",
   "golem-stateless-agent-effect": "Creating Ephemeral Agents with Effect",
   "golem-durable-streams-effect": "Durable Streams with Effect",
   "golem-tools-middleware-effect": "Effect tools and middleware",
@@ -27,9 +27,10 @@ export default {
   "golem-logging-effect": "Logging and Tracing from an Effect Agent",
   "golem-make-http-request-effect": "Making Outgoing HTTP Requests from Effect Golem Agents",
   "golem-read-only-method-effect": "Marking Agent Methods as Read-Only (Effect)",
+  "golem-multi-instance-agent-effect":
+    "Multiple Agents with Identical Agent Id Fields in Effect Golem",
   "golem-parallel-workers-effect": "Parallel Workers with Effect",
   "golem-permission-card-effect": "Permission cards in Effect",
-  "golem-multi-instance-agent-effect": "Phantom Agents in Effect Golem",
   "golem-recurring-task-effect": "Recurring Tasks via Self-Scheduling in Effect",
   "golem-agent-reflection-effect": "Runtime reflection with Effect",
   "golem-add-transactions-effect": "Saga-Pattern Transactions in Effect Golem Agents",

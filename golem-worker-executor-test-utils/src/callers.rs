@@ -19,7 +19,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::caller::{
     AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, Claims, Pair, Principal,
-    UserPrincipal,
+    ToolPrincipal, UserPrincipal,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId, Timestamp};
@@ -58,47 +58,35 @@ pub fn user(issuer: &str, subject: &str) -> Caller {
     user_with_claims(issuer, subject, "{}")
 }
 
-/// An agent as a principal. Its type is the one in its name, and its fingerprint and environment
-/// are nil.
-pub fn agent_principal(agent_id: AgentId) -> Principal {
-    let agent_type = agent_id
-        .agent_id
-        .split('(')
-        .next()
-        .unwrap_or_default()
-        .to_string();
+/// An agent as a principal. Its fingerprint and environment are nil.
+pub fn agent_principal(agent_id: AgentId, agent_type: AgentTypeName) -> Principal {
     Principal::Agent(AgentPrincipal::of_agent(
         GOLEM_ISSUER.to_string(),
         agent_id,
         AgentFingerprint(uuid::Uuid::nil()),
-        AgentTypeName(agent_type),
+        agent_type,
         EnvironmentId(uuid::Uuid::nil()),
     ))
 }
 
 /// An agent, in both roles.
-pub fn agent(agent_id: AgentId) -> Caller {
-    Caller::entry(agent_principal(agent_id))
+pub fn agent(agent_id: AgentId, agent_type: AgentTypeName) -> Caller {
+    Caller::entry(agent_principal(agent_id, agent_type))
 }
 
 /// An agent with its real incarnation and environment, in both roles: what the executor records
 /// when the agent itself is the caller.
 pub fn agent_in(
     agent_id: AgentId,
+    agent_type: AgentTypeName,
     fingerprint: AgentFingerprint,
     environment_id: EnvironmentId,
 ) -> Caller {
-    let agent_type = agent_id
-        .agent_id
-        .split('(')
-        .next()
-        .unwrap_or_default()
-        .to_string();
     Caller::entry(Principal::Agent(AgentPrincipal::of_agent(
         GOLEM_ISSUER.to_string(),
         agent_id,
         fingerprint,
-        AgentTypeName(agent_type),
+        agent_type,
         environment_id,
     )))
 }
@@ -113,5 +101,32 @@ pub fn account_text(account_id: AccountId) -> String {
     format!(
         "account (\"{GOLEM_ISSUER}\",\"account:{}\")",
         account_id.0.hyphenated()
+    )
+}
+
+/// A tool of the environment as a principal, under the test Golem issuer.
+pub fn tool_principal(environment_id: EnvironmentId, tool_name: &str) -> Principal {
+    Principal::Tool(ToolPrincipal {
+        issuer: GOLEM_ISSUER.to_string(),
+        environment_id,
+        tool_name: golem_common::model::tool::ToolName::try_from(tool_name)
+            .expect("the tool name is valid"),
+    })
+}
+
+/// The display text that every SDK gives a principal: its kind and its pair, or `anonymous`.
+pub fn principal_text(principal: &Principal) -> String {
+    match principal.principal_ref() {
+        Some(principal_ref) => format!("{} {principal_ref}", principal.kind()),
+        None => "anonymous".to_string(),
+    }
+}
+
+/// Both roles of a caller as the caller-reporting fixtures print them: `<original>|<immediate>`.
+pub fn caller_text(caller: &Caller) -> String {
+    format!(
+        "{}|{}",
+        principal_text(&caller.original),
+        principal_text(&caller.immediate)
     )
 }

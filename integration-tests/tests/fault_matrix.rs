@@ -35,13 +35,14 @@ mod rows {
     use golem_client::model::ComponentDto;
     use golem_common::base_model::agent::AgentTypeName;
     use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
-    use golem_common::model::agent::ParsedAgentKey;
+    use golem_common::base_model::type_id::TypeId;
+    use golem_common::model::agent::{OwnedAgentId, ParsedAgentKey};
     use golem_common::model::durable_stream::StreamSessionRecord;
     use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
     use golem_common::model::{AgentId, PromiseId, RoutingTable};
     use golem_common::schema::{FromSchema, SchemaValue};
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
     use golem_schema::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
     use golem_test_framework::components::worker_service::WorkerService;
     use golem_test_framework::components::worker_service::relayed::RelayedWorkerService;
@@ -51,6 +52,7 @@ mod rows {
         DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+    use integration_tests::agents::{agent_type_id, keyed_agent_id};
     use integration_tests::fault_matrix::{
         Delivery, FIXTURE_AGENT_TYPE, FIXTURES, Fixture, InjectorEffect, Terminal,
         assert_fail_clean, assert_resumed,
@@ -161,6 +163,22 @@ mod rows {
         sdk: &'static str,
         user: TestUserContext<EnvBasedTestDependencies>,
         component: ComponentDto,
+        /// The registry type ID of the fixture agent type in the row's environment.
+        type_id: TypeId,
+    }
+
+    impl Row {
+        /// The ID of the keyed fixture agent of `agent`, whether or not the agent exists.
+        fn agent_id(&self, agent: &ParsedAgentKey) -> anyhow::Result<OwnedAgentId> {
+            keyed_agent_id(&self.component, self.type_id, agent)
+        }
+
+        async fn open_gate(&self, gate: &PromiseId) -> anyhow::Result<()> {
+            self.user
+                .complete_promise(&self.component.environment_id, gate, Vec::new())
+                .await?;
+            Ok(())
+        }
     }
 
     async fn row(deps: &EnvBasedTestDependencies, fixture: Fixture) -> anyhow::Result<Row> {
@@ -172,15 +190,22 @@ mod rows {
             .unique()
             .store()
             .await?;
+        let type_id = agent_type_id(
+            &user,
+            &component,
+            &AgentTypeName(FIXTURE_AGENT_TYPE.to_string()),
+        )
+        .await?;
         Ok(Row {
             sdk: fixture.sdk,
             user,
             component,
+            type_id,
         })
     }
 
     fn agent(name: &str) -> ParsedAgentKey {
-        agent_id!(FIXTURE_AGENT_TYPE, name.to_string())
+        agent_key!(FIXTURE_AGENT_TYPE, name.to_string())
     }
 
     fn fresh_agent() -> ParsedAgentKey {
@@ -459,7 +484,7 @@ mod rows {
             let run = next_run();
             let (mut session, gate, id) = start_gated(deps, &row, &agent, run).await?;
             session.cancel_output(id).await?;
-            row.user.complete_promise(&gate, Vec::new()).await?;
+            row.open_gate(&gate).await?;
             let report = session.complete().await?;
             let cancelled = delivery(&report.outputs[&id])?;
             ensure!(
@@ -511,7 +536,7 @@ mod rows {
             let (resumed, _) =
                 InvocationSession::reattach(deps, checkpoint, ResumeOperation::Takeover, PHASE)
                     .await?;
-            row.user.complete_promise(&gate, Vec::new()).await?;
+            row.open_gate(&gate).await?;
             let report = resumed.finish().await?;
             effect.ensure_happened()?;
             assert_resumed(run, COUNT, &delivery(&report.outputs[&id])?)
@@ -540,7 +565,7 @@ mod rows {
             let (resumed, _) =
                 InvocationSession::reattach(&view, checkpoint, ResumeOperation::Resume, PHASE)
                     .await?;
-            row.user.complete_promise(&gate, Vec::new()).await?;
+            row.open_gate(&gate).await?;
             let report = resumed.finish().await?;
             InjectorEffect::WorkerServiceRestarted { before, after }.ensure_happened()?;
             assert_resumed(run, COUNT, &delivery(&report.outputs[&id])?)
@@ -569,7 +594,7 @@ mod rows {
             let (resumed, _) =
                 InvocationSession::reattach(&view, saved, ResumeOperation::Takeover, PHASE).await?;
             let epoch_after = resumed.checkpoint().acceptance.as_ref().unwrap().epoch;
-            row.user.complete_promise(&gate, Vec::new()).await?;
+            row.open_gate(&gate).await?;
             let report = resumed.finish().await?;
             InjectorEffect::ClientDropped { resets }.ensure_happened()?;
             InjectorEffect::BrowserReloaded {
@@ -593,10 +618,16 @@ mod rows {
         for &fixture in FIXTURES {
             let row = row(deps, fixture).await?;
             let agent = fresh_agent();
-            let agent_id =
-                AgentId::from_agent_id(row.component.id, &agent).map_err(anyhow::Error::msg)?;
+            let agent_id = row.agent_id(&agent)?;
             let run = next_run();
             let (mut session, gate, id) = start_gated(deps, &row, &agent, run).await?;
+            ensure!(
+                gate.agent_id == agent_id.agent_id,
+                "{}: the gate names agent {}, not the keyed agent {}",
+                fixture.sdk,
+                gate.agent_id,
+                agent_id.agent_id
+            );
             let before = row
                 .user
                 .get_worker_metadata(&agent_id)
@@ -615,7 +646,7 @@ mod rows {
             row.user
                 .auto_update_worker(&agent_id, updated.revision, false)
                 .await?;
-            row.user.complete_promise(&gate, Vec::new()).await?;
+            row.open_gate(&gate).await?;
             // The update is requested while the session is open and the producer is gated.
             ensure!(
                 session.checkpoint().completion.is_none(),
@@ -667,22 +698,18 @@ mod rows {
     /// of the remote stream, while the stream has no terminal and the call is still running.
     async fn wait_for_consumed_prefix<T>(
         user: &TestUserContext<EnvBasedTestDependencies>,
-        caller: &AgentId,
+        caller: &OwnedAgentId,
         call: &JoinHandle<T>,
     ) -> anyhow::Result<()> {
         tokio::time::timeout(PHASE, async {
             loop {
                 ensure!(!call.is_finished(), "read_remote finished before the fault");
-                // A read never creates an agent, so the caller has no oplog until the spawned
-                // call reaches it.
-                let history = match user.get_oplog(caller, OplogIndex::INITIAL).await {
-                    Ok(history) => history,
-                    Err(error) if format!("{error:#}").contains("does not exist") => {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                };
+                // The caller has no oplog until the spawned call creates it.
+                if user.get_worker_metadata_opt(caller).await?.is_none() {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+                let history = user.get_oplog(caller, OplogIndex::INITIAL).await?;
                 let mut consumed = 0;
                 for entry in history {
                     let PublicOplogEntry::StreamSession(params) = &entry.entry else {
@@ -729,11 +756,10 @@ mod rows {
                     let name = format!("rpc-{}-{index}", uuid::Uuid::new_v4());
                     let caller = agent(&format!("{name}-caller"));
                     let target = format!("{name}-target");
-                    let caller_id = AgentId::from_agent_id(row.component.id, &caller).ok()?;
-                    let target_id =
-                        AgentId::from_agent_id(row.component.id, &agent(&target)).ok()?;
-                    let caller_index = executor_index(deps, &table, &caller_id).ok()?;
-                    let callee_index = executor_index(deps, &table, &target_id).ok()?;
+                    let caller_id = row.agent_id(&caller).ok()?;
+                    let target_id = row.agent_id(&agent(&target)).ok()?;
+                    let caller_index = executor_index(deps, &table, &caller_id.agent_id).ok()?;
+                    let callee_index = executor_index(deps, &table, &target_id.agent_id).ok()?;
                     (caller_index != callee_index).then_some((
                         caller,
                         target,
@@ -756,8 +782,7 @@ mod rows {
             };
             // The callee's producer cannot finish before the gate opens, so the stream is still
             // open when its executor dies, and the caller has already read the prefix.
-            let caller_id =
-                AgentId::from_agent_id(row.component.id, &caller).map_err(anyhow::Error::msg)?;
+            let caller_id = row.agent_id(&caller)?;
             wait_for_consumed_prefix(&row.user, &caller_id, &call)
                 .await
                 .with_context(|| format!("{}: RPC prefix before the kill", fixture.sdk))?;
@@ -776,7 +801,7 @@ mod rows {
                 pids[caller_index] == after[caller_index],
                 "the caller's executor restarted too"
             );
-            row.user.complete_promise(&gate, Vec::new()).await?;
+            row.open_gate(&gate).await?;
             let read = records(
                 call.await??
                     .into_return_value()

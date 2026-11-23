@@ -19,12 +19,14 @@ use golem_common::model::InvocationId;
 
 use crate::worker::*;
 use chrono::{DateTime, Utc};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{IdempotencyKey, ScheduleId, ScheduledAction};
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn enqueue_oplog_processor<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>
@@ -38,7 +40,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let worker = deps
             .active_agents()
-            .get_or_add_oplog_processor(deps, owned_agent_id, component_revision)
+            .get_or_add_oplog_processor(deps, owned_agent_id, component_id, component_revision)
             .await?;
         // The batch runs as the processor agent itself, in both roles.
         let mut invocation = invocation;
@@ -189,7 +191,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // The observer task does a final epoch recheck before insert
             // (`populate_read_only_cache`), so it needs the live atomic.
             let read_only_cache_epoch = self.read_only_cache_epoch.clone();
-            let agent_id = self.owned_agent_id.agent_id.clone();
+            let agent_id = self.owned_agent_id.agent_id;
             let idem = idempotency_key;
             tokio::spawn(async move {
                 let wait_result = obs_sub
@@ -291,6 +293,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else if let Some(index) = accepted_index {
             let OplogEntry::PendingAgentInvocation {
                 invocation_id: accepted_key,
+                operation,
                 payload,
                 ..
             } = self.oplog.read(index).await?
@@ -304,9 +307,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "native session references a different invocation key",
                 ));
             }
-            let payload: AgentInvocationPayload = self
+            let payload = self
                 .oplog
-                .download_payload(payload)
+                .download_request(*operation, payload)
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
             let AgentInvocationPayload::ExternalTool { activation, .. } = payload else {
@@ -366,6 +369,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 expected_deployment_revision,
                 activation.registered_tool.deployment_revision,
             )?;
+            require_canonical_command_path(&activation, &tool_name, &command_path)?;
             if let Some(scope_card) = &scope_card {
                 crate::services::card::validate_scope_card(
                     self.card_service().as_ref(),
@@ -605,7 +609,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // caller's wait would pick an arbitrary winner. The request that owns the
             // execution is the honest originator.
             let origin = TraceOrigin::capture_current();
-            let owner_agent_id = self.owned_agent_id.agent_id.clone();
+            let owner_agent_id = self.owned_agent_id.agent_id;
             let owner_idempotency_key = idempotency_key;
 
             let pending_or_final = async {
@@ -972,15 +976,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match entry {
             OplogEntry::PendingAgentInvocation {
                 invocation_id: idempotency_key,
+                operation,
                 payload,
                 trace_id,
                 trace_states,
                 invocation_context,
                 ..
             } => {
+                let operation = *operation;
                 let agent_payload = self
                     .oplog
-                    .download_payload_classified(payload.clone())
+                    .download_request_classified(operation.clone(), payload.clone())
                     .await
                     .map_err(|error| match error {
                         OplogPayloadDownloadError::Backend(error) => {
@@ -1008,6 +1014,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     AgentInvocation::from_parts(idempotency_key, agent_payload, invocation_context);
                 Ok(HydratedInvocation {
                     invocation,
+                    operation,
                     payload,
                 })
             }
@@ -1047,31 +1054,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             into_pending_invocation_parts(invocation);
         let invocation_context = invocation_context
             .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
-        let payload = match invocation_payload {
-            // A manual update invocation stays in the oplog whatever the payload limit, so every
-            // reader of the oplog tells it from other invocations without a download.
-            payload @ AgentInvocationPayload::ManualUpdate { .. } => {
-                OplogPayload::SerializedInline {
-                    bytes: golem_common::serialization::serialize(&payload).map_err(|e| {
-                        WorkerExecutorError::invalid_request(format!(
-                            "Failed to serialize invocation payload: {e}"
-                        ))
-                    })?,
-                    cached: Some(Arc::new(payload)),
-                }
-            }
-            payload => oplog.upload_payload_owned(payload).await.map_err(|e| {
+        let (operation, payload) = oplog
+            .upload_request(invocation_payload)
+            .await
+            .map_err(|e| {
                 WorkerExecutorError::invalid_request(format!(
                     "Failed to upload invocation payload: {e}"
                 ))
-            })?,
-        };
+            })?;
         let invocation_context_spans = invocation_context.to_oplog_data();
         Ok((
             semantic_key,
             OplogEntry::pending_agent_invocation(
                 not_before,
                 idempotency_key,
+                Box::new(operation),
                 payload,
                 invocation_context.trace_id,
                 invocation_context.trace_states,
@@ -1402,11 +1399,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Refuses an inspection that would be the first start of an ephemeral agent: it would run
     /// the constructor before a schedule whose commit the caller may still be repairing. A
     /// worker that a delete has claimed gives the deletion error, as starting it would.
-    pub(crate) async fn ensure_inspection_may_start(&self) -> Result<(), WorkerExecutorError> {
+    pub(crate) async fn ensure_inspection_may_start(
+        &self,
+        owner: Option<&NewOwner>,
+    ) -> Result<(), WorkerExecutorError> {
+        {
+            let instance = self.instance.lock().await;
+            instance.ensure_not_deleting()?;
+            self.ensure_owns_key(owner)?;
+        }
         if self.agent_mode() != AgentMode::Ephemeral {
             return Ok(());
         }
-        self.instance.lock().await.ensure_not_deleting()?;
         let status = self.state_actor.try_status().await?;
         if super::invocation_loop::ephemeral_inspection_may_start(
             &status,
@@ -1592,6 +1596,27 @@ pub(crate) fn require_expected_tool_deployment_revision(
     }
 }
 
+/// The invocation ID is derived from the command path, so only the canonical path of a declared
+/// command is accepted: an alias would give the same command a second ID.
+pub(crate) fn require_canonical_command_path(
+    activation: &golem_common::model::tool::ToolActivationSnapshot,
+    tool_name: &ToolName,
+    command_path: &[String],
+) -> Result<(), WorkerExecutorError> {
+    if activation
+        .effective_definition()
+        .canonical_command_path(command_path)
+        .as_deref()
+        == Some(command_path)
+    {
+        Ok(())
+    } else {
+        Err(WorkerExecutorError::invalid_request(format!(
+            "command path {command_path:?} of tool '{tool_name}' does not name a declared command by its canonical names"
+        )))
+    }
+}
+
 pub(in crate::worker) fn into_pending_invocation_parts(
     invocation: AgentInvocation,
 ) -> (
@@ -1628,15 +1653,20 @@ pub(in crate::worker) fn inactive_ephemeral_agent_error() -> WorkerExecutorError
     WorkerExecutorError::invalid_request(INACTIVE_EPHEMERAL_AGENT_ERROR)
 }
 
+/// Checks the identity of an invocation's target. A KnownFresh invocation skips the lookup of
+/// an existing agent, so it is accepted only for an ephemeral instance whose ID derives from the
+/// invocation's owner key: no other invocation reaches that ID.
 pub(in crate::worker) fn validate_resolved_invocation_identity(
     agent_mode: AgentMode,
-    phantom_id: Option<Uuid>,
+    environment_id: EnvironmentId,
+    agent_id: &AgentId,
+    keyed: bool,
     idempotency_key: &IdempotencyKey,
     freshness_disposition: InvocationFreshnessDisposition,
 ) -> Result<(), WorkerExecutorError> {
-    if agent_mode == AgentMode::Ephemeral && phantom_id.is_none() {
+    if agent_mode == AgentMode::Ephemeral && keyed {
         return Err(WorkerExecutorError::invalid_request(
-            "An ephemeral invocation requires a final phantom agent ID",
+            "An ephemeral agent has no key: address it by ID",
         ));
     }
 
@@ -1650,8 +1680,10 @@ pub(in crate::worker) fn validate_resolved_invocation_identity(
         ));
     }
 
-    let expected_phantom_id = ephemeral_invocation_phantom_id(idempotency_key);
-    if phantom_id != Some(expected_phantom_id) {
+    let derived = agent_id
+        .type_id()
+        .map(|type_id| AgentId::ephemeral_invocation(environment_id, type_id, idempotency_key));
+    if derived.as_ref() != Some(agent_id) {
         return Err(WorkerExecutorError::invalid_request(
             "KnownFresh ephemeral agent id does not match the invocation idempotency key",
         ));

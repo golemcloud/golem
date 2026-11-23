@@ -56,9 +56,12 @@ async fn scenario(
         .await?;
     let name = format!("input-{live}-{replay}-{reads}-{omit_read}");
     let target = executor
-        .start_agent(&component.id, agent_id!("StreamingRpcTarget", name.clone()))
+        .start_agent(
+            &component.id,
+            agent_key!("StreamingRpcTarget", name.clone()),
+        )
         .await?;
-    let id = agent_id!("InputGc", name);
+    let id = agent_key!("InputGc", name);
     let agent = executor.start_agent(&component.id, id.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &id, "configure", data_value!(live, replay))
@@ -115,7 +118,7 @@ async fn scenario(
         .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
         .unwrap();
     assert!(snapshot.oplog_index < run.oplog_index);
-    executor.commit_oplog(&target).await?;
+    executor.commit_oplog(&target.agent_id).await?;
     let target_invocations = |history: &[PublicOplogEntryWithIndex]| {
         history
             .iter()
@@ -128,7 +131,9 @@ async fn scenario(
     drop(executor);
     let executor = start_with_overrides(deps, context, overrides()).await?;
     let mut events = executor.capture_output(&agent).await?;
-    executor.complete_promise(&gate, vec![]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &gate, vec![])
+        .await?;
     let result = tokio::time::timeout(
         Duration::from_secs(30),
         executor.invoke_and_await_agent_with_key(
@@ -165,7 +170,7 @@ async fn scenario(
             (false, reads, u32::from(live == 2)),
             "fallback must replay the original reads without the restored heap"
         );
-        executor.commit_oplog(&target).await?;
+        executor.commit_oplog(&target.agent_id).await?;
         assert_eq!(
             target_invocations(&executor.get_oplog(&target, OplogIndex::INITIAL).await?),
             target_before,
@@ -205,7 +210,7 @@ async fn scenario(
         .await?
         .into_typed()?;
     assert_eq!(values, vec![30, 31, 32]);
-    executor.commit_oplog(&target).await?;
+    executor.commit_oplog(&target.agent_id).await?;
     let target_history = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
     assert_eq!(
         target_history
@@ -215,7 +220,7 @@ async fn scenario(
         3,
         "constructor, one original production and one fresh continuation, with no repeated target invocation"
     );
-    executor.commit_oplog(&agent).await?;
+    executor.commit_oplog(&agent.agent_id).await?;
     let history = executor.get_oplog(&agent, OplogIndex::INITIAL).await?;
     for entry in &history {
         if let PublicOplogEntry::Start(_) = &entry.entry {
@@ -361,14 +366,7 @@ struct TsInputGcPromise {
 }
 
 #[derive(Clone, FromSchema, IntoSchema)]
-#[schema(rename_all = "camelCase")]
 struct TsInputGcAgentId {
-    component_id: TsInputGcComponentId,
-    agent_id: String,
-}
-
-#[derive(Clone, FromSchema, IntoSchema)]
-struct TsInputGcComponentId {
     uuid: TsInputGcUuid,
 }
 
@@ -400,7 +398,7 @@ async fn completed_invocation_drop_has_no_following_guest_host_call(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let id = agent_id!("InputGc", "completed-drop");
+    let id = agent_key!("InputGc", "completed-drop");
     let agent = executor.start_agent(&component.id, id.clone()).await?;
     executor
         .invoke_and_await_agent(&component, &id, "configure", data_value!(2_u32, 0_u32))
@@ -408,7 +406,7 @@ async fn completed_invocation_drop_has_no_following_guest_host_call(
     executor
         .invoke_and_await_agent(&component, &id, "run_to_end", data_value!())
         .await?;
-    executor.commit_oplog(&agent).await?;
+    executor.commit_oplog(&agent.agent_id).await?;
     let history = executor.get_oplog(&agent, OplogIndex::INITIAL).await?;
     let snapshot = history
         .iter()
@@ -479,7 +477,7 @@ async fn typescript_gc_collects_previously_retained_input_with_identical_reads(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let id = agent_id!("TsInputGc", format!("ts-input-{reads}"));
+        let id = agent_key!("TsInputGc", format!("ts-input-{reads}"));
         let agent = executor.start_agent(&component.id, id.clone()).await?;
         let gate: TsInputGcPromise = executor
             .invoke_and_await_agent(&component, &id, "promise", data_value!())
@@ -523,8 +521,9 @@ async fn typescript_gc_collects_previously_retained_input_with_identical_reads(
         let mut events = executor.capture_output(&agent).await?;
         executor
             .complete_promise(
+                &executor.context.default_environment_id,
                 &PromiseId {
-                    agent_id: agent.clone(),
+                    agent_id: agent.agent_id,
                     fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::from_u64_pair(
                         gate.fingerprint.high_bits,
                         gate.fingerprint.low_bits,
@@ -572,7 +571,7 @@ async fn typescript_gc_collects_previously_retained_input_with_identical_reads(
         assert!(report.restored);
         assert_eq!(report.reads, reads);
         assert_eq!(report.retained, 0.0);
-        executor.commit_oplog(&agent).await?;
+        executor.commit_oplog(&agent.agent_id).await?;
         let history = executor.get_oplog(&agent, OplogIndex::INITIAL).await?;
         assert!(
             history.iter().any(|entry| matches!(&entry.entry,

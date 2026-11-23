@@ -253,6 +253,22 @@ pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
         .map_err(|error| wasmtime::Error::msg(error.to_string()))
 }
 
+/// The tool that a middleware layer wraps: the last layer of its plan.
+fn wrapped_tool(
+    position: &crate::durable_host::entity::ResolvedEntityInvocationPosition,
+) -> Option<golem_common::model::tool::CompiledToolBinding> {
+    let plan = position.plan();
+    let leaf = plan
+        .layer(u32::try_from(plan.len().checked_sub(1)?).ok()?)
+        .ok()?;
+    match leaf.activation().policy() {
+        golem_common::model::entity::EntityActivationPolicy::Tool { binding, .. } => {
+            Some(binding.as_ref().clone())
+        }
+        golem_common::model::entity::EntityActivationPolicy::ToolMiddleware { .. } => None,
+    }
+}
+
 async fn run_tool_command<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
     call: impl AsyncFnOnce(
@@ -421,6 +437,14 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         .data_mut()
         .durable_ctx_mut()
         .set_invocation_caller(Some(caller));
+    if let golem_common::model::entity::EntityInvocationPlanLayer::Middleware { .. } =
+        position.layer()
+    {
+        store
+            .data_mut()
+            .durable_ctx_mut()
+            .set_middleware_wrapped_tool(wrapped_tool(&position));
+    }
     let parent = store.data().durable_ctx().owner_invocation_id()?;
     let instance_pre = instance.instance_pre(&store);
     let replay = store.data().durable_ctx().state.replay_state.clone();

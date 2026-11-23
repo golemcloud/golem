@@ -14,7 +14,8 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use golem_common::model::{AgentId, AgentStatus};
+use golem_common::model::component::ComponentId;
+use golem_common::model::{AgentStatus, OwnedAgentId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -36,15 +37,16 @@ async fn restore_from_recovery_golden_file(
     executor: &TestWorkerExecutor,
     context: &TestContext,
     name: &str,
+    component_id: &ComponentId,
     component_names: &[&str],
-) -> anyhow::Result<AgentId> {
+) -> anyhow::Result<OwnedAgentId> {
     let agent_id_path =
         Path::new("tests/goldenfiles").join(format!("worker_recovery_{name}.agent_id.bin"));
     let oplog_path =
         Path::new("tests/goldenfiles").join(format!("worker_recovery_{name}.oplog.bin"));
 
     let agent_id = tokio::fs::read(&agent_id_path).await.unwrap();
-    let agent_id: AgentId = deserialize(&agent_id).unwrap();
+    let agent_id: OwnedAgentId = deserialize(&agent_id).unwrap();
 
     let entries = tokio::fs::read(&oplog_path).await.unwrap();
     let entries: Vec<BTreeMap<String, BTreeMap<String, Vec<u8>>>> = deserialize(&entries).unwrap();
@@ -54,13 +56,13 @@ async fn restore_from_recovery_golden_file(
             executor
                 .store_component_with_id(
                     component_name,
-                    &agent_id.component_id,
+                    component_id,
                     &context.default_environment_id,
                 )
                 .await?;
         } else {
             executor
-                .update_component(&agent_id.component_id, component_name)
+                .update_component(component_id, component_name)
                 .await?;
         }
     }
@@ -70,7 +72,7 @@ async fn restore_from_recovery_golden_file(
     let oplog_key = &format!(
         "{}worker:oplog:{}",
         context.redis_prefix(),
-        agent_id.to_redis_key()
+        agent_id.storage_key()
     );
 
     info!("Using redis key {oplog_key}");
@@ -104,7 +106,7 @@ pub async fn save_recovery_golden_file(
     executor: &TestWorkerExecutor,
     context: &TestContext,
     name: &str,
-    agent_id: &AgentId,
+    agent_id: &golem_common::model::OwnedAgentId,
 ) -> anyhow::Result<()> {
     if std::env::var("UPDATE_GOLDENFILES") == Ok("1".to_string()) {
         info!(
@@ -115,7 +117,7 @@ pub async fn save_recovery_golden_file(
             .xrange_all(format!(
                 "{}worker:oplog:{}",
                 context.redis_prefix(),
-                agent_id.to_redis_key()
+                agent_id.storage_key()
             ))
             .await?;
 
@@ -136,7 +138,7 @@ pub async fn save_recovery_golden_file(
 #[allow(dead_code)]
 async fn wait_for_worker_recovery(
     executor: &TestWorkerExecutor,
-    agent_id: &AgentId,
+    agent_id: &golem_common::model::OwnedAgentId,
 ) -> anyhow::Result<AgentStatus> {
     loop {
         let metadata = executor.get_worker_metadata(agent_id).await?;

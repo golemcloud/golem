@@ -120,7 +120,7 @@ async fn test_go_http_router_deployed() {
         .unwrap();
     assert_eq!(missing.status(), 404);
     assert!(
-        ctx.cli([cmd::AGENT, cmd::NEW, "Files(\"alice\")"])
+        ctx.cli([cmd::AGENT, cmd::CREATE, "Files(\"alice\")", "--keyed"])
             .await
             .success_or_dump()
     );

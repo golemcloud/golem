@@ -105,7 +105,7 @@ func witUser(subject, claims string) common.Principal {
 func witAgent() common.Principal {
 	return common.MakePrincipalAgent(common.AgentPrincipal{
 		Pair:          pair("agent:2/3"),
-		AgentId:       types.AgentId{AgentId: `Relay("r")`},
+		AgentId:       types.AgentId{Uuid: types.Uuid{LowBits: 3}},
 		AgentType:     "Relay",
 		EnvironmentId: types.EnvironmentId{},
 	})
@@ -134,7 +134,7 @@ func TestCallerReadsBothRolesTokensAndPrintsWithoutClaims(t *testing.T) {
 	if text != `user ("https://login.example","u-1")` || strings.Contains(text, "secret") {
 		t.Errorf("user prints as %q", text)
 	}
-	if got := c.Immediate.(AgentPrincipal); got.AgentType != "Relay" || got.AgentID.AgentID != `Relay("r")` {
+	if got := c.Immediate.(AgentPrincipal); got.AgentType != "Relay" || got.AgentID != AgentIDFromUUID(UUID{15: 3}) {
 		t.Errorf("agent %+v", got)
 	}
 	if AnonymousCaller().Original.String() != "anonymous" {

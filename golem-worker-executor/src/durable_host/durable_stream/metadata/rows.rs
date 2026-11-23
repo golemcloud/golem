@@ -86,7 +86,7 @@ impl ProducerStreamIndex {
             ProducerMetadataKey::Attachment(attachment, stream, environment, consumer) => {
                 ProducerMetadataRow::Attachment(Box::new(
                     self.attachments
-                        .get(&(*attachment, *stream, *environment, consumer.clone()))?
+                        .get(&(*attachment, *stream, *environment, *consumer))?
                         .clone(),
                 ))
             }
@@ -114,7 +114,7 @@ impl ProducerStreamIndex {
             ProducerMetadataKey::AttachmentPosition(attachment, stream, environment, consumer) => {
                 ProducerMetadataRow::AttachmentPosition(
                     self.attachment_positions
-                        .get(&(*attachment, *stream, *environment, consumer.clone()))
+                        .get(&(*attachment, *stream, *environment, *consumer))
                         .copied()
                         .flatten(),
                 )

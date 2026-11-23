@@ -54,9 +54,10 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
 
 ## Identity on the replay path
 
-Any value replay must reproduce (idempotency keys, phantom ids, scope discriminators, span ids
+Any value replay must reproduce (idempotency keys, agent IDs, scope discriminators, span ids
 that reach the guest) derives from oplog indices or recorded data — `derive_idempotency_key`,
-`ephemeral_invocation_phantom_id` (UUIDv5 of the key). Fresh randomness or clock reads are
+`AgentId::allocated` (from the `Start` index), `AgentId::keyed` (from a recorded agent type),
+`AgentId::ephemeral_invocation` (from the owner key). Fresh randomness or clock reads are
 allowed only when appended and committed before the guest can observe them and read back on
 replay (as `caller_attempt_id` does); unrecorded guest-observable randomness is a bug.
 
@@ -76,7 +77,8 @@ Decide child authorization and protocol readiness before publishing live. Termin
 abandons replay for failure (`authoritative_replay_failure`); it must not publish over sibling
 history. A typed-loss `End` belongs to the original `Start`. Never rewind or discard another
 task's history to make repair possible. HTTP without a safe resend reports
-`http-response-incomplete`, RDBMS reports `resource-lost`, and TCP reports `connection-broken`.
+`http-response-incomplete`, RDBMS reports `resource-lost`, and TCP reports `connection-broken`
+(P2 TCP reports `connection-reset`, because P2 has no `connection-broken` code).
 UDP `ReadRemote` re-executes receive after rebind rather than manufacturing connection loss.
 
 Preview 2 HTTP is removed. Preview 3 send keeps request-body intake running while awaiting

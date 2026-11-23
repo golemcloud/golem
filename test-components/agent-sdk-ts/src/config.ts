@@ -6,6 +6,7 @@ import {
   awaitPromise,
   createPromise,
   Uuid,
+  isRemoteCallError,
 } from '@golemcloud/golem-ts-sdk';
 import type { PromiseId } from 'golem:api/host@1.5.0';
 
@@ -14,10 +15,7 @@ import type { PromiseId } from 'golem:api/host@1.5.0';
 // method.
 const PromiseIdSchema = z.object({
   agentId: z.object({
-    componentId: z.object({
-      uuid: s.uuid(),
-    }),
-    agentId: z.string(),
+    uuid: s.uuid(),
   }),
   fingerprint: s.uuid(),
   oplogIdx: s.u64(),
@@ -138,10 +136,7 @@ export const SharedConfigAgentImpl = SharedConfigAgent.implement({
         ...promiseId,
         agentId: {
           ...promiseId.agentId,
-          componentId: {
-            ...promiseId.agentId.componentId,
-            uuid: Uuid.from(promiseId.agentId.componentId.uuid),
-          },
+          uuid: Uuid.from(promiseId.agentId.uuid),
         },
         fingerprint: Uuid.from(promiseId.fingerprint),
       };
@@ -153,10 +148,7 @@ export const SharedConfigAgentImpl = SharedConfigAgent.implement({
         ...promiseId,
         agentId: {
           ...promiseId.agentId,
-          componentId: {
-            ...promiseId.agentId.componentId,
-            uuid: promiseId.agentId.componentId.uuid,
-          },
+          uuid: promiseId.agentId.uuid,
         },
       } as PromiseId);
       return secret;
@@ -279,10 +271,10 @@ export const NestedRequiredGroupConfigAgentImpl = NestedRequiredGroupConfigAgent
   },
 });
 
-// `RpcLocalConfigAgent` invokes `LocalConfigAgent` with per-call config
-// overrides via `definition.client.get(id, config)`:
-// the non-secret override leaves present in `config` are encoded into the target
-// `WasmRpc`'s `agentConfig` list (see `agent_config/rpc.rs`).
+// `RpcLocalConfigAgent` creates the keyed `LocalConfigAgent` with config overrides via
+// `definition.client.create(id, { keyed: true, config })`: the non-secret override leaves
+// present in `config` are encoded into the created agent's `agentConfig` list (see
+// `agent_config/rpc.rs`). An existing agent keeps its configuration and is reused.
 export const RpcLocalConfigAgent = defineAgent({
   name: 'RpcLocalConfigAgent',
   id: { name: z.string() },
@@ -300,14 +292,24 @@ export const RpcLocalConfigAgentImpl = RpcLocalConfigAgent.implement({
   methods: {
     async echoLocalConfig() {
       const config = this.config;
-      // Mirror the decorator agent's `getWithConfig(name, { foo, nested: { a } })`:
-      // override `foo`, and `nested.a` only when it is actually set (omitting an
+      // Override `foo`, and `nested.a` only when it is actually set (omitting an
       // undefined leaf leaves the callee's manifest value in place).
-      const overrides: Record<string, unknown> = { foo: config.foo };
+      const overrides: { foo: number; nested?: { a: boolean } } = { foo: config.foo };
       if (config.nested_a !== undefined) {
         overrides.nested = { a: config.nested_a };
       }
-      const client = LocalConfigAgent.client.get({ _name: this.name }, overrides);
+      let client;
+      try {
+        client = await LocalConfigAgent.client.create(
+          { _name: this.name },
+          { keyed: true, config: overrides },
+        );
+      } catch (error) {
+        if (!isRemoteCallError(error) || error.cause.tag !== 'conflict') {
+          throw error;
+        }
+        client = LocalConfigAgent.client.upsert({ _name: this.name });
+      }
       return await client.echoLocalConfig();
     },
   },

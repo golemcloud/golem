@@ -61,7 +61,7 @@ use crate::log::{
 };
 use crate::model::agent::RawAgentId;
 use anyhow::anyhow;
-use golem_client::api::WorkerClient;
+use golem_client::api::{InvocationClient, WorkerClient};
 use golem_client::model::NativeToolInvocationMode;
 use golem_common::base_model::tool::ToolName;
 use golem_common::model::{AgentStatus, IdempotencyKey};
@@ -249,14 +249,13 @@ async fn cancel_call(ctx: &Arc<Context>, owner: &ToolOwner, key: &CallKey) -> an
     Ok(ctx
         .golem_clients()
         .await?
-        .worker
+        .invocation
         .cancel_invocation(
-            &agent.component_id.0,
-            &agent.agent_id,
-            &accepted.to_string(),
+            &owner.environment.environment_id.0,
+            &format!("{agent}.{accepted}"),
         )
         .await
-        .map(|result| result.canceled)
+        .map(|invocation| invocation.state == golem_client::model::InvocationState::Cancelled)
         .map_service_error()?)
 }
 
@@ -402,8 +401,7 @@ impl SshCommandHandler {
             self.ctx.worker_service_url().as_str(),
             &session.owner.application_name.to_string(),
             &session.owner.environment_name.to_string(),
-            &agent.component_id.0.to_string(),
-            &agent.agent_id,
+            &agent.to_string(),
         );
         SessionHistory::open(&path).unwrap_or_else(|error| {
             log_warn(format!(
@@ -740,7 +738,7 @@ impl SshCommandHandler {
             let clients = self.ctx.golem_clients().await.ok()?;
             clients
                 .worker
-                .get_worker_metadata(&agent.component_id.0, &agent.agent_id)
+                .get_worker_metadata(&session.owner.environment.environment_id.0, &agent.0, None)
                 .await
                 .ok()
         };
@@ -998,12 +996,18 @@ impl SshCommandHandler {
         let request = cancel_call(&self.ctx, &session.owner, key);
         classify_cancel(match tokio::time::timeout(CANCEL_WAIT, request).await {
             Ok(Ok(cancelled)) => Ok(cancelled),
-            Ok(Err(error)) => Err(match error_response(&error) {
-                Some((_, _, messages)) if !messages.is_empty() => messages.join("; "),
-                Some((_, rendered, _)) => rendered,
-                None => format!("{error:#}"),
-            }),
-            Err(_) => Err("no answer to the cancel request".to_string()),
+            Ok(Err(error)) => Err((
+                error
+                    .downcast_ref::<ServiceError>()
+                    .and_then(|error| error.error_code())
+                    .map(str::to_string),
+                match error_response(&error) {
+                    Some((_, _, messages)) if !messages.is_empty() => messages.join("; "),
+                    Some((_, rendered, _)) => rendered,
+                    None => format!("{error:#}"),
+                },
+            )),
+            Err(_) => Err((None, "no answer to the cancel request".to_string())),
         })
     }
 

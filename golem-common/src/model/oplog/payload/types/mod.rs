@@ -345,6 +345,43 @@ pub enum SerializableSocketError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerializableSocketErrorCode(SocketErrorCode);
 
+/// The error of a P2 TCP stream operation. A trap is never recorded.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableTcpStreamError {
+    Closed,
+    LastOperationFailed(SerializableTcpStreamFailure),
+}
+
+/// The failure of a P2 TCP stream operation, kept so that replay gives the guest the same error,
+/// with the same `network-error-code`.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub struct SerializableTcpStreamFailure {
+    /// The errno of an I/O error that the OS reported.
+    pub os_error: Option<i32>,
+    /// The socket error code of an I/O error without an errno, or the socket error code that a
+    /// native P2 TCP stream failed with; `None` if the error is neither.
+    pub code: Option<SerializableSocketErrorCode>,
+    pub message: String,
+}
+
 #[derive(
     Debug,
     Clone,
@@ -698,6 +735,8 @@ pub enum SerializableP3TcpChunk {
 )]
 pub struct AgentMetadataForGuests {
     pub agent_id: AgentId,
+    pub agent_type_name: Option<crate::model::agent::AgentTypeName>,
+    pub fingerprint: crate::model::AgentFingerprint,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
     pub config: BTreeMap<String, String>,
@@ -1011,6 +1050,9 @@ pub enum SerializableRpcError {
     },
     RemoteAgentError {
         error: Box<crate::model::agent::AgentError>,
+    },
+    Conflict {
+        details: String,
     },
 }
 

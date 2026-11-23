@@ -1,16 +1,19 @@
-/** Schema-value RPC for callers that only have an environment-scoped agent ID. @since 1.6.0 */
+/** Schema-value RPC for callers that only have an agent ID. @since 1.6.0 */
 import { Effect, Scope } from "effect"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import type { Identity } from "./AgentIdentity.js"
-import type { InvocationMetadata, RemoteCallError } from "./Client.js"
-import { RpcClient } from "./host/RpcClient.js"
-import { AgentIdentityError } from "./internal/agentIdentityError.js"
-import { connectIdentity } from "./internal/agentIdentity.js"
+import type { AgentId } from "./AgentId.js"
+import {
+  ClientBindingError,
+  connectById,
+  registeredTypeOf,
+  type InvocationMetadata,
+  type RemoteCallError,
+} from "./Client.js"
+import type { AgentHostClient } from "./host/AgentHostClient.js"
+import type { RpcClient } from "./host/RpcClient.js"
 import { dynamicMethod } from "./internal/dynamicMethod.js"
 import type { GuestScopeCard } from "./internal/scopeCard.js"
-
-export { AgentIdentityError } from "./internal/agentIdentityError.js"
 
 /** @since 1.6.0 @category models */
 export interface DynamicInvocation {
@@ -20,7 +23,7 @@ export interface DynamicInvocation {
 
 /**
  * Per-call options of an awaited dynamic or reflected call. `scopeCard` is borrowed for the
- * call; see `GetOptions.scopeCard` for its validity rules.
+ * call; see `ScopeCardOptions.scopeCard` for its validity rules.
  *
  * @since 1.6.0
  * @category models
@@ -57,30 +60,36 @@ export interface DynamicMethod {
 
 /** @since 1.6.0 @category models */
 export interface DynamicAgentClient {
-  readonly agentId: string
+  readonly agentId: AgentId
   readonly method: (name: string) => DynamicMethod
 }
 
 /**
- * Bind directly to an agent ID without a reflection lookup. Inputs and outputs
- * are schema-value trees, so the caller owns the independent method definitions.
+ * Connect to the existing agent with the given ID, without a typed client definition. The agent
+ * type comes from the type tag of the ID. An unknown ID fails with `not-found`; an ID of an
+ * ephemeral agent type fails with `ClientBindingError`. Inputs and outputs are schema-value
+ * trees, so the caller owns the independent method definitions.
  * @since 1.6.0
  * @category constructors
  */
 export const bind = (
-  identity: Identity,
+  id: AgentId,
 ): Effect.Effect<
   DynamicAgentClient,
-  RemoteCallError | AgentIdentityError,
-  RpcClient | Scope.Scope
+  RemoteCallError | ClientBindingError,
+  RpcClient | AgentHostClient | Scope.Scope
 > =>
   Effect.gen(function* () {
-    const rpc = yield* Effect.acquireRelease(
-      connectIdentity(identity, [], (cause) => new AgentIdentityError(cause)),
-      (connection) => Effect.sync(() => connection.drop()),
-    )
+    const { raw, registered } = yield* registeredTypeOf(id)
+    if (registered.agentType.mode === "ephemeral")
+      return yield* Effect.fail(
+        new ClientBindingError(
+          `Cannot bind agent ID '${id.uuid}' to ephemeral agent type '${registered.agentType.typeName}'`,
+        ),
+      )
+    const rpc = yield* connectById(registered.agentType.typeName, raw)
     return Object.freeze({
-      agentId: identity.encoded,
+      agentId: id,
       method: (name: string) => dynamicMethod(rpc, name),
     })
   })

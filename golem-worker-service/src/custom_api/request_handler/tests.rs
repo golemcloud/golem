@@ -238,6 +238,8 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
             let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
                 unreachable!()
             };
+            call.component_id = harness.component_id;
+            call.agent_type = harness.agent_type.type_name.clone();
             let map = binding.ends_with("map");
             let input_type = if map {
                 let ty = SchemaType::map(SchemaType::string(), SchemaType::bool());
@@ -644,15 +646,15 @@ async fn unavailable_security_fails_before_route_dispatch() {
 struct StaticApiDefinitionsLookup;
 
 #[test]
-async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
+async fn agent_selector_runs_after_auth_and_before_etag_revalidation() {
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
     use golem_common::model::agent::AgentMetadataDto;
     use golem_common::model::agent::{CachePolicy, OwnerKind, ReadOnlyConfig};
-    use golem_common::model::{AgentFingerprint, AgentId, AgentStatus, OplogIndex, Timestamp};
+    use golem_common::model::{
+        AgentFingerprint, AgentId, AgentStatus, OplogIndex, OwnedAgentId, Timestamp,
+    };
     use golem_service_base::custom_api::PhantomSelection;
     use poem::IntoResponse;
-    let p = "550e8400-e29b-41d4-a716-446655440000";
-    let q = "8badf00d-1234-4567-89ab-0123456789ab";
     let harness = InvocationHarness::new(
         AgentInvocationOutput {
             result: golem_common::model::AgentInvocationResult::AgentInitialization,
@@ -698,19 +700,33 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         cache_policy: CachePolicy::UntilWrite(Empty {}),
     });
     let bound_call = call.clone();
+    let keyed = AgentId::keyed(
+        harness.environment_id,
+        harness.type_id,
+        &golem_common::model::agent::AgentKey::new(
+            AgentTypeName("mcp-agent".into()),
+            golem_common::schema::TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(vec![])),
+                golem_common::schema::SchemaValue::Record { fields: vec![] },
+            ),
+        )
+        .unwrap(),
+    );
+    let selected_p = AgentId::from_parts(harness.type_id.get(), 1);
+    let selected_q = AgentId::from_parts(harness.type_id.get(), 2);
+    let other_type = AgentId::from_parts(harness.type_id.get() + 1, 1);
+    let p = selected_p.to_string();
+    let q = selected_q.to_string();
     let mut ids = vec![];
-    for phantom in [None, Some(p), Some(q)] {
-        let id = AgentId {
-            component_id: harness.component_id,
-            agent_id: phantom
-                .map(|p| format!("mcp-agent()[{p}]"))
-                .unwrap_or_else(|| "mcp-agent()".into()),
-        };
+    for id in [keyed, selected_p, selected_q] {
         harness.metadata.lock().unwrap().insert(
-            id.clone(),
+            id,
             AgentMetadataDto {
-                agent_id: id.clone(),
+                agent_id: id,
                 owner_kind: OwnerKind::ComponentAgent,
+                agent_type_name: Some(AgentTypeName("mcp-agent".into())),
+                canonical_key: None,
+                constructor_parameters: None,
                 environment_id: harness.environment_id,
                 created_by: harness.account_id,
                 env: Default::default(),
@@ -798,10 +814,10 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         crate::custom_api::call_agent::cache_headers::caller_etag_tag(&caller)
     };
     let etag = |id: &AgentId| {
+        let route_agent = OwnedAgentId::new(EnvironmentId(uuid::Uuid::nil()), id);
         format!(
             "\"{}/{}/{fingerprint}/{session_tag}:17\"",
-            id.component_id,
-            id.agent_name_encoded()
+            route_agent.environment_id, route_agent.agent_id
         )
     };
     for (query, authorized, expected) in [
@@ -828,6 +844,11 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
             StatusCode::NOT_MODIFIED,
         ),
         ("".into(), true, StatusCode::NOT_MODIFIED),
+        (
+            format!("instance={other_type}"),
+            true,
+            StatusCode::NOT_FOUND,
+        ),
     ] {
         harness.metadata_reads.lock().unwrap().clear();
         let mut request = Request::builder()
@@ -851,7 +872,7 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         assert!(harness.contexts.lock().unwrap().is_empty());
         let reads = harness.metadata_reads.lock().unwrap();
         if expected == StatusCode::NOT_MODIFIED {
-            assert_eq!(*reads, vec![ids[usize::from(!query.is_empty())].clone()]);
+            assert_eq!(*reads, vec![ids[usize::from(!query.is_empty())]]);
         } else {
             assert!(reads.is_empty());
         }
@@ -881,7 +902,7 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         assert!(harness.contexts.lock().unwrap().is_empty());
         let reads = harness.metadata_reads.lock().unwrap();
         if expected == StatusCode::NOT_MODIFIED {
-            assert_eq!(*reads, vec![ids[selected].clone()]);
+            assert_eq!(*reads, vec![ids[selected]]);
         } else {
             assert!(reads.is_empty());
         }
@@ -1058,7 +1079,7 @@ fn durable_stream_routes() -> CompiledRoutes {
             allow_invocation_delete: false,
             load: None,
         }),
-        component_id: ComponentId::new(),
+        component_id: DURABLE_STREAM_COMPONENT,
         component_revision: ComponentRevision::INITIAL,
         agent_type: AgentTypeName("oracle-agent".to_string()),
         agent_mode: AgentMode::Durable,
@@ -1261,8 +1282,17 @@ fn request_handler_with(
     )
 }
 
-fn invocation_harness() -> InvocationHarness {
-    InvocationHarness::new(
+/// The component that implements `oracle-agent` for the routes of [`durable_stream_routes`].
+const DURABLE_STREAM_COMPONENT: ComponentId = ComponentId(uuid::Uuid::from_u128(0xd5));
+
+/// A harness whose component `component_id` implements the durable agent type
+/// `agent_type`, without constructor parameters, in the nil environment of the test routes.
+fn route_harness(
+    agent_type: &str,
+    component_id: ComponentId,
+    methods: Vec<golem_common::schema::AgentMethodSchema>,
+) -> InvocationHarness {
+    InvocationHarness::with_agent_type(
         AgentInvocationOutput {
             result: golem_common::model::AgentInvocationResult::AgentInitialization,
             consumed_fuel: None,
@@ -1273,13 +1303,60 @@ fn invocation_harness() -> InvocationHarness {
             oplog_index: None,
             agent_fingerprint: None,
         },
-        AgentConstructorSchema {
-            name: None,
+        golem_common::schema::AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
+            type_name: AgentTypeName(agent_type.to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            schema: SchemaGraph::empty(),
+            constructor: AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            methods,
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: None,
+            snapshotting: golem_common::model::agent::Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        },
+        component_id,
+        EnvironmentId(uuid::Uuid::nil()),
+    )
+}
+
+/// A harness that implements the `oracle-agent` of [`durable_stream_routes`].
+fn invocation_harness() -> InvocationHarness {
+    route_harness(
+        "oracle-agent",
+        DURABLE_STREAM_COMPONENT,
+        vec![golem_common::schema::AgentMethodSchema {
+            name: "stream".to_string(),
             description: String::new(),
             prompt_hint: None,
             input_schema: InputSchema::Parameters(vec![]),
-        },
-        vec![],
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        }],
+    )
+}
+
+/// The keyed `oracle-agent()` agent of the harness.
+fn oracle_agent_id(harness: &InvocationHarness) -> golem_common::model::AgentId {
+    golem_common::model::AgentId::keyed(
+        harness.environment_id,
+        harness.type_id,
+        &golem_common::model::agent::AgentKey::new(
+            AgentTypeName("oracle-agent".into()),
+            golem_common::schema::TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(vec![])),
+                golem_common::schema::SchemaValue::Record { fields: vec![] },
+            ),
+        )
+        .unwrap(),
     )
 }
 
@@ -1585,22 +1662,24 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         ForkStreamSlotSuccess, ReadStreamSlotSuccess,
     };
+    use golem_common::model::AgentId;
     use golem_common::model::OplogIndex;
     use golem_common::model::durable_stream::StreamOffset;
     use golem_service_base::custom_api::PhantomSelection;
-    let p = "550e8400-e29b-41d4-a716-446655440000";
-    let q = "8badf00d-1234-4567-89ab-0123456789ab";
+    let selected_p = AgentId::from_parts(42, 1);
+    let selected_q = AgentId::from_parts(42, 2);
+    let p_text = selected_p.to_string();
+    let q_text = selected_q.to_string();
+    let p = p_text.as_str();
+    let q = q_text.as_str();
     let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
     let target_fork =
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
     let source_fork =
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
-    let named_fork = |root: &str, scope: &str, name: &str| {
-        let hash = blake3::hash(&serde_json::to_vec(&(root, scope, name)).unwrap());
-        let mut bytes: [u8; 16] = hash.as_bytes()[..16].try_into().unwrap();
-        bytes[6] = (bytes[6] & 15) | 64;
-        bytes[8] = (bytes[8] & 63) | 128;
-        format!("oracle-agent()[{}]", uuid::Uuid::from_bytes(bytes))
+    let environment_id = EnvironmentId(uuid::Uuid::nil());
+    let named_fork = |root: AgentId, scope: &str, name: &str| {
+        AgentId::durable_stream_fork(environment_id, root, scope, name)
     };
     for path_selector in [false, true] {
         for root in [None, Some(p), Some(q)] {
@@ -1609,6 +1688,7 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
             }
             for nested in [false, true] {
                 let harness = invocation_harness();
+                assert_eq!(harness.type_id.get(), 42);
                 let mut routes = durable_stream_routes().routes;
                 for route in &mut routes {
                     if let RouteBehaviour::CallAgent(call) = &mut route.behavior {
@@ -1721,21 +1801,25 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                 assert_eq!(response.headers()[http::header::LOCATION], expected_url);
                 let forks = harness.recorded_durable_stream_forks();
                 assert_eq!(forks.len(), 1);
-                let root_id = root
-                    .map(|id| format!("oracle-agent()[{id}]"))
-                    .unwrap_or_else(|| "oracle-agent()".into());
+                let root_id = match root {
+                    Some(id) => id.parse::<AgentId>().unwrap(),
+                    None => oracle_agent_id(&harness),
+                };
+                let source_agent_id = AgentId::try_from(forks[0].source_agent_id.unwrap()).unwrap();
+                let target_agent_id = AgentId::try_from(forks[0].target_agent_id.unwrap()).unwrap();
                 assert_eq!(
-                    forks[0].source_agent_id.as_ref().unwrap().name,
+                    source_agent_id,
                     if nested {
-                        named_fork(&root_id, &forks[0].route_scope, &source_fork)
+                        named_fork(root_id, &forks[0].route_scope, &source_fork)
                     } else {
-                        root_id.clone()
+                        root_id
                     }
                 );
                 assert_eq!(
-                    forks[0].target_agent_id.as_ref().unwrap().name,
-                    named_fork(&root_id, &forks[0].route_scope, &target_fork)
+                    target_agent_id,
+                    named_fork(root_id, &forks[0].route_scope, &target_fork)
                 );
+                assert_eq!(target_agent_id.type_tag(), root_id.type_tag());
                 assert_eq!(forks[0].source_path, source);
             }
         }
@@ -2436,7 +2520,7 @@ async fn ordinary_traffic_lazy_openapi_corpus() {
     };
     filesystem.file_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
     routes.push(live);
-    let harness = invocation_harness();
+    let harness = route_harness("agent2", ComponentId(uuid::Uuid::nil()), vec![]);
     harness.file_reads.responses.lock().unwrap().push_back(
         std::future::ready(Ok(FileReadResponse {
             head: FileReadHead::Absent,

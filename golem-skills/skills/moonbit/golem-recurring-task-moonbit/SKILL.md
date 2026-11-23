@@ -34,7 +34,7 @@ pub async fn PollerAgent::poll(self : Self) -> Unit {
   do_work()
 
   // 2. Schedule the next run (60 seconds from now)
-  PollerAgentClient::scoped(self.name, async fn(client) {
+  PollerAgentClient::scoped_upsert(self.name, async fn(client) {
     let now = @systemClock.now()
     let scheduled_at = @systemClock.Instant::{
       seconds: now.seconds + 60,
@@ -78,7 +78,7 @@ pub async fn PollerAgent::poll(self : Self) -> Unit {
     if backoff > self.max_interval_secs { self.max_interval_secs } else { backoff }
   }
 
-  PollerAgentClient::scoped(self.name, async fn(client) {
+  PollerAgentClient::scoped_upsert(self.name, async fn(client) {
     let now = @systemClock.now()
     client.schedule_poll(@systemClock.Instant::{
       seconds: now.seconds + delay.to_int64(),
@@ -111,7 +111,7 @@ pub async fn PollerAgent::poll(self : Self) -> Unit {
     return
   }
   do_work()
-  PollerAgentClient::scoped(self.name, async fn(client) {
+  PollerAgentClient::scoped_upsert(self.name, async fn(client) {
     let now = @systemClock.now()
     let token = client.schedule_cancelable_poll(@systemClock.Instant::{
       seconds: now.seconds + 60,
@@ -169,7 +169,7 @@ Schedule with an explicit idempotency key and cancel the pending invocation:
 golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z -i 'poll-next' 'PollerAgent("my-poller")' poll
 
 # Cancel the pending invocation
-golem agent cancel-invocation 'PollerAgent("my-poller")' 'poll-next'
+golem invocation cancel --agent 'PollerAgent("my-poller")' --idempotency-key 'poll-next'
 ```
 
 ## Common Use Cases
@@ -216,7 +216,7 @@ Extract the scheduling logic into a helper to keep methods clean:
 
 ```moonbit
 async fn PollerAgent::schedule_next(self : Self, delay_secs : Int64) -> Unit {
-  PollerAgentClient::scoped(self.name, async fn(client) {
+  PollerAgentClient::scoped_upsert(self.name, async fn(client) {
     let now = @systemClock.now()
     client.schedule_poll(@systemClock.Instant::{
       seconds: now.seconds + delay_secs,

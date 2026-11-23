@@ -7,7 +7,7 @@ mod state;
 
 use config::ExporterConfig;
 use export::{build_resource_attributes, send_logs, send_metrics, send_spans};
-use helpers::worker_key;
+use helpers::agent_key;
 use otlp_json::{
     ExportLogsServiceRequest, ExportMetricsServiceRequest, ExportTraceServiceRequest,
     InstrumentationScope, OtlpResource, ResourceLogs, ResourceMetrics, ResourceSpans, ScopeLogs,
@@ -17,7 +17,7 @@ use state::WORKER_STATES;
 
 use golem_rust::bindings::golem::api::oplog::{OplogEntry, OplogIndex};
 use golem_rust::oplog_processor::exports::golem::api::oplog_processor::Guest as OplogProcessorGuest;
-use golem_rust::schema::wit::wire::{AgentId, ComponentId};
+use golem_rust::schema::wit::wire::AgentId;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -69,8 +69,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
     async fn process(
         _account_info: golem_rust::oplog_processor::exports::golem::api::oplog_processor::AccountInfo,
         config: Vec<(String, String)>,
-        component_id: ComponentId,
-        worker_id: AgentId,
+        agent_id: AgentId,
         metadata: golem_rust::oplog_processor::host::AgentMetadata,
         _first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
@@ -87,7 +86,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
             }
         };
 
-        let key = worker_key(&component_id, &worker_id);
+        let key = agent_key(&metadata.environment_id, &agent_id);
 
         // Clone current state for processing — do NOT mutate the stored state yet
         let mut working_state = WORKER_STATES.with(|states| {
@@ -117,8 +116,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
 
         let resource_attrs = build_resource_attributes(
             &exporter_config,
-            &component_id,
-            &worker_id,
+            &agent_id,
             &metadata,
             working_state.resource_identity.as_ref(),
         );

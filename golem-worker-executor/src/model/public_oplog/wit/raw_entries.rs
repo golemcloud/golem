@@ -23,6 +23,7 @@ before (value) {}
         timestamp: timestamp_from_datetime(params.timestamp),
         parameters: Box::new(golem_common::model::oplog::CreateProjectionParameters {
             agent_id: golem_common::model::AgentId::from(params.agent_id),
+            agent_type_name: params.agent_type_name.map(golem_common::model::agent::AgentTypeName),
             owner_kind: match params.owner_kind {
                 oplog::OwnerKind::ComponentAgent => {
                     golem_common::model::agent::OwnerKind::ComponentAgent
@@ -70,9 +71,6 @@ before (value) {}
                     value: decode_untyped_schema_value(entry.value)?,
                 })
             }).collect::<Result<_, String>>()?,
-            original_phantom_id: params
-                .original_phantom_id
-                .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
             instance_id: uuid::Uuid::from_u64_pair(
                 params.instance_id.high_bits,
                 params.instance_id.low_bits,
@@ -123,6 +121,7 @@ before (value) {}
                     Ok(M::AgentInvocationStarted {
                         timestamp: timestamp_from_datetime(params.timestamp),
                         invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+                        operation: Box::new(params.operation.try_into()?),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
                         trace_states: params.trace_states,
@@ -197,6 +196,7 @@ before (value) {}
                         timestamp: timestamp_from_datetime(params.timestamp),
                         not_before: params.not_before.map(timestamp_from_datetime),
                         invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+                        operation: Box::new(params.operation.try_into()?),
                         payload: oplog_payload_from_wit(params.payload),
                         trace_id,
                         trace_states: params.trace_states,
@@ -539,8 +539,9 @@ before (value) {}
                 }) => {
                     let golem_common::model::oplog::CreateParameters {
                         component_id: _,
-                        agent_type_name: _,
+                        agent_type_name,
                         canonical_key: _,
+                        constructor_parameters: _,
                         agent_id,
                         owner_kind,
                         agent_mode,
@@ -553,7 +554,6 @@ before (value) {}
                         initial_total_linear_memory_size,
                         initial_active_plugins,
                         local_agent_config,
-                        original_phantom_id,
                         instance_id,
                         create_request: _,
                         never_live,
@@ -561,6 +561,7 @@ before (value) {}
                     Ok(Self::Create(oplog::RawCreateParameters {
                         timestamp: timestamp.into(),
                         agent_id: agent_id.into(),
+                        agent_type_name: agent_type_name.map(|name| name.0),
                         owner_kind: match owner_kind {
                             golem_common::model::agent::OwnerKind::ComponentAgent => {
                                 oplog::OwnerKind::ComponentAgent
@@ -600,7 +601,6 @@ before (value) {}
                                 })
                             })
                             .collect::<Result<_, String>>()?,
-                        original_phantom_id: original_phantom_id.map(|id| id.into()),
                         instance_id: instance_id.into(),
                         never_live,
                     }))
@@ -633,6 +633,7 @@ before (value) {}
     AgentInvocationStarted { record () => RawAgentInvocationStartedParameters {
         timestamp: timestamp.into(),
         invocation_id: invocation_id.0.into(),
+        operation: (*operation).into(),
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,
@@ -678,6 +679,7 @@ before (value) {}
         timestamp: timestamp.into(),
         not_before: not_before.map(Into::into),
         invocation_id: invocation_id.0.into(),
+        operation: (*operation).into(),
         payload: oplog_payload_to_wit(payload)?,
         trace_id: trace_id.to_string(),
         trace_states: trace_states,

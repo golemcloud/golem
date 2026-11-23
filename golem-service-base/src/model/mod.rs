@@ -40,14 +40,6 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct WorkerCreationResponse {
-    pub agent_id: AgentId,
-    pub component_revision: ComponentRevision,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -97,11 +89,10 @@ pub struct DeactivatePluginResponse {}
 pub struct RevertWorkerResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-pub struct ForkWorkerResponse {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-pub struct CancelInvocationResponse {
-    pub canceled: bool,
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ForkWorkerResponse {
+    pub agent_id: AgentId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
@@ -138,7 +129,6 @@ pub struct UpdateWorkerRequest {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ForkWorkerRequest {
-    pub target_agent_id: AgentId,
     pub oplog_index_cutoff: OplogIndex,
 }
 

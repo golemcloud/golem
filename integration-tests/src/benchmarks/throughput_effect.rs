@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{cleanup_user_state, delete_workers, invoke_and_await_agent};
+use crate::benchmarks::{
+    cleanup_user_state, delete_workers, invoke_and_await_agent, lookup_keyed_agents,
+};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::model::AgentId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkError, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
 };
@@ -100,7 +101,7 @@ impl Benchmark for ThroughputLargeInputEffect {
             .await
             .unwrap();
         let agent_ids = (0..self.config.size)
-            .map(|n| agent_id!("EffectBenchmarkAgent", format!("test-{n}")))
+            .map(|n| agent_key!("EffectBenchmarkAgent", format!("test-{n}")))
             .collect();
         Ok(IterationContext {
             user,
@@ -175,11 +176,7 @@ impl Benchmark for ThroughputLargeInputEffect {
         context: Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
-        let ids: Vec<AgentId> = context
-            .agent_ids
-            .iter()
-            .filter_map(|id| AgentId::from_agent_id(context.component.id, id).ok())
-            .collect();
+        let ids = lookup_keyed_agents(&context.user, &context.component, &context.agent_ids).await;
         delete_workers(&context.user, &ids, &recorder).await;
         cleanup_user_state(&context.user, &context.env_id, &recorder).await;
         Ok(())

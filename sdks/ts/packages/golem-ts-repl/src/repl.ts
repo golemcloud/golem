@@ -78,7 +78,7 @@ export class Repl {
         request: AgentInvocationRequest,
         result: JsonResult<AgentInvocationResult, any>,
       ): Promise<void> {
-        await cli.stopAgentStream(request, result.ok?.idempotencyKey);
+        await cli.stopAgentStream(request, result.ok);
       },
     };
   }

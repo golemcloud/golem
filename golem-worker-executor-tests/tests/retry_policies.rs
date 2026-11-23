@@ -15,7 +15,7 @@
 use crate::Tracing;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -46,7 +46,7 @@ async fn set_retry_policy_is_persisted_to_oplog(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("GolemHostApi", "set-retry-oplog");
+    let parsed_agent_id = agent_key!("GolemHostApi", "set-retry-oplog");
     let agent_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -109,7 +109,7 @@ async fn remove_retry_policy_is_persisted_to_oplog(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("GolemHostApi", "remove-retry-oplog");
+    let parsed_agent_id = agent_key!("GolemHostApi", "remove-retry-oplog");
     let agent_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -180,7 +180,7 @@ async fn retry_policy_survives_restart(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("GolemHostApi", "restart-retry");
+    let parsed_agent_id = agent_key!("GolemHostApi", "restart-retry");
 
     let agent_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
@@ -270,7 +270,7 @@ async fn get_missing_retry_policy_returns_false(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("GolemHostApi", "missing-retry");
+    let parsed_agent_id = agent_key!("GolemHostApi", "missing-retry");
     let agent_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -306,7 +306,7 @@ async fn list_retry_policy_names_returns_all(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("GolemHostApi", "list-retry-names");
+    let parsed_agent_id = agent_key!("GolemHostApi", "list-retry-names");
     let agent_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -379,7 +379,7 @@ async fn golem_rust_set_retry_policy(
         .store()
         .await?;
 
-    let agent_id = agent_id!("GolemHostApi", "set-retry-policy-1");
+    let agent_id = agent_key!("GolemHostApi", "set-retry-policy-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -463,7 +463,7 @@ async fn guest_and_explicit_host_traps_after_an_effect_are_permanent(
         .store()
         .await?;
     for (expected_effects, via_host) in [(1, false), (2, true)] {
-        let parsed_agent_id = agent_id!("GolemHostApi", format!("trap-after-effect-{via_host}"));
+        let parsed_agent_id = agent_key!("GolemHostApi", format!("trap-after-effect-{via_host}"));
         let worker_id = executor
             .start_agent(&component.id, parsed_agent_id.clone())
             .await?;

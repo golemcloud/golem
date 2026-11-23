@@ -56,10 +56,7 @@ pub(crate) fn user_principal() -> Principal {
 pub(crate) fn sample_caller() -> Caller {
     Caller {
         original: user_principal(),
-        immediate: agent_principal(AgentId {
-            component_id: golem_common::model::component::ComponentId(Uuid::from_u128(0xc0)),
-            agent_id: "Relay(\"r\")".to_string(),
-        }),
+        immediate: agent_principal(AgentId::from_parts(7, 0xc0)),
         tokens: vec![
             TokenProvenance {
                 id: Uuid::from_u128(0x70c1),

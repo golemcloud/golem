@@ -74,7 +74,7 @@ use crate::chaos::workload::{self, WorkloadContext};
 use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::PromiseId;
 use golem_common::model::agent::ParsedAgentKey;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -165,7 +165,7 @@ pub async fn warm(ctx: &WorkloadContext, waiters: &[String]) -> usize {
         let ctx = ctx.clone();
         let waiter = waiter.clone();
         set.spawn(async move {
-            let parsed: ParsedAgentKey = agent_id!(PROMISE_WAITER_AGENT, waiter.clone());
+            let parsed: ParsedAgentKey = agent_key!(PROMISE_WAITER_AGENT, waiter.clone());
             ctx.user
                 .invoke_and_await_agent(&ctx.promise, &parsed, "wakes", data_value!())
                 .await
@@ -196,7 +196,7 @@ pub async fn warm(ctx: &WorkloadContext, waiters: &[String]) -> usize {
 /// part of the workload, and its whole value is in saying *why*.
 pub async fn smoke_test(ctx: &WorkloadContext, dwell: Duration) -> Result<(), String> {
     let waiter = format!("{}-promise-smoke", ctx.key_prefix);
-    let parsed: ParsedAgentKey = agent_id!(PROMISE_WAITER_AGENT, waiter.clone());
+    let parsed: ParsedAgentKey = agent_key!(PROMISE_WAITER_AGENT, waiter.clone());
     let token = format!("{waiter}-smoke");
 
     let created = ctx
@@ -224,7 +224,11 @@ pub async fn smoke_test(ctx: &WorkloadContext, dwell: Duration) -> Result<(), St
 
     tokio::time::sleep(dwell).await;
     ctx.user
-        .complete_promise(&id, COMPLETION_PAYLOAD.to_vec())
+        .complete_promise(
+            &ctx.promise.environment_id,
+            &id,
+            COMPLETION_PAYLOAD.to_vec(),
+        )
         .await
         .map_err(|e| format!("complete_promise failed: {e:#}"))?;
 
@@ -296,7 +300,7 @@ async fn run_waiter(
     rounds: Arc<AtomicU64>,
     stalled: Arc<AtomicU64>,
 ) {
-    let parsed: ParsedAgentKey = agent_id!(PROMISE_WAITER_AGENT, waiter.clone());
+    let parsed: ParsedAgentKey = agent_key!(PROMISE_WAITER_AGENT, waiter.clone());
     let mut round = 0u64;
 
     while running.load(Ordering::Relaxed) {
@@ -466,7 +470,11 @@ async fn complete(ctx: &WorkloadContext, waiter: &str, token: &str, promise_id: 
             let promise_id = promise_id.clone();
             async move {
                 ctx.user
-                    .complete_promise(&promise_id, COMPLETION_PAYLOAD.to_vec())
+                    .complete_promise(
+                        &ctx.promise.environment_id,
+                        &promise_id,
+                        COMPLETION_PAYLOAD.to_vec(),
+                    )
                     .await?;
                 Ok(None)
             }
@@ -497,7 +505,7 @@ pub async fn read_logs(ctx: &WorkloadContext, waiters: &[String]) -> Vec<WaiterW
 }
 
 async fn read_log(ctx: &WorkloadContext, waiter: &str) -> WaiterWakeupLog {
-    let parsed: ParsedAgentKey = agent_id!(PROMISE_WAITER_AGENT, waiter.to_string());
+    let parsed: ParsedAgentKey = agent_key!(PROMISE_WAITER_AGENT, waiter.to_string());
 
     let wakes = match read_within(waiter, "wakes", async {
         ctx.user

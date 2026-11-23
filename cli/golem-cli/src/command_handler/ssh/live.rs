@@ -120,7 +120,10 @@ pub(super) async fn run_live(
         session_token: None,
         accepted_invocation: None,
     };
-    let requests = Arc::new(CliSessionRequestProvider::new(ctx.clone()));
+    let requests = Arc::new(CliSessionRequestProvider::new(
+        ctx.clone(),
+        owner.environment.environment_id,
+    ));
     open_and_drive(
         requests,
         initial,

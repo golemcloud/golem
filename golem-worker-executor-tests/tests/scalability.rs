@@ -18,8 +18,8 @@ use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
-use golem_common::{agent_id, data_value};
+use golem_common::model::{AgentStatus, IdempotencyKey};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::{MemoryConfig, OplogConfig};
 use golem_worker_executor_test_utils::{
@@ -53,6 +53,7 @@ inherit_test_dep!(
 inherit_test_dep!(Tracing);
 
 #[test]
+#[test_r::tag(latency)]
 #[tracing::instrument]
 async fn spawning_many_workers_that_sleep(
     last_unique_id: &LastUniqueId,
@@ -62,7 +63,7 @@ async fn spawning_many_workers_that_sleep(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     fn agent_id(n: i32) -> ParsedAgentKey {
-        agent_id!("Clocks", format!("sleeping-agent-{n}"))
+        agent_key!("Clocks", format!("sleeping-agent-{n}"))
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -170,6 +171,7 @@ async fn spawning_many_workers_that_sleep(
 }
 
 #[test]
+#[test_r::tag(latency)]
 #[tracing::instrument]
 async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     last_unique_id: &LastUniqueId,
@@ -179,7 +181,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     fn agent_id(n: i32) -> ParsedAgentKey {
-        agent_id!("Clocks", format!("sleeping-suspending-agent-{n}"))
+        agent_key!("Clocks", format!("sleeping-suspending-agent-{n}"))
     }
 
     async fn timed<F>(f: F) -> (F::Output, Duration)
@@ -329,7 +331,7 @@ async fn initial_large_memory_allocation(
     for i in 0..N {
         let executor_clone = executor.clone();
         let component_clone = component.clone();
-        let agent_id = agent_id!("LargeInitialMemoryAgent", format!("mem-{i}"));
+        let agent_id = agent_key!("LargeInitialMemoryAgent", format!("mem-{i}"));
         handles.spawn(
             async move {
                 executor_clone
@@ -390,7 +392,7 @@ async fn dynamic_large_memory_allocation(
     for i in 0..N {
         let executor_clone = executor.clone();
         let component_clone = component.clone();
-        let agent_id = agent_id!("LargeDynamicMemoryAgent", format!("mem-{i}"));
+        let agent_id = agent_key!("LargeDynamicMemoryAgent", format!("mem-{i}"));
         handles.spawn(
             async move {
                 executor_clone
@@ -443,11 +445,8 @@ async fn interrupt_wins_over_dynamic_memory_permit_reacquisition(
     let mut workers = Vec::new();
     let mut invocations = Vec::new();
     for i in 0..3 {
-        let agent_id = agent_id!("LargeDynamicMemoryAgent", format!("interrupt-{i}"));
-        workers.push(AgentId {
-            component_id: component.id,
-            agent_id: agent_id.to_string(),
-        });
+        let agent_id = agent_key!("LargeDynamicMemoryAgent", format!("interrupt-{i}"));
+        workers.push(executor.keyed_agent_id(context.default_environment_id, &agent_id)?);
 
         let executor = executor.clone();
         let component = component.clone();
@@ -561,9 +560,9 @@ async fn interrupt_during_oom_backoff_is_durable_before_restart(
         .component_dep(&context.default_environment_id, large_dynamic_memory)
         .store()
         .await?;
-    let agent = agent_id!("LargeDynamicMemoryAgent", "interrupt-during-backoff");
+    let agent = agent_key!("LargeDynamicMemoryAgent", "interrupt-during-backoff");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker);
+    let owned = worker.clone();
     let owner = executor.active_agent(&owned).await.unwrap().primary();
     let key = IdempotencyKey::fresh();
     let invocation = {
@@ -687,7 +686,7 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
         .await?;
 
     // Worker A: invoke and let it complete → LoadedIdle
-    let agent_a = agent_id!("LargeInitialMemoryAgent", "eviction-idle-a");
+    let agent_a = agent_key!("LargeInitialMemoryAgent", "eviction-idle-a");
     let worker_a = executor.start_agent(&component.id, agent_a.clone()).await?;
     let result_a = executor
         .invoke_and_await_agent(&component, &agent_a, "run", data_value!())
@@ -703,7 +702,7 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
 
     // Worker B: invoke and let it complete, then fire-and-forget another invoke
     // → WarmRunnable (has durable pending invocation)
-    let agent_b = agent_id!("LargeInitialMemoryAgent", "eviction-warm-b");
+    let agent_b = agent_key!("LargeInitialMemoryAgent", "eviction-warm-b");
     let worker_b = executor.start_agent(&component.id, agent_b.clone()).await?;
     let result_b = executor
         .invoke_and_await_agent(&component, &agent_b, "run", data_value!())
@@ -729,7 +728,7 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
     // Worker C: create a new worker. This should trigger eviction because the
     // memory pool is too small for all three. Under the new eviction policy,
     // Worker A (LoadedIdle) should be evicted before Worker B (WarmRunnable).
-    let agent_c = agent_id!("LargeInitialMemoryAgent", "eviction-new-c");
+    let agent_c = agent_key!("LargeInitialMemoryAgent", "eviction-new-c");
     let _worker_c = executor.start_agent(&component.id, agent_c.clone()).await?;
     let result_c = executor
         .invoke_and_await_agent(&component, &agent_c, "run", data_value!())
@@ -753,10 +752,10 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
 async fn primary_oplog_length(
     redis: &dyn golem_test_framework::components::redis::Redis,
     redis_prefix: &str,
-    agent_id: &golem_common::base_model::AgentId,
+    agent_id: &golem_common::model::OwnedAgentId,
 ) -> u64 {
     let mut conn = redis.get_async_connection(0).await;
-    let key = format!("{redis_prefix}worker:oplog:{}", agent_id.to_redis_key());
+    let key = format!("{redis_prefix}worker:oplog:{}", agent_id.storage_key());
     redis::cmd("XLEN")
         .arg(&key)
         .query_async(&mut conn)
@@ -768,7 +767,7 @@ async fn primary_oplog_length(
 async fn wait_for_primary_oplog_empty(
     redis: &dyn golem_test_framework::components::redis::Redis,
     redis_prefix: &str,
-    agent_id: &golem_common::base_model::AgentId,
+    agent_id: &golem_common::model::OwnedAgentId,
     timeout: Duration,
 ) -> bool {
     let start = tokio::time::Instant::now();
@@ -801,7 +800,7 @@ async fn auto_committed_invocations_publish_idle_status(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Environment", "auto-commit-status");
+    let agent_id = agent_key!("Environment", "auto-commit-status");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -842,7 +841,7 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         .store()
         .await?;
 
-    let agent_id = agent_id!("Environment", "archive-idle-1");
+    let agent_id = agent_key!("Environment", "archive-idle-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -903,7 +902,7 @@ async fn oplog_archive_scheduled_when_worker_fails(
         .store()
         .await?;
 
-    let agent_id = agent_id!("GolemHostApi", "archive-failed-1");
+    let agent_id = agent_key!("GolemHostApi", "archive-failed-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;

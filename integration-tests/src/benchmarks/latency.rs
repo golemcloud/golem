@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{cleanup_user_state, delete_workers, invoke_and_await_agent};
+use crate::benchmarks::{
+    cleanup_user_state, delete_workers, invoke_and_await_agent, lookup_keyed_agents,
+};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::model::AgentId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
 };
@@ -268,7 +269,7 @@ impl LatencyBenchmark {
 
         let mut agent_ids = vec![];
         for n in 0..config.size {
-            let agent_id = agent_id!(&self.agent_type_name, format!("test-{n}"));
+            let agent_id = agent_key!(&self.agent_type_name, format!("test-{n}"));
             agent_ids.push(agent_id);
         }
 
@@ -342,11 +343,8 @@ impl LatencyBenchmark {
         iteration: IterationContext,
         recorder: BenchmarkRecorder,
     ) {
-        let agent_ids: Vec<AgentId> = iteration
-            .agent_ids
-            .iter()
-            .filter_map(|agent_id| AgentId::from_agent_id(iteration.component.id, agent_id).ok())
-            .collect();
+        let agent_ids =
+            lookup_keyed_agents(&iteration.user, &iteration.component, &iteration.agent_ids).await;
         delete_workers(&iteration.user, &agent_ids, &recorder).await;
         cleanup_user_state(&iteration.user, &iteration.env_id, &recorder).await;
     }

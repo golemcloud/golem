@@ -54,7 +54,7 @@ import scala.concurrent.duration._
   CounterAgentClient.configure(GolemServer.Local, "my-app", "local")
 
   val timeout = 30.seconds
-  val counter = Await.result(CounterAgentClient.get("my-counter"), timeout)
+  val counter = CounterAgentClient.upsert("my-counter")
   val result  = Await.result(counter.increment(), timeout)
 
   println(result)
@@ -76,12 +76,13 @@ sbt run
 
 Generated Scala bridge clients follow the same conventions as agent-to-agent RPC:
 
-- `Client.get(...)` addresses a durable agent; ephemeral clients have only the phantom factories.
-- Durable bridges expose `Client.getPhantom(...)` to address a specific phantom UUID. Ephemeral CLI bridges (guest and JVM) do not expose it.
-- `Client.newPhantom(...)` returns a logical proxy; the first invocation creates the instance, not the factory call.
+- `Client.upsert(...)` addresses the keyed agent of the constructor parameters. It does not contact the server: the first call creates the agent when it is missing. Ephemeral clients have only `upsert`, and every call runs on a new one-shot instance.
+- Durable bridges expose `Client.create(..., keyed = false, <config>..., env = Map.empty)`, which creates an agent and returns a `Future` of its client: without `keyed` the agent has no key and a new agent ID; with `keyed = true` it is the keyed agent, and an existing one fails with a conflict.
+- Durable bridges expose `Client.getById(agentId)` to address an existing agent by its `golem.bridge.runtime.AgentId`. It never creates the agent; an unknown ID fails with not-found.
+- Every durable client has `agentId(): Future[AgentId]`; on a client of `upsert` the first call creates a missing agent.
 - For durable targets, awaited methods return `Future[T]`; stream-free trigger and schedule methods return `Future[Unit]`.
 - For ephemeral targets, awaited methods return `Future[golem.bridge.runtime.InvocationResult[T]]`; stream-free trigger and schedule methods return `Future[golem.bridge.runtime.InvocationReceipt]`.
-- External JVM factories return futures (as in the example), unlike synchronous guest factories. External phantom UUIDs are `java.util.UUID`, as in guest code. External REST bridge types live under `golem.bridge.runtime`, not `golem.runtime.rpc`. CLI-generated internal guest clients use `golem.runtime.rpc.InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` for ephemeral operations.
+- External JVM `create` and `getById` return futures, as in guest code; `upsert` returns the client at once. External REST bridge types live under `golem.bridge.runtime`, not `golem.runtime.rpc`. CLI-generated internal guest clients use `golem.runtime.rpc.InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` for ephemeral operations.
 - Bridge clients omit trigger and schedule helpers for recursively stream-bearing methods; use awaited streaming calls.
 - A bare `text` schema, also a refined one with languages, a length or a regex, maps to `golem.bridge.runtime.Text(text, language)` in external bridges and to the SDK's `golem.schema.Text(text, language)` in internal clients. The client does not check the restrictions; the server does.
 

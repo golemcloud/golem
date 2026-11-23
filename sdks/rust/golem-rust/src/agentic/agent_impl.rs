@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::identity::{golem_env_var_not_readable, parse_agent_id};
+use super::identity::golem_env_var_not_readable;
 use crate::agentic::{
     InvocationContext, agent_registry, get_resolved_agent, register_initialized_agent,
 };
@@ -131,33 +131,35 @@ fn decode_snapshot(
     }
 }
 
-struct ParsedRestoreIdentity {
+struct RestoreIdentity {
     agent_type: String,
-    parameters: crate::schema::wit::wire::SchemaValueTree,
-    phantom_id: Option<crate::Uuid>,
+    agent_id: crate::AgentId,
 }
 
-fn parse_restore_identity(id: &str) -> Result<ParsedRestoreIdentity, String> {
-    let (agent_type, parameters, phantom_id) = parse_agent_id(id).map_err(|e| e.to_string())?;
-    Ok(ParsedRestoreIdentity {
+fn current_restore_identity() -> Result<RestoreIdentity, String> {
+    let agent_type = std::env::var("GOLEM_AGENT_TYPE")
+        .map_err(|_| golem_env_var_not_readable("GOLEM_AGENT_TYPE"))?;
+    let agent_id = agent_id_from_env();
+    let agent_id =
+        crate::Uuid::parse_str(&agent_id).map_err(|e| format!("Invalid GOLEM_AGENT_ID: {e}"))?;
+    Ok(RestoreIdentity {
         agent_type,
-        parameters: parameters.value,
-        phantom_id: phantom_id.map(Into::into),
+        agent_id: crate::AgentId::new(agent_id),
     })
 }
 
 async fn load_agent_snapshot(
     snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
-    id: &str,
-    parse_identity: impl FnOnce(&str) -> Result<ParsedRestoreIdentity, String>,
+    constructor: crate::schema::wit::wire::SchemaValueTree,
+    identity: impl FnOnce() -> Result<RestoreIdentity, String>,
 ) -> Result<(), String> {
     let agent_snapshot = decode_snapshot(snapshot)?;
-    let identity = parse_identity(id)?;
+    let identity = identity()?;
     let agent_type_name = AgentTypeName(identity.agent_type.clone());
     let context = crate::agentic::SnapshotRestoreContext {
         agent_type: identity.agent_type,
-        parameters: identity.parameters,
-        phantom_id: identity.phantom_id,
+        parameters: constructor,
+        agent_id: identity.agent_id,
     };
     let resolved = with_agent_initiator(
         |initiator| async move { initiator.restore(agent_snapshot, context).await },
@@ -177,7 +179,7 @@ pub fn install_agent_exports() {
         invoke: |name, input| Box::pin(AgentRuntime::invoke(name, input)),
         get_definition: AgentRuntime::get_definition,
         discover: AgentRuntime::discover_agent_types,
-        load: |snapshot| Box::pin(AgentRuntime::load(snapshot)),
+        load: |snapshot, constructor| Box::pin(AgentRuntime::load(snapshot, constructor)),
         save: || Box::pin(AgentRuntime::save()),
     });
     #[cfg(target_arch = "wasm32")]
@@ -227,10 +229,8 @@ impl Guest for AgentRuntime {
         input: crate::schema::wit::wire::SchemaValueTree,
     ) -> Result<Option<crate::schema::wit::wire::SchemaValueTree>, AgentError> {
         let context = InvocationContext::current();
-        {
-            let agent_id = agent_id_from_env();
-            parse_agent_id(&agent_id).map_err(|e| AgentError::InvalidInput(e.to_string()))?;
-        }
+        crate::Uuid::parse_str(&agent_id_from_env())
+            .map_err(|e| AgentError::InvalidInput(format!("Invalid GOLEM_AGENT_ID: {e}")))?;
 
         with_agent_instance_async(|resolved_agent| async move {
             let result = resolved_agent
@@ -260,6 +260,7 @@ impl LoadSnapshotGuest for AgentRuntime {
     #[allow(clippy::await_holding_refcell_ref)]
     async fn load(
         snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
+        constructor: crate::schema::wit::wire::SchemaValueTree,
     ) -> Result<(), String> {
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
@@ -270,9 +271,7 @@ impl LoadSnapshotGuest for AgentRuntime {
             return Err("Agent is already initialized".to_string());
         }
 
-        let id = agent_id_from_env();
-
-        load_agent_snapshot(snapshot, &id, parse_restore_identity).await
+        load_agent_snapshot(snapshot, constructor, current_restore_identity).await
     }
 }
 
@@ -323,7 +322,7 @@ impl SaveSnapshotGuest for AgentRuntime {
 #[cfg(test)]
 mod tests {
     use super::{
-        BINARY_SNAPSHOT_VERSION, ParsedRestoreIdentity, agent_id_from_env, decode_snapshot,
+        BINARY_SNAPSHOT_VERSION, RestoreIdentity, agent_id_from_env, decode_snapshot,
         encode_json_snapshot, golem_env_var_not_readable, load_agent_snapshot,
     };
     use crate::agentic::{
@@ -343,12 +342,13 @@ mod tests {
 
     struct TestAgent {
         snapshot: Vec<u8>,
+        constructor: (String, u32),
     }
 
     #[async_trait::async_trait(?Send)]
     impl BaseAgent for TestAgent {
-        fn get_agent_id(&self) -> String {
-            "RestoreTest()".to_string()
+        fn get_agent_id(&self) -> crate::AgentId {
+            restore_test_agent_id()
         }
 
         async fn invoke(
@@ -365,7 +365,10 @@ mod tests {
         }
 
         async fn save_snapshot_base(&self) -> Result<SnapshotData, String> {
-            Ok(SnapshotData::Bytes(self.snapshot.clone()))
+            let (name, count) = &self.constructor;
+            let mut saved = self.snapshot.clone();
+            saved.extend_from_slice(format!("|{name}|{count}").as_bytes());
+            Ok(SnapshotData::Bytes(saved))
         }
     }
 
@@ -391,43 +394,45 @@ mod tests {
                 return Err("expected bytes".to_string());
             };
             RESTORE_CALLS.fetch_add(1, Ordering::SeqCst);
-            let expected_phantom =
-                crate::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
-            let mut parameters = crate::agentic::DirectAgentInput::new(context.parameters)
-                .map_err(|e| e.to_string())?;
-            let parameters_match =
-                parameters.take::<String>().map_err(|e| e.to_string())? == "constructor";
-            parameters.finish().map_err(|e| e.to_string())?;
-            if context.agent_type != "RestoreTest"
-                || !parameters_match
-                || context.phantom_id != Some(expected_phantom)
-            {
+            if context.agent_type != "RestoreTest" || context.agent_id != restore_test_agent_id() {
                 return Err("unexpected restore context".to_string());
             }
+            let mut parameters = crate::agentic::DirectAgentInput::new(context.parameters)
+                .map_err(|e| e.to_string())?;
+            let constructor = (
+                parameters.take::<String>().map_err(|e| e.to_string())?,
+                parameters.take::<u32>().map_err(|e| e.to_string())?,
+            );
+            parameters.finish().map_err(|e| e.to_string())?;
             if snapshot == b"fail" {
                 return Err("restore failed".to_string());
             }
-            Ok(ResolvedAgent::new(Box::new(TestAgent { snapshot })))
+            Ok(ResolvedAgent::new(Box::new(TestAgent {
+                snapshot,
+                constructor,
+            })))
         }
     }
 
-    fn parsed_test_identity(id: &str) -> Result<ParsedRestoreIdentity, String> {
-        assert_eq!(
-            id,
-            "RestoreTest(\"constructor\")[00000000-0000-0000-0000-000000000001]"
-        );
-        Ok(ParsedRestoreIdentity {
+    fn constructor_tree(name: &str, count: u32) -> SchemaValueTree {
+        SchemaValueTree {
+            value_nodes: vec![
+                SchemaValueNode::RecordValue(vec![2, 1]),
+                SchemaValueNode::U32Value(count),
+                SchemaValueNode::StringValue(name.to_string()),
+            ],
+            root: 0,
+        }
+    }
+
+    fn restore_test_agent_id() -> crate::AgentId {
+        crate::AgentId::new(crate::Uuid::parse_str("00000000-0000-8000-8000-000000000001").unwrap())
+    }
+
+    fn test_identity() -> Result<RestoreIdentity, String> {
+        Ok(RestoreIdentity {
             agent_type: "RestoreTest".to_string(),
-            parameters: SchemaValueTree {
-                value_nodes: vec![
-                    SchemaValueNode::RecordValue(vec![1]),
-                    SchemaValueNode::StringValue("constructor".to_string()),
-                ],
-                root: 0,
-            },
-            phantom_id: Some(
-                crate::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap(),
-            ),
+            agent_id: restore_test_agent_id(),
         })
     }
 
@@ -463,10 +468,10 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_component_id_names_its_own_card_grant() {
+    fn unreadable_agent_type_names_its_own_card_grant() {
         assert_eq!(
-            golem_env_var_not_readable("GOLEM_COMPONENT_ID"),
-            "GOLEM_COMPONENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_COMPONENT_ID"
+            golem_env_var_not_readable("GOLEM_AGENT_TYPE"),
+            "GOLEM_AGENT_TYPE is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE"
         );
     }
 
@@ -664,7 +669,6 @@ mod tests {
         INITIALIZE_CALLS.store(0, Ordering::SeqCst);
         RESTORE_CALLS.store(0, Ordering::SeqCst);
 
-        let encoded_agent_id = "RestoreTest(\"constructor\")[00000000-0000-0000-0000-000000000001]";
         for envelope in [
             r#"[1,{"tag":"anonymous"},null]"#,
             r#"{"version":1,"principal":["anonymous",null],"state":null}"#,
@@ -675,7 +679,7 @@ mod tests {
                 mime_type: "multipart/mixed; boundary=b".to_string(),
             };
             assert!(
-                load_agent_snapshot(snapshot, encoded_agent_id, |_| {
+                load_agent_snapshot(snapshot, constructor_tree("from-load", 7), || {
                     panic!("malformed metadata must fail before identity resolution")
                 })
                 .await
@@ -687,24 +691,38 @@ mod tests {
         }
         let failure = load_agent_snapshot(
             binary_snapshot(b"fail"),
-            encoded_agent_id,
-            parsed_test_identity,
+            constructor_tree("from-load", 7),
+            test_identity,
         )
         .await;
         assert_eq!(failure.unwrap_err(), "restore failed");
         assert!(get_resolved_agent().is_none());
         assert_eq!(INITIALIZE_CALLS.load(Ordering::SeqCst), 0);
 
+        let mismatched = SchemaValueTree {
+            value_nodes: vec![
+                SchemaValueNode::RecordValue(vec![1]),
+                SchemaValueNode::StringValue("from-load".to_string()),
+            ],
+            root: 0,
+        };
+        assert!(
+            load_agent_snapshot(binary_snapshot(b"restored"), mismatched, test_identity)
+                .await
+                .is_err()
+        );
+        assert!(get_resolved_agent().is_none());
+
         load_agent_snapshot(
             binary_snapshot(b"restored"),
-            encoded_agent_id,
-            parsed_test_identity,
+            constructor_tree("from-load", 7),
+            test_identity,
         )
         .await
         .unwrap();
         assert!(get_resolved_agent().is_some());
         assert_eq!(INITIALIZE_CALLS.load(Ordering::SeqCst), 0);
-        assert_eq!(RESTORE_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(RESTORE_CALLS.load(Ordering::SeqCst), 3);
 
         let saved = with_agent_instance_async(|agent| async move {
             agent.agent.borrow().save_snapshot_base().await.unwrap()
@@ -713,7 +731,7 @@ mod tests {
         let SnapshotData::Bytes(saved) = saved else {
             panic!("expected bytes");
         };
-        assert_eq!(saved, b"restored");
+        assert_eq!(saved, b"restored|from-load|7");
 
         *get_state().agent_instance.borrow_mut() = Default::default();
     }

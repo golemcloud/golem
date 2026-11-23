@@ -21,6 +21,7 @@ import {
 } from '../../../../javascript/js-bundle-fixtures.mjs';
 
 const nativeRequire = createRequire(import.meta.url);
+const COUNTER_AGENT_ID = '00000007-0000-8000-8000-000000000021';
 const fixtures = path.resolve('tests/components');
 const richToolContract = JSON.parse(
   fs.readFileSync(path.resolve('../../../../test-data/gol-40/rich-tool-conformance-v1.json')),
@@ -158,17 +159,21 @@ function instantiate(code, overrides = {}, format = 'cjs') {
   const module = { exports: {} };
   const host = {
     DatabaseSync: class {},
-    getEnvironment: () => [['GOLEM_AGENT_ID', 'Counter()']],
-    caller: () => ({
-      original: { tag: 'anonymous' },
-      immediate: { tag: 'anonymous' },
-      tokens: [],
-    }),
-    parseAgentId: () => [
-      'Counter',
-      { graph: { typeNodes: [], defs: [], root: 0 }, value: unit },
-      undefined,
+    getEnvironment: () => [
+      ['GOLEM_AGENT_ID', COUNTER_AGENT_ID],
+      ['GOLEM_AGENT_TYPE', 'Counter'],
     ],
+    caller: () => ({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' }, tokens: [] }),
+    parseUuid: (uuid) => {
+      const hex = uuid.replace(/-/g, '');
+      return { highBits: BigInt(`0x${hex.slice(0, 16)}`), lowBits: BigInt(`0x${hex.slice(16)}`) };
+    },
+    uuidToString: ({ highBits, lowBits }) => {
+      const hex = [highBits, lowBits]
+        .map((bits) => BigInt.asUintN(64, bits).toString(16).padStart(16, '0'))
+        .join('');
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    },
     ...overrides,
   };
   new Function('require', 'module', 'exports', code)(
@@ -806,7 +811,11 @@ describe('component exports', () => {
     let secretDrops = 0;
     let title;
     const runtime = await instantiate(output.code, {
-      makeAgentId: () => 'Counter()',
+      caller: () => ({
+        original: { tag: 'anonymous' },
+        immediate: { tag: 'anonymous' },
+        tokens: [],
+      }),
       getConfigValue(path, graph) {
         expect(graph.typeNodes.length).toBeGreaterThan(0);
         if (path.join('.') === 'group.title')
@@ -840,10 +849,14 @@ describe('component exports', () => {
         root: 0,
       }),
       WasmRpc: class {
+        static upsert(agentTypeName, input) {
+          calls.push({ upsert: agentTypeName, input });
+          return new this();
+        }
         asyncInvokeAndAwait(method, input) {
           calls.push({ method, input });
           return {
-            metadata: hostInvocationMetadata('Counter()'),
+            metadata: hostInvocationMetadata(COUNTER_AGENT_ID),
             future: {
               get: async () => ({ valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 }),
               cancel() {},
@@ -913,6 +926,7 @@ describe('component exports', () => {
     });
     expect(remote).toEqual({ valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 });
     expect(calls).toEqual([
+      { upsert: 'Counter', input: expect.objectContaining({ valueNodes: expect.any(Array) }) },
       {
         method: 'scalar',
         input: {
@@ -1208,7 +1222,10 @@ describe('component exports', () => {
           val: 'missing',
         });
         await expect(
-          exports.loadSnapshot.load({ payload: new Uint8Array(), mimeType: 'application/json' }),
+          exports.loadSnapshot.load(
+            { payload: new Uint8Array(), mimeType: 'application/json' },
+            unit,
+          ),
         ).rejects.toBe('This component does not define agents');
       } else {
         await exports.guest.initialize('Counter', unit);
@@ -1224,7 +1241,7 @@ describe('component exports', () => {
           fileDatabases: {},
         });
         const restored = await instantiate(output.code);
-        await restored.loadSnapshot.load(snapshot);
+        await restored.loadSnapshot.load(snapshot, unit);
         expect(await restored.saveSnapshot.save()).toEqual(snapshot);
       }
       const input = wireValue(z.object({ name: z.string() }), { name: 'Ada' });

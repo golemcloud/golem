@@ -107,10 +107,10 @@ pub(crate) struct SandboxFilesystemName {
 impl SandboxFilesystemName {
     pub(crate) fn new(
         environment: String,
-        component: String,
+        type_tag: String,
         filesystem: String,
     ) -> Result<Self, FilesystemStorageError> {
-        let components = [environment, component, filesystem];
+        let components = [environment, type_tag, filesystem];
         if components.iter().all(|component| {
             let path = Path::new(component);
             !component.starts_with('.')

@@ -114,8 +114,9 @@ const (
 // The current status of an agent
 type AgentStatus = uint8
 
-// Describes a filter condition on agent IDs when enumerating agents
-type AgentNameFilter struct {
+// Describes a filter condition on the canonical key of keyed agents when enumerating
+// agents. An agent without a key never matches it.
+type AgentKeyFilter struct {
 	Comparator StringFilterComparator
 	Value      string
 }
@@ -153,7 +154,7 @@ type AgentConfigVarsFilter struct {
 }
 
 const (
-	AgentPropertyFilterName      uint8 = 0
+	AgentPropertyFilterKey       uint8 = 0
 	AgentPropertyFilterStatus    uint8 = 1
 	AgentPropertyFilterVersion   uint8 = 2
 	AgentPropertyFilterCreatedAt uint8 = 3
@@ -171,11 +172,11 @@ func (self AgentPropertyFilter) Tag() uint8 {
 	return self.tag
 }
 
-func (self AgentPropertyFilter) Name() AgentNameFilter {
-	if self.tag != AgentPropertyFilterName {
+func (self AgentPropertyFilter) Key() AgentKeyFilter {
+	if self.tag != AgentPropertyFilterKey {
 		panic("tag mismatch")
 	}
-	return self.value.(AgentNameFilter)
+	return self.value.(AgentKeyFilter)
 }
 func (self AgentPropertyFilter) Status() AgentStatusFilter {
 	if self.tag != AgentPropertyFilterStatus {
@@ -208,8 +209,8 @@ func (self AgentPropertyFilter) Config() AgentConfigVarsFilter {
 	return self.value.(AgentConfigVarsFilter)
 }
 
-func MakeAgentPropertyFilterName(value AgentNameFilter) AgentPropertyFilter {
-	return AgentPropertyFilter{AgentPropertyFilterName, value}
+func MakeAgentPropertyFilterKey(value AgentKeyFilter) AgentPropertyFilter {
+	return AgentPropertyFilter{AgentPropertyFilterKey, value}
 }
 func MakeAgentPropertyFilterStatus(value AgentStatusFilter) AgentPropertyFilter {
 	return AgentPropertyFilter{AgentPropertyFilterStatus, value}
@@ -239,8 +240,13 @@ type AgentAnyFilter struct {
 
 // Metadata about an agent
 type AgentMetadata struct {
-	// The agent ID, consists of the component ID, agent type and agent parameters
+	// The agent ID
 	AgentId golem_core_types.AgentId
+	// The name of the agent's type. Owners without an agent type have none.
+	AgentTypeName witTypes.Option[string]
+	// The incarnation of the agent: a deleted and re-created agent keeps its ID but
+	// gets a new fingerprint
+	Fingerprint golem_core_types.Uuid
 	// Command line arguments seen by the agent
 	Args []string
 	// Environment variables seen by the agent
@@ -369,7 +375,7 @@ func MakeAgentOperationErrorBackendError(value string) AgentOperationError {
 
 // Details about the fork result
 type ForkDetails struct {
-	ForkedPhantomId golem_core_types.Uuid
+	ForkedAgentId golem_core_types.AgentId
 }
 
 const (
@@ -380,7 +386,7 @@ const (
 )
 
 // Indicates which agent the code is running on after `fork`.
-// The parameter contains details about the fork result, such as the phantom-ID of the newly
+// The parameter contains details about the fork result, such as the ID of the newly
 // created agent.
 type ForkResult struct {
 	tag   uint8
@@ -461,12 +467,14 @@ type Snapshot struct {
 }
 
 //go:wasmimport golem:api/host@1.5.0 [constructor]get-agents
-func wasm_import_constructor_get_agents(arg0 int64, arg1 int64, arg2 int32, arg3 uintptr, arg4 uint32, arg5 int32) int32
+func wasm_import_constructor_get_agents(arg0 uintptr, arg1 uint32, arg2 int32, arg3 uintptr, arg4 uint32, arg5 int32) int32
 
-func MakeGetAgents(componentId golem_core_types.ComponentId, filter witTypes.Option[AgentAnyFilter], precise bool) *GetAgents {
+func MakeGetAgents(agentTypeName string, filter witTypes.Option[AgentAnyFilter], precise bool) *GetAgents {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
+	utf8 := unsafe.Pointer(unsafe.StringData(agentTypeName))
+	pinner.Pin(utf8)
 	var option int32
 	var option0 uintptr
 	var option1 uint32
@@ -499,7 +507,7 @@ func MakeGetAgents(componentId golem_core_types.ComponentId, filter witTypes.Opt
 	} else {
 		result2 = 0
 	}
-	result3 := wasm_import_constructor_get_agents(int64(((componentId).Uuid).HighBits), int64(((componentId).Uuid).LowBits), option, option0, option1, result2)
+	result3 := wasm_import_constructor_get_agents(uintptr(utf8), uint32(len(agentTypeName)), option, option0, option1, result2)
 	return GetAgentsFromOwnHandle(int32(uintptr(result3)))
 
 }
@@ -524,8 +532,8 @@ func (self *GetAgents) GetNext() witTypes.Result[witTypes.Option[[]AgentMetadata
 		case 1:
 			result0 := make([]AgentMetadata, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))); index++ {
-				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(56+8*4))
-				result := wasm_lift_1_t158(unsafe.Add(unsafe.Pointer(base), 0))
+				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(80+8*4))
+				result := wasm_lift_1_t159(unsafe.Add(unsafe.Pointer(base), 0))
 
 				result0 = append(result0, result)
 			}
@@ -537,7 +545,7 @@ func (self *GetAgents) GetNext() witTypes.Result[witTypes.Option[[]AgentMetadata
 
 		result2 = witTypes.Ok[witTypes.Option[[]AgentMetadata], AgentOperationError](option)
 	case 1:
-		result1 := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t162(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[witTypes.Option[[]AgentMetadata], AgentOperationError](result1)
 	default:
@@ -571,7 +579,7 @@ func CreatePromise() golem_core_types.PromiseId {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (40 + 2*4), 8))
+	returnArea := uintptr(witRuntime.Allocate(pinner, 40, 8))
 	wasm_import_create_promise(returnArea)
 	result := wasm_lift_1_t14(unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result0 := result
@@ -580,31 +588,25 @@ func CreatePromise() golem_core_types.PromiseId {
 }
 
 //go:wasmimport golem:api/host@1.5.0 get-promise
-func wasm_import_get_promise(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 int64, arg5 int64, arg6 int64) int32
+func wasm_import_get_promise(arg0 int64, arg1 int64, arg2 int64, arg3 int64, arg4 int64) int32
 
 func GetPromise(promiseId golem_core_types.PromiseId) *GetPromiseResult {
-	pinner := &runtime.Pinner{}
-	defer pinner.Unpin()
 
-	utf8 := unsafe.Pointer(unsafe.StringData(((promiseId).AgentId).AgentId))
-	pinner.Pin(utf8)
-	result := wasm_import_get_promise(int64(((((promiseId).AgentId).ComponentId).Uuid).HighBits), int64(((((promiseId).AgentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len(((promiseId).AgentId).AgentId)), int64(((promiseId).Fingerprint).HighBits), int64(((promiseId).Fingerprint).LowBits), int64((promiseId).OplogIdx))
+	result := wasm_import_get_promise(int64((((promiseId).AgentId).Uuid).HighBits), int64((((promiseId).AgentId).Uuid).LowBits), int64(((promiseId).Fingerprint).HighBits), int64(((promiseId).Fingerprint).LowBits), int64((promiseId).OplogIdx))
 	return GetPromiseResultFromOwnHandle(int32(uintptr(result)))
 
 }
 
 //go:wasmimport golem:api/host@1.5.0 complete-promise
-func wasm_import_complete_promise(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 int64, arg5 int64, arg6 int64, arg7 uintptr, arg8 uint32) int32
+func wasm_import_complete_promise(arg0 int64, arg1 int64, arg2 int64, arg3 int64, arg4 int64, arg5 uintptr, arg6 uint32) int32
 
 func CompletePromise(promiseId golem_core_types.PromiseId, data []uint8) bool {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	utf8 := unsafe.Pointer(unsafe.StringData(((promiseId).AgentId).AgentId))
-	pinner.Pin(utf8)
 	data0 := unsafe.Pointer(unsafe.SliceData(data))
 	pinner.Pin(data0)
-	result := wasm_import_complete_promise(int64(((((promiseId).AgentId).ComponentId).Uuid).HighBits), int64(((((promiseId).AgentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len(((promiseId).AgentId).AgentId)), int64(((promiseId).Fingerprint).HighBits), int64(((promiseId).Fingerprint).LowBits), int64((promiseId).OplogIdx), uintptr(data0), uint32(len(data)))
+	result := wasm_import_complete_promise(int64((((promiseId).AgentId).Uuid).HighBits), int64((((promiseId).AgentId).Uuid).LowBits), int64(((promiseId).Fingerprint).HighBits), int64(((promiseId).Fingerprint).LowBits), int64((promiseId).OplogIdx), uintptr(data0), uint32(len(data)))
 	return (result != 0)
 
 }
@@ -647,23 +649,21 @@ func GenerateIdempotencyKey() golem_core_types.Uuid {
 }
 
 //go:wasmimport golem:api/host@1.5.0 update-agent
-func wasm_import_update_agent(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 int64, arg5 int32, arg6 uintptr)
+func wasm_import_update_agent(arg0 int64, arg1 int64, arg2 int64, arg3 int32, arg4 uintptr)
 
 func UpdateAgent(agentId golem_core_types.AgentId, targetRevision uint64, mode UpdateMode) witTypes.Result[witTypes.Unit, AgentOperationError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
-	utf8 := unsafe.Pointer(unsafe.StringData((agentId).AgentId))
-	pinner.Pin(utf8)
-	wasm_import_update_agent(int64((((agentId).ComponentId).Uuid).HighBits), int64((((agentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len((agentId).AgentId)), int64(targetRevision), int32(mode), returnArea)
+	wasm_import_update_agent(int64(((agentId).Uuid).HighBits), int64(((agentId).Uuid).LowBits), int64(targetRevision), int32(mode), returnArea)
 	var result0 witTypes.Result[witTypes.Unit, AgentOperationError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
 		result0 = witTypes.Ok[witTypes.Unit, AgentOperationError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t162(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Unit, AgentOperationError](result)
 	default:
@@ -681,16 +681,16 @@ func GetSelfMetadata() witTypes.Result[AgentMetadata, AgentOperationError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (64 + 8*4), 8))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (88 + 8*4), 8))
 	wasm_import_get_self_metadata(returnArea)
 	var result1 witTypes.Result[AgentMetadata, AgentOperationError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result := wasm_lift_1_t158(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t159(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Ok[AgentMetadata, AgentOperationError](result)
 	case 1:
-		result0 := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result0 := wasm_lift_1_t162(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Err[AgentMetadata, AgentOperationError](result0)
 	default:
@@ -702,23 +702,21 @@ func GetSelfMetadata() witTypes.Result[AgentMetadata, AgentOperationError] {
 }
 
 //go:wasmimport golem:api/host@1.5.0 get-agent-metadata
-func wasm_import_get_agent_metadata(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 uintptr)
+func wasm_import_get_agent_metadata(arg0 int64, arg1 int64, arg2 uintptr)
 
 func GetAgentMetadata(agentId golem_core_types.AgentId) witTypes.Option[AgentMetadata] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (64 + 8*4), 8))
-	utf8 := unsafe.Pointer(unsafe.StringData((agentId).AgentId))
-	pinner.Pin(utf8)
-	wasm_import_get_agent_metadata(int64((((agentId).ComponentId).Uuid).HighBits), int64((((agentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len((agentId).AgentId)), returnArea)
+	returnArea := uintptr(witRuntime.Allocate(pinner, (88 + 8*4), 8))
+	wasm_import_get_agent_metadata(int64(((agentId).Uuid).HighBits), int64(((agentId).Uuid).LowBits), returnArea)
 	var option witTypes.Option[AgentMetadata]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
 		option = witTypes.None[AgentMetadata]()
 	case 1:
-		result := wasm_lift_1_t158(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t159(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		option = witTypes.Some[AgentMetadata](result)
 	default:
@@ -730,27 +728,24 @@ func GetAgentMetadata(agentId golem_core_types.AgentId) witTypes.Option[AgentMet
 }
 
 //go:wasmimport golem:api/host@1.5.0 fork-agent
-func wasm_import_fork_agent(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 int64, arg5 int64, arg6 uintptr, arg7 uint32, arg8 int64, arg9 uintptr)
+func wasm_import_fork_agent(arg0 int64, arg1 int64, arg2 int64, arg3 uintptr)
 
-func ForkAgent(sourceAgentId golem_core_types.AgentId, targetAgentId golem_core_types.AgentId, oplogIdxCutOff uint64) witTypes.Result[witTypes.Unit, AgentOperationError] {
+func ForkAgent(sourceAgentId golem_core_types.AgentId, oplogIdxCutOff uint64) witTypes.Result[golem_core_types.AgentId, AgentOperationError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
-	utf8 := unsafe.Pointer(unsafe.StringData((sourceAgentId).AgentId))
-	pinner.Pin(utf8)
-	utf80 := unsafe.Pointer(unsafe.StringData((targetAgentId).AgentId))
-	pinner.Pin(utf80)
-	wasm_import_fork_agent(int64((((sourceAgentId).ComponentId).Uuid).HighBits), int64((((sourceAgentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len((sourceAgentId).AgentId)), int64((((targetAgentId).ComponentId).Uuid).HighBits), int64((((targetAgentId).ComponentId).Uuid).LowBits), uintptr(utf80), uint32(len((targetAgentId).AgentId)), int64(oplogIdxCutOff), returnArea)
-	var result1 witTypes.Result[witTypes.Unit, AgentOperationError]
+	returnArea := uintptr(witRuntime.Allocate(pinner, (16 + 2*4), 8))
+	wasm_import_fork_agent(int64(((sourceAgentId).Uuid).HighBits), int64(((sourceAgentId).Uuid).LowBits), int64(oplogIdxCutOff), returnArea)
+	var result1 witTypes.Result[golem_core_types.AgentId, AgentOperationError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
+		result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-		result1 = witTypes.Ok[witTypes.Unit, AgentOperationError](witTypes.Unit{})
+		result1 = witTypes.Ok[golem_core_types.AgentId, AgentOperationError](result)
 	case 1:
-		result := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t162(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-		result1 = witTypes.Err[witTypes.Unit, AgentOperationError](result)
+		result1 = witTypes.Err[golem_core_types.AgentId, AgentOperationError](result0)
 	default:
 		panic("unreachable")
 	}
@@ -760,15 +755,13 @@ func ForkAgent(sourceAgentId golem_core_types.AgentId, targetAgentId golem_core_
 }
 
 //go:wasmimport golem:api/host@1.5.0 revert-agent
-func wasm_import_revert_agent(arg0 int64, arg1 int64, arg2 uintptr, arg3 uint32, arg4 int32, arg5 int64, arg6 uintptr)
+func wasm_import_revert_agent(arg0 int64, arg1 int64, arg2 int32, arg3 int64, arg4 uintptr)
 
 func RevertAgent(agentId golem_core_types.AgentId, revertTarget RevertAgentTarget) witTypes.Result[witTypes.Unit, AgentOperationError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
-	utf8 := unsafe.Pointer(unsafe.StringData((agentId).AgentId))
-	pinner.Pin(utf8)
 	var variant int32
 	var variant0 int64
 	switch revertTarget.Tag() {
@@ -787,14 +780,14 @@ func RevertAgent(agentId golem_core_types.AgentId, revertTarget RevertAgentTarge
 	default:
 		panic("unreachable")
 	}
-	wasm_import_revert_agent(int64((((agentId).ComponentId).Uuid).HighBits), int64((((agentId).ComponentId).Uuid).LowBits), uintptr(utf8), uint32(len((agentId).AgentId)), variant, variant0, returnArea)
+	wasm_import_revert_agent(int64(((agentId).Uuid).HighBits), int64(((agentId).Uuid).LowBits), variant, variant0, returnArea)
 	var result1 witTypes.Result[witTypes.Unit, AgentOperationError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
 		result1 = witTypes.Ok[witTypes.Unit, AgentOperationError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t162(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[witTypes.Unit, AgentOperationError](result)
 	default:
@@ -833,66 +826,6 @@ func ResolveComponentId(componentReference string) witTypes.Option[golem_core_ty
 
 }
 
-//go:wasmimport golem:api/host@1.5.0 resolve-agent-id
-func wasm_import_resolve_agent_id(arg0 uintptr, arg1 uint32, arg2 uintptr, arg3 uint32, arg4 uintptr)
-
-func ResolveAgentId(componentReference string, agentName string) witTypes.Option[golem_core_types.AgentId] {
-	pinner := &runtime.Pinner{}
-	defer pinner.Unpin()
-
-	returnArea := uintptr(witRuntime.Allocate(pinner, (24 + 2*4), 8))
-	utf8 := unsafe.Pointer(unsafe.StringData(componentReference))
-	pinner.Pin(utf8)
-	utf80 := unsafe.Pointer(unsafe.StringData(agentName))
-	pinner.Pin(utf80)
-	wasm_import_resolve_agent_id(uintptr(utf8), uint32(len(componentReference)), uintptr(utf80), uint32(len(agentName)), returnArea)
-	var option witTypes.Option[golem_core_types.AgentId]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
-	case 0:
-
-		option = witTypes.None[golem_core_types.AgentId]()
-	case 1:
-		result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(returnArea), 8))
-
-		option = witTypes.Some[golem_core_types.AgentId](result)
-	default:
-		panic("unreachable")
-	}
-	result1 := option
-	return result1
-
-}
-
-//go:wasmimport golem:api/host@1.5.0 resolve-agent-id-strict
-func wasm_import_resolve_agent_id_strict(arg0 uintptr, arg1 uint32, arg2 uintptr, arg3 uint32, arg4 uintptr)
-
-func ResolveAgentIdStrict(componentReference string, agentName string) witTypes.Option[golem_core_types.AgentId] {
-	pinner := &runtime.Pinner{}
-	defer pinner.Unpin()
-
-	returnArea := uintptr(witRuntime.Allocate(pinner, (24 + 2*4), 8))
-	utf8 := unsafe.Pointer(unsafe.StringData(componentReference))
-	pinner.Pin(utf8)
-	utf80 := unsafe.Pointer(unsafe.StringData(agentName))
-	pinner.Pin(utf80)
-	wasm_import_resolve_agent_id_strict(uintptr(utf8), uint32(len(componentReference)), uintptr(utf80), uint32(len(agentName)), returnArea)
-	var option witTypes.Option[golem_core_types.AgentId]
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
-	case 0:
-
-		option = witTypes.None[golem_core_types.AgentId]()
-	case 1:
-		result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(returnArea), 8))
-
-		option = witTypes.Some[golem_core_types.AgentId](result)
-	default:
-		panic("unreachable")
-	}
-	result1 := option
-	return result1
-
-}
-
 //go:wasmimport golem:api/host@1.5.0 fork
 func wasm_import_fork(arg0 uintptr)
 
@@ -905,11 +838,11 @@ func Fork() witTypes.Result[ForkResult, AgentOperationError] {
 	var result1 witTypes.Result[ForkResult, AgentOperationError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result := wasm_lift_1_t163(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t164(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Ok[ForkResult, AgentOperationError](result)
 	case 1:
-		result0 := wasm_lift_1_t161(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result0 := wasm_lift_1_t162(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Err[ForkResult, AgentOperationError](result0)
 	default:
@@ -937,41 +870,54 @@ func wasm_lower_1_t154(pinner *runtime.Pinner, value AgentAllFilter, dst unsafe.
 }
 
 //go:noinline
-func wasm_lift_1_t158(src unsafe.Pointer) AgentMetadata {
+func wasm_lift_1_t159(src unsafe.Pointer) AgentMetadata {
 	result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 0))
-	result1 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4))))
-	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 3*4)))); index++ {
-		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))), index*(2*4))
-		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
+	case 0:
 
-		result1 = append(result1, value0)
+		option = witTypes.None[string]()
+	case 1:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 2*4))))
+
+		option = witTypes.Some[string](value0)
+	default:
+		panic("unreachable")
 	}
-
-	result4 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 5*4))))
-	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 5*4)))); index++ {
-		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4))))), index*(4*4))
+	result1 := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), (24 + 2*4)))
+	result3 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 3*4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 3*4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 2*4))))), index*(2*4))
 		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-		value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 
-		result4 = append(result4, witTypes.Tuple2[string, string]{F0: value2, F1: value3})
+		result3 = append(result3, value2)
 	}
 
-	result7 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 7*4))))
-	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 7*4)))); index++ {
-		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 6*4))))), index*(4*4))
-		value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-		value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+	result6 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 5*4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 5*4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 4*4))))), index*(4*4))
+		value4 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+		value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 
-		result7 = append(result7, witTypes.Tuple2[string, string]{F0: value5, F1: value6})
+		result6 = append(result6, witTypes.Tuple2[string, string]{F0: value4, F1: value5})
 	}
 
-	result8 := wasm_lift_1_t141(unsafe.Add(unsafe.Pointer(src), (40 + 8*4)))
+	result9 := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 7*4))))
+	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 7*4)))); index++ {
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 6*4))))), index*(4*4))
+		value7 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+		value8 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 
-	return AgentMetadata{AgentId: result, Args: result1, Env: result4, Config: result7, Status: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 8*4))))), ComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (24 + 8*4)))), RetryCount: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (32 + 8*4)))), EnvironmentId: result8}
+		result9 = append(result9, witTypes.Tuple2[string, string]{F0: value7, F1: value8})
+	}
+
+	result10 := wasm_lift_1_t141(unsafe.Add(unsafe.Pointer(src), (64 + 8*4)))
+
+	return AgentMetadata{AgentId: result, AgentTypeName: option, Fingerprint: result1, Args: result3, Env: result6, Config: result9, Status: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (40 + 8*4))))), ComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (48 + 8*4)))), RetryCount: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (56 + 8*4)))), EnvironmentId: result10}
 }
 
 //go:noinline
-func wasm_lift_1_t161(src unsafe.Pointer) AgentOperationError {
+func wasm_lift_1_t162(src unsafe.Pointer) AgentOperationError {
 	var variant AgentOperationError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -993,15 +939,22 @@ func wasm_lift_1_t161(src unsafe.Pointer) AgentOperationError {
 //go:noinline
 func wasm_lift_1_t14(src unsafe.Pointer) golem_core_types.PromiseId {
 	result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), (16 + 2*4)))
+	result0 := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 16))
 
-	return golem_core_types.PromiseId{AgentId: result, Fingerprint: result0, OplogIdx: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (32 + 2*4))))}
+	return golem_core_types.PromiseId{AgentId: result, Fingerprint: result0, OplogIdx: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 32)))}
 }
 
 //go:noinline
 func wasm_lift_1_t4(src unsafe.Pointer) golem_core_types.Uuid {
 
 	return golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8)))}
+}
+
+//go:noinline
+func wasm_lift_1_t8(src unsafe.Pointer) golem_core_types.AgentId {
+	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 0))
+
+	return golem_core_types.AgentId{Uuid: result}
 }
 
 //go:noinline
@@ -1012,24 +965,16 @@ func wasm_lift_1_t7(src unsafe.Pointer) golem_core_types.ComponentId {
 }
 
 //go:noinline
-func wasm_lift_1_t8(src unsafe.Pointer) golem_core_types.AgentId {
-	result := wasm_lift_1_t7(unsafe.Add(unsafe.Pointer(src), 0))
-	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4))))
-
-	return golem_core_types.AgentId{ComponentId: result, AgentId: value0}
-}
-
-//go:noinline
-func wasm_lift_1_t163(src unsafe.Pointer) ForkResult {
+func wasm_lift_1_t164(src unsafe.Pointer) ForkResult {
 	var variant ForkResult
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t162(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t163(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeForkResultOriginal(result)
 
 	case 1:
-		result0 := wasm_lift_1_t162(unsafe.Add(unsafe.Pointer(src), 8))
+		result0 := wasm_lift_1_t163(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeForkResultForked(result0)
 
@@ -1044,8 +989,8 @@ func wasm_lift_1_t163(src unsafe.Pointer) ForkResult {
 func wasm_lower_1_t152(pinner *runtime.Pinner, value AgentPropertyFilter, dst unsafe.Pointer) {
 
 	switch value.Tag() {
-	case AgentPropertyFilterName:
-		payload := value.Name()
+	case AgentPropertyFilterKey:
+		payload := value.Key()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
 		wasm_lower_1_t146(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
@@ -1088,14 +1033,14 @@ func wasm_lift_1_t141(src unsafe.Pointer) EnvironmentId {
 }
 
 //go:noinline
-func wasm_lift_1_t162(src unsafe.Pointer) ForkDetails {
-	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t163(src unsafe.Pointer) ForkDetails {
+	result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 0))
 
-	return ForkDetails{ForkedPhantomId: result}
+	return ForkDetails{ForkedAgentId: result}
 }
 
 //go:noinline
-func wasm_lower_1_t146(pinner *runtime.Pinner, value AgentNameFilter, dst unsafe.Pointer) {
+func wasm_lower_1_t146(pinner *runtime.Pinner, value AgentKeyFilter, dst unsafe.Pointer) {
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32((value).Comparator))
 	utf8 := unsafe.Pointer(unsafe.StringData((value).Value))
 	pinner.Pin(utf8)

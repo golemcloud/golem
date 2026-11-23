@@ -117,6 +117,11 @@ fn agent_owner(
     }
 }
 
+/// The leaf of agent `n` of type tag 7; agent 1 is `00000007-0000-8000-8000-000000000001`.
+fn agent_leaf(n: u128) -> AgentOwnerLeafPattern {
+    AgentOwnerLeafPattern::agent(crate::base_model::AgentId::from_parts(7, n), None)
+}
+
 fn agent_recipient(
     account: &str,
     application: &str,
@@ -165,32 +170,20 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
     let cases: Vec<(&str, &str, PermissionPattern)> = vec![
         (
             "filesystem_canonical",
-            "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : read : /data/**",
+            "filesystem(acme/shop/prod/cart/00000007-0000-8000-8000-000000000001) @ acme/shop/prod/cart/agent : read : /data/**",
             PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass> {
                 verb: Some(FilesystemVerb::Read),
-                owner: agent_owner(
-                    "acme",
-                    "shop",
-                    "prod",
-                    "cart",
-                    AgentOwnerLeafPattern::Agent("agent".to_string()),
-                ),
+                owner: agent_owner("acme", "shop", "prod", "cart", agent_leaf(1)),
                 recipient: agent_recipient("acme", "shop", "prod", "cart", "agent"),
                 resource: filesystem_path_data_glob(),
             }),
         ),
         (
             "filesystem_email_recipient",
-            "filesystem(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ alice@example.com/shop/prod/cart-svc/CartAgent(\"42\") : read : /data/**",
+            "filesystem(acme/shop/prod/cart-svc/00000007-0000-8000-8000-000000000002) @ alice@example.com/shop/prod/cart-svc/CartAgent(\"42\") : read : /data/**",
             PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass> {
                 verb: Some(FilesystemVerb::Read),
-                owner: agent_owner(
-                    "acme",
-                    "shop",
-                    "prod",
-                    "cart-svc",
-                    AgentOwnerLeafPattern::Agent("CartAgent(\"42\")".to_string()),
-                ),
+                owner: agent_owner("acme", "shop", "prod", "cart-svc", agent_leaf(2)),
                 recipient: agent_recipient(
                     "alice@example.com",
                     "shop",
@@ -203,32 +196,20 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "filesystem_any_verb",
-            "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : * : /data/**",
+            "filesystem(acme/shop/prod/cart/00000007-0000-8000-8000-000000000001) @ acme/shop/prod/cart/agent : * : /data/**",
             PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass> {
                 verb: None,
-                owner: agent_owner(
-                    "acme",
-                    "shop",
-                    "prod",
-                    "cart",
-                    AgentOwnerLeafPattern::Agent("agent".to_string()),
-                ),
+                owner: agent_owner("acme", "shop", "prod", "cart", agent_leaf(1)),
                 recipient: agent_recipient("acme", "shop", "prod", "cart", "agent"),
                 resource: filesystem_path_data_glob(),
             }),
         ),
         (
             "filesystem_root",
-            "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : read : /",
+            "filesystem(acme/shop/prod/cart/00000007-0000-8000-8000-000000000001) @ acme/shop/prod/cart/agent : read : /",
             PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass> {
                 verb: Some(FilesystemVerb::Read),
-                owner: agent_owner(
-                    "acme",
-                    "shop",
-                    "prod",
-                    "cart",
-                    AgentOwnerLeafPattern::Agent("agent".to_string()),
-                ),
+                owner: agent_owner("acme", "shop", "prod", "cart", agent_leaf(1)),
                 recipient: agent_recipient("acme", "shop", "prod", "cart", "agent"),
                 resource: FilesystemResourcePattern::Path(FilesystemPathPattern {
                     segments: vec![],
@@ -237,16 +218,10 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "filesystem_segment_wildcards",
-            "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : read : /data/*/**",
+            "filesystem(acme/shop/prod/cart/00000007-0000-8000-8000-000000000001) @ acme/shop/prod/cart/agent : read : /data/*/**",
             PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass> {
                 verb: Some(FilesystemVerb::Read),
-                owner: agent_owner(
-                    "acme",
-                    "shop",
-                    "prod",
-                    "cart",
-                    AgentOwnerLeafPattern::Agent("agent".to_string()),
-                ),
+                owner: agent_owner("acme", "shop", "prod", "cart", agent_leaf(1)),
                 recipient: agent_recipient("acme", "shop", "prod", "cart", "agent"),
                 resource: FilesystemResourcePattern::Path(FilesystemPathPattern {
                     segments: vec![
@@ -350,48 +325,30 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "env",
-            "env(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : HOME",
+            "env(acme/shop/prod/cart-svc/00000007-0000-8000-8000-000000000002) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : HOME",
             PermissionPattern::Env(ClassPermissionPattern::<EnvClass> {
                 verb: Some(EnvVerb::Read),
-                owner: agent_owner(
-                    "acme",
-                    "shop",
-                    "prod",
-                    "cart-svc",
-                    AgentOwnerLeafPattern::Agent("CartAgent(\"42\")".to_string()),
-                ),
+                owner: agent_owner("acme", "shop", "prod", "cart-svc", agent_leaf(2)),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
                 resource: EnvResourcePattern::VarName(EnvVarName("HOME".to_string())),
             }),
         ),
         (
             "oplog_any",
-            "oplog(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : *",
+            "oplog(acme/shop/prod/cart-svc/00000007-0000-8000-8000-000000000002) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : *",
             PermissionPattern::Oplog(ClassPermissionPattern::<OplogClass> {
                 verb: Some(OplogVerb::Read),
-                owner: agent_owner(
-                    "acme",
-                    "shop",
-                    "prod",
-                    "cart-svc",
-                    AgentOwnerLeafPattern::Agent("CartAgent(\"42\")".to_string()),
-                ),
+                owner: agent_owner("acme", "shop", "prod", "cart-svc", agent_leaf(2)),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
                 resource: OplogResourcePattern::Any,
             }),
         ),
         (
             "oplog_range_with_colons",
-            "oplog(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : read : start=1000:end=2000",
+            "oplog(acme/shop/prod/cart/00000007-0000-8000-8000-000000000001) @ acme/shop/prod/cart/agent : read : start=1000:end=2000",
             PermissionPattern::Oplog(ClassPermissionPattern::<OplogClass> {
                 verb: Some(OplogVerb::Read),
-                owner: agent_owner(
-                    "acme",
-                    "shop",
-                    "prod",
-                    "cart",
-                    AgentOwnerLeafPattern::Agent("agent".to_string()),
-                ),
+                owner: agent_owner("acme", "shop", "prod", "cart", agent_leaf(1)),
                 recipient: agent_recipient("acme", "shop", "prod", "cart", "agent"),
                 resource: OplogResourcePattern::Range {
                     start: Some(1000),
@@ -401,16 +358,10 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
         ),
         (
             "config",
-            "config(acme/shop/prod/cart-svc/CartAgent(\"42\")) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : model.retry-count",
+            "config(acme/shop/prod/cart-svc/00000007-0000-8000-8000-000000000002) @ acme/shop/prod/cart-svc/CartAgent(\"42\") : read : model.retry-count",
             PermissionPattern::Config(ClassPermissionPattern::<ConfigClass> {
                 verb: Some(ConfigVerb::Read),
-                owner: agent_owner(
-                    "acme",
-                    "shop",
-                    "prod",
-                    "cart-svc",
-                    AgentOwnerLeafPattern::Agent("CartAgent(\"42\")".to_string()),
-                ),
+                owner: agent_owner("acme", "shop", "prod", "cart-svc", agent_leaf(2)),
                 recipient: agent_recipient("acme", "shop", "prod", "cart-svc", "CartAgent(\"42\")"),
                 resource: ConfigResourcePattern::Key(ConfigKeyPathPattern {
                     segments: vec![
@@ -1092,7 +1043,7 @@ fn parses_runtime_class_examples_from_spec(r: &mut DynamicTestRegistration) {
 #[test]
 fn rejects_unknown_verbs_for_class() {
     let result = parse_permission(
-        "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : query : /data/**",
+        "filesystem(acme/shop/prod/cart/00000007-0000-8000-8000-000000000001) @ acme/shop/prod/cart/agent : query : /data/**",
     );
 
     assert_eq!(
@@ -1195,7 +1146,7 @@ fn rejects_recipient_depths_without_holder_kind() {
     );
     assert_eq!(
         parse_permission(
-            "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart : read : /data/**"
+            "filesystem(acme/shop/prod/cart/00000007-0000-8000-8000-000000000001) @ acme/shop/prod/cart : read : /data/**"
         ),
         Err(CardParseError::InvalidRecipientPath(
             "acme/shop/prod/cart".to_string()
@@ -1241,7 +1192,7 @@ fn rejects_invalid_filesystem_resource_patterns() {
     ] {
         assert_eq!(
             parse_permission(&format!(
-                "filesystem(acme/shop/prod/cart/agent) @ acme/shop/prod/cart/agent : read : {resource}"
+                "filesystem(acme/shop/prod/cart/00000007-0000-8000-8000-000000000001) @ acme/shop/prod/cart/agent : read : {resource}"
             )),
             Err(CardParseError::InvalidResource {
                 class: FilesystemClass::NAME.to_string(),
@@ -1781,7 +1732,8 @@ fn concrete_parser_rejects_slot_variables() {
 
 #[test]
 fn legacy_agent_debug_is_only_a_parse_time_expansion() {
-    let alias = "agent(acme/shop/prod/cart/Cart(42)) @ acme : debug : *";
+    let alias =
+        "agent(acme/shop/prod/cart/00000007-0000-8000-8000-000000000002) @ acme : debug : *";
 
     assert!(matches!(
         parse_permission(alias),
@@ -1797,14 +1749,14 @@ fn legacy_agent_debug_is_only_a_parse_time_expansion() {
     assert_eq!(
         rendered,
         vec![
-            "oplog(acme/shop/prod/cart/Cart(42)) @ acme : read : *",
-            "agent(acme/shop/prod/cart/Cart(42)) @ acme : view : ",
-            "filesystem(acme/shop/prod/cart/Cart(42)) @ acme : read : /**",
-            "env(acme/shop/prod/cart/Cart(42)) @ acme : read : *",
-            "config(acme/shop/prod/cart/Cart(42)) @ acme : read : *",
-            "agent(acme/shop/prod/cart/Cart(42)) @ acme : fork : ",
-            "agent(acme/shop/prod/cart/Cart(42)) @ acme : interrupt : ",
-            "agent(acme/shop/prod/cart/Cart(42)) @ acme : resume : ",
+            "oplog(acme/shop/prod/cart/00000007-0000-8000-8000-000000000002) @ acme : read : *",
+            "agent(acme/shop/prod/cart/00000007-0000-8000-8000-000000000002) @ acme : view : ",
+            "filesystem(acme/shop/prod/cart/00000007-0000-8000-8000-000000000002) @ acme : read : /**",
+            "env(acme/shop/prod/cart/00000007-0000-8000-8000-000000000002) @ acme : read : *",
+            "config(acme/shop/prod/cart/00000007-0000-8000-8000-000000000002) @ acme : read : *",
+            "agent(acme/shop/prod/cart/00000007-0000-8000-8000-000000000002) @ acme : fork : ",
+            "agent(acme/shop/prod/cart/00000007-0000-8000-8000-000000000002) @ acme : interrupt : ",
+            "agent(acme/shop/prod/cart/00000007-0000-8000-8000-000000000002) @ acme : resume : ",
         ]
     );
 }
@@ -1812,7 +1764,9 @@ fn legacy_agent_debug_is_only_a_parse_time_expansion() {
 #[test]
 fn legacy_agent_debug_alias_rejects_non_wildcard_resources() {
     assert_eq!(
-        parse_permission_grant("agent(acme/shop/prod/cart/Cart(42)) @ acme : debug : method"),
+        parse_permission_grant(
+            "agent(acme/shop/prod/cart/00000007-0000-8000-8000-000000000002) @ acme : debug : method"
+        ),
         Err(CardParseError::InvalidResource {
             class: "agent".to_string(),
             resource: "method".to_string(),
@@ -1826,7 +1780,7 @@ fn scope_card_deserialization_expands_legacy_agent_debug_alias() {
         "scopeCardId": CardId::new(),
         "rootCardIds": [],
         "lowerPositive": [
-            "agent(acme/shop/prod/cart/Cart(42)) @ acme : debug : *"
+            "agent(acme/shop/prod/cart/00000007-0000-8000-8000-000000000002) @ acme : debug : *"
         ],
         "lowerNegative": [],
         "upperPositive": [],

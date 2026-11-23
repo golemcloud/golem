@@ -21,15 +21,14 @@ use crate::Tracing;
 
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::agent::{AgentMode, ParsedAgentKey};
+use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PublicOplogEntry};
 use golem_common::model::{
-    AgentId, AgentStatus, IdempotencyKey, InvocationRequestKey, OwnedAgentId, ShardAssignment,
-    ShardId,
+    AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardAssignment, ShardId,
 };
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::{
     BlobMetadata, BlobMissingError, BlobRangeStream, BlobStorage, BlobStorageBackend,
@@ -51,6 +50,7 @@ use golem_worker_executor_test_utils::{
     truncate_archived_oplog_chunk,
 };
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -139,8 +139,8 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
         .store()
         .await?;
 
-    let unreadable = agent_id!("Counter", "unreadable-archive");
-    let healthy = agent_id!("Counter", "healthy-archive");
+    let unreadable = agent_key!("Counter", "unreadable-archive");
+    let healthy = agent_key!("Counter", "healthy-archive");
     let unreadable_id = executor
         .start_agent(&component.id, unreadable.clone())
         .await?;
@@ -152,8 +152,8 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
                 .await?;
         }
     }
-    let unreadable_owned = OwnedAgentId::new(context.default_environment_id, &unreadable_id);
-    let healthy_owned = OwnedAgentId::new(context.default_environment_id, &healthy_id);
+    let unreadable_owned = unreadable_id.clone();
+    let healthy_owned = healthy_id.clone();
     wait_until_archived(deps, &context, &unreadable_owned).await?;
     wait_until_archived(deps, &context, &healthy_owned).await?;
     drop(executor);
@@ -168,7 +168,7 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
         executor
             .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
             .await,
-        &unreadable_id,
+        &unreadable_id.agent_id,
     );
 
     assert_eq!(
@@ -210,14 +210,14 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
         .store()
         .await?;
 
-    let unreadable = agent_id!("Counter", "unreadable-later-chunk");
-    let healthy = agent_id!("Counter", "healthy-later-chunk");
+    let unreadable = agent_key!("Counter", "unreadable-later-chunk");
+    let healthy = agent_key!("Counter", "healthy-later-chunk");
     let unreadable_id = executor
         .start_agent(&component.id, unreadable.clone())
         .await?;
     let healthy_id = executor.start_agent(&component.id, healthy.clone()).await?;
-    let unreadable_owned = OwnedAgentId::new(context.default_environment_id, &unreadable_id);
-    let healthy_owned = OwnedAgentId::new(context.default_environment_id, &healthy_id);
+    let unreadable_owned = unreadable_id.clone();
+    let healthy_owned = healthy_id.clone();
     // Two rounds of invocations, each archived on its own, leave two chunks per agent.
     for _ in 0..2 {
         for agent in [&unreadable, &healthy] {
@@ -285,7 +285,7 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
             executor.invoke_and_await_agent(&component, &unreadable, "increment", data_value!()),
         )
         .await?,
-        &unreadable_id,
+        &unreadable_id.agent_id,
     );
 
     assert_eq!(
@@ -339,6 +339,7 @@ async fn an_ephemeral_constructor_completes_while_its_archive_write_is_pending(
             configure: Some(Arc::new(|config| {
                 config.oplog = blob_archiving_config();
                 config.invocation_results.recent_capacity = 0;
+                config.invocation_results.hydrated_cache_capacity = 0;
                 config.invocation_results.bloom_bits = 1;
                 config.invocation_results.bloom_hashes = 1;
             })),
@@ -356,25 +357,26 @@ async fn an_ephemeral_constructor_completes_while_its_archive_write_is_pending(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let agent = agent_id!("EphemeralStreamingRpcTarget", "pending-constructor-archive")
-        .with_ephemeral_invocation_phantom(
-            &InvocationRequestKey::external(
-                executor.auth_ctx().idempotency_scope(),
-                Some(&IdempotencyKey::fresh()),
-            )
-            .owner_key("produce_gated_siblings"),
-        )
-        .map_err(anyhow::Error::msg)?;
-    let creation = executor.start_agent(&component.id, agent.clone());
+    let agent = agent_key!("EphemeralStreamingRpcTarget", "pending-constructor-archive");
+    let agent_id = crate::agent::ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &agent,
+        &IdempotencyKey::fresh(),
+        "produce_gated_siblings",
+    );
+    let creation = executor.create_unkeyed_agent(
+        &component.id,
+        Some(&agent_id.agent_id),
+        agent,
+        HashMap::new(),
+    );
     let (created, ()) = tokio::time::timeout(Duration::from_secs(30), async {
         tokio::join!(creation, fault.write_blocked.notified())
     })
     .await
     .map_err(|_| anyhow::anyhow!("creation did not finish with its archive write held"))?;
-    assert_eq!(
-        created?,
-        AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?
-    );
+    assert_eq!(created?, agent_id);
     release.cancel();
     Ok(())
 }
@@ -730,7 +732,7 @@ struct ArchiveFaultAgent {
     executor: TestWorkerExecutor,
     component: ComponentDto,
     agent: ParsedAgentKey,
-    agent_id: AgentId,
+    agent_id: OwnedAgentId,
 }
 
 impl ArchiveFaultAgent {
@@ -768,9 +770,12 @@ impl ArchiveFaultAgent {
             .component_dep(&context.default_environment_id, host_api_tests)
             .store()
             .await?;
-        let agent = agent_id!("GolemHostApi", name);
+        let agent = agent_key!("GolemHostApi", name);
         let agent_id = executor.start_agent(&component.id, agent.clone()).await?;
-        fault.agent_path.set(agent_path_segment(&agent_id)).unwrap();
+        fault
+            .agent_path
+            .set(agent_path_segment(&agent_id.agent_id))
+            .unwrap();
         let this = Self {
             context,
             fault,
@@ -808,9 +813,9 @@ impl ArchiveFaultAgent {
         mode: u8,
         while_held: impl AsyncFnOnce(&Self) -> anyhow::Result<()>,
     ) -> anyhow::Result<(anyhow::Result<AgentResult>, OplogIndex)> {
-        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, &self.agent_id);
+        let owned_agent_id = self.agent_id.clone();
         let (entered, release) = self.executor.gate_next_oplog_function_end(
-            &self.agent_id,
+            &self.agent_id.agent_id,
             HostFunctionName::GolemApiGetSelfMetadata,
             false,
         );
@@ -822,7 +827,7 @@ impl ArchiveFaultAgent {
             .await
             .map_err(|_| anyhow::anyhow!("the host call must reach its End"))?;
         while_held(self.as_ref()).await?;
-        self.executor.commit_oplog(&self.agent_id).await?;
+        self.executor.commit_oplog(&self.agent_id.agent_id).await?;
         wait_until_archived(deps, &self.context, &owned_agent_id).await?;
         let before_failure = self.executor.oplog_max_index(&self.agent_id).await?;
         self.fault.fail_history(mode, before_failure);
@@ -927,8 +932,7 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
             )
             .await?,
         );
-        let owned_agent_id =
-            OwnedAgentId::new(agent.context.default_environment_id, &agent.agent_id);
+        let owned_agent_id = agent.agent_id.clone();
         let worker = agent
             .executor
             .active_agents()
@@ -947,7 +951,8 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
             .expect_err("an agent whose status does not rebuild must not run");
         let error = format!("{error:#}");
         assert!(
-            error.contains(&agent.agent_id.to_string()) && error.contains("failed to decode"),
+            error.contains(&agent.agent_id.agent_id.to_string())
+                && error.contains("failed to decode"),
             "the failure does not name the agent and the decode error: {error}"
         );
         if mode == ARCHIVE_UNKNOWN_VERSION {
@@ -973,8 +978,7 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
             .expect_err("metadata must not return a detached status while history is corrupt");
         let error = format!("{error:#}");
         assert!(
-            error.contains(&agent.agent_id.component_id.to_string())
-                && error.contains("early-receipt-corrupt-archive")
+            error.contains(&agent.agent_id.agent_id.to_string())
                 && error.contains("failed to decode"),
             "the metadata failure does not name the agent and the decode error: {error}"
         );
@@ -1007,7 +1011,7 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
             "metadata observation must not restart the failed agent: {oplog:#?}"
         );
 
-        let healthy = agent_id!("GolemHostApi", "healthy-next-to-corrupt-archive");
+        let healthy = agent_key!("GolemHostApi", "healthy-next-to-corrupt-archive");
         agent
             .executor
             .start_agent(&agent.component.id, healthy.clone())
@@ -1022,7 +1026,10 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
             )
             .await?
             .into_typed::<Result<String, String>>()?;
-        assert_eq!(healthy_result, Ok(healthy.to_string()));
+        let healthy_id = agent
+            .executor
+            .keyed_agent_id(agent.context.default_environment_id, &healthy)?;
+        assert_eq!(healthy_result, Ok(healthy_id.agent_id.to_string()));
     }
     Ok(())
 }
@@ -1051,7 +1058,7 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
         )
         .await?,
     );
-    let owned_agent_id = OwnedAgentId::new(agent.context.default_environment_id, &agent.agent_id);
+    let owned_agent_id = agent.agent_id.clone();
     let worker = agent
         .executor
         .active_agents()
@@ -1076,7 +1083,7 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
             agent
                 .executor
                 .commit_oplog_entry_bypassing_worker_status(
-                    &agent.agent_id,
+                    &agent.agent_id.agent_id,
                     OplogEntry::grow_memory(0),
                 )
                 .await
@@ -1090,7 +1097,7 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
                 agent_id,
                 idempotency_key,
                 result,
-            } if agent_id == &agent.agent_id => Some((*idempotency_key, result.is_ok())),
+            } if agent_id == &agent.agent_id.agent_id => Some((*idempotency_key, result.is_ok())),
             _ => None,
         })
         .await?;
@@ -1114,7 +1121,7 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
                 agent_id,
                 idempotency_key,
                 result,
-            } if agent_id == &agent.agent_id && idempotency_key == &committed => {
+            } if agent_id == &agent.agent_id.agent_id && idempotency_key == &committed => {
                 Some(result.clone())
             }
             _ => None,
@@ -1166,7 +1173,7 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
         )
         .await?,
     );
-    let owned_agent_id = OwnedAgentId::new(agent.context.default_environment_id, &agent.agent_id);
+    let owned_agent_id = agent.agent_id.clone();
     let worker = agent
         .executor
         .active_agents()
@@ -1177,7 +1184,11 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
     let queued = IdempotencyKey::fresh();
     let stored_queued = agent
         .executor
-        .external_invocation_key(&agent.agent_id, &queued, "get_self_metadata_result")
+        .external_invocation_key(
+            &agent.agent_id.agent_id,
+            &queued,
+            "get_self_metadata_result",
+        )
         .await?;
 
     // The enqueue folds every entry before it, so the status of the first invocation does not
@@ -1205,7 +1216,7 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
                 agent_id,
                 idempotency_key,
                 result,
-            } if agent_id == &agent.agent_id && idempotency_key == &stored_queued => {
+            } if agent_id == &agent.agent_id.agent_id && idempotency_key == &stored_queued => {
                 Some(result.clone())
             }
             _ => None,
@@ -1243,5 +1254,75 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
             .status,
         AgentStatus::Failed
     );
+    Ok(())
+}
+
+/// An agent whose whole history is archived is still the agent its key and its ID name: a keyed
+/// invocation joins it instead of creating another agent, and an invocation by ID reaches it.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn archived_agents_are_reached_by_key_and_by_id(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let by_key = agent_key!("Counter", "archived-by-key");
+    let by_id = agent_key!("Counter", "archived-by-id");
+    let by_key_id = executor.start_agent(&component.id, by_key.clone()).await?;
+    let by_id_id = executor.start_agent(&component.id, by_id.clone()).await?;
+    for (agent, increments) in [(&by_key, 3), (&by_id, 2)] {
+        for _ in 0..increments {
+            executor
+                .invoke_and_await_agent(&component, agent, "increment", data_value!())
+                .await?;
+        }
+    }
+    wait_until_archived(deps, &context, &by_key_id).await?;
+    wait_until_archived(deps, &context, &by_id_id).await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+
+    let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &by_key, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        4
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent_by_id(&component, &by_id_id, None, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        3
+    );
+    let (cursor, agents) = executor
+        .get_workers_metadata(
+            &component.environment_id,
+            &AgentTypeName("Counter".to_string()),
+            None,
+            ScanCursor::default(),
+            100,
+            true,
+        )
+        .await?;
+    assert!(cursor.is_none());
+    assert_eq!(
+        agents
+            .into_iter()
+            .map(|agent| agent.agent_id)
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([by_key_id.agent_id, by_id_id.agent_id])
+    );
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     Ok(())
 }

@@ -1,0 +1,614 @@
+{
+  "tier": "pr",
+  "description": "Bash's own builtins, as a script uses them: options, statuses and error paths.",
+  "cases": [
+    {
+      "name": "builtin: file tests on an empty path",
+      "script": "[ -e '' ] || echo e; [[ -d '' ]] || echo d; test -f '' || echo f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: alias needs expand_aliases",
+      "script": "alias hi='echo hello'\nhi 2>/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: alias expands on a later line",
+      "script": "shopt -s expand_aliases\nalias hi='echo hello'\nhi there",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: alias on the same line does not expand",
+      "script": "shopt -s expand_aliases; alias hi='echo hello'; hi 2>/dev/null; echo status=$?",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: alias listing and unalias",
+      "script": "alias a='echo a' b='echo b'; alias; unalias a; alias; unalias nosuch; echo status=$?",
+      "tags": [
+        "builtin.unalias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: alias -p and missing alias",
+      "script": "alias x='ls -l'; alias -p; alias nosuch; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: builtin runs the builtin",
+      "script": "echo() { printf 'fn\\n'; }; echo x; builtin echo y; builtin nosuch; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: command bypasses functions",
+      "script": "ls() { echo fn; }; ls; command -v ls >/dev/null && echo found; command echo direct",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: command -v and -V",
+      "script": "f() { :; }; command -v f cd echo; command -V f 2>&1 | head -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: type -t forms",
+      "script": "f() { :; }; alias a=b; type -t f cd if a nosuch; echo status=$?",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: type output",
+      "script": "type cd; type if; f() { echo x; }; type f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: hash with no path",
+      "script": "hash; echo status=$?; hash -r; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: enable lists and disables",
+      "script": "enable -n echo; echo hi 2>/dev/null; echo status=$?; enable echo; echo back",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: enable -n is unsupported in bash-tool\n"
+        },
+        "reason": "refused (runtime-gaps): bash-tool refuses a feature it does not implement, up front when the script names it"
+      }
+    },
+    {
+      "name": "builtin: caller outside a function",
+      "script": "caller; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: caller inside a function",
+      "script": "f() { caller 0 >/dev/null; echo status=$?; }; f",
+      "tags": [
+        "param.callstack"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: eval builds commands",
+      "script": "x='echo'; y='hi there'; eval \"$x \\\"$y\\\"\"; eval 'a=1; b=2'; echo $((a+b))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: eval syntax error",
+      "script": "eval 'if'; echo status=$?",
+      "tags": [
+        "syntax.error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: eval status and exit",
+      "script": "eval 'false'; echo status=$?; eval 'exit 3'; echo not-reached",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: source a file with arguments",
+      "script": "printf 'echo \"sourced $1 $#\"; v=set\\n' >/tmp/lib.sh; source /tmp/lib.sh a b; echo $v; . /tmp/lib.sh",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: source return status",
+      "script": "printf 'return 4\\necho no\\n' >/tmp/r.sh; . /tmp/r.sh; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: source a missing file",
+      "script": "source /tmp/nosuch.sh; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: continue and break levels",
+      "script": "for i in 1 2 3; do for j in a b c; do [ $j = b ] && continue 2; [ $i = 3 ] && break 2; echo $i$j; done; done; echo end",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: continue outside a loop",
+      "script": "continue; echo status=$?; break; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: break with a bad count",
+      "script": "for i in 1 2; do break 0; done; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: declare -p forms",
+      "script": "declare -i n=5; declare -a a=(1 2); declare -A m=([k]=v); declare -r r=1; declare -x e=2; declare -p n a m r e",
+      "tags": [
+        "param.attributes",
+        "param.array.assoc",
+        "param.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: declare -i evaluates",
+      "script": "declare -i n; n=2+3*4; echo $n; n+=1; echo $n; n=abc; echo $n",
+      "tags": [
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: declare -l and -u",
+      "script": "declare -l lo=HeLLo; declare -u up=HeLLo; echo $lo $up; lo=AGAIN; echo $lo",
+      "tags": [
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: declare -f and -F",
+      "script": "f() { echo body; }; g() { :; }; declare -F; declare -f f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: declare -g inside a function",
+      "script": "f() { declare -g G=global; declare L=local; }; f; echo \"[$G] [${L-unset}]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: typeset is declare",
+      "script": "typeset -i t=1+1; echo $t; typeset -p t",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: local outside a function",
+      "script": "local x=1; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: local scoping is dynamic",
+      "script": "x=global; inner() { echo $x; }; outer() { local x=outer; inner; }; outer; echo $x",
+      "tags": [
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: local -",
+      "script": "f() { local -; set -f; echo *; }; f; set -o | grep -E '^noglob'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: readonly blocks assignment",
+      "script": "readonly r=1; r=2; echo status=$?; echo $r; unset r; echo status=$?",
+      "tags": [
+        "param.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: readonly -p",
+      "script": "readonly a=1 b; readonly -p | grep -E ' (a|b)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: pushd popd dirs",
+      "script": "cd /tmp; mkdir -p a b; pushd a >/dev/null; pushd /tmp/b; dirs; popd >/dev/null; pwd; popd; dirs -c; dirs",
+      "tags": [
+        "builtin.pushd",
+        "builtin.popd",
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: popd on an empty stack",
+      "script": "popd; echo status=$?",
+      "tags": [
+        "builtin.popd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: pushd to a missing directory",
+      "script": "pushd /nope; echo status=$?",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: disown a job",
+      "script": "sleep 0.05 & disown; jobs | wc -l; wait; echo status=$?; sleep 0.2",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: disown with no job",
+      "script": "disown %5; echo status=$?",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: times",
+      "script": "times >/dev/null; echo status=$?",
+      "tags": [
+        "builtin.times"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: getopts basic",
+      "script": "set -- -a -b val -c rest; while getopts ab:c o; do echo \"$o ${OPTARG-}\"; done; shift $((OPTIND-1)); echo \"rest=$*\"",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: getopts clustered and attached",
+      "script": "set -- -abval -c; while getopts ab:c o; do echo \"$o ${OPTARG-}\"; done; echo OPTIND=$OPTIND",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: getopts unknown option",
+      "script": "set -- -x; while getopts ab o; do echo \"got $o\"; done; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: getopts silent mode",
+      "script": "set -- -x -b; while getopts :ab: o; do echo \"$o ${OPTARG-}\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: getopts missing argument",
+      "script": "set -- -b; while getopts b: o; do echo \"got $o\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: getopts in a function",
+      "script": "f() { local OPTIND o; while getopts n: o \"$@\"; do echo \"$o=$OPTARG\"; done; }; f -n 1; f -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: getopts stops at --",
+      "script": "set -- -a -- -b; while getopts ab o; do echo $o; done; shift $((OPTIND-1)); echo \"$@\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: let arithmetic and status",
+      "script": "let a=2*3 b=a+1; echo $a $b; let 0; echo status=$?; let 'c = 1 + 1'; echo $c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: readarray options",
+      "script": "printf 'a\\nb\\nc\\nd\\n' >/tmp/f; readarray -t -s 1 -n 2 arr </tmp/f; declare -p arr; mapfile -t -O 5 arr </tmp/f; echo ${#arr[@]} ${arr[5]}",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: mapfile with a delimiter",
+      "script": "printf 'a,b,c' | { mapfile -d , -t parts; printf '[%s]' \"${parts[@]}\"; echo; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: shift counts",
+      "script": "set -- a b c d; shift; echo \"$*\"; shift 2; echo \"$*\"; shift 5; echo status=$? \"$*\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: set -- and positional count",
+      "script": "set -- 'a b' c; echo $#; for x in \"$@\"; do echo \"[$x]\"; done; set --; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: echo options",
+      "script": "echo -n no-newline; echo; echo -e 'a\\tb\\x41\\0101'; echo -E 'raw\\t'; echo -- -n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: printf -v",
+      "script": "printf -v out '%05d|%-4s|' 42 ab; echo \"$out\"; printf -v 'arr[1]' '%s' x; echo ${arr[1]}",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: printf reuses its format",
+      "script": "printf '%s=%s\\n' a 1 b 2 c; printf '%b\\n' 'x\\ty'; printf '%q\\n' 'a b' \"it's\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: printf errors",
+      "script": "printf '%d\\n' 1.5; echo status=$?; printf '%z'; echo status=$?",
+      "tags": [
+        "cmd.printf",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: read splits on IFS",
+      "script": "echo 'a b  c d' | { read x y z; echo \"[$x][$y][$z]\"; }; echo 'a:b:c' | { IFS=: read -r x y; echo \"[$x][$y]\"; }",
+      "tags": [
+        "expansion.word-splitting"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: read -r and backslashes",
+      "script": "printf 'a\\\\b\\n' | { read v; echo \"$v\"; }; printf 'a\\\\b\\n' | { read -r v; echo \"$v\"; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: read -a -d -n -N",
+      "script": "echo 'x y z' | { read -a arr; echo ${#arr[@]} ${arr[2]}; }; printf 'ab;cd' | { read -d ';' v; echo $v; }; echo abcdef | { read -n 3 v; echo $v; }; printf 'a\\nb' | { read -N 3 v; printf '[%s]\\n' \"$v\"; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: read at EOF",
+      "script": "printf 'last' | { read v; echo status=$? v=$v; }; : | { read v; echo status=$?; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: while read loop",
+      "script": "printf '1 a\\n2 b\\n3 c\\n' | while read -r n l; do echo \"$l$n\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: read -p to stderr",
+      "script": "echo x | { read -p 'prompt: ' v 2>/dev/null; echo $v; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: read -u from a descriptor",
+      "script": "echo from3 >/tmp/f; exec 3</tmp/f; read -u 3 v; echo $v; exec 3<&-",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: set -o listing",
+      "script": "set -o | grep -E '^(errexit|nounset|pipefail|noglob) ' ",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: set +o round trip",
+      "script": "set -e -u; set +o | grep -E 'errexit|nounset'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: set with a bad option",
+      "script": "set -o nosuchoption; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: shopt query forms",
+      "script": "shopt -q extglob; echo status=$?; shopt -s nullglob; shopt nullglob; shopt -p nullglob; shopt -u nullglob; shopt -q nullglob; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: shopt unknown option",
+      "script": "shopt -s nosuchopt; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: test string operators",
+      "script": "test -z '' && echo z; test -n x && echo n; [ a = a ] && echo eq; [ a != b ] && echo ne; [ a \\< b ] && echo lt; [ b \\> a ] && echo gt",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: test numeric operators",
+      "script": "[ 2 -eq 2 ] && [ 1 -lt 2 ] && [ 3 -ge 3 ] && [ 4 -ne 5 ] && echo ok; [ 1 -eq x ]; echo status=$?",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: test file operators",
+      "script": "cd /tmp; : >e; echo x >s; mkdir -p d; ln -sf s l; for f in e s d l nope; do printf '%s:' $f; [ -e $f ] && printf e; [ -f $f ] && printf f; [ -d $f ] && printf d; [ \"$f\" != d ] && [ -s $f ] && printf s; [ -L $f ] && printf L; echo; done",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: test combined and negated",
+      "script": "[ ! -e /nope ] && echo absent; [ 1 -eq 1 -a 2 -eq 2 ] && echo and; [ 1 -eq 2 -o 2 -eq 2 ] && echo or; [ \\( 1 -eq 1 \\) ] && echo group",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: test syntax errors",
+      "script": "[ 1 -eq ]; echo status=$?; [ a b c ]; echo status=$?; test; echo status=$?",
+      "tags": [
+        "builtin.test",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: test newer and older",
+      "script": "cd /tmp; touch -d '2020-01-01' old; touch -d '2021-01-01' new; [ new -nt old ] && echo nt; [ old -ot new ] && echo ot; [ old -ef old ] && echo ef",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: unset variables and functions",
+      "script": "x=1; f() { :; }; unset x; echo \"[${x-unset}]\"; unset -f f; f 2>/dev/null; echo status=$?; unset -v nosuch; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: unset an array element",
+      "script": "a=(1 2 3); unset 'a[1]'; echo ${#a[@]} ${!a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: return outside a function",
+      "script": "return 3; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: return statuses",
+      "script": "f() { return 7; }; f; echo $?; g() { false; return; }; g; echo $?; h() { return 300; }; h; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: exit status wraps",
+      "script": "(exit 256); echo $?; (exit -1); echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: exec a command ends the script",
+      "script": "echo before; exec echo replaced; echo not-reached",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: exec with no command keeps going",
+      "script": "exec 3>/tmp/x; echo kept >&3; exec 3>&-; cat /tmp/x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: colon true false",
+      "script": ": ignored args; echo $?; true; echo $?; false; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: jobs listing forms",
+      "script": "sleep 0.1 & jobs >/dev/null; echo status=$?; jobs -l | wc -l; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "builtin: kill -l",
+      "script": "kill -l 15; kill -l TERM; kill -l 999; echo status=$?",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: compgen word lists",
+      "script": "compgen -W 'alpha beta alps' al; compgen -W 'x y' z; echo status=$?",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "builtin: compgen variables",
+      "script": "myvar1=1 myvar2=2; compgen -v myvar",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    }
+  ]
+}

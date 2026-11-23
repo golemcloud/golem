@@ -11,7 +11,7 @@ Key concepts:
 
 ## Agent Fundamentals
 
-- Every agent is uniquely identified by its **constructor parameter values** — two agents with the same parameters are the same agent
+- Every agent has an opaque **agent ID** (a UUID that Golem issues). An agent reached through `upsert` is the **keyed** agent of its constructor parameter values — two upserts with the same parameters reach the same agent; `create` without `keyed` makes a new agent with a new ID
 - Agents are **durable by default** — their state persists across invocations, failures, and restarts
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
 - Agents can **spawn other agents** and communicate with them via **RPC** (see Agent-to-Agent Communication)
@@ -317,9 +317,9 @@ The `agents` code generation tool auto-generates a `<AgentName>Client` struct fo
 - `schedule_method(scheduled_at, args)` — scheduled invocation at a future time
 
 ```moonbit
-// Awaited call — use an async method and scoped for automatic cleanup
+// Awaited call — use an async method and scoped_upsert for automatic cleanup
 pub async fn call_counter() -> UInt64 {
-  CounterClient::scoped("my-counter", async fn(counter) {
+  CounterClient::scoped_upsert("my-counter", async fn(counter) {
     counter.increment()
     counter.increment()
     counter.get_value()
@@ -327,23 +327,38 @@ pub async fn call_counter() -> UInt64 {
 }
 
 // Fire-and-forget
-let counter = CounterClient::get("my-counter")
+let counter = CounterClient::upsert("my-counter")
 counter.trigger_increment()
 counter.drop()
 
 // Manual lifecycle management in an async function
 pub async fn read_counter() -> UInt64 {
-  let counter = CounterClient::get("my-counter")
+  let counter = CounterClient::upsert("my-counter")
   defer counter.drop()
   counter.increment()
   counter.get_value()
 }
 
-// Phantom agents (multiple instances with same constructor params)
-let phantom = CounterClient::new_phantom("my-counter")
-let id = phantom.phantom_id()
-// Later, reconnect to the same phantom:
-let same = CounterClient::get_phantom("my-counter", id.unwrap())
+// Create a new agent without a key (one more instance with the same
+// constructor parameters), and later reconnect to it by its ID
+pub async fn create_counter() -> @schema.AgentId {
+  let counter = CounterClient::create("my-counter", env=[("MODE", "test")])
+  defer counter.drop()
+  let id = counter.agent_id()
+  let same = CounterClient::get_by_id(id)
+  defer same.drop()
+  id
+}
+
+// Keyed create fails with `@agentHost.RpcError::Conflict` when the keyed
+// agent already exists
+pub async fn create_keyed_counter() -> Unit {
+  let counter = CounterClient::create("my-counter", keyed=true) catch {
+    @agentHost.RpcError::Conflict(_) => return
+    error => raise error
+  }
+  counter.drop()
+}
 ```
 
 Avoid RPC cycles (A calls B calls A) — use `trigger_` to break deadlocks.

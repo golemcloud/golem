@@ -29,18 +29,18 @@ object HostApiCompileSpec extends ZIOSpecDefault {
     // ---------------------------------------------------------------------------
 
     test("ForkResult.Original and Forked variants compile") {
-      val phantomId                    = new java.util.UUID(1L, 2L)
-      val original: HostApi.ForkResult = HostApi.ForkResult.Original(phantomId)
-      val forked: HostApi.ForkResult   = HostApi.ForkResult.Forked(phantomId)
+      val forkedId                     = AgentId(new java.util.UUID(1L, 2L))
+      val original: HostApi.ForkResult = HostApi.ForkResult.Original(forkedId)
+      val forked: HostApi.ForkResult   = HostApi.ForkResult.Forked(forkedId)
       assertTrue(
-        original.forkedPhantomId == phantomId,
-        forked.forkedPhantomId == phantomId
+        original.forkedAgentId == forkedId,
+        forked.forkedAgentId == forkedId
       )
     },
 
     test("ForkResult pattern match compiles") {
       val result: HostApi.ForkResult =
-        HostApi.ForkResult.Original(new java.util.UUID(0L, 0L))
+        HostApi.ForkResult.Original(AgentId(new java.util.UUID(0L, 0L)))
       val label = result match {
         case HostApi.ForkResult.Original(_) => "original"
         case HostApi.ForkResult.Forked(_)   => "forked"
@@ -54,23 +54,21 @@ object HostApiCompileSpec extends ZIOSpecDefault {
 
     test("AgentMetadata construction with all fields") {
       val meta = HostApi.AgentMetadata(
-        agentId = null.asInstanceOf[HostApi.AgentIdLiteral],
+        agentId = AgentId(new java.util.UUID(1L, 2L)),
+        agentTypeName = Some("my-agent"),
+        fingerprint = new java.util.UUID(3L, 4L),
         args = List("arg1", "arg2"),
         env = Map("KEY" -> "VALUE"),
         config = Map("cfg" -> "val"),
         status = null.asInstanceOf[HostApi.AgentStatus],
         componentRevision = BigInt(3),
         retryCount = BigInt(0),
-        agentType = "my-agent",
-        agentName = "instance-1",
-        componentId = null.asInstanceOf[HostApi.ComponentIdLiteral],
         environmentId = null.asInstanceOf[JsEnvironmentId]
       )
       assertTrue(
         meta.args == List("arg1", "arg2"),
         meta.env == Map("KEY" -> "VALUE"),
-        meta.agentType == "my-agent",
-        meta.agentName == "instance-1",
+        meta.agentTypeName.contains("my-agent"),
         meta.componentRevision == BigInt(3)
       )
     },
@@ -146,39 +144,16 @@ object HostApiCompileSpec extends ZIOSpecDefault {
     // ---------------------------------------------------------------------------
 
     test("RegisteredAgentType construction") {
-      val rat = HostApi.RegisteredAgentType(
-        typeName = "my-agent",
-        implementedBy = null.asInstanceOf[HostApi.ComponentIdLiteral]
-      )
+      val rat = HostApi.RegisteredAgentType(typeName = "my-agent")
       assertTrue(rat.typeName == "my-agent")
-    },
-
-    // ---------------------------------------------------------------------------
-    // AgentIdParts (Scala case class, no js.Dynamic)
-    // ---------------------------------------------------------------------------
-
-    test("AgentIdParts construction") {
-      val parts = HostApi.AgentIdParts(
-        agentTypeName = "counter",
-        phantom = Some(new java.util.UUID(1L, 2L))
-      )
-      assertTrue(
-        parts.agentTypeName == "counter",
-        parts.phantom.isDefined
-      )
-    },
-
-    test("AgentIdParts with no phantom") {
-      val parts = HostApi.AgentIdParts("counter", None)
-      assertTrue(parts.phantom.isEmpty)
     },
 
     // ---------------------------------------------------------------------------
     // Filter construction APIs
     // ---------------------------------------------------------------------------
 
-    test("AgentNameFilter construction with StringFilterComparator") {
-      val f: HostApi.AgentNameFilter = HostApi.AgentNameFilter(HostApi.StringFilterComparator.Equal, "my-agent")
+    test("AgentKeyFilter construction with StringFilterComparator") {
+      val f: HostApi.AgentKeyFilter = HostApi.AgentKeyFilter(HostApi.StringFilterComparator.Equal, "my-agent")
       assertTrue(f != null)
     },
 
@@ -210,9 +185,9 @@ object HostApiCompileSpec extends ZIOSpecDefault {
       assertTrue(f != null)
     },
 
-    test("AgentPropertyFilter.name wraps AgentNameFilter") {
-      val nameFilter                      = HostApi.AgentNameFilter(HostApi.StringFilterComparator.Equal, "test")
-      val pf: HostApi.AgentPropertyFilter = HostApi.AgentPropertyFilter.name(nameFilter)
+    test("AgentPropertyFilter.key wraps AgentKeyFilter") {
+      val keyFilter                       = HostApi.AgentKeyFilter(HostApi.StringFilterComparator.Equal, "test")
+      val pf: HostApi.AgentPropertyFilter = HostApi.AgentPropertyFilter.key(keyFilter)
       assertTrue(pf != null)
     },
 
@@ -248,7 +223,7 @@ object HostApiCompileSpec extends ZIOSpecDefault {
 
     test("AgentAllFilter combines multiple AgentPropertyFilters") {
       val nameFilter =
-        HostApi.AgentPropertyFilter.name(HostApi.AgentNameFilter(HostApi.StringFilterComparator.Equal, "a"))
+        HostApi.AgentPropertyFilter.key(HostApi.AgentKeyFilter(HostApi.StringFilterComparator.Equal, "a"))
       val statusFilter = HostApi.AgentPropertyFilter.status(
         HostApi.AgentStatusFilter(HostApi.FilterComparator.Equal, HostApi.AgentStatus.Running)
       )
@@ -258,10 +233,10 @@ object HostApiCompileSpec extends ZIOSpecDefault {
 
     test("AgentAnyFilter combines multiple AgentAllFilters") {
       val all1 = HostApi.AgentAllFilter(
-        List(HostApi.AgentPropertyFilter.name(HostApi.AgentNameFilter(HostApi.StringFilterComparator.Equal, "a")))
+        List(HostApi.AgentPropertyFilter.key(HostApi.AgentKeyFilter(HostApi.StringFilterComparator.Equal, "a")))
       )
       val all2 = HostApi.AgentAllFilter(
-        List(HostApi.AgentPropertyFilter.name(HostApi.AgentNameFilter(HostApi.StringFilterComparator.Equal, "b")))
+        List(HostApi.AgentPropertyFilter.key(HostApi.AgentKeyFilter(HostApi.StringFilterComparator.Equal, "b")))
       )
       val any: HostApi.AgentAnyFilter = HostApi.AgentAnyFilter(List(all1, all2))
       assertTrue(any != null)
@@ -282,21 +257,12 @@ object HostApiCompileSpec extends ZIOSpecDefault {
       assertTrue(cid != null)
     },
 
-    test("AgentIdLiteral companion constructs from ComponentIdLiteral and name") {
-      val uuid                        = HostApi.UuidLiteral(js.BigInt(1), js.BigInt(2))
-      val cid                         = HostApi.ComponentIdLiteral(uuid)
-      val aid: HostApi.AgentIdLiteral = HostApi.AgentIdLiteral(cid, "my-agent")
-      assertTrue(aid != null)
-    },
-
-    test("PromiseIdLiteral companion constructs from AgentIdLiteral, fingerprint and oplog index") {
-      val uuid        = HostApi.UuidLiteral(js.BigInt(1), js.BigInt(2))
-      val cid         = HostApi.ComponentIdLiteral(uuid)
-      val aid         = HostApi.AgentIdLiteral(cid, "my-agent")
+    test("PromiseIdLiteral companion constructs from AgentId, fingerprint and oplog index") {
+      val aid         = AgentId(new java.util.UUID(1L, 2L))
       val fingerprint = HostApi.UuidLiteral(js.BigInt(3), js.BigInt(4))
       val pid         = HostApi.PromiseIdLiteral(aid, fingerprint, js.BigInt(42))
       assertTrue(
-        pid.agentId.agentId == "my-agent",
+        golem.host.js.JsAgentId.toAgentId(pid.agentId) == aid,
         pid.fingerprint.highBits == js.BigInt(3),
         pid.fingerprint.lowBits == js.BigInt(4),
         pid.oplogIdx == js.BigInt(42)

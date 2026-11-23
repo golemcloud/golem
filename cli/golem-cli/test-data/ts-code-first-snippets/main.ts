@@ -343,11 +343,11 @@ export const FooAgent = defineAgent({
 });
 
 export const FooAgentImpl = FooAgent.implement({
-  // Build the typed RPC client for BarAgent, mirroring `BarAgent.get("foooo", 1)`
+  // Build the typed RPC client for BarAgent, mirroring `BarAgent.upsert("foooo", 1)`
   // (constructor params optionalStringType = "foooo", optionalUnionType = 1).
   init: ({ id }) => ({
     input: id.input,
-    barAgent: BarAgent.client.get({ optionalStringType: 'foooo', optionalUnionType: 1 }),
+    barAgent: BarAgent.client.upsert({ optionalStringType: 'foooo', optionalUnionType: 1 }),
   }),
   methods: {
     funAll(input) {

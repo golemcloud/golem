@@ -60,6 +60,9 @@ pub(crate) struct SocketEntry {
     pub native_bound: bool,
     /// P2: `start-bind` succeeded and `finish-bind` has not completed it yet.
     pub bind_pending: bool,
+    /// P2: the native connect of this socket started in this Store. A connect that started
+    /// before a reconstruction has no native future here.
+    pub native_connect: bool,
     pub options: TcpSocketOptions,
 }
 
@@ -75,6 +78,7 @@ impl SocketEntry {
             receive_taken: false,
             native_bound: false,
             bind_pending: false,
+            native_connect: false,
             options: TcpSocketOptions::default(),
         }
     }

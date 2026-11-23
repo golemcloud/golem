@@ -26,7 +26,7 @@ final class PrincipalAgentImpl(input: String, context: InvocationContext) extend
   private def describe(principal: Principal): String = principal match {
     case Principal.User(ref, _, _)        => s"user: $ref"
     case Principal.Account(ref, _, _)     => s"account: $ref"
-    case Principal.Agent(ref, _, _, _, _) => s"agent: $ref"
+    case Principal.Agent(ref, _, _, _)    => s"agent: $ref"
     case Principal.Tool(ref, _, toolName) => s"tool: $toolName ($ref)"
     case Principal.Anonymous              => "anonymous"
   }

@@ -1,0 +1,120 @@
+{
+  "tier": "pr",
+  "description": "The shell's memory budget: what a script builds in memory, and where bash-tool stops it.\n\nBash allocates until `malloc` fails, then ends with `xmalloc: cannot allocate N bytes` (status 2),\nor, for a brace expansion it cannot allocate, fails just that expansion. An agent's memory is\ncapped, and running out of it traps the agent, so bash-tool keeps the shell's own data within a\nbudget and ends the same way when a script asks for more (README.md, \"Limits\"). Bash, with the\nmemory of its machine, finishes each of these.\n\nWhere a case's refusal names a byte count that depends on what the shell held at the time, its\nstderr is piped through `sed` so the golden does not change with unrelated allocations.\n\nEach case name starts with `memory: `.",
+  "cases": [
+    {
+      "name": "memory: a 50 MB variable and its copy",
+      "script": "x=$(yes | head -c 50000000); y=$x; echo ${#x} ${#y}",
+      "tags": [],
+      "options": {
+        "timeout": 60
+      }
+    },
+    {
+      "name": "memory: an array of 100,000 elements",
+      "script": "for ((i = 0; i < 100000; i++)); do a[i]=element-$i; done; echo ${#a[@]} ${a[99999]}",
+      "tags": [],
+      "options": {
+        "timeout": 60
+      }
+    },
+    {
+      "name": "memory: a brace expansion of a million words",
+      "script": "a=({1..1000000}); echo ${#a[@]} ${a[999999]}",
+      "tags": [],
+      "options": {
+        "timeout": 60
+      }
+    },
+    {
+      "name": "memory: a value that keeps doubling ends the script",
+      "script": "x=y; for i in {1..28}; do x=$x$x; done; echo ${#x}",
+      "tags": [],
+      "options": {
+        "timeout": 60
+      },
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: xmalloc: cannot allocate 134217744 bytes: shell memory over 384 MiB is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: bash-tool keeps the shell's memory within a budget (README.md, \"Limits\") and refuses past it as bash does when malloc fails, where bash, with the memory of its machine, finishes"
+      }
+    },
+    {
+      "name": "memory: appending to an array past the budget ends its subshell",
+      "script": "x=$(yes | head -c 50000000); (for i in {1..9}; do a+=(\"$x\"); done; echo ${#a[@]}) 2>&1 | sed 's/allocate [0-9]* bytes/allocate N bytes/'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {
+        "timeout": 60
+      },
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "bash: xmalloc: cannot allocate N bytes: shell memory over 384 MiB is unsupported in bash-tool\nstatus=2\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "fixture: bash-tool keeps the shell's memory within a budget (README.md, \"Limits\") and refuses past it as bash does when malloc fails, where bash, with the memory of its machine, finishes"
+      }
+    },
+    {
+      "name": "memory: many large variables end their subshell",
+      "script": "x=$(yes | head -c 50000000); (for i in {1..9}; do declare \"v$i=$x\"; done; echo done) 2>&1 | sed 's/allocate [0-9]* bytes/allocate N bytes/'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {
+        "timeout": 60
+      },
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "bash: xmalloc: cannot allocate N bytes: shell memory over 384 MiB is unsupported in bash-tool\nstatus=2\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "fixture: bash-tool keeps the shell's memory within a budget (README.md, \"Limits\") and refuses past it as bash does when malloc fails, where bash, with the memory of its machine, finishes"
+      }
+    },
+    {
+      "name": "memory: a brace expansion past the budget ends the script",
+      "script": "a=({1..3000000}); echo after",
+      "tags": [],
+      "options": {
+        "timeout": 60
+      },
+      "expected": {
+        "status": 1,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: line 1: brace expansion: failed to allocate memory for 3000000 elements: shell memory over 384 MiB is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: bash-tool keeps the shell's memory within a budget (README.md, \"Limits\") and refuses past it as bash does when malloc fails, where bash, with the memory of its machine, finishes"
+      }
+    },
+    {
+      "name": "memory: text too large to parse ends its subshell",
+      "script": "s=$(yes 'echo hi;' | head -n 400000); { eval \"$s\"; } 2>&1 | sed 's/allocate [0-9]* bytes/allocate N bytes/' | tail -n 1; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {
+        "timeout": 60
+      },
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "bash: xmalloc: cannot allocate N bytes: shell memory over 384 MiB is unsupported in bash-tool\nstatus=2\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "fixture: bash-tool keeps the shell's memory within a budget (README.md, \"Limits\") and refuses past it as bash does when malloc fails, where bash, with the memory of its machine, finishes"
+      }
+    }
+  ]
+}

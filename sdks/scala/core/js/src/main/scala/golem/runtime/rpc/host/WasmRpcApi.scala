@@ -16,8 +16,8 @@
 
 package golem.runtime.rpc.host
 
-import golem.{Datetime, InvocationId}
-import golem.host.js.JsDatetime
+import golem.{Datetime, FutureInterop, InvocationId}
+import golem.host.js.{JsAgentId, JsDatetime}
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedAgentConfigValue, JsUuid}
 import golem.runtime.rpc.{
   AsyncInvocation,
@@ -29,8 +29,10 @@ import golem.runtime.rpc.{
   RawCancellationToken
 }
 
-import scala.annotation.unused
+import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
+import scala.util.control.NonFatal
 import scala.scalajs.js.annotation.{JSImport, JSName}
 
 // ---------------------------------------------------------------------------
@@ -57,32 +59,51 @@ sealed trait JsRpcErrorRemoteAgent extends JsRpcError {
 }
 
 private[golem] object WasmRpcApi {
-  def newClient(
-    agentTypeName: String,
-    constructorPayload: JsSchemaValueTree,
-    phantomId: js.UndefOr[JsUuid],
-    agentConfig: js.Array[JsTypedAgentConfigValue]
-  ): WasmRpcClient = {
-    val phantomArg: js.Any = phantomId.getOrElse(js.undefined)
-    new WasmRpcClient(new RawWasmRpc(agentTypeName, constructorPayload, phantomArg, agentConfig))
-  }
 
-  def createClient(
-    agentTypeName: String,
-    constructorPayload: JsSchemaValueTree,
-    phantomId: js.UndefOr[JsUuid],
-    agentConfig: js.Array[JsTypedAgentConfigValue]
-  ): Either[RpcError, WasmRpcClient] = {
-    val phantomArg: js.Any = phantomId.getOrElse(js.undefined)
-    try Right(new WasmRpcClient(RawWasmRpc.create(agentTypeName, constructorPayload, phantomArg, agentConfig)))
+  /** A client of the keyed agent of the constructor parameters (`upsert`). */
+  def upsert(agentTypeName: String, constructorPayload: JsSchemaValueTree): Either[RpcError, WasmRpcClient] =
+    try Right(new WasmRpcClient(RawWasmRpc.upsert(agentTypeName, constructorPayload)))
     catch { case js.JavaScriptException(error) => Left(decodeRpcError(error)) }
+
+  /** A client of the existing agent with the given ID (`get-by-id`). */
+  def getById(agentTypeName: String, agentId: JsAgentId): Either[RpcError, WasmRpcClient] =
+    try Right(new WasmRpcClient(RawWasmRpc.getById(agentTypeName, agentId)))
+    catch { case js.JavaScriptException(error) => Left(decodeRpcError(error)) }
+
+  /** Creates a durable agent and returns its ID and a client (`create`). */
+  def create(
+    agentTypeName: String,
+    constructorPayload: JsSchemaValueTree,
+    keyed: Boolean,
+    agentConfig: js.Array[JsTypedAgentConfigValue],
+    env: Map[String, String]
+  ): Future[Either[RpcError, (JsAgentId, WasmRpcClient)]] = {
+    val options = js.Dynamic
+      .literal(
+        "keyed"       -> keyed,
+        "agentConfig" -> agentConfig,
+        "env"         -> js.Array(env.toSeq.map { case (key, value) => js.Tuple2(key, value) }*)
+      )
+      .asInstanceOf[RawCreateOptions]
+    rpcFuture(RawWasmRpc.create(agentTypeName, constructorPayload, options))
+      .map(_.map(created => (created.agentId, new WasmRpcClient(created.client))))
   }
 
-  def bindSelf(): Either[RpcError, (String, WasmRpcClient)] =
+  def bindSelf(): Either[RpcError, (JsAgentId, WasmRpcClient)] =
     try {
       val bound = RawWasmRpc.bindSelf()
       Right((bound._1, new WasmRpcClient(bound._2)))
     } catch { case js.JavaScriptException(error) => Left(decodeRpcError(error)) }
+
+  /**
+   * Awaits a host promise whose rejection is an `rpc-error`. A synchronous
+   * throw of the host call becomes a `Left` too.
+   */
+  private def rpcFuture[A](promise: => js.Promise[A]): Future[Either[RpcError, A]] =
+    (try FutureInterop.fromPromise(promise)
+    catch { case NonFatal(error) => Future.failed(error) })
+      .map[Either[RpcError, A]](Right(_))
+      .recover { case js.JavaScriptException(error) => Left(decodeRpcError(error)) }
 
   private def datetimeToJs(datetime: Datetime): JsDatetime = {
     val totalMs            = datetime.epochMillis
@@ -120,6 +141,8 @@ private[golem] object WasmRpcApi {
           RpcError("remote-internal-error", Some(value.asInstanceOf[JsRpcErrorString].value))
         case "remote-agent-error" =>
           RpcError("remote-agent-error", None, Some(value.asInstanceOf[JsRpcErrorRemoteAgent].value))
+        case "conflict" =>
+          RpcError("conflict", Some(value.asInstanceOf[JsRpcErrorString].value))
         case other =>
           RpcError(other, None)
       }
@@ -136,8 +159,17 @@ private[golem] object WasmRpcApi {
       ()
     }
 
-    private def metadata(raw: RawInvocationMetadata): InvocationMetadata =
-      InvocationMetadata(raw.agentId, InvocationId(raw.agentId, JsUuid.toUuid(raw.invocationId.id)))
+    private def metadata(raw: RawInvocationMetadata): InvocationMetadata = {
+      val agentId = JsAgentId.toAgentId(raw.agentId)
+      InvocationMetadata(agentId, InvocationId(agentId, JsUuid.toUuid(raw.invocationId.id)))
+    }
+
+    /**
+     * The ID of the agent this client connects to. On a client of `upsert` the
+     * host creates the agent when it is missing.
+     */
+    def agentId(): Future[Either[RpcError, JsAgentId]] =
+      rpcFuture(raw.agentId())
 
     /**
      * `scopeCard` is a raw `permission-card` resource that the host borrows for
@@ -243,7 +275,7 @@ private[golem] object WasmRpcApi {
 
   @js.native
   private[rpc] trait RawInvocationMetadata extends js.Object {
-    def agentId: String                     = js.native
+    def agentId: JsAgentId                  = js.native
     def invocationId: RawInvocationIdRecord = js.native
   }
 
@@ -283,13 +315,18 @@ private[golem] object WasmRpcApi {
   }
 
   @js.native
+  private[rpc] trait RawCreateOptions extends js.Object
+
+  @js.native
+  private[rpc] trait RawCreated extends js.Object {
+    def client: RawWasmRpc = js.native
+    def agentId: JsAgentId = js.native
+  }
+
+  @js.native
   @JSImport("golem:agent/host@2.0.0", "WasmRpc")
-  private final class RawWasmRpc(
-    @unused agentTypeName: String,
-    @unused constructor_ : JsSchemaValueTree,
-    @unused phantomId: js.Any,
-    @unused agentConfig: js.Array[JsTypedAgentConfigValue]
-  ) extends js.Object {
+  private[rpc] final class RawWasmRpc extends js.Object {
+    def agentId(): js.Promise[JsAgentId] = js.native
     def invokeAndAwait(
       methodName: String,
       input: JsSchemaValueTree,
@@ -318,12 +355,13 @@ private[golem] object WasmRpcApi {
   @js.native
   @JSImport("golem:agent/host@2.0.0", "WasmRpc")
   private object RawWasmRpc extends js.Object {
-    def bindSelf(): js.Tuple2[String, RawWasmRpc] = js.native
+    def upsert(agentTypeName: String, constructorPayload: JsSchemaValueTree): RawWasmRpc = js.native
+    def getById(agentTypeName: String, agentId: JsAgentId): RawWasmRpc                   = js.native
     def create(
       agentTypeName: String,
       constructorPayload: JsSchemaValueTree,
-      phantomId: js.Any,
-      agentConfig: js.Array[JsTypedAgentConfigValue]
-    ): RawWasmRpc = js.native
+      options: RawCreateOptions
+    ): js.Promise[RawCreated]                        = js.native
+    def bindSelf(): js.Tuple2[JsAgentId, RawWasmRpc] = js.native
   }
 }

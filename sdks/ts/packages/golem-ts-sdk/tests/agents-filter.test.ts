@@ -5,6 +5,12 @@ import { describe, expect, it } from 'vitest';
 import { Filter, RevertTarget } from '../src/host/hostapi';
 
 describe('Filter → agent-any-filter (DNF)', () => {
+  it('compiles a key leaf to the key property filter', () => {
+    expect(Filter.key('equal', 'Counter("a")').toRaw()).toEqual({
+      filters: [{ filters: [{ tag: 'key', val: { comparator: 'equal', value: 'Counter("a")' } }] }],
+    });
+  });
+
   it('a single leaf is one conjunction of one property', () => {
     expect(Filter.status('equal', 'idle').toRaw()).toEqual({
       filters: [{ filters: [{ tag: 'status', val: { comparator: 'equal', value: 'idle' } }] }],
@@ -12,9 +18,9 @@ describe('Filter → agent-any-filter (DNF)', () => {
   });
 
   it('`.and` groups leaves into one conjunction', () => {
-    const raw = Filter.status('equal', 'idle').and(Filter.name('starts-with', 'w-')).toRaw();
+    const raw = Filter.status('equal', 'idle').and(Filter.key('starts-with', 'Counter(')).toRaw();
     expect(raw.filters).toHaveLength(1);
-    expect(raw.filters[0]!.filters.map((f) => f.tag)).toEqual(['status', 'name']);
+    expect(raw.filters[0]!.filters.map((f) => f.tag)).toEqual(['status', 'key']);
   });
 
   it('`.or` produces separate conjunctions', () => {
@@ -25,14 +31,14 @@ describe('Filter → agent-any-filter (DNF)', () => {
 
   it('distributes AND over OR into disjunctive normal form', () => {
     // (A or B) and C  →  (A and C) or (B and C)
-    const A = Filter.name('equal', 'a');
-    const B = Filter.name('equal', 'b');
+    const A = Filter.key('equal', 'Counter("a")');
+    const B = Filter.key('equal', 'Counter("b")');
     const C = Filter.status('equal', 'idle');
     const raw = A.or(B).and(C).toRaw();
     expect(raw.filters).toHaveLength(2);
     for (const conj of raw.filters) {
       const tags = conj.filters.map((f) => f.tag).sort();
-      expect(tags).toEqual(['name', 'status']);
+      expect(tags).toEqual(['key', 'status']);
     }
   });
 

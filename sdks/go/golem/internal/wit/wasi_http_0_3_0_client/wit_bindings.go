@@ -62,7 +62,7 @@ func Send(request *wasi_http_0_3_0_types.Request) witTypes.Result[*wasi_http_0_3
 
 		result0 = witTypes.Ok[*wasi_http_0_3_0_types.Response, wasi_http_0_3_0_types.ErrorCode](wasi_http_0_3_0_types.ResponseFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))))
 	case 1:
-		result := wasm_lift_1_t1308(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t1312(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result0 = witTypes.Err[*wasi_http_0_3_0_types.Response, wasi_http_0_3_0_types.ErrorCode](result)
 	default:
@@ -74,7 +74,7 @@ func Send(request *wasi_http_0_3_0_types.Request) witTypes.Result[*wasi_http_0_3
 }
 
 //go:noinline
-func wasm_lift_1_t1308(src unsafe.Pointer) wasi_http_0_3_0_types.ErrorCode {
+func wasm_lift_1_t1312(src unsafe.Pointer) wasi_http_0_3_0_types.ErrorCode {
 	var variant wasi_http_0_3_0_types.ErrorCode
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -82,7 +82,7 @@ func wasm_lift_1_t1308(src unsafe.Pointer) wasi_http_0_3_0_types.ErrorCode {
 		variant = wasi_http_0_3_0_types.MakeErrorCodeDnsTimeout()
 
 	case 1:
-		result := wasm_lift_1_t1301(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t1305(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = wasi_http_0_3_0_types.MakeErrorCodeDnsError(result)
 
@@ -135,7 +135,7 @@ func wasm_lift_1_t1308(src unsafe.Pointer) wasi_http_0_3_0_types.ErrorCode {
 		variant = wasi_http_0_3_0_types.MakeErrorCodeTlsCertificateError()
 
 	case 14:
-		result0 := wasm_lift_1_t1303(unsafe.Add(unsafe.Pointer(src), 8))
+		result0 := wasm_lift_1_t1307(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = wasi_http_0_3_0_types.MakeErrorCodeTlsAlertReceived(result0)
 
@@ -196,7 +196,7 @@ func wasm_lift_1_t1308(src unsafe.Pointer) wasi_http_0_3_0_types.ErrorCode {
 
 			option3 = witTypes.None[wasi_http_0_3_0_types.FieldSizePayload]()
 		case 1:
-			result2 := wasm_lift_1_t1305(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))
+			result2 := wasm_lift_1_t1309(unsafe.Add(unsafe.Pointer(src), (8 + 1*4)))
 
 			option3 = witTypes.Some[wasi_http_0_3_0_types.FieldSizePayload](result2)
 		default:
@@ -221,7 +221,7 @@ func wasm_lift_1_t1308(src unsafe.Pointer) wasi_http_0_3_0_types.ErrorCode {
 		variant = wasi_http_0_3_0_types.MakeErrorCodeHttpRequestTrailerSectionSize(option4)
 
 	case 24:
-		result5 := wasm_lift_1_t1305(unsafe.Add(unsafe.Pointer(src), 8))
+		result5 := wasm_lift_1_t1309(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = wasi_http_0_3_0_types.MakeErrorCodeHttpRequestTrailerSize(result5)
 
@@ -245,7 +245,7 @@ func wasm_lift_1_t1308(src unsafe.Pointer) wasi_http_0_3_0_types.ErrorCode {
 		variant = wasi_http_0_3_0_types.MakeErrorCodeHttpResponseHeaderSectionSize(option6)
 
 	case 27:
-		result7 := wasm_lift_1_t1305(unsafe.Add(unsafe.Pointer(src), 8))
+		result7 := wasm_lift_1_t1309(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = wasi_http_0_3_0_types.MakeErrorCodeHttpResponseHeaderSize(result7)
 
@@ -280,7 +280,7 @@ func wasm_lift_1_t1308(src unsafe.Pointer) wasi_http_0_3_0_types.ErrorCode {
 		variant = wasi_http_0_3_0_types.MakeErrorCodeHttpResponseTrailerSectionSize(option9)
 
 	case 30:
-		result10 := wasm_lift_1_t1305(unsafe.Add(unsafe.Pointer(src), 8))
+		result10 := wasm_lift_1_t1309(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = wasi_http_0_3_0_types.MakeErrorCodeHttpResponseTrailerSize(result10)
 
@@ -360,7 +360,7 @@ func wasm_lift_1_t1308(src unsafe.Pointer) wasi_http_0_3_0_types.ErrorCode {
 }
 
 //go:noinline
-func wasm_lift_1_t1301(src unsafe.Pointer) wasi_http_0_3_0_types.DnsErrorPayload {
+func wasm_lift_1_t1305(src unsafe.Pointer) wasi_http_0_3_0_types.DnsErrorPayload {
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -389,7 +389,7 @@ func wasm_lift_1_t1301(src unsafe.Pointer) wasi_http_0_3_0_types.DnsErrorPayload
 }
 
 //go:noinline
-func wasm_lift_1_t1303(src unsafe.Pointer) wasi_http_0_3_0_types.TlsAlertReceivedPayload {
+func wasm_lift_1_t1307(src unsafe.Pointer) wasi_http_0_3_0_types.TlsAlertReceivedPayload {
 	var option witTypes.Option[uint8]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -418,7 +418,7 @@ func wasm_lift_1_t1303(src unsafe.Pointer) wasi_http_0_3_0_types.TlsAlertReceive
 }
 
 //go:noinline
-func wasm_lift_1_t1305(src unsafe.Pointer) wasi_http_0_3_0_types.FieldSizePayload {
+func wasm_lift_1_t1309(src unsafe.Pointer) wasi_http_0_3_0_types.FieldSizePayload {
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

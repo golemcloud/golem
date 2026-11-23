@@ -2,7 +2,8 @@ use super::*;
 use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, PendingUpload};
 use async_trait::async_trait;
-use golem_common::model::agent::OwnerKind;
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::card::{
     AgentCardHolder, Card, CardHolder, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
 };
@@ -17,12 +18,12 @@ use golem_common::model::oplog::payload::types::{
 use golem_common::model::oplog::{
     AgentError, DurableFunctionType, DurableInvocationId, FilesystemSnapshotName, HostRequest,
     HostRequestGolemToolInvocationRejected, HostRequestMonotonicClockDuration, HostRequestNoInput,
-    HostResponseMonotonicClockTimestamp, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult, HostStreamKind, OplogErrorKind, OplogPayload,
-    PayloadId, RawOplogPayload,
+    HostResponse, HostResponseGolemApiFork, HostResponseMonotonicClockTimestamp,
+    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
+    HostStreamKind, OplogErrorKind, OplogPayload, PayloadId, RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentId, AgentInvocationPayload, Timestamp};
+use golem_common::model::{AgentId, ForkResult, Timestamp};
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::collections::BTreeMap;
@@ -212,10 +213,7 @@ impl Oplog for InMemoryOplog {
 fn test_agent_id() -> OwnedAgentId {
     OwnedAgentId {
         environment_id: EnvironmentId::new(),
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "replay-state-test".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 1),
     }
 }
 
@@ -268,7 +266,8 @@ fn invocation_started_for(
     OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc(),
         invocation_id,
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+        operation: Box::new(InvocationRequestOperation::SaveSnapshot),
+        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
             caller: golem_common::model::caller::Caller::anonymous(),
         })),
         trace_id: TraceId::generate(),
@@ -1119,9 +1118,7 @@ fn end_for(start_index: u64, nanos: u64) -> OplogEntry {
     }
 }
 
-/// A `Start` for the sequential `golem::api` fork pair. Its only special replay behaviour is the
-/// commit-only side effect in [`ReplayState::apply_commit_effects`] (recording its index in
-/// `pending_fork_starts`), which the speculative-rollback test exercises.
+/// A `Start` for the sequential `golem::api` fork pair.
 fn fork_start() -> OplogEntry {
     OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
@@ -2007,17 +2004,18 @@ async fn historical_revision_updates_remain_for_root_after_entity_drain() {
     let update = ReplayEvent::UpdateReplayed {
         new_revision: golem_common::model::component::ComponentRevision::new(2).unwrap(),
     };
-    let fork = ReplayEvent::ForkReplayed {
-        new_phantom_id: uuid::Uuid::new_v4(),
+    let installed = ReplayEvent::CardInstalled {
+        card: stored_test_card(CardId::new()),
+        wallet_generation: 1,
     };
     replay
         .cursor
         .pending_replay_events
         .lock()
         .unwrap()
-        .extend([update.clone(), fork.clone()]);
+        .extend([update.clone(), installed.clone()]);
 
-    assert_eq!(replay.take_new_replay_events_for(false), vec![fork]);
+    assert_eq!(replay.take_new_replay_events_for(false), vec![installed]);
     assert!(replay.take_new_replay_events_for(false).is_empty());
     assert_eq!(replay.take_new_replay_events_for(true), vec![update]);
     assert!(replay.take_new_replay_events_for(true).is_empty());
@@ -2584,7 +2582,8 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
     let wallet_pin = InvocationWalletPin {
         wallet_token: WalletVersionToken {
             wallet_id_hash: CardHolder::Agent(AgentCardHolder {
-                agent_id: owned_agent_id.agent_id.clone(),
+                environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+                agent_id: owned_agent_id.agent_id,
             })
             .wallet_id_hash(),
             generation: 0,
@@ -2772,6 +2771,7 @@ async fn permission_events_are_recovered_from_skipped_regions() {
     let source_card_id = CardId::new();
     let card = stored_test_card(CardId::new());
     let target_holder = CardHolder::Agent(AgentCardHolder {
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
         agent_id: test_agent_id().agent_id,
     });
     let oplog = Arc::new(InMemoryOplog::new());
@@ -3389,35 +3389,42 @@ async fn predicate_probe_retains_unclaimed_start_and_drains_awaited_terminals() 
 #[test]
 async fn speculative_rollback_does_not_apply_side_effects() {
     // A speculative read whose predicate fails rolls the cursor back AND applies none of the
-    // entry's commit-only side effects. A GolemApiFork `Start` records its index in
-    // `pending_fork_starts` only when permanently consumed; a rolled-back read must not.
+    // entry's commit-only side effects. An `AgentInvocationStarted` records its wallet pin
+    // replay event only when permanently consumed; a rolled-back read must not.
+    let pin = InvocationWalletPin {
+        wallet_token: WalletVersionToken {
+            wallet_id_hash: [5; 32],
+            generation: 7,
+        },
+        pinned_card_ids: Vec::new(),
+        scope_card_id: None,
+    };
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
-        fork_start(),
+        invocation_started(pin.clone()),
+        remove_retry_policy(),
     ])
     .await;
 
     let probe = rs.try_get_oplog_entry(|_| false).await.unwrap();
     assert!(probe.is_none());
-    {
-        let internal = rs.cursor.state.lock().await;
-        assert!(
-            internal.pending_fork_starts.is_empty(),
-            "rolled-back speculative read must not apply the fork Start side effect"
-        );
-    }
+    assert!(
+        rs.cursor.pending_replay_events.lock().unwrap().is_empty(),
+        "rolled-back speculative read must not apply the invocation wallet pin side effect"
+    );
 
     // The committed consume does apply the side effect.
     let (idx, _) = rs.try_get_oplog_entry(|_| true).await.unwrap().unwrap();
     assert_eq!(idx, OplogIndex::from_u64(2));
-    let internal = rs.cursor.state.lock().await;
-    assert!(
-        internal
-            .pending_fork_starts
-            .contains(&OplogIndex::from_u64(2)),
-        "committed read must apply the fork Start side effect"
+    assert_eq!(
+        *rs.cursor.pending_replay_events.lock().unwrap(),
+        vec![ReplayEvent::InvocationWalletPinned {
+            oplog_index: OplogIndex::from_u64(2),
+            wallet_pin: pin,
+        }],
+        "committed read must apply the invocation wallet pin side effect"
     );
 }
 
@@ -4485,11 +4492,9 @@ async fn invocation_boundary_rejects_terminal_of_resolved_claimed_start() {
 #[test]
 async fn invocation_boundary_rejects_unclaimed_fork_pair() {
     // [RecoverySucceeded, Start(2, GolemApiFork), End(2→3, Forked), AgentInvocationFinished(4)] — an
-    // unclaimed legacy fork pair is a dedicated-positional-consumer record whose committed
-    // consume is not inert: committing it would record a pending fork and decode the End
-    // into a `ForkReplayed` event the replayed guest never requested. It must stay fatal
-    // at the invocation boundary, and neither its commit-side state nor its replay event
-    // may be applied.
+    // unclaimed fork pair is a dedicated-positional-consumer record that the replayed guest
+    // never requested. It must stay fatal at the invocation boundary, and no replay event may
+    // be applied for it.
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
@@ -4500,7 +4505,7 @@ async fn invocation_boundary_rejects_unclaimed_fork_pair() {
             start_index: OplogIndex::from_u64(2),
             response: Some(OplogPayload::Inline(Box::new(HostResponse::GolemApiFork(
                 HostResponseGolemApiFork {
-                    forked_phantom_id: Uuid::new_v4(),
+                    forked_agent_id: Some(AgentId::from_parts(7, 1)),
                     result: Ok(ForkResult::Forked),
                 },
             )))),
@@ -4523,11 +4528,6 @@ async fn invocation_boundary_rejects_unclaimed_fork_pair() {
     assert!(
         rs.take_new_replay_events().is_empty(),
         "no replay event may be emitted for the rejected fork pair"
-    );
-    let internal = rs.cursor.state.lock().await;
-    assert!(
-        internal.pending_fork_starts.is_empty(),
-        "the rejected fork Start's commit-side state must not be applied"
     );
 }
 
@@ -12073,13 +12073,7 @@ async fn wallet_replay_fixture(
     use golem_common::model::agent::ResolvedOwnerContext;
 
     let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
-    let owner_id = OwnedAgentId::new(
-        metadata.environment_id,
-        &AgentId {
-            component_id: metadata.id,
-            agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
-        },
-    );
+    let owner_id = OwnedAgentId::new(metadata.environment_id, &AgentId::random_reserved());
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in entries {
         oplog.add(entry).await.unwrap();
@@ -15113,13 +15107,7 @@ async fn owner_wallet_reconstructs_physical_prefixes_without_rewinding_live_stat
 
     let component_id = ComponentId::new();
     let environment_id = EnvironmentId::new();
-    let owner = OwnedAgentId::new(
-        environment_id,
-        &AgentId {
-            component_id,
-            agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
-        },
-    );
+    let owner = OwnedAgentId::new(environment_id, &AgentId::random_reserved());
     let metadata = wallet_test_component(component_id, environment_id);
     let components = Arc::new(WalletComponentService {
         metadata: metadata.clone(),
@@ -15273,13 +15261,7 @@ async fn owner_wallet_selected_snapshot_excludes_earlier_effects_and_preserves_e
     use golem_common::model::agent::ResolvedOwnerContext;
 
     let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
-    let owner_id = OwnedAgentId::new(
-        metadata.environment_id,
-        &AgentId {
-            component_id: metadata.id,
-            agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
-        },
-    );
+    let owner_id = OwnedAgentId::new(metadata.environment_id, &AgentId::random_reserved());
     let before = stored_test_card(CardId::new());
     let selected = stored_test_card(CardId::new());
     let audit = stored_test_card(CardId::new());
@@ -15383,13 +15365,7 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
 
     for conflict in -3..5 {
         let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
-        let owner_id = OwnedAgentId::new(
-            metadata.environment_id,
-            &AgentId {
-                component_id: metadata.id,
-                agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
-            },
-        );
+        let owner_id = OwnedAgentId::new(metadata.environment_id, &AgentId::random_reserved());
         let installed = stored_test_card(CardId::new());
         let first = stored_test_card(CardId::new());
         let second = stored_test_card(CardId::new());
@@ -15585,13 +15561,7 @@ async fn failed_wallet_publication_poison_is_local_and_rebuild_retains_the_entry
 
     for retire in [false, true] {
         let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
-        let owner_id = OwnedAgentId::new(
-            metadata.environment_id,
-            &AgentId {
-                component_id: metadata.id,
-                agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
-            },
-        );
+        let owner_id = OwnedAgentId::new(metadata.environment_id, &AgentId::random_reserved());
         let oplog = Arc::new(InMemoryOplog::new());
         oplog.add(remove_retry_policy()).await.unwrap();
         let baseline = WalletBaseline::new(
@@ -15708,13 +15678,7 @@ async fn owner_boundary_admission_precedes_poll_and_drains_cancelled_acquisition
     use golem_common::model::agent::ResolvedOwnerContext;
 
     let metadata = wallet_test_component(ComponentId::new(), EnvironmentId::new());
-    let owner_id = OwnedAgentId::new(
-        metadata.environment_id,
-        &AgentId {
-            component_id: metadata.id,
-            agent_id: OwnerKind::oplog_processor_instance_name(uuid::Uuid::new_v4()),
-        },
-    );
+    let owner_id = OwnedAgentId::new(metadata.environment_id, &AgentId::random_reserved());
     let oplog = InMemoryOplog::new();
     oplog.add(remove_retry_policy()).await.unwrap();
     let baseline = WalletBaseline::new(
@@ -15960,13 +15924,7 @@ async fn live_bootstrap_cursor_replays_a_partial_block_then_goes_live_locally() 
 
 #[test]
 fn unclosed_abandoned_starts_diverge_at_the_lowest_open_index() {
-    let owned_agent_id = OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "abandoned".to_string(),
-        },
-    );
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
     for order in [[12, 9, 6, 3, 5], [3, 5, 6, 9, 12], [9, 3, 12, 5, 6]] {
         let mut abandoned = AbandonedStarts::default();
         for index in order {

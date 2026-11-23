@@ -129,8 +129,12 @@ fn qualify_local_stream(
     producer: &AgentId,
     producer_fingerprint: AgentFingerprint,
 ) -> Result<StreamId, StreamStoreError> {
-    StreamId::derive(environment_id, producer, producer_fingerprint, local_id.0)
-        .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))
+    Ok(StreamId::derive(
+        environment_id,
+        producer,
+        producer_fingerprint,
+        local_id.0,
+    ))
 }
 
 fn materialize_stream_reference(
@@ -158,7 +162,7 @@ impl RegisteredStream {
         let source_invocation = match &record.source_invocation {
             StreamRegistrationInvocation::Local(idempotency_key) => StreamInvocationId {
                 callee_environment_id: environment_id,
-                callee: producer.clone(),
+                callee: *producer,
                 callee_fingerprint: producer_fingerprint,
                 idempotency_key: *idempotency_key,
             },
@@ -184,13 +188,12 @@ impl RegisteredStream {
             producer,
             producer_fingerprint,
             registration_oplog_index,
-        )
-        .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?;
+        );
         let handle = DurableStreamHandle {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             stream_id,
             producer_environment_id: environment_id,
-            producer: producer.clone(),
+            producer: *producer,
             expected_producer_fingerprint: producer_fingerprint,
             producer_generation: OplogIndex::NONE,
             source_invocation,
@@ -206,7 +209,7 @@ impl RegisteredStream {
                 let invocation_id = match invocation {
                     StreamRegistrationInvocation::Local(key) => StreamInvocationId {
                         callee_environment_id: environment_id,
-                        callee: producer.clone(),
+                        callee: *producer,
                         callee_fingerprint: producer_fingerprint,
                         idempotency_key: *key,
                     },

@@ -695,14 +695,14 @@ Add `FileOwner: {}` beside the routers in the deployment's `agents` map, then:
 ```shell
 golem deploy -L -Y
 curl http://localhost:9006/files/alice/value
-golem agent new -L 'FileOwner("alice")'
+golem agent create -L --keyed 'FileOwner("alice")'
 curl http://localhost:9006/files/alice/value
 golem agent invoke -L 'FileOwner("alice")' update
 curl http://localhost:9006/files/alice/value
 ```
 
 The first read returns 404, because a file read never creates the agent. After
-`golem agent new`, the read returns `initial:alice`; after `update`, it returns
+`golem agent create --keyed`, the read returns `initial:alice`; after `update`, it returns
 `updated`. Reads use `Cache-Control: no-store` with no ETag. No exported method is
 called to serve the file. A slow download can delay other
 work on that agent; see [live-file lifecycle](/next/invoke/making-custom-apis/http-routers/semantics#live-durable-agent-files).
@@ -716,14 +716,14 @@ handler, update the file owner before constructing the response:
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
-await FileOwner.client.get({ name: 'from-router' }).update();
+await FileOwner.client.upsert({ name: 'from-router' }).update();
 ```
 </Tabs.Tab>
 <Tabs.Tab>
 Inside the handler's `Effect.gen` block:
 
 ```typescript
-const owner = yield* FileOwner.client.get({ name: "from-router" })
+const owner = yield* FileOwner.client.upsert({ name: "from-router" })
 yield* owner.update({})
 ```
 
@@ -731,7 +731,7 @@ Keep the call in the request's Effect scope; do not launch a detached `runPromis
 </Tabs.Tab>
 <Tabs.Tab>
 ```rust
-FileOwnerClient::get("from-router".to_string()).update().await;
+FileOwnerClient::upsert("from-router".to_string()).update().await;
 ```
 </Tabs.Tab>
 <Tabs.Tab>
@@ -740,7 +740,7 @@ Chain the response with `map` after the update, using the Scala.js execution con
 ```scala
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
-FileOwnerClient.get("from-router").update().map { _ =>
+FileOwnerClient.upsert("from-router").update().map { _ =>
   HttpResponse(UShort(200), Nil, request.body)
 }
 ```
@@ -749,7 +749,7 @@ FileOwnerClient.get("from-router").update().map { _ =>
 Make the handler `pub async fn` before awaiting the generated client:
 
 ```moonbit
-let owner = FileOwnerClient::get("from-router")
+let owner = FileOwnerClient::upsert("from-router")
 defer owner.drop()
 owner.update() |> ignore
 ```
@@ -758,7 +758,7 @@ owner.update() |> ignore
 Inside the handler, before writing the response:
 
 ```go
-fileowner.Update.MustCall(fileowner.FileOwner.Get(fileowner.FileOwnerID{Name: "from-router"}), golem.Unit{})
+fileowner.Update.MustCall(fileowner.FileOwner.Upsert(fileowner.FileOwnerID{Name: "from-router"}), golem.Unit{})
 ```
 </Tabs.Tab>
 </Tabs>

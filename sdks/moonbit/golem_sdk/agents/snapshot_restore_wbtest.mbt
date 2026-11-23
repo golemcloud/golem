@@ -48,12 +48,13 @@ test "snapshot restoration installs only after success" {
     load_snapshot: None,
   }
   let context : SnapshotRestoreContext = {
-    agent_id: "RestoreTestAgent(identity)",
+    agent_id: @schema.AgentId::parse("0000002a-0000-8011-8000-00000000001d"),
     agent_type: "RestoreTestAgent",
-    identity_fields: decode_snapshot_identity(
+    identity_fields: decode_wire_input(
       @schema.into_wire_record(["identity", 42U]),
+      2,
+      "RestoreTestAgent::new",
     ),
-    phantom_id: None,
   }
   let identity : String = context.identity(0)
   debug_inspect(identity, content="\"identity\"")
@@ -96,10 +97,9 @@ test "failed snapshot restoration does not commit decoded identity resources" {
     let reader = @schema.WireReader::new(tree, drop_resource=_ => dropped += 1)
     ignore(@schema.wire_node(reader, tree.root))
     let context : SnapshotRestoreContext = {
-      agent_id: "FailedRestore()",
+      agent_id: @schema.AgentId::parse("0000002a-0000-8011-8000-00000000001d"),
       agent_type: "FailedRestore",
       identity_fields: { reader, fields: [0], },
-      phantom_id: None,
     }
     register_agent({
       name: "FailedRestore",
@@ -177,10 +177,13 @@ test "multipart failed restore is retryable skips constructor and installs fresh
     })
     let context = fn() -> SnapshotRestoreContext raise {
       {
-        agent_id: "MultipartRestore()",
+        agent_id: @schema.AgentId::parse("0000002a-0000-8011-8000-00000000001d"),
         agent_type: "MultipartRestore",
-        identity_fields: decode_snapshot_identity(@schema.into_wire_record([])),
-        phantom_id: None,
+        identity_fields: decode_wire_input(
+          @schema.into_wire_record([]),
+          0,
+          "MultipartRestore::new",
+        ),
       }
     }
     assert_true(

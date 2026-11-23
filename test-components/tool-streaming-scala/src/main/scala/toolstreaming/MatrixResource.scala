@@ -126,13 +126,15 @@ final class MatrixTypedToolImpl extends MatrixTypedTool {
 private def matrixResourceEvidence(context: InvocationContext): (String, String, String) =
   (
     "scala",
-    context.caller.immediate.toString,
-    HostApi.getSelfMetadata().agentId.agentId
+    s"${context.caller.original.toString}|${context.caller.immediate.toString}",
+    HostApi.getSelfMetadata().agentId.toString
   )
 
-/** The evidence of a user caller whose subject is the acceptance subject. */
-private def isAcceptanceCaller(text: String): Boolean =
-  text.startsWith("user (") && text.endsWith(",\"matrix-resource-acceptance\")")
+/** The evidence of a caller whose original caller is the user with the acceptance subject. */
+private def isAcceptanceCaller(text: String): Boolean = {
+  val original = text.takeWhile(_ != '|')
+  original.startsWith("user (") && original.endsWith(",\"matrix-resource-acceptance\")")
+}
 
 final case class MatrixResourceConfig(secret: Secret[String])
 object MatrixResourceConfig {
@@ -254,7 +256,7 @@ final class ScalaResourceToolStreamingCallerImpl(name: String, config: Config[Ma
             s"matrix permission issuer principal was ${issue.principal}, expected a user caller with subject matrix-resource-acceptance"
           )
         )
-      case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.agentId =>
+      case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.toString =>
         Future.failed(
           new IllegalStateException(
             s"matrix permission issuer owner was ${issue.ownerAgentId}, expected the calling agent"
@@ -308,7 +310,7 @@ final class ScalaResourceToolStreamingCallerImpl(name: String, config: Config[Ma
                         s"matrix permission issuer principal was ${issue.principal}, expected a user caller with subject matrix-resource-acceptance"
                       )
                     )
-                  case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.agentId =>
+                  case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.toString =>
                     Future.failed(
                       new IllegalStateException(
                         s"matrix permission issuer owner was ${issue.ownerAgentId}, expected the calling agent"

@@ -15,7 +15,7 @@
 //! Trusted output invocations through worker-service, including exact-cursor reattachment.
 //! Observations survive connections and are keyed by durable identity, never transport channel.
 
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, anyhow, bail, ensure};
 use futures::{StreamExt, stream::BoxStream};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
@@ -28,8 +28,8 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_session_completion, stream_terminal,
 };
 use golem_client::model::ComponentDto;
-use golem_common::model::agent::ParsedAgentKey;
-use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::model::IdempotencyKey;
+use golem_common::model::agent::{AgentKey, AgentTarget, ParsedAgentKey};
 use golem_common::schema::TypedSchemaValue;
 use golem_schema::proto::golem::common::Uuid;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoValue;
@@ -321,11 +321,17 @@ impl InvocationSession {
         input: TypedSchemaValue,
         timeout: Duration,
     ) -> anyhow::Result<Self> {
-        let agent = AgentId::from_agent_id(component.id, agent).map_err(anyhow::Error::msg)?;
+        let key = AgentKey::new(agent.agent_type.clone(), agent.parameters.clone())
+            .map_err(|err| anyhow!("Invalid agent key {agent}: {err}"))?;
         let (_, value) = input.into_parts();
         let request = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(agent.into()),
+                target: Some(
+                    AgentTarget::Key(key)
+                        .try_into()
+                        .map_err(anyhow::Error::msg)?,
+                ),
+                component_id: Some(component.id.into()),
                 method_name: Some(method.to_string()),
                 input: Some(value.try_into().map_err(anyhow::Error::msg)?),
                 idempotency_key: Some(IdempotencyKey::fresh().into()),
@@ -361,7 +367,7 @@ impl InvocationSession {
         let request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
                 idempotency_key: accepted.idempotency_key,
-                agent_id: accepted.agent_id.clone(),
+                agent_id: accepted.agent_id,
                 environment_id: accepted.environment_id,
                 attachment_id: accepted.attachment_id,
                 attempt_id: Some(uuid::Uuid::new_v4().into()),

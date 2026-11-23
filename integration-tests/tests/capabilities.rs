@@ -17,16 +17,17 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
+use golem_common::model::AgentStatus;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
 use golem_common::model::quota::{EnforcementAction, TimePeriod};
-use golem_common::model::{AgentId, AgentStatus};
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use integration_tests::agents::lookup_keyed_agent;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -111,7 +112,7 @@ async fn quota_token_capability_round_trips_and_is_redacted(
         .store()
         .await?;
 
-    let sender = agent_id!("QuotaRpcSender", "cap-rpc-sender");
+    let sender = agent_key!("QuotaRpcSender", "cap-rpc-sender");
     let sender_sys = user.start_agent(&component.id, sender.clone()).await?;
 
     user.invoke_agent(
@@ -141,10 +142,12 @@ async fn quota_token_capability_round_trips_and_is_redacted(
     )
     .await?;
 
-    let receiver = AgentId {
-        component_id: component.id,
-        agent_id: "QuotaRpcReceiver(\"cap-rpc-sender-receiver\")".to_string(),
-    };
+    let receiver = lookup_keyed_agent(
+        &user,
+        &component,
+        &agent_key!("QuotaRpcReceiver", "cap-rpc-sender-receiver"),
+    )
+    .await?;
     user.wait_for_statuses(
         &receiver,
         &[AgentStatus::Idle, AgentStatus::Suspended],

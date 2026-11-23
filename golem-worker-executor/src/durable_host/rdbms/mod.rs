@@ -423,7 +423,7 @@ where
     let result = ctx
         .begin_transaction_function(RdbmsRemoteTransactionHandler::<T>::new(
             pool_key.clone(),
-            ctx.state.owned_agent_id.agent_id.clone(),
+            ctx.state.owned_agent_id.agent_id,
             ctx.state.rdbms_service.clone(),
         ))
         .await;
@@ -467,7 +467,7 @@ where
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
-    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
+    let agent_id = ctx.state.owned_agent_id.agent_id;
     let pool_key = ctx
         .as_wasi_view()
         .table()
@@ -607,7 +607,7 @@ where
     R: FromRdbmsValue<crate::services::rdbms::DbResult<T>>,
     E: From<RdbmsError>,
 {
-    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
+    let agent_id = ctx.state.owned_agent_id.agent_id;
     let pool_key = ctx
         .as_wasi_view()
         .table()
@@ -908,7 +908,7 @@ where
     dyn RdbmsService: RdbmsTypeService<T>,
 {
     ctx.observe_function_call(T::durability_connection_interface(), "drop");
-    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
+    let agent_id = ctx.state.owned_agent_id.agent_id;
     let (pool_key, initialized) = ctx
         .as_wasi_view()
         .table()
@@ -2078,7 +2078,7 @@ where
 
     match result {
         Ok((pool_key, transaction_id)) => {
-            let agent_id = ctx.state.owned_agent_id.agent_id.clone();
+            let agent_id = ctx.state.owned_agent_id.agent_id;
             ctx.state
                 .rdbms_service
                 .rdbms_type_service()

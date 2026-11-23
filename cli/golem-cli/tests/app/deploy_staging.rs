@@ -22,6 +22,87 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[timeout("15 minutes")]
+async fn installed_package_has_no_http_route_until_declared() -> anyhow::Result<()> {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    assert!(
+        ctx.cli([flag::YES, cmd::NEW, "publisher", flag::TEMPLATE, "ts"])
+            .await
+            .success_or_dump()
+    );
+    ctx.cd("publisher");
+    let http_api = indoc::indoc! {r#"
+        httpApi:
+          deployments:
+            local:
+              - domain: localhost:9006
+                scheme: http
+                agents:
+                  CounterAgent: {}
+    "#};
+    let publisher = formatdoc! {r#"
+        manifestVersion: {}
+        app: publisher
+        package: {{ name: publisher, version: 1.0.0 }}
+        environments:
+          local:
+            server: local
+            componentPresets: quick
+        components:
+          publisher:main:
+            templates: ts
+        {http_api}
+    "#, versions::sdk::MANIFEST};
+    fs::write_str(ctx.cwd_path_join("golem.yaml"), publisher)?;
+    assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
+    let pack = ctx.cli(["package", "pack"]).await;
+    assert!(pack.success_or_dump());
+    assert!(pack.stderr_contains(format!(
+        "Omitted HTTP API export: localhost:{}",
+        ctx.custom_request_port()
+    )));
+    let archive = ctx.cwd_path_join("golem-package.tar");
+
+    ctx.cd("..");
+    fs::create_dir_all(ctx.cwd_path_join("installer"))?;
+    ctx.cd("installer");
+    std::fs::copy(archive, ctx.cwd_path_join("publisher.tar"))?;
+    let manifest = ctx.cwd_path_join("golem.yaml");
+    fs::write_str(
+        &manifest,
+        formatdoc! {r#"
+            manifestVersion: {}
+            app: installer
+            environments:
+              local:
+                server: local
+        "#, versions::sdk::MANIFEST},
+    )?;
+    assert!(
+        ctx.cli(["install", "./publisher.tar"])
+            .await
+            .success_or_dump()
+    );
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    let route = format!(
+        "http://localhost:{}/counters/probe/value",
+        ctx.custom_request_port()
+    );
+    let client = reqwest::Client::new();
+    assert_eq!(client.get(&route).send().await?.status(), 404);
+
+    let installed = fs::read_to_string(&manifest)?;
+    fs::write_str(&manifest, format!("{installed}\n{http_api}"))?;
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    let response = client.get(&route).send().await?;
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.json::<f64>().await?, 0.0);
+    Ok(())
+}
+
+#[test]
+#[timeout("15 minutes")]
 async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::Result<()> {
     use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
     use golem_client::{Context, Security};

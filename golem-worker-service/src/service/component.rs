@@ -23,6 +23,8 @@ use golem_common::model::tool::ToolDeploymentState;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::component::Component;
+use std::future::Future;
+use std::hash::Hash;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -85,7 +87,7 @@ pub trait ComponentService: Send + Sync {
         _environment_id: EnvironmentId,
         _component_id: ComponentId,
         _component_revision: ComponentRevision,
-    ) -> Result<Option<ToolDeploymentState>, ComponentServiceError> {
+    ) -> Result<Option<Arc<ToolDeploymentState>>, ComponentServiceError> {
         Err(ComponentServiceError::InternalError(anyhow!(
             "tool deployment metadata is not supported by this component service"
         )))
@@ -112,23 +114,28 @@ impl From<CacheError> for ComponentServiceError {
     }
 }
 
-type CurrentComponentCache =
-    Cache<(ComponentId, u64), (), Arc<CurrentComponent>, RegistryServiceError>;
+/// Metadata that depends on the current deployment, keyed by the invalidation generation that
+/// was current when the lookup started.
+type CurrentCache<K, T> = Cache<(K, u64), (), Arc<Current<T>>, RegistryServiceError>;
+
+type ToolDeploymentKey = (EnvironmentId, ComponentId, ComponentRevision);
 
 pub struct RemoteComponentService {
     client: Arc<dyn RegistryService>,
     cache: Cache<(ComponentId, ComponentRevision), (), Component, CacheError>,
-    current_cache: Option<CurrentComponentCache>,
+    current_cache: Option<CurrentCache<ComponentId, Component>>,
+    tool_deployment_cache:
+        Option<CurrentCache<ToolDeploymentKey, Option<Arc<ToolDeploymentState>>>>,
     generation: AtomicU64,
     max_age: Duration,
 }
 
-struct CurrentComponent {
-    component: Component,
+struct Current<T> {
+    value: T,
     fetched_at: Instant,
 }
 
-const MAX_CURRENT_LOOKUP_ATTEMPTS: usize = 3;
+const CURRENT_LOOKUP_RETRY_WINDOW: Duration = Duration::from_secs(30);
 
 impl RemoteComponentService {
     pub fn new(client: Arc<dyn RegistryService>, config: &ComponentServiceConfig) -> Self {
@@ -140,19 +147,96 @@ impl RemoteComponentService {
                 BackgroundEvictionMode::None,
                 "component_metadata",
             ),
-            current_cache: (config.component_cache_max_capacity > 0
-                && !config.current_component_cache_ttl.is_zero())
+            current_cache: Self::current_cache(config, "current_component_metadata"),
+            tool_deployment_cache: Self::current_cache(config, "current_tool_deployment_state"),
+            generation: AtomicU64::new(0),
+            max_age: config.current_component_cache_ttl,
+        }
+    }
+
+    fn current_cache<K, T>(
+        config: &ComponentServiceConfig,
+        name: &'static str,
+    ) -> Option<CurrentCache<K, T>>
+    where
+        K: Eq + Hash + Clone + Send + Sync + 'static,
+        T: Send + Sync + 'static,
+    {
+        (config.component_cache_max_capacity > 0 && !config.current_component_cache_ttl.is_zero())
             .then(|| {
                 Cache::new(
                     Some(config.component_cache_max_capacity),
                     FullCacheEvictionMode::LeastRecentlyUsed(1),
                     BackgroundEvictionMode::None,
-                    "current_component_metadata",
+                    name,
                 )
-            }),
-            generation: AtomicU64::new(0),
-            max_age: config.current_component_cache_ttl,
+            })
+    }
+
+    async fn evict_older_generations<K, T>(cache: &Option<CurrentCache<K, T>>, generation: u64)
+    where
+        K: Eq + Hash + Clone + Send + Sync + 'static,
+        T: Send + Sync + 'static,
+    {
+        if let Some(cache) = cache {
+            for key in cache.keys().await {
+                if key.1 < generation {
+                    cache.remove_if_cached(&key, |_| true).await;
+                }
+            }
         }
+    }
+
+    /// Reads current-deployment metadata through `cache`. A result counts only when no
+    /// invalidation happened while it was fetched and it is younger than the configured TTL.
+    /// Returns `None` when no such result arrived within the retry window.
+    async fn get_current<K, T, F, Fut>(
+        &self,
+        cache: &Option<CurrentCache<K, T>>,
+        key: K,
+        fetch: F,
+    ) -> Result<Option<Arc<Current<T>>>, RegistryServiceError>
+    where
+        K: Eq + Hash + Clone + Send + Sync + 'static,
+        T: Send + Sync + 'static,
+        F: Fn() -> Fut + Clone + Send + 'static,
+        Fut: Future<Output = Result<T, RegistryServiceError>> + Send + 'static,
+    {
+        // Invalidations are global, so unrelated deployments can invalidate several reads
+        // in a row. Bound retries by elapsed time, not by the number of deployments.
+        let retry_deadline = Instant::now() + CURRENT_LOOKUP_RETRY_WINDOW;
+        while Instant::now() < retry_deadline {
+            tokio::task::yield_now().await;
+            let generation = self.generation.load(Ordering::SeqCst);
+            let fetch = fetch.clone();
+            let fetch = move || async move {
+                let fetched_at = Instant::now();
+                fetch()
+                    .await
+                    .map(|value| Arc::new(Current { value, fetched_at }))
+            };
+            let cache_key = (key.clone(), generation);
+            let result = match cache {
+                Some(cache) => cache.get_or_insert_simple_spawned(&cache_key, fetch).await,
+                None => fetch().await,
+            };
+            if self.generation.load(Ordering::SeqCst) != generation {
+                continue;
+            }
+            let current = result?;
+            if let Some(cache) = cache
+                && current.fetched_at.elapsed() >= self.max_age
+            {
+                cache
+                    .remove_if_cached(&cache_key, |value| Arc::ptr_eq(value, &current))
+                    .await;
+                continue;
+            }
+            if self.generation.load(Ordering::SeqCst) == generation {
+                return Ok(Some(current));
+            }
+        }
+        Ok(None)
     }
 
     async fn store_component_in_cache(&self, component: Component) {
@@ -171,13 +255,8 @@ impl ComponentService for RemoteComponentService {
         // Pending lookups may not yet identify their environment. Generation keys
         // keep their late fills from replacing or being read as current metadata.
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        if let Some(cache) = &self.current_cache {
-            for key in cache.keys().await {
-                if key.1 < generation {
-                    cache.remove_if_cached(&key, |_| true).await;
-                }
-            }
-        }
+        Self::evict_older_generations(&self.current_cache, generation).await;
+        Self::evict_older_generations(&self.tool_deployment_cache, generation).await;
     }
 
     async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
@@ -190,7 +269,7 @@ impl ComponentService for RemoteComponentService {
         if self.generation.load(Ordering::SeqCst) == generation {
             component
                 .filter(|c| c.fetched_at.elapsed() < self.max_age)
-                .map(|c| c.component.clone())
+                .map(|c| c.value.clone())
         } else {
             None
         }
@@ -200,50 +279,24 @@ impl ComponentService for RemoteComponentService {
         &self,
         component_id: ComponentId,
     ) -> Result<Component, ComponentServiceError> {
-        for _ in 0..MAX_CURRENT_LOOKUP_ATTEMPTS {
-            let generation = self.generation.load(Ordering::SeqCst);
-            let client = self.client.clone();
-            let key = (component_id, generation);
-            let fetch = move || async move {
-                let fetched_at = Instant::now();
-                client
-                    .get_deployed_component_metadata(component_id)
-                    .await
-                    .map(|component| {
-                        Arc::new(CurrentComponent {
-                            component,
-                            fetched_at,
-                        })
-                    })
-            };
-            let result = match &self.current_cache {
-                Some(cache) => cache.get_or_insert_simple_spawned(&key, fetch).await,
-                None => fetch().await,
-            };
-            if self.generation.load(Ordering::SeqCst) != generation {
-                continue;
-            }
-            let current = result.map_err(|error| match error {
+        let client = self.client.clone();
+        let current = self
+            .get_current(&self.current_cache, component_id, move || {
+                let client = client.clone();
+                async move { client.get_deployed_component_metadata(component_id).await }
+            })
+            .await
+            .map_err(|error| match error {
                 RegistryServiceError::NotFound(_) => ComponentServiceError::ComponentNotFound,
                 other => other.into(),
+            })?
+            .ok_or_else(|| {
+                ComponentServiceError::InternalError(anyhow!(
+                    "Could not obtain fresh deployed component metadata for {component_id} after repeated invalidation or expiry"
+                ))
             })?;
-            self.store_component_in_cache(current.component.clone())
-                .await;
-            if let Some(cache) = &self.current_cache
-                && current.fetched_at.elapsed() >= self.max_age
-            {
-                cache
-                    .remove_if_cached(&key, |value| Arc::ptr_eq(value, &current))
-                    .await;
-                continue;
-            }
-            if self.generation.load(Ordering::SeqCst) == generation {
-                return Ok(current.component.clone());
-            }
-        }
-        Err(ComponentServiceError::InternalError(anyhow!(
-            "Could not obtain fresh deployed component metadata for {component_id} after repeated invalidation or expiry"
-        )))
+        self.store_component_in_cache(current.value.clone()).await;
+        Ok(current.value.clone())
     }
 
     async fn get_current_by_id_uncached(
@@ -312,11 +365,33 @@ impl ComponentService for RemoteComponentService {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-    ) -> Result<Option<ToolDeploymentState>, ComponentServiceError> {
-        Ok(self
-            .client
-            .get_tool_deployment_state(environment_id, component_id, component_revision)
-            .await?)
+    ) -> Result<Option<Arc<ToolDeploymentState>>, ComponentServiceError> {
+        let client = self.client.clone();
+        let current = self
+            .get_current(
+                &self.tool_deployment_cache,
+                (environment_id, component_id, component_revision),
+                move || {
+                    let client = client.clone();
+                    async move {
+                        client
+                            .get_tool_deployment_state(
+                                environment_id,
+                                component_id,
+                                component_revision,
+                            )
+                            .await
+                            .map(|state| state.map(Arc::new))
+                    }
+                },
+            )
+            .await?
+            .ok_or_else(|| {
+                ComponentServiceError::InternalError(anyhow!(
+                    "Could not obtain fresh tool deployment state for component {component_id} revision {component_revision} after repeated invalidation or expiry"
+                ))
+            })?;
+        Ok(current.value.clone())
     }
 }
 

@@ -18,7 +18,7 @@ mod oplog_macro;
 pub(crate) mod public_types;
 mod replay_divergence;
 
-use crate::base_model::agent::{AgentMode, OwnerKind};
+use crate::base_model::agent::{AgentMode, AgentTypeName, OwnerKind};
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
@@ -49,7 +49,9 @@ mod raw_imports {
 
     pub use crate::model::oplog::raw_types::*;
     pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
-    pub use crate::model::{AgentInvocationPayload, AgentInvocationResult};
+    pub use crate::model::{
+        AgentInvocationResult, InvocationRequestOperation, StoredAgentInvocationPayload,
+    };
     pub use crate::resource_runtime::ResourceTypeId;
 
     pub use std::collections::HashSet;
@@ -84,6 +86,7 @@ oplog_entry! {
         }
         public {
             agent_id: AgentId,
+            agent_type_name: Option<AgentTypeName>,
             owner_kind: OwnerKind,
             agent_mode: AgentMode,
             component_revision: ComponentRevision,
@@ -95,7 +98,6 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
             local_agent_config: Vec<PublicTypedAgentConfigEntry>,
-            original_phantom_id: Option<Uuid>,
             instance_id: Uuid,
             never_live: bool
         }
@@ -194,7 +196,8 @@ oplog_entry! {
         wit_public_type: "agent-invocation-started-parameters"
         raw {
             invocation_id: InvocationId,
-            payload: payload::OplogPayload<AgentInvocationPayload>,
+            operation: Box<InvocationRequestOperation>,
+            payload: payload::OplogPayload<StoredAgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
             invocation_context: Vec<SpanData>,
@@ -333,7 +336,8 @@ oplog_entry! {
         raw {
             not_before: Option<Timestamp>,
             invocation_id: InvocationId,
-            payload: payload::OplogPayload<AgentInvocationPayload>,
+            operation: Box<InvocationRequestOperation>,
+            payload: payload::OplogPayload<StoredAgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
             invocation_context: Vec<SpanData>,

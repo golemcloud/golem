@@ -22,7 +22,7 @@ func init() {
 
 		// 2. Register the pending approval with the human over agent RPC.
 		//    Normally you would surface this in a UI, email, etc.
-		approver := human.Agent.Get(human.ID{Username: in.Approver})
+		approver := human.Agent.Upsert(human.ID{Username: in.Approver})
 		human.RequestApproval.MustCall(approver, human.RequestApprovalIn{
 			WorkflowID: ctx.State.workflowID,
 			PromiseID:  approval.ID(),

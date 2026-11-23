@@ -118,7 +118,7 @@ pub fn validate_snapshot_update_boundaries(
     deleted_regions: &DeletedRegions,
 ) -> Result<(), RevertUpdateBoundaryError> {
     // A manual update invocation changes only the manual admissions, and no queue element ends
-    // through one, so the check does not decode the invocation payloads.
+    // through one, so the check leaves the invocation entries out.
     entries
         .iter()
         .filter(|(_, entry)| !matches!(entry, OplogEntry::PendingAgentInvocation { .. }))

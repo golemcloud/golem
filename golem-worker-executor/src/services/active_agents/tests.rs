@@ -6,7 +6,6 @@ use super::is_loaded_idle_filesystem_pressure_candidate;
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::ComponentId;
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{non_flaky, test, timeout};
@@ -835,10 +834,7 @@ async fn concurrent_agents_plan_upgrade_does_not_over_add_under_parallel_acquire
 // ---------------------------------------------------------------------------
 
 fn agent(name: &str) -> AgentId {
-    AgentId {
-        component_id: ComponentId::new(),
-        agent_id: name.to_string(),
-    }
+    crate::test_agent_id(name)
 }
 
 fn scheduler() -> Arc<ConcurrentAgentsScheduler> {

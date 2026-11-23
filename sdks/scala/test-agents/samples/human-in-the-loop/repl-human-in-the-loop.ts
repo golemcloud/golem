@@ -1,5 +1,5 @@
-const w = await ApprovalWorkflow.get("demo");
-const h = await Human.get("demo");
+const w = await ApprovalWorkflow.upsert("demo");
+const h = await Human.upsert("demo");
 
 const started = await w.begin();
 const decided = await h.decide("demo", "approved");

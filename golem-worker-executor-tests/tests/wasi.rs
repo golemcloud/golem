@@ -19,7 +19,7 @@ use axum::routing::{get, post};
 use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::stream;
-use golem_common::agent_id;
+use golem_common::agent_key;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind, RevertToOplogIndex,
@@ -215,7 +215,7 @@ async fn write_stdout(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -224,7 +224,7 @@ async fn write_stdout(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Logging", "write-stdout-1");
+    let agent_id = agent_key!("Logging", "write-stdout-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -296,7 +296,7 @@ async fn write_stderr(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -305,7 +305,7 @@ async fn write_stderr(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Logging", "write-stderr-1");
+    let agent_id = agent_key!("Logging", "write-stderr-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -344,7 +344,7 @@ async fn read_stdin(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -353,7 +353,7 @@ async fn read_stdin(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Io", "read-stdin-1");
+    let agent_id = agent_key!("Io", "read-stdin-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -376,7 +376,7 @@ async fn clocks(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -385,7 +385,7 @@ async fn clocks(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clocks", "clocks-1");
+    let agent_id = agent_key!("Clocks", "clocks-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -437,7 +437,7 @@ async fn file_write_read_delete(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -450,7 +450,7 @@ async fn file_write_read_delete(
         )
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-write-read-delete-1");
+    let agent_id = agent_key!("FileSystem", "file-write-read-delete-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -492,7 +492,7 @@ async fn initial_file_read_write(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -519,7 +519,7 @@ async fn initial_file_read_write(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
-    let agent_id = agent_id!("FileReadWrite", "initial-file-read-write-1");
+    let agent_id = agent_key!("FileReadWrite", "initial-file-read-write-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -573,7 +573,7 @@ async fn initial_file_directory_hard_link_gives_not_permitted_through_p2_and_p3(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -581,7 +581,7 @@ async fn initial_file_directory_hard_link_gives_not_permitted_through_p2_and_p3(
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "directory-hard-link");
+    let agent_id = agent_key!("P3FileSystem", "directory-hard-link");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -645,7 +645,7 @@ async fn p2_p3_quota_classification_on_managed_xfs(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let root = managed_xfs_test_root();
     let context = TestContext::new(last_unique_id);
@@ -661,7 +661,7 @@ async fn p2_p3_quota_classification_on_managed_xfs(
         .store()
         .await?;
 
-    let p2_exhaustion_agent = agent_id!("P3FileSystem", "managed-quota-p2-exhaustion");
+    let p2_exhaustion_agent = agent_key!("P3FileSystem", "managed-quota-p2-exhaustion");
     let p2_exhaustion = schema_string_list(
         executor
             .invoke_and_await_agent(
@@ -706,7 +706,7 @@ async fn p2_p3_quota_classification_on_managed_xfs(
         ["prefix-complete=true", "suffix-bytes=0"]
     );
 
-    let p3_exhaustion_agent = agent_id!("P3FileSystem", "managed-quota-p3-exhaustion");
+    let p3_exhaustion_agent = agent_key!("P3FileSystem", "managed-quota-p3-exhaustion");
     let p3_exhaustion = executor
         .invoke_and_await_agent(
             &component,
@@ -869,7 +869,7 @@ async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let root = managed_xfs_test_root();
     let context = TestContext::new(last_unique_id);
@@ -904,7 +904,7 @@ async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
         )
         .store()
         .await?;
-    let agent = agent_id!("P3FileSystem", "managed-quota-downgrade");
+    let agent = agent_key!("P3FileSystem", "managed-quota-downgrade");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     let initial_result = executor
         .invoke_and_await_agent(
@@ -920,8 +920,8 @@ async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
     );
     let runtime_path = root
         .join(context.default_environment_id.to_string())
-        .join(component.id.to_string())
-        .join(agent_path_segment(&worker_id));
+        .join(format!("{:08x}", worker_id.agent_id.type_tag()))
+        .join(agent_path_segment(&worker_id.agent_id));
     assert!(runtime_path.exists());
 
     quota.set_limit(4096).await?;
@@ -1015,7 +1015,7 @@ async fn managed_xfs_resource_billing_survives_idle_and_replay(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let (executor, billing) = start_with_mutable_agent_storage_quota_on_managed_xfs(
@@ -1029,7 +1029,7 @@ async fn managed_xfs_resource_billing_survives_idle_and_replay(
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let agent = agent_id!("P3FileSystem", "managed-xfs-resource-billing");
+    let agent = agent_key!("P3FileSystem", "managed-xfs-resource-billing");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
 
     let mutation = executor
@@ -1222,7 +1222,7 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
     root: PathBuf,
     project_quota: Option<u64>,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
     use std::io::{Seek, SeekFrom, Write};
 
     const {
@@ -1241,7 +1241,7 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
         .store()
         .await?;
 
-    let victim = agent_id!("FileSystem", "physical-pressure-victim");
+    let victim = agent_key!("FileSystem", "physical-pressure-victim");
     let victim_worker = executor.start_agent(&component.id, victim.clone()).await?;
     executor
         .invoke_and_await_agent(
@@ -1256,8 +1256,8 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
         .await?;
     let victim_path = root
         .join(context.default_environment_id.to_string())
-        .join(component.id.to_string())
-        .join(agent_path_segment(&victim_worker));
+        .join(format!("{:08x}", victim_worker.agent_id.type_tag()))
+        .join(agent_path_segment(&victim_worker.agent_id));
     assert!(victim_path.is_dir(), "the victim did not use the XFS root");
     create_allocated_file(
         &victim_path.join("pressure-allocation"),
@@ -1265,7 +1265,7 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
         0x5a,
     )?;
 
-    let trigger = agent_id!("FileSystem", "physical-pressure-trigger");
+    let trigger = agent_key!("FileSystem", "physical-pressure-trigger");
     let trigger_worker = executor.start_agent(&component.id, trigger.clone()).await?;
     executor
         .invoke_and_await_agent(
@@ -1280,8 +1280,8 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
         .await?;
     let trigger_path = root
         .join(context.default_environment_id.to_string())
-        .join(component.id.to_string())
-        .join(agent_path_segment(&trigger_worker));
+        .join(format!("{:08x}", trigger_worker.agent_id.type_tag()))
+        .join(agent_path_segment(&trigger_worker.agent_id));
     assert!(
         trigger_path.is_dir(),
         "the trigger did not use the XFS root"
@@ -1492,7 +1492,7 @@ async fn initial_file_p3_parity_impl(
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -1539,7 +1539,7 @@ async fn initial_file_p3_parity_impl(
         .store()
         .await?;
 
-    let agent_id = agent_id!("P3FileSystem", "initial-file-p3-parity-1");
+    let agent_id = agent_key!("P3FileSystem", "initial-file-p3-parity-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1758,7 +1758,7 @@ async fn full_replay_on_an_empty_root_rebuilds_the_tree_after_initial_file_opera
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::agent_id;
+    use golem_common::agent_key;
     use golem_common::model::oplog::PublicOplogEntry;
 
     let context = TestContext::new(last_unique_id);
@@ -1798,7 +1798,7 @@ async fn full_replay_on_an_empty_root_rebuilds_the_tree_after_initial_file_opera
         )
         .store()
         .await?;
-    let agent = agent_id!("FilesystemTree", "full-replay");
+    let agent = agent_key!("FilesystemTree", "full-replay");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     let ok = Some(SchemaValue::String("ok".to_string()));
 
@@ -1997,7 +1997,7 @@ async fn filesystem_guest_latency_benchmark(
     let max_concurrency = *concurrencies.last().unwrap();
     let agent_ids = (0..max_concurrency)
         .map(|index| {
-            agent_id!(
+            agent_key!(
                 "P3FileSystem",
                 format!("filesystem-benchmark-{mode}-{index}")
             )
@@ -2177,7 +2177,7 @@ async fn cross_preview_append_coordination_survives_replay(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2185,7 +2185,7 @@ async fn cross_preview_append_coordination_survives_replay(
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "cross-preview-append");
+    let agent_id = agent_key!("P3FileSystem", "cross-preview-append");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2220,7 +2220,7 @@ async fn filesystem_mutation_histories_reconstruct_impl(
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(
@@ -2236,7 +2236,7 @@ async fn filesystem_mutation_histories_reconstruct_impl(
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "filesystem-reconstruction-matrix");
+    let agent_id = agent_key!("P3FileSystem", "filesystem-reconstruction-matrix");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2316,7 +2316,7 @@ async fn filesystem_reconstruction_stops_at_exact_revert_target_impl(
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(
@@ -2332,7 +2332,7 @@ async fn filesystem_reconstruction_stops_at_exact_revert_target_impl(
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "filesystem-exact-replay-target");
+    let agent_id = agent_key!("P3FileSystem", "filesystem-exact-replay-target");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2402,7 +2402,7 @@ async fn filesystem_reconstruction_uses_updated_initial_files_impl(
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(
@@ -2426,7 +2426,7 @@ async fn filesystem_reconstruction_uses_updated_initial_files_impl(
         )
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "filesystem-updated-initial-files");
+    let agent_id = agent_key!("P3FileSystem", "filesystem-updated-initial-files");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2512,7 +2512,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
     };
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let first_root = tempfile::tempdir()?;
@@ -2538,11 +2538,11 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         .component_dep(&context.default_environment_id, initial_file_system)
         .store()
         .await?;
-    let agent_id = agent_id!("P3FileSystem", "filesystem-full-replay-lifecycles");
+    let agent_id = agent_key!("P3FileSystem", "filesystem-full-replay-lifecycles");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "run_writable", data_value!())
@@ -2648,7 +2648,7 @@ async fn initial_file_listing_through_api(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::agent_id;
+    use golem_common::agent_key;
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2678,7 +2678,7 @@ async fn initial_file_listing_through_api(
         .store()
         .await?;
 
-    let agent_id = agent_id!("FileReadWrite", "initial-file-listing-1");
+    let agent_id = agent_key!("FileReadWrite", "initial-file-listing-1");
     let worker_id = executor.start_agent(&component.id, agent_id).await?;
 
     let result = executor.get_file_system_node(&worker_id, "/").await?;
@@ -2782,7 +2782,7 @@ async fn initial_file_reading_through_api(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2809,7 +2809,7 @@ async fn initial_file_reading_through_api(
 
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
-    let agent_id = agent_id!("FileReadWrite", "initial-file-read-write-3");
+    let agent_id = agent_key!("FileReadWrite", "initial-file-read-write-3");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -2834,7 +2834,7 @@ async fn initial_file_reading_through_api(
 
     // Retain the lookup result across unload: intake must restore through this handle,
     // replaying writable contents without starting a new invocation.
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     let worker = executor
         .active_agent(&owned_agent_id)
         .await
@@ -2910,7 +2910,7 @@ async fn directories(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2919,7 +2919,7 @@ async fn directories(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "directories-1");
+    let agent_id = agent_key!("FileSystem", "directories-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -2990,7 +2990,7 @@ async fn directories_replay(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -2999,7 +2999,7 @@ async fn directories_replay(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "directories-1");
+    let agent_id = agent_key!("FileSystem", "directories-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3081,7 +3081,7 @@ async fn file_write_read(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3090,7 +3090,7 @@ async fn file_write_read(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-1");
+    let agent_id = agent_key!("FileSystem", "file-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3138,7 +3138,7 @@ async fn file_update_1(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3156,7 +3156,7 @@ async fn file_update_1(
         .store()
         .await?;
 
-    let agent_id = agent_id!("IfsUpdate", "ifs-update-1");
+    let agent_id = agent_key!("IfsUpdate", "ifs-update-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3302,7 +3302,7 @@ async fn file_update_in_the_middle_of_exported_function(
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3354,7 +3354,7 @@ async fn file_update_in_the_middle_of_exported_function(
         .store()
         .await?;
 
-    let agent_id = agent_id!("IfsUpdateInsideExportedFunction", "ifs-update-1");
+    let agent_id = agent_key!("IfsUpdateInsideExportedFunction", "ifs-update-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3428,7 +3428,7 @@ async fn environment_variables(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3437,7 +3437,7 @@ async fn environment_variables(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Environment", "environment-service-1");
+    let agent_id = agent_key!("Environment", "environment-service-1");
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
@@ -3462,7 +3462,7 @@ async fn environment_variables(
 
     assert_eq!(result_p3, result);
 
-    let worker_name = agent_id.to_string();
+    let agent_key = agent_id.to_string();
     assert_eq!(
         result,
         SchemaValue::Result(ResultValuePayload::Ok {
@@ -3477,19 +3477,13 @@ async fn environment_variables(
                     SchemaValue::Tuple {
                         elements: vec![
                             SchemaValue::String("GOLEM_AGENT_ID".to_string()),
-                            SchemaValue::String(worker_name.clone())
+                            SchemaValue::String(worker_id.agent_id.to_string())
                         ]
                     },
                     SchemaValue::Tuple {
                         elements: vec![
-                            SchemaValue::String("GOLEM_WORKER_NAME".to_string()),
-                            SchemaValue::String(worker_name)
-                        ]
-                    },
-                    SchemaValue::Tuple {
-                        elements: vec![
-                            SchemaValue::String("GOLEM_COMPONENT_ID".to_string()),
-                            SchemaValue::String(component.id.to_string())
+                            SchemaValue::String("GOLEM_AGENT_KEY".to_string()),
+                            SchemaValue::String(agent_key)
                         ]
                     },
                     SchemaValue::Tuple {
@@ -3520,7 +3514,7 @@ async fn http_client_response_persisted_between_invocations(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3554,7 +3548,7 @@ async fn http_client_response_persisted_between_invocations(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient");
+    let agent_id = agent_key!("HttpClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -3596,7 +3590,7 @@ async fn http_client_interrupting_response_stream(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3646,7 +3640,7 @@ async fn http_client_interrupting_response_stream(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient2");
+    let agent_id = agent_key!("HttpClient2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -3722,7 +3716,7 @@ async fn http_client_interrupting_response_stream_async(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3772,7 +3766,7 @@ async fn http_client_interrupting_response_stream_async(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient3");
+    let agent_id = agent_key!("HttpClient3");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -3840,6 +3834,7 @@ async fn http_client_interrupting_response_stream_async(
 }
 
 #[test]
+#[test_r::tag(latency)]
 #[tracing::instrument]
 async fn sleep(
     last_unique_id: &LastUniqueId,
@@ -3847,7 +3842,7 @@ async fn sleep(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3856,7 +3851,7 @@ async fn sleep(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-1");
+    let agent_id = agent_key!("Clock", "clock-service-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3888,7 +3883,7 @@ async fn sleep_less_than_suspend_threshold(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3897,7 +3892,7 @@ async fn sleep_less_than_suspend_threshold(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-2");
+    let agent_id = agent_key!("Clock", "clock-service-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -3931,7 +3926,7 @@ async fn sleep_longer_than_suspend_threshold(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -3940,11 +3935,11 @@ async fn sleep_longer_than_suspend_threshold(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-3");
+    let agent_id = agent_key!("Clock", "clock-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
 
     let start = Instant::now();
     let sleep = executor.invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(12u64));
@@ -3994,7 +3989,7 @@ async fn assert_short_p3_timer_wins_without_suspension(
     executor: &TestWorkerExecutor,
     component: &golem_common::model::component::ComponentDto,
     agent_id: &golem_common::model::agent::ParsedAgentKey,
-    worker_id: &golem_common::model::AgentId,
+    worker_id: &golem_common::model::OwnedAgentId,
     timers: Vec<u64>,
 ) -> anyhow::Result<()> {
     use golem_common::data_value;
@@ -4065,7 +4060,7 @@ async fn p3_short_timer_blocks_suspension(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", format!("p3-short-timer-{timers:?}"));
+    let agent_id = agent_key!("Clock", format!("p3-short-timer-{timers:?}"));
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4092,7 +4087,7 @@ async fn p3_polling_loop_completes_without_watchdog_suspension(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p3-polling-loop");
+    let agent_id = agent_key!("Clock", "p3-polling-loop");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4146,11 +4141,11 @@ async fn p3_all_long_timers_suspend_and_resume_at_earliest_deadline(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p3-all-long-timers");
+    let agent_id = agent_key!("Clock", "p3-all-long-timers");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned_agent_id = worker_id.clone();
     let started = Instant::now();
     let invocation = executor.invoke_and_await_agent(
         &component,
@@ -4180,6 +4175,7 @@ async fn p3_all_long_timers_suspend_and_resume_at_earliest_deadline(
 }
 
 #[test]
+#[test_r::tag(latency)]
 #[timeout("120s")]
 #[tracing::instrument]
 async fn p3_repeated_short_timer_races_preserve_shared_scheduler_wakeups(
@@ -4198,7 +4194,7 @@ async fn p3_repeated_short_timer_races_preserve_shared_scheduler_wakeups(
         .await?;
 
     for index in 0..20 {
-        let agent_id = agent_id!("Clock", format!("p3-shared-scheduler-short-{index}"));
+        let agent_id = agent_key!("Clock", format!("p3-shared-scheduler-short-{index}"));
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
@@ -4222,13 +4218,12 @@ async fn p3_repeated_short_timer_races_preserve_shared_scheduler_wakeups(
     let run_long_race = |index| {
         let executor = &executor;
         let component = &component;
-        let context = &context;
         async move {
-            let agent_id = agent_id!("Clock", format!("p3-shared-scheduler-long-{index}"));
+            let agent_id = agent_key!("Clock", format!("p3-shared-scheduler-long-{index}"));
             let worker_id = executor
                 .start_agent(&component.id, agent_id.clone())
                 .await?;
-            let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+            let owner = worker_id.clone();
             let started = Instant::now();
             let invocation = executor.invoke_and_await_agent(
                 component,
@@ -4271,7 +4266,7 @@ async fn p3_short_timer_blocks_suspension_while_promise_is_pending(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p3-promise-short-timer");
+    let agent_id = agent_key!("Clock", "p3-promise-short-timer");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4317,7 +4312,7 @@ async fn p3_sleep_suspends_and_resumes(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -4326,7 +4321,7 @@ async fn p3_sleep_suspends_and_resumes(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p3-sleep-suspends-and-resumes");
+    let agent_id = agent_key!("Clock", "p3-sleep-suspends-and-resumes");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4405,7 +4400,7 @@ async fn interrupt_while_parked_in_p3_sleep(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "interrupt-while-parked-in-p3-sleep");
+    let agent_id = agent_key!("Clock", "interrupt-while-parked-in-p3-sleep");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4677,7 +4672,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Networking", "interrupt-while-parked-in-p3-tcp-receive");
+    let agent_id = agent_key!("Networking", "interrupt-while-parked-in-p3-tcp-receive");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -4691,7 +4686,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     let key = IdempotencyKey::fresh();
     let invocation_key = key.clone();
     let stored_key = executor
-        .external_invocation_key(&worker_id, &key, "tcp_collect_p3")
+        .external_invocation_key(&worker_id.agent_id, &key, "tcp_collect_p3")
         .await?;
     let method_counts = |oplog: &[PublicOplogEntryWithIndex]| {
         let mut current_is_method = false;
@@ -4744,7 +4739,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     let mut pending_summary = String::from("no oplog sample");
     let (receive_start, chunk_start) = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            executor.commit_oplog(&worker_id).await?;
+            executor.commit_oplog(&worker_id.agent_id).await?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             let terminal_starts = oplog
                 .iter()
@@ -4805,7 +4800,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     .await
     .with_context(|| format!("P3 TCP open receive parent and chunk Starts with one unfinished invocation: {pending_summary}"))??;
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
-    let committed_prefix = executor.stored_oplog(&worker_id).await;
+    let committed_prefix = executor.stored_oplog(&worker_id.agent_id).await;
 
     executor
         .interrupt(&worker_id)
@@ -4873,7 +4868,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
         .await
         .context("P3 TCP retained invocation reaches Idle after resume")?;
     let after_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let raw_after_resume = executor.stored_oplog(&worker_id).await;
+    let raw_after_resume = executor.stored_oplog(&worker_id.agent_id).await;
     assert!(raw_after_resume.len() >= committed_prefix.len());
     assert_eq!(
         &raw_after_resume[..committed_prefix.len()],
@@ -5004,7 +4999,7 @@ async fn incomplete_p3_udp_receive_repairs_original_start_and_replays_completed_
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Networking", "incomplete-p3-udp-receive");
+    let agent_id = agent_key!("Networking", "incomplete-p3-udp-receive");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5175,7 +5170,7 @@ async fn synchronous_clock_overlaps_http_and_replays_offline(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "synchronous-clock-concurrent-http");
+    let agent_id = agent_key!("Clock", "synchronous-clock-concurrent-http");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5307,7 +5302,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5319,7 +5314,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-4");
+    let agent_id = agent_key!("Clock", "clock-service-4");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5357,7 +5352,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5369,7 +5364,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-5");
+    let agent_id = agent_key!("Clock", "clock-service-5");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5407,7 +5402,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5419,7 +5414,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-6");
+    let agent_id = agent_key!("Clock", "clock-service-6");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5464,7 +5459,7 @@ async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5476,7 +5471,7 @@ async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-p2-sleep-during-request");
+    let agent_id = agent_key!("Clock", "clock-service-p2-sleep-during-request");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5550,7 +5545,7 @@ async fn p2_sleep_completes_while_p3_request_remains_pending(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5560,7 +5555,7 @@ async fn p2_sleep_completes_while_p3_request_remains_pending(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-p2-first-completion");
+    let agent_id = agent_key!("Clock", "clock-service-p2-first-completion");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5612,7 +5607,7 @@ async fn p2_poll_preserves_duplicate_indices_and_repeated_readiness(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5620,7 +5615,7 @@ async fn p2_poll_preserves_duplicate_indices_and_repeated_readiness(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-p2-poll-duplicates");
+    let agent_id = agent_key!("Clock", "clock-service-p2-poll-duplicates");
 
     let result = executor
         .invoke_and_await_agent(
@@ -5651,7 +5646,7 @@ async fn p2_file_pollables_ready_and_block_survive_full_replay(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(
@@ -5667,7 +5662,7 @@ async fn p2_file_pollables_ready_and_block_survive_full_replay(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p2-file-pollables-replay");
+    let agent_id = agent_key!("Clock", "p2-file-pollables-replay");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5702,7 +5697,7 @@ async fn sleep_and_awaiting_parallel_responses(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5714,7 +5709,7 @@ async fn sleep_and_awaiting_parallel_responses(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-7");
+    let agent_id = agent_key!("Clock", "clock-service-7");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5766,7 +5761,7 @@ async fn sleep_below_threshold_between_http_responses(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5778,7 +5773,7 @@ async fn sleep_below_threshold_between_http_responses(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-8");
+    let agent_id = agent_key!("Clock", "clock-service-8");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5829,7 +5824,7 @@ async fn sleep_above_threshold_between_http_responses(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5841,7 +5836,7 @@ async fn sleep_above_threshold_between_http_responses(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-9");
+    let agent_id = agent_key!("Clock", "clock-service-9");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5888,7 +5883,7 @@ async fn resuming_sleep(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5897,7 +5892,7 @@ async fn resuming_sleep(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-service-2");
+    let agent_id = agent_key!("Clock", "clock-service-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -5952,7 +5947,7 @@ async fn p3_resuming_sleep(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -5961,7 +5956,7 @@ async fn p3_resuming_sleep(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "p3-resuming-sleep");
+    let agent_id = agent_key!("Clock", "p3-resuming-sleep");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6015,7 +6010,7 @@ async fn p3_ready_timers_defer_delivery_before_direct_clock_and_replay(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "ready-timers-before-direct-clock");
+    let agent_id = agent_key!("Clock", "ready-timers-before-direct-clock");
     let worker = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6100,7 +6095,7 @@ async fn p3_wait_for_restart_preserves_recorded_deadline(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "recorded-p3-deadline");
+    let agent_id = agent_key!("Clock", "recorded-p3-deadline");
     let worker = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6109,7 +6104,7 @@ async fn p3_wait_for_restart_preserves_recorded_deadline(
         .await?;
     let boundary = executor.oplog_max_index(&worker).await?;
     let mut read = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::now",
         ReplayAdmissionStage::AfterHostInternalTerminal,
     );
@@ -6117,7 +6112,7 @@ async fn p3_wait_for_restart_preserves_recorded_deadline(
         .invoke_agent(&component, &agent_id, "sleep_p3", data_value!(8u64))
         .await?;
     tokio::time::timeout(Duration::from_secs(10), read.entered()).await?;
-    executor.commit_oplog(&worker).await?;
+    executor.commit_oplog(&worker.agent_id).await?;
     let before = executor.get_oplog(&worker, boundary.next()).await?;
     let clock = before
         .iter()
@@ -6195,7 +6190,7 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "cancel-after-internal-clock-end");
+    let agent_id = agent_key!("Clock", "cancel-after-internal-clock-end");
     let worker = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6206,22 +6201,22 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
     // Each wait starts in its own host task, so the waits reach their gates in any order. The
     // test lets one wait at a time pass its `Start` and tells the waits apart by their requests.
     let mut first_start = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::wait-for",
         ReplayAdmissionStage::BeforeLiveStart,
     );
     let mut second_start = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::wait-for",
         ReplayAdmissionStage::BeforeLiveStart,
     );
     let mut first_read = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::now",
         ReplayAdmissionStage::BeforeDeferredStart,
     );
     let mut second_read = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::now",
         ReplayAdmissionStage::BeforeDeferredStart,
     );
@@ -6240,7 +6235,7 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
         tokio::join!(first_start.entered(), second_start.entered());
         first_start.release();
         first_read.entered().await;
-        executor.commit_oplog(&worker).await?;
+        executor.commit_oplog(&worker.agent_id).await?;
         let first_is_long = executor
             .get_oplog(&worker, boundary.next())
             .await?
@@ -6263,13 +6258,13 @@ async fn p3_wait_for_cancel_after_internal_end_replays(
         };
         // Hold the long wait after the End of its clock read, so the short wait cancels it there.
         let mut read = executor.gate_next_replay_access_admission(
-            &worker,
+            &worker.agent_id,
             "monotonic-clock::now",
             ReplayAdmissionStage::AfterHostInternalTerminal,
         );
         long_read.release();
         read.entered().await;
-        executor.commit_oplog(&worker).await?;
+        executor.commit_oplog(&worker.agent_id).await?;
         let entries = executor.get_oplog(&worker, boundary.next()).await?;
         let clock = entries
             .iter()
@@ -6371,7 +6366,7 @@ async fn failing_worker(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("FailingCounter", "failing-worker-1");
+    let agent_id = agent_key!("FailingCounter", "failing-worker-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6424,7 +6419,7 @@ async fn file_service_write_direct(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6433,7 +6428,7 @@ async fn file_service_write_direct(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-2");
+    let agent_id = agent_key!("FileSystem", "file-service-2");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6481,7 +6476,7 @@ async fn filesystem_write_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6490,7 +6485,7 @@ async fn filesystem_write_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-3");
+    let agent_id = agent_key!("FileSystem", "file-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6544,7 +6539,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6553,7 +6548,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-4");
+    let agent_id = agent_key!("FileSystem", "file-service-4");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6597,7 +6592,7 @@ async fn file_hard_link(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6606,7 +6601,7 @@ async fn file_hard_link(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-5");
+    let agent_id = agent_key!("FileSystem", "file-service-5");
     let _worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6653,7 +6648,7 @@ async fn filesystem_link_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6662,7 +6657,7 @@ async fn filesystem_link_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-6");
+    let agent_id = agent_key!("FileSystem", "file-service-6");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6756,7 +6751,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6765,7 +6760,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-7");
+    let agent_id = agent_key!("FileSystem", "file-service-7");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -6829,7 +6824,7 @@ async fn filesystem_escaping_relative_symlink_is_a_guest_error(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::model::PromiseId;
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6842,7 +6837,7 @@ async fn filesystem_escaping_relative_symlink_is_a_guest_error(
         ("root", "../etc", "/esc"),
         ("nested", "../../etc", "/d/esc"),
     ] {
-        let agent_id = agent_id!("FileSystem", format!("escaping-symlink-{case}"));
+        let agent_id = agent_key!("FileSystem", format!("escaping-symlink-{case}"));
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
@@ -6916,7 +6911,7 @@ async fn filesystem_escaping_relative_symlink_is_a_guest_error(
             )
             .await?
             .into_typed::<PromiseId>()?;
-        assert_eq!(promise.agent_id, worker_id);
+        assert_eq!(promise.agent_id, worker_id.agent_id);
 
         let ordinary_read = executor
             .invoke_and_await_agent(&component, &agent_id, "read_file", data_value!("/control"))
@@ -6941,7 +6936,7 @@ async fn filesystem_symlink_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -6950,7 +6945,7 @@ async fn filesystem_symlink_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-8");
+    let agent_id = agent_key!("FileSystem", "file-service-8");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7044,7 +7039,7 @@ async fn filesystem_rename_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7053,7 +7048,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-9");
+    let agent_id = agent_key!("FileSystem", "file-service-9");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7160,7 +7155,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7169,7 +7164,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-10");
+    let agent_id = agent_key!("FileSystem", "file-service-10");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7249,7 +7244,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7258,7 +7253,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-3");
+    let agent_id = agent_key!("FileSystem", "file-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7318,7 +7313,7 @@ async fn filesystem_metadata_hash(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7327,7 +7322,7 @@ async fn filesystem_metadata_hash(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("FileSystem", "file-service-3");
+    let agent_id = agent_key!("FileSystem", "file-service-3");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7371,7 +7366,7 @@ async fn ip_address_resolve(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(
@@ -7385,7 +7380,7 @@ async fn ip_address_resolve(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Networking", "ip-address-resolve-1");
+    let agent_id = agent_key!("Networking", "ip-address-resolve-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7450,7 +7445,7 @@ async fn p3_ip_address_resolve(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Networking", "p3-ip-address-resolve-1");
+    let agent_id = agent_key!("Networking", "p3-ip-address-resolve-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7545,7 +7540,7 @@ async fn p3_ip_address_resolve_permanent_failure_is_guest_visible_without_retry(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("Networking", "p3-ip-address-resolve-failure-1");
+    let agent_id = agent_key!("Networking", "p3-ip-address-resolve-failure-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7595,7 +7590,7 @@ async fn wasi_config_initial_worker_config(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7604,7 +7599,7 @@ async fn wasi_config_initial_worker_config(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("WasiConfig", "worker-1");
+    let agent_id = agent_key!("WasiConfig", "worker-1");
 
     let worker_id = executor
         .start_agent_with(
@@ -7698,7 +7693,7 @@ async fn wasi_config_component_update(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7721,7 +7716,7 @@ async fn wasi_config_component_update(
         .store()
         .await?;
 
-    let agent_id = agent_id!("WasiConfig", "worker-1");
+    let agent_id = agent_key!("WasiConfig", "worker-1");
 
     let worker_id = executor
         .start_agent_with(
@@ -7872,7 +7867,7 @@ async fn oplog_replay_after_http_requests_with_suspend(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7885,7 +7880,7 @@ async fn oplog_replay_after_http_requests_with_suspend(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-oplog-replay-1");
+    let agent_id = agent_key!("Clock", "clock-oplog-replay-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -7959,7 +7954,7 @@ async fn oplog_replay_after_parallel_http_requests(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -7972,7 +7967,7 @@ async fn oplog_replay_after_parallel_http_requests(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "clock-oplog-parallel-1");
+    let agent_id = agent_key!("Clock", "clock-oplog-parallel-1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -8125,28 +8120,17 @@ async fn http_connection_pool_contention_between_agents(
         .store()
         .await?;
 
-    let agent_id_slow = {
-        use golem_common::phantom_agent_id;
-        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
-    };
-    let agent_id_fast = {
-        use golem_common::phantom_agent_id;
-        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
-    };
+    let agent_id_slow = agent_key!("StreamingClient");
+    let agent_id_fast = agent_key!("StreamingClient");
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id_slow = executor
-        .start_agent_with(
-            &component.id,
-            agent_id_slow.clone(),
-            env.clone(),
-            Vec::new(),
-        )
+        .create_unkeyed_agent(&component.id, None, agent_id_slow.clone(), env.clone())
         .await?;
     let worker_id_fast = executor
-        .start_agent_with(&component.id, agent_id_fast.clone(), env, Vec::new())
+        .create_unkeyed_agent(&component.id, None, agent_id_fast.clone(), env)
         .await?;
 
     executor.log_output(&worker_id_slow).await?;
@@ -8155,13 +8139,14 @@ async fn http_connection_pool_contention_between_agents(
     // Start the slow agent's request (don't await it yet)
     let executor_clone = executor.clone();
     let component_clone = component.clone();
-    let agent_id_slow_clone = agent_id_slow.clone();
+    let worker_id_slow_clone = worker_id_slow.clone();
     let slow_handle = spawn(
         async move {
             executor_clone
-                .invoke_and_await_agent(
+                .invoke_and_await_agent_by_id(
                     &component_clone,
-                    &agent_id_slow_clone,
+                    &worker_id_slow_clone,
+                    None,
                     "slow_body_stream",
                     data_value!(),
                 )
@@ -8179,9 +8164,10 @@ async fn http_connection_pool_contention_between_agents(
     // Now invoke the fast agent — it must wait for the connection pool
     let fast_start = Instant::now();
     let fast_result = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_by_id(
             &component,
-            &agent_id_fast,
+            &worker_id_fast,
+            None,
             "slow_body_stream",
             data_value!(),
         )
@@ -8294,28 +8280,17 @@ async fn http_connection_pool_contention_with_restart(
         .store()
         .await?;
 
-    let agent_id_slow = {
-        use golem_common::phantom_agent_id;
-        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
-    };
-    let agent_id_fast = {
-        use golem_common::phantom_agent_id;
-        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
-    };
+    let agent_id_slow = agent_key!("StreamingClient");
+    let agent_id_fast = agent_key!("StreamingClient");
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id_slow = executor
-        .start_agent_with(
-            &component.id,
-            agent_id_slow.clone(),
-            env.clone(),
-            Vec::new(),
-        )
+        .create_unkeyed_agent(&component.id, None, agent_id_slow.clone(), env.clone())
         .await?;
     let worker_id_fast = executor
-        .start_agent_with(&component.id, agent_id_fast.clone(), env, Vec::new())
+        .create_unkeyed_agent(&component.id, None, agent_id_fast.clone(), env)
         .await?;
 
     executor.log_output(&worker_id_slow).await?;
@@ -8324,13 +8299,14 @@ async fn http_connection_pool_contention_with_restart(
     // Start the slow agent's request (don't await it yet)
     let executor_clone = executor.clone();
     let component_clone = component.clone();
-    let agent_id_slow_clone = agent_id_slow.clone();
+    let worker_id_slow_clone = worker_id_slow.clone();
     let slow_handle = spawn(
         async move {
             executor_clone
-                .invoke_and_await_agent(
+                .invoke_and_await_agent_by_id(
                     &component_clone,
-                    &agent_id_slow_clone,
+                    &worker_id_slow_clone,
+                    None,
                     "slow_body_stream",
                     data_value!(),
                 )
@@ -8349,9 +8325,10 @@ async fn http_connection_pool_contention_with_restart(
     // the HTTP request cannot even start within 2s, causing the timeout to fire.
     let fast_start = Instant::now();
     let fast_result = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_by_id(
             &component,
-            &agent_id_fast,
+            &worker_id_fast,
+            None,
             "slow_body_stream_with_timeout",
             data_value!(2000u64), // 2 second timeout
         )
@@ -8392,9 +8369,10 @@ async fn http_connection_pool_contention_with_restart(
     // After restart, invoke both agents again — triggers oplog replay.
     // The slow agent should still work and get a fast response (server counter > 0).
     let slow_result2 = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_by_id(
             &component,
-            &agent_id_slow,
+            &worker_id_slow,
+            None,
             "slow_body_stream",
             data_value!(),
         )
@@ -8405,9 +8383,10 @@ async fn http_connection_pool_contention_with_restart(
 
     // The fast agent that previously timed out should also be usable after restart
     let fast_result2 = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_by_id(
             &component,
-            &agent_id_fast,
+            &worker_id_fast,
+            None,
             "slow_body_stream",
             data_value!(),
         )
@@ -8472,10 +8451,7 @@ async fn http_timeout_and_restart(
         .store()
         .await?;
 
-    let agent_id = {
-        use golem_common::phantom_agent_id;
-        phantom_agent_id!("StreamingClient", uuid::Uuid::now_v7())
-    };
+    let agent_id = agent_key!("StreamingClient");
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
@@ -8550,7 +8526,7 @@ async fn oplog_replay_after_streaming_http_read(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -8562,7 +8538,7 @@ async fn oplog_replay_after_streaming_http_read(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -8645,7 +8621,7 @@ async fn http_client_transient_mid_stream_failure_is_retried_and_reissued(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -8689,7 +8665,7 @@ async fn http_client_transient_mid_stream_failure_is_retried_and_reissued(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -8735,7 +8711,7 @@ async fn http_client_interrupted_mid_response_reissues_recorded_post_body(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -8787,7 +8763,7 @@ async fn http_client_interrupted_mid_response_reissues_recorded_post_body(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
@@ -8897,7 +8873,7 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -8909,7 +8885,7 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -8992,7 +8968,7 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -9004,7 +8980,7 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -9086,7 +9062,7 @@ async fn oplog_replay_after_raw_streaming_http_read(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -9098,7 +9074,7 @@ async fn oplog_replay_after_raw_streaming_http_read(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor
@@ -9189,7 +9165,7 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -9201,7 +9177,7 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("StreamingClient");
+    let agent_id = agent_key!("StreamingClient");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let worker_id = executor

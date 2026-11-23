@@ -46,6 +46,8 @@ export type FilterComparator =
 export type StringFilterComparator = "equal" | "not-equal" | "like" | "not-like" | "starts-with"
 export type AgentMetadata = {
   agentId: AgentId
+  agentTypeName?: string
+  fingerprint: Uuid
   args: string[]
   env: [string, string][]
   config: [string, string][]
@@ -62,9 +64,9 @@ export type UpdateMode = "automatic" | "snapshot-based"
 export type RevertAgentTarget =
   | { tag: "revert-to-oplog-index"; val: OplogIndex }
   | { tag: "revert-last-invocations"; val: bigint }
-export type ForkDetails = { forkedPhantomId: Uuid }
+export type ForkDetails = { forkedAgentId: AgentId }
 export type ForkResult = { tag: "original"; val: ForkDetails } | { tag: "forked"; val: ForkDetails }
-export type AgentNameFilter = { comparator: StringFilterComparator; value: string }
+export type AgentKeyFilter = { comparator: StringFilterComparator; value: string }
 export type AgentStatusFilter = { comparator: FilterComparator; value: AgentStatus }
 export type AgentVersionFilter = { comparator: FilterComparator; value: bigint }
 export type AgentCreatedAtFilter = { comparator: FilterComparator; value: bigint }
@@ -79,7 +81,7 @@ export type AgentConfigVarsFilter = {
   value: string
 }
 export type AgentPropertyFilter =
-  | { tag: "name"; val: AgentNameFilter }
+  | { tag: "key"; val: AgentKeyFilter }
   | { tag: "status"; val: AgentStatusFilter }
   | { tag: "version"; val: AgentVersionFilter }
   | { tag: "created-at"; val: AgentCreatedAtFilter }
@@ -169,11 +171,14 @@ export const __resetTraps = (): void => {
 // Self metadata + agent lifecycle
 // ---------------------------------------------------------------------------
 
-const defaultComponentId: ComponentId = { uuid: { highBits: 0n, lowBits: 1n } }
+const defaultAgentId: AgentId = { uuid: { highBits: 0x1n, lowBits: 0x8000000000000001n } }
+const defaultFingerprint: Uuid = { highBits: 0n, lowBits: 2n }
 const defaultEnvironmentId: EnvironmentId = { uuid: { highBits: 0n, lowBits: 1n } }
 
 let _selfMetadata: AgentMetadata = {
-  agentId: { componentId: defaultComponentId, agentId: "Test()" },
+  agentId: defaultAgentId,
+  agentTypeName: "Test",
+  fingerprint: defaultFingerprint,
   args: [],
   env: [],
   config: [],
@@ -190,7 +195,7 @@ export const __setSelfMetadata = (next: AgentMetadata): void => {
   _selfMetadata = next
 }
 
-const agentIdKey = (id: AgentId): string => `${uuidToString(id.componentId.uuid)}::${id.agentId}`
+const agentIdKey = (id: AgentId): string => uuidToString(id.uuid)
 
 export const getAgentMetadata = (id: AgentId): AgentMetadata | undefined =>
   _otherMetadata.get(agentIdKey(id))
@@ -216,12 +221,16 @@ export const __getUpdateCalls = (): ReadonlyArray<UpdateAgentCall> => [..._updat
 
 interface ForkAgentCall {
   source: AgentId
-  target: AgentId
   oplogIdxCutOff: OplogIndex
 }
 const _forkCalls: ForkAgentCall[] = []
-export const forkAgent = (source: AgentId, target: AgentId, oplogIdxCutOff: OplogIndex): void => {
-  _forkCalls.push({ source, target, oplogIdxCutOff })
+let _forkedAgentId: AgentId = { uuid: { highBits: 0x1n, lowBits: 0x80000000000000ffn } }
+export const forkAgent = (source: AgentId, oplogIdxCutOff: OplogIndex): AgentId => {
+  _forkCalls.push({ source, oplogIdxCutOff })
+  return _forkedAgentId
+}
+export const __setForkedAgentId = (id: AgentId): void => {
+  _forkedAgentId = id
 }
 export const __getForkCalls = (): ReadonlyArray<ForkAgentCall> => [..._forkCalls]
 
@@ -237,7 +246,7 @@ export const __getRevertCalls = (): ReadonlyArray<RevertAgentCall> => [..._rever
 
 let _forkResult: ForkResult = {
   tag: "original",
-  val: { forkedPhantomId: { highBits: 0n, lowBits: 0n } },
+  val: { forkedAgentId: { uuid: { highBits: 0n, lowBits: 0n } } },
 }
 export const fork = (): ForkResult => _forkResult
 export const __setForkResult = (next: ForkResult): void => {
@@ -245,45 +254,26 @@ export const __setForkResult = (next: ForkResult): void => {
 }
 
 const _componentIdsByRef = new Map<string, ComponentId>()
-const _agentIdsByRef = new Map<string, AgentId>()
-const _strictAgentIdsByRef = new Map<string, AgentId>()
 
 export const resolveComponentId = (componentReference: string): ComponentId | undefined =>
   _componentIdsByRef.get(componentReference)
 
-export const resolveAgentId = (
-  componentReference: string,
-  agentName: string,
-): AgentId | undefined => _agentIdsByRef.get(`${componentReference}::${agentName}`)
-
-export const resolveAgentIdStrict = (
-  componentReference: string,
-  agentName: string,
-): AgentId | undefined => _strictAgentIdsByRef.get(`${componentReference}::${agentName}`)
-
 export const __seedComponentId = (ref: string, id: ComponentId): void => {
   _componentIdsByRef.set(ref, id)
-}
-export const __seedAgentId = (ref: string, name: string, id: AgentId): void => {
-  _agentIdsByRef.set(`${ref}::${name}`, id)
-}
-export const __seedStrictAgentId = (ref: string, name: string, id: AgentId): void => {
-  _strictAgentIdsByRef.set(`${ref}::${name}`, id)
 }
 
 // ---------------------------------------------------------------------------
 // GetAgents pager
 // ---------------------------------------------------------------------------
 
-const _agentsByComponent = new Map<string, ReadonlyArray<ReadonlyArray<AgentMetadata>>>()
+const _agentsByType = new Map<string, ReadonlyArray<ReadonlyArray<AgentMetadata>>>()
 
 export class GetAgents {
   private cursor = 0
   private readonly chunks: ReadonlyArray<ReadonlyArray<AgentMetadata>>
 
-  constructor(componentId: ComponentId, _filter: AgentAnyFilter | undefined, _precise: boolean) {
-    const key = uuidToString(componentId.uuid)
-    this.chunks = _agentsByComponent.get(key) ?? []
+  constructor(agentTypeName: string, _filter: AgentAnyFilter | undefined, _precise: boolean) {
+    this.chunks = _agentsByType.get(agentTypeName) ?? []
   }
 
   getNext(): AgentMetadata[] | undefined {
@@ -302,11 +292,11 @@ let _getAgentsDisposeCount = 0
 
 export const __getGetAgentsDisposeCount = (): number => _getAgentsDisposeCount
 
-export const __seedAgentsForComponent = (
-  componentId: ComponentId,
+export const __seedAgentsForType = (
+  agentTypeName: string,
   chunks: ReadonlyArray<ReadonlyArray<AgentMetadata>>,
 ): void => {
-  _agentsByComponent.set(uuidToString(componentId.uuid), chunks)
+  _agentsByType.set(agentTypeName, chunks)
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +375,9 @@ export const __resetAll = (): void => {
   _oplogIndex = 0n
   _oplogCommits.length = 0
   _selfMetadata = {
-    agentId: { componentId: defaultComponentId, agentId: "Test()" },
+    agentId: defaultAgentId,
+    agentTypeName: "Test",
+    fingerprint: defaultFingerprint,
     args: [],
     env: [],
     config: [],
@@ -400,12 +392,11 @@ export const __resetAll = (): void => {
   _revertCalls.length = 0
   _forkResult = {
     tag: "original",
-    val: { forkedPhantomId: { highBits: 0n, lowBits: 0n } },
+    val: { forkedAgentId: { uuid: { highBits: 0n, lowBits: 0n } } },
   }
+  _forkedAgentId = { uuid: { highBits: 0x1n, lowBits: 0x80000000000000ffn } }
   _componentIdsByRef.clear()
-  _agentIdsByRef.clear()
-  _strictAgentIdsByRef.clear()
-  _agentsByComponent.clear()
+  _agentsByType.clear()
   _promises.clear()
   _promiseGetError = undefined
   _getAgentsDisposeCount = 0

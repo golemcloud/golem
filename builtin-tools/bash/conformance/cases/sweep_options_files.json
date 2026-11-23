@@ -1,0 +1,3440 @@
+{
+  "tier": "sweep",
+  "description": "Option sweep, part E: find, xargs, diff, cmp and patch, option by option, with error paths.\n\nTrees are built inside each script. Output that GNU leaves in directory order is sorted, and\ntime predicates use times `touch -d` set far in the past, so no case depends on the clock.\nError paths fold GNU's curly quotes into ASCII ones, as in part A.",
+  "cases": [
+    {
+      "name": "opt find: expression none",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find .  | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -name '*.txt'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -iname '*.txt'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -iname '*.txt' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -name '*.[tT][xX][tT]'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.[tT][xX][tT]' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -path '*/b/*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -path '*/b/*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -ipath '*/B/*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -ipath '*/B/*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -wholename './a/*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -wholename './a/*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -regex '.*/t[a-z]*\\.log'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -regex '.*/t[a-z]*\\.log' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -iregex '.*TXT'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -iregex '.*TXT' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -regextype posix-extended -regex '.*/(one|two)\\..*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -regextype posix-extended -regex '.*/(one|two)\\..*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -regextype egrep -regex '.*o{2}.*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -regextype egrep -regex '.*o{2}.*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type d",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type d | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type l",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type l | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f,l",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f,l | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -xtype l",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -xtype l | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -xtype f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -xtype f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -xtype d",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -xtype d | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -empty",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -empty | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -empty -type f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -empty -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f -size 0",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -size 0 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f -size +1k",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -size +1k | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f -size -2",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -size -2 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f -size 5c",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -size 5c | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f -size +4c -size -6c",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -size +4c -size -6c | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f -size 1k",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -size 1k | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f -size -1M",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -size -1M | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f -size +0",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -size +0 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -maxdepth 1",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -maxdepth 1 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -mindepth 2",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -mindepth 2 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -maxdepth 1 -mindepth 1",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -maxdepth 1 -mindepth 1 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -maxdepth 0",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -maxdepth 0 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -depth",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -depth | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -d",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -d | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -name a -prune -o -print",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name a -prune -o -print | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -path ./a -prune -o -type f -print",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -path ./a -prune -o -type f -print | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -not -name '*.txt'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -not -name '*.txt' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression ! -type d",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . ! -type d | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f -a -name '*o*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -a -name '*o*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f -o -type l",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -o -type l | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression \\( -name one.txt -o -name four \\)",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . \\( -name one.txt -o -name four \\) | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -name '*.txt' , -name '*.log'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' , -name '*.log' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -true",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -true | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -false",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -false | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -name one.txt -quit",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name one.txt -quit | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -print -quit",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -print -quit | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type f -print0 | sort -z | tr '\\0' ' '; echo",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -print0 | sort -z | tr '\\0' ' '; echo | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -newer c/three.log",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -newer c/three.log | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression ! -newer c/three.log -type f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . ! -newer c/three.log -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -mtime +1000",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -mtime +1000 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -mtime -1000 -type f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -mtime -1000 -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -mmin +100000",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -mmin +100000 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -mtime +8000 -mtime -9000",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -mtime +8000 -mtime -9000 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -newermt 2005-01-01 -type f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -newermt 2005-01-01 -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression ! -newermt 2005-01-01 -type f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . ! -newermt 2005-01-01 -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -anewer c/three.log -type f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -anewer c/three.log -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -lname 'a*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -lname 'a*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -ilname 'A*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -ilname 'A*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -follow -type f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -follow -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -L . -type f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -L . -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -H lnk",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -H lnk | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -L lnk",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -L lnk | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -P lnk -type l",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -P lnk -type l | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -xdev -type f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -xdev -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -mount -name four",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -mount -name four | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -noleaf -name four",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -noleaf -name four | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -ignore_readdir_race -name four",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -ignore_readdir_race -name four | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -nowarn -name four",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -nowarn -name four | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -warn -name four",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -warn -name four | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -daystart -mtime +1000",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -daystart -mtime +1000 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -name '[ab]*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '[ab]*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -name '\\*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '\\*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -name 'o*' -o -name 't*' -type f",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name 'o*' -o -name 't*' -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type d -empty",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type d -empty | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -type d -name '.*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type d -name '.*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -name '.*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '.*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: expression -path './.h*'",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -path './.h*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %p\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%p\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %f\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%f\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %h\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%h\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %P\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%P\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %s %p\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%s %p\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %d %p\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%d %p\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %y %p\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%y %p\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %Y %p\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%Y %p\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %l\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%l\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %H|%P\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%H|%P\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %-10f|\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%-10f|\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %10s|\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%10s|\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %TY-%Tm-%Td\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%TY-%Tm-%Td\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %T@\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%T@\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %t\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%t\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %A@\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%A@\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %TF %TT\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%TF %TT\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %%\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%%\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %p\\t%s\\0",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%p\\t%s\\0' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf \\101\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '\\101\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf [%q]\\n",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '[%q]\\n' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf %p",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '%p' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: printf \\c%p",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -printf '\\c%p' | od -c | head -n 4",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: several starting points",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find a c -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: starting point is file",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find a/one.txt",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: trailing slash start",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find a/ -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: absolute start",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find /tmp/t/c",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: no start defaults to dot",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find -name four",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: sorted siblings",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find c a -maxdepth 1 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: exec semicolon",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -exec echo got {} \\; | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: exec plus",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -name '*.txt' -exec echo {} + | tr ' ' '\\n' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: exec plus with trailing",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name one.txt -exec echo {} end \\;",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: exec status as test",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -exec grep -q 1 {} \\; -print | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: exec embedded braces",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name four -exec echo x{}y \\;",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: execdir",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name one.txt -execdir pwd \\;",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: execdir plus",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -execdir echo {} +  | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: exec sh",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.log' -exec sh -c 'wc -c <\"$1\"' _ {} \\;",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: exec function",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; f() { echo fn; }; find . -name four -exec f {} \\;; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: exec missing command",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name four -exec nosuchcmd {} \\;; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: exec plus nonzero",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name four -exec false {} +; echo \"status=$?\"",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: exec missing terminator",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -exec echo {}; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: exec plus not last",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -exec echo {} x +; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: delete",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.log' -delete; find . -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: delete directory tree",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find a -delete; ls",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: delete nonempty with prune",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name c -delete; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: fprint",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name '*.txt' -fprint /tmp/out; sort /tmp/out",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: fprint0",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name four -fprint0 /tmp/out; od -An -c /tmp/out",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: fprintf",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name four -fprintf /tmp/out '%f!\\n'; cat /tmp/out",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: print0",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find c -print0 | od -An -c",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: missing start",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: missing start continues",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find nosuch c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: unknown predicate",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: missing argument",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: invalid type",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type q; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: invalid size",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -size x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: invalid maxdepth",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -maxdepth -1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: invalid mtime",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -mtime x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: unbalanced parenthesis",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . \\( -name a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: stray closing parenthesis",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name a \\); } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: invalid regex",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -regex '['; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: invalid regextype",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -regextype bogus -regex x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: newer missing reference",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -newer nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: option after test warns",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name four -maxdepth 1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: path with trailing slash warns",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name 'a/'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: dangling symlink with L",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find -L . -name dangling; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: loop with L",
+      "script": "{ mkdir -p /tmp/l/d; cd /tmp/l/d; ln -s .. up; cd /tmp/l; find -L . | sort; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: operator without operand",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -o -name x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: comma list prints both",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find c -name '*.log' -printf 'A %f\\n' , -printf 'B %f\\n'",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: prune with depth",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -depth -name a -prune | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: quit status",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -quit; echo \"status=$?\"",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: dot dot start",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; cd a; find .. -maxdepth 1 -name c",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: name with slash never matches",
+      "script": "{ mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name 'a/one.txt'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.find",
+        "cmd.find.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: empty name",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -name ''",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: size units",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -size -1b | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: newerXY variants",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -newerat 2005-01-01 -type f | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt find: newer reference symlink",
+      "script": "mkdir -p /tmp/t/a/b /tmp/t/c /tmp/t/.h /tmp/t/empty; cd /tmp/t; printf 12345 >a/one.txt; printf '' >a/b/two.TXT; printf 123 >c/three.log; printf 'x' >.h/four; printf '%02000d' 0 >big; ln -s a/one.txt lnk; ln -s nosuch dangling; ln -s a dirlink; touch -d 2000-01-01 a/one.txt; touch -d 2010-01-01 c/three.log; find . -type f -newer lnk | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: default echo",
+      "script": "printf 'a b\\nc\\n' | xargs",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: command",
+      "script": "printf 'a b\\nc\\n' | xargs echo X",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: max args",
+      "script": "seq 1 5 | xargs -n 2 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: max args long",
+      "script": "seq 1 5 | xargs --max-args=3 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: max lines",
+      "script": "printf 'a b\\nc\\nd e f\\n' | xargs -L 1 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: max lines two",
+      "script": "printf 'a\\nb\\nc\\n' | xargs -L 2 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: max lines trailing blank",
+      "script": "printf 'a \\nb\\nc\\n' | xargs -L 1 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: l option",
+      "script": "printf 'a\\nb\\n' | xargs -l echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: replace",
+      "script": "printf 'a\\nb\\n' | xargs -I{} echo '<{}>'",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: replace custom",
+      "script": "printf 'a\\nb\\n' | xargs -I % echo %-%",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: replace long",
+      "script": "printf 'a\\nb\\n' | xargs --replace=X echo X.",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: i default",
+      "script": "printf 'a\\nb\\n' | xargs -i echo '[{}]'",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: replace keeps spaces",
+      "script": "printf 'a  b\\n' | xargs -I{} echo '[{}]'",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: replace strips leading blanks",
+      "script": "printf '  a b\\n' | xargs -I{} echo '[{}]'",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: null",
+      "script": "printf 'a b\\0c\\0' | xargs -0 -n 1 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: null long",
+      "script": "printf 'x\\0y\\0' | xargs --null echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: delimiter",
+      "script": "printf 'a,b,c' | xargs -d , -n 1 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: delimiter newline",
+      "script": "printf 'a b\\nc\\n' | xargs -d '\\n' -n 1 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: delimiter escape",
+      "script": "printf 'a\\tb' | xargs -d '\\t' echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: delimiter octal",
+      "script": "printf 'a:b' | xargs -d '\\072' echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: eof string",
+      "script": "printf 'a\\nSTOP\\nb\\n' | xargs -E STOP echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: eof option",
+      "script": "printf 'a\\n_\\nb\\n' | xargs -e_ echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: eof empty",
+      "script": "printf 'a\\n_\\nb\\n' | xargs -e echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: no run if empty",
+      "script": "printf '' | xargs -r echo ran; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: run once if empty",
+      "script": "printf '' | xargs echo ran",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: verbose",
+      "script": "printf 'a\\n' | xargs -t echo 2>&1",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: verbose quoting",
+      "script": "printf 'a b\\n' | xargs -0 -t echo 2>&1",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: arg file",
+      "script": "printf 'x y\\n' >/tmp/a; xargs -a /tmp/a echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: arg file long",
+      "script": "printf 'x\\n' >/tmp/a; xargs --arg-file=/tmp/a echo got",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: max chars",
+      "script": "seq 1 10 | xargs -s 12 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: max chars exit",
+      "script": "seq 1 10 | xargs -x -s 8 -n 3 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: max procs",
+      "script": "seq 1 4 | xargs -P 2 -n 1 echo | sort",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: quotes",
+      "script": "printf '\"a b\" c\\n' | xargs -n 1 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: single quotes",
+      "script": "printf \"'a b' c\\n\" | xargs -n 1 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: backslash",
+      "script": "printf 'a\\\\ b c\\n' | xargs -n 1 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: unmatched quote",
+      "script": "printf '\"a b\\n' | xargs echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: exit 255 stops",
+      "script": "seq 1 3 | xargs -n 1 sh -c 'echo $0; exit 255'; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: failure status 123",
+      "script": "seq 1 3 | xargs -n 1 sh -c 'exit 1'; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: command not found",
+      "script": "echo a | xargs nosuchcmd; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: function not visible",
+      "script": "f() { echo fn; }; echo a | xargs f; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: builtin echo",
+      "script": "echo a | xargs echo -n; echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: shell builtin cd",
+      "script": "echo /tmp | xargs cd; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: exported variable",
+      "script": "export V=1; echo a | xargs sh -c 'echo $V $0'",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: default command echo options",
+      "script": "printf -- '-n\\n' | xargs; echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: stdin of command",
+      "script": "echo a | xargs sh -c 'cat; echo end'",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: bash c with args",
+      "script": "printf 'a\\nb\\n' | xargs bash -c 'echo \"$@\"' _",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: replace with max args",
+      "script": "printf 'a\\nb\\n' | xargs -I{} -n 1 echo {}",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: zero input with replace",
+      "script": "printf '' | xargs -I{} echo {}; echo \"status=$?\"",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: empty lines",
+      "script": "printf '\\n\\na\\n\\n' | xargs echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: long line",
+      "script": "printf '%0500d\\n' 0 | xargs echo | wc -c",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: invalid max args",
+      "script": "{ echo a | xargs -n 0 echo; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.xargs",
+        "cmd.xargs.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: invalid max lines",
+      "script": "{ echo a | xargs -L x echo; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.xargs",
+        "cmd.xargs.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: invalid max chars",
+      "script": "{ echo a | xargs -s 0 echo; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.xargs",
+        "cmd.xargs.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: max chars too large",
+      "script": "{ echo a | xargs -s 99999999999 echo 2>/tmp/e; st=$?; sed 's/should be <= [0-9]*/should be <= N/' /tmp/e >&2; (exit $st); } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.xargs",
+        "cmd.xargs.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: invalid delimiter",
+      "script": "{ echo a | xargs -d ab echo; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.xargs",
+        "cmd.xargs.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: missing arg file",
+      "script": "{ xargs -a /tmp/nosuch echo; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.xargs",
+        "cmd.xargs.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: unknown option",
+      "script": "{ xargs --bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.xargs",
+        "cmd.xargs.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: exit when too long",
+      "script": "{ echo aaaaaaaaaa | xargs -x -s 5 echo; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.xargs",
+        "cmd.xargs.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt xargs: nul with quotes kept",
+      "script": "printf '\"a\"\\0' | xargs -0 echo",
+      "tags": [
+        "cmd.xargs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option none",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff  /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --normal",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --normal /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -q",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -q /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --brief",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --brief /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -s",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -s /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -c",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -c /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -C 1",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -C 1 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --context=0",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --context=0 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -u",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -u /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -U 0",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -U 0 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -U1",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -U1 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --unified=5",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --unified=5 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -e",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -e /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --ed",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --ed /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -n",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -n /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --rcs",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --rcs /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -i",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -i /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --ignore-case",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --ignore-case /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -t",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -t /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -T",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -T /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --tabsize=4 -t",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --tabsize=4 -t /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -u --label A --label B",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -u --label A --label B /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -c --label X --label Y",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -c --label X --label Y /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -D SYM",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -D SYM /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --ifdef=X",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --ifdef=X /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -a",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -a /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --text",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --text /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -d",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -d /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --minimal",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --minimal /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --horizon-lines=1",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --horizon-lines=1 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --speed-large-files",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --speed-large-files /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --color=never",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --color=never /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -p -u",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -p -u /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -F '^[a-c]' -u",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -F '^[a-c]' -u /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --suppress-blank-empty -u",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --suppress-blank-empty -u /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -u --strip-trailing-cr",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -u --strip-trailing-cr /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --line-format='%L'",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --line-format='%L' /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --old-line-format='-%l\n' --new-line-format='+%l\n' --unchanged-line-format=' %l\n'",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --old-line-format='-%l\n' --new-line-format='+%l\n' --unchanged-line-format=' %l\n' /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --changed-group-format='[%<|%>]'",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --changed-group-format='[%<|%>]' /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --unchanged-group-format='' --changed-group-format='%dF-%dL %dn\n'",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --unchanged-group-format='' --changed-group-format='%dF-%dL %dn\n' /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -I '^[bB]$'",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -I '^[bB]$' /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option --ignore-matching-lines='^h'",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff --ignore-matching-lines='^h' /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -u -I h",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -u -I h /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: option -l",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -l /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: whitespace none",
+      "script": "printf 'a b\\n c\\nx\\t \\nd\\n' >/tmp/1; printf 'a  b\\nc\\nx\\nd\\n' >/tmp/2; diff  /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: whitespace -b",
+      "script": "printf 'a b\\n c\\nx\\t \\nd\\n' >/tmp/1; printf 'a  b\\nc\\nx\\nd\\n' >/tmp/2; diff -b /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: whitespace -w",
+      "script": "printf 'a b\\n c\\nx\\t \\nd\\n' >/tmp/1; printf 'a  b\\nc\\nx\\nd\\n' >/tmp/2; diff -w /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: whitespace -Z",
+      "script": "printf 'a b\\n c\\nx\\t \\nd\\n' >/tmp/1; printf 'a  b\\nc\\nx\\nd\\n' >/tmp/2; diff -Z /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: whitespace -E",
+      "script": "printf 'a b\\n c\\nx\\t \\nd\\n' >/tmp/1; printf 'a  b\\nc\\nx\\nd\\n' >/tmp/2; diff -E /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: whitespace --ignore-space-change",
+      "script": "printf 'a b\\n c\\nx\\t \\nd\\n' >/tmp/1; printf 'a  b\\nc\\nx\\nd\\n' >/tmp/2; diff --ignore-space-change /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: whitespace --ignore-all-space",
+      "script": "printf 'a b\\n c\\nx\\t \\nd\\n' >/tmp/1; printf 'a  b\\nc\\nx\\nd\\n' >/tmp/2; diff --ignore-all-space /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: whitespace --ignore-trailing-space",
+      "script": "printf 'a b\\n c\\nx\\t \\nd\\n' >/tmp/1; printf 'a  b\\nc\\nx\\nd\\n' >/tmp/2; diff --ignore-trailing-space /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: whitespace --ignore-tab-expansion",
+      "script": "printf 'a b\\n c\\nx\\t \\nd\\n' >/tmp/1; printf 'a  b\\nc\\nx\\nd\\n' >/tmp/2; diff --ignore-tab-expansion /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: whitespace -bZ",
+      "script": "printf 'a b\\n c\\nx\\t \\nd\\n' >/tmp/1; printf 'a  b\\nc\\nx\\nd\\n' >/tmp/2; diff -bZ /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: identical",
+      "script": "echo a >/tmp/1; echo a >/tmp/2; diff /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: report identical",
+      "script": "echo a >/tmp/1; echo a >/tmp/2; diff -s /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: no newline at end",
+      "script": "printf 'a' >/tmp/1; printf 'a\\n' >/tmp/2; diff /tmp/1 /tmp/2; diff -u /tmp/1 /tmp/2 | tail -n 3",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: empty files",
+      "script": "printf '' >/tmp/1; printf 'x\\n' >/tmp/2; diff -u /tmp/1 /tmp/2 | tail -n 2",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: stdin dash",
+      "script": "echo a >/tmp/1; echo b | diff /tmp/1 -",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: binary files",
+      "script": "printf 'a\\000' >/tmp/1; printf 'b\\000' >/tmp/2; diff /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: binary files brief",
+      "script": "printf 'a\\000' >/tmp/1; printf 'b\\000' >/tmp/2; diff -q /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: file and directory",
+      "script": "mkdir /tmp/d; echo a >/tmp/d/f; echo b >/tmp/f; diff /tmp/f /tmp/d; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directory and file",
+      "script": "mkdir /tmp/d; echo a >/tmp/d/f; echo b >/tmp/f; diff /tmp/d /tmp/f; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories none",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff  /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -r",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -r /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -q",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -q /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -rq",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -rq /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -rN",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -rN /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -ru",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -ru /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -r --unidirectional-new-file",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -r --unidirectional-new-file; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -r -x s",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -r -x s /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -r --exclude='*a'",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -r --exclude='*a' /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -r -S c",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -r -S c /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -rs",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -rs /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -r --no-dereference",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -r --no-dereference /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories --from-file=/tmp/x/a /tmp/y/a /tmp/x/c",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff --from-file=/tmp/x/a /tmp/y/a /tmp/x/c; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories --to-file=/tmp/y/a /tmp/x/a /tmp/x/c",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff --to-file=/tmp/y/a /tmp/x/a /tmp/x/c; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: directories -r --ignore-file-name-case",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; diff -r --ignore-file-name-case; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: exclude from",
+      "script": "mkdir -p /tmp/x/s /tmp/y/s /tmp/x/only; echo 1 >/tmp/x/a; echo 2 >/tmp/y/a; echo s >/tmp/x/s/f; echo t >/tmp/y/s/f; echo n >/tmp/y/new; echo same >/tmp/x/c; echo same >/tmp/y/c; find /tmp/x /tmp/y -exec touch -d '2001-01-01 UTC' {} +; echo s >/tmp/ex; diff -r -X /tmp/ex /tmp/x /tmp/y; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: missing file",
+      "script": "{ echo a >/tmp/1; diff /tmp/1 /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.diff",
+        "cmd.diff.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: missing file new-file",
+      "script": "echo a >/tmp/1; diff -N /tmp/1 /tmp/nosuch; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: missing operand",
+      "script": "{ diff /tmp/1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.diff",
+        "cmd.diff.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: extra operand",
+      "script": "{ diff a b c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.diff",
+        "cmd.diff.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: unknown option",
+      "script": "{ diff --bogus a b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.diff",
+        "cmd.diff.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: invalid context",
+      "script": "{ diff -C x /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.diff",
+        "cmd.diff.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: conflicting formats",
+      "script": "{ echo a >/tmp/1; echo b >/tmp/2; touch -d '2001-01-01 UTC' /tmp/1 /tmp/2; diff -u -c /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.diff",
+        "cmd.diff.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: invalid width",
+      "script": "{ diff -y -W x /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.diff",
+        "cmd.diff.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: invalid regex",
+      "script": "{ echo a >/tmp/1; echo b >/tmp/2; diff -I '[' /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.diff",
+        "cmd.diff.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: both stdin",
+      "script": "echo a | diff - -; echo \"status=$?\"",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: large context",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -U 100 /tmp/1 /tmp/2 | tail -n +3",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: unified hunk merge",
+      "script": "seq 1 20 >/tmp/1; seq 1 20 | sed 's/^5$/five/;s/^9$/nine/;s/^18$/x/' >/tmp/2; diff -u /tmp/1 /tmp/2 | tail -n +3",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: context headers labels",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -c --label=old --label=new /tmp/1 /tmp/2 | head -n 3",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: ifdef with changes",
+      "script": "printf 'a\\nb\\n' >/tmp/1; printf 'a\\nc\\n' >/tmp/2; diff -DNEW /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: ed script applies",
+      "script": "printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' >/tmp/1; printf 'a\\nB\\nc\\nd\\ne\\nf\\ng\\nh\\n' >/tmp/2; touch -d '2001-02-03 04:05:06.5 UTC' /tmp/1; touch -d '2002-03-04 05:06:07 UTC' /tmp/2; diff -e /tmp/1 /tmp/2 >/tmp/ed; cat /tmp/ed",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt diff: crlf",
+      "script": "printf 'a\\r\\n' >/tmp/1; printf 'a\\n' >/tmp/2; diff /tmp/1 /tmp/2 | od -An -c",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option none",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp  /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option -b",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -b /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option -l",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -l /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option -lb",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -lb /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option -s",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -s /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option --silent",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp --silent /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option --quiet",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp --quiet /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option -n 2",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -n 2 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option -n 3",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -n 3 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option --bytes=10",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp --bytes=10 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option -i 3",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -i 3 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option -i 3:4",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -i 3:4 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option --ignore-initial=1",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp --ignore-initial=1 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option -i 1k",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -i 1k /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option -l -n 5",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -l -n 5 /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option --print-bytes",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp --print-bytes /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option --verbose",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp --verbose /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: option -z",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -z /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: identical",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp /tmp/1 /tmp/3; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: skip operands",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp /tmp/1 /tmp/2 3 3; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: skip operand suffix",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp /tmp/1 /tmp/2 0 1K; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: eof on shorter",
+      "script": "{ printf 'ab' >/tmp/1; printf 'abc' >/tmp/2; cmp /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: eof on empty",
+      "script": "{ printf '' >/tmp/1; printf 'a' >/tmp/2; cmp /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: eof verbose",
+      "script": "{ printf 'ab' >/tmp/1; printf 'aXc' >/tmp/2; cmp -l /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: stdin dash",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cat /tmp/1 | cmp - /tmp/3; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: one operand reads stdin",
+      "script": "{ printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp /tmp/1 </tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: missing file",
+      "script": "{ printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp /tmp/1 /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: missing file silent",
+      "script": "printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -s /tmp/1 /tmp/nosuch; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: missing operand",
+      "script": "{ cmp; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: invalid skip",
+      "script": "{ printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -i x /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: invalid bytes",
+      "script": "{ printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -n x /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: unknown option",
+      "script": "{ cmp --bogus a b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: directory",
+      "script": "{ mkdir /tmp/d; cmp /tmp/d /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: help",
+      "script": "cmp --help | head -n 1",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: print bytes high",
+      "script": "printf 'a\\377' >/tmp/1; printf 'a\\200' >/tmp/2; cmp -b /tmp/1 /tmp/2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: extra operand",
+      "script": "{ printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp /tmp/1 /tmp/2 1 2 3; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cmp: silent and verbose",
+      "script": "{ printf 'abcdef\\nline2\\n' >/tmp/1; printf 'abXdef\\nline2 more\\n' >/tmp/2; cp /tmp/1 /tmp/3; cmp -s -l /tmp/1 /tmp/2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.cmp",
+        "cmd.cmp.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -i u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -i u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --input=u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --input=u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option < c.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch < c.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -c < c.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -c < c.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -u < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -u < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option f < n.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch f < n.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -n f < n.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -n f < n.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --dry-run < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --dry-run < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -s < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -s < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --silent < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --silent < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --verbose < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --verbose < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -b < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -b < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -b -z .old < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -b -z .old < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --backup --suffix=.bk < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --backup --suffix=.bk < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -B pre_ < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -B pre_ < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -o out < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -o out < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -o - < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -o - < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -r rej < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -r rej < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -E < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -E < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -t < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -t < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -f < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -f < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --posix < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --posix < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -l < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -l < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -F 0 < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -F 0 < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --binary < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --binary < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -V numbered -b < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -V numbered -b < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --quoting-style=literal < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --quoting-style=literal < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -p0 < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -p0 < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -p1 < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -p1 < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -D FOO < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -D FOO < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --merge < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --merge < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -Z < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -Z < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --reject-format=unified < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --reject-format=unified < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --read-only=ignore < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --read-only=ignore < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --no-backup-if-mismatch < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --no-backup-if-mismatch < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option --backup-if-mismatch < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --backup-if-mismatch < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -Y bk/ -b < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -Y bk/ -b < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -e f < n.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -e f < n.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: option -g 0 < u.diff",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -g 0 < u.diff; echo \"status=$?\"; cat f; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: reverse",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch <u.diff >/dev/null; patch -R <u.diff; cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: already applied detected",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch <u.diff >/dev/null; patch <u.diff; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: forward ignores applied",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch <u.diff >/dev/null; patch -N <u.diff; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: forward batch",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch <u.diff >/dev/null; patch -N -t <u.diff; echo \"status=$?\"",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: offset",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; printf 'zero\\n' | cat - orig >f; patch <u.diff; cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: fuzz",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; printf 'one\\ntwo\\nthree\\nFOUR\\nfive\\n' >f; patch <u.diff; echo \"status=$?\"; cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: fuzz zero fails",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; printf 'one\\ntwo\\nthree\\nFOUR\\nfive\\n' >f; patch -F 0 <u.diff; echo \"status=$?\"; cat f.rej",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: rejected hunk",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; printf 'x\\ny\\nz\\n' >f; patch <u.diff; echo \"status=$?\"; ls; cat f.rej",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: strip components",
+      "script": "mkdir -p /tmp/p/a /tmp/p/b; cd /tmp/p; printf 'x\\n' >a/f; printf 'y\\n' >b/f; diff -u a/f b/f >d; printf 'x\\n' >f; mkdir -p c; printf 'x\\n' >c/f; patch -p1 -d c <d; cat c/f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: directory option",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; mkdir sub; cp orig sub/f; patch -d sub <u.diff; cat sub/f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: directory missing",
+      "script": "{ mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -d nosuch <u.diff; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.patch",
+        "cmd.patch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: file operand and patch file",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; cp orig h; patch h u.diff; cat h",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: creates new file",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'new\\n' >n; diff -u /dev/null n >d; rm n; patch <d; cat n",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: removes emptied file",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'x\\n' >e; printf '' >e2; diff -u e e2 >d; patch -E e <d; ls",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: git style headers",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'a\\n' >f; printf -- '--- a/f\\n+++ b/f\\n@@ -1 +1 @@\\n-a\\n+b\\n' >d; patch -p1 <d; cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: missing target file",
+      "script": "{ mkdir -p /tmp/p; cd /tmp/p; printf -- '--- x\\n+++ x\\n@@ -1 +1 @@\\n-a\\n+b\\n' >d; patch -t <d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.patch",
+        "cmd.patch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: garbage input",
+      "script": "{ mkdir -p /tmp/p; cd /tmp/p; echo garbage | patch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.patch",
+        "cmd.patch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: empty input",
+      "script": "{ mkdir -p /tmp/p; cd /tmp/p; patch </dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.patch",
+        "cmd.patch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: malformed hunk",
+      "script": "{ mkdir -p /tmp/p; cd /tmp/p; printf 'a\\n' >f; printf -- '--- f\\n+++ f\\n@@ -1 +1 @@\\n' >d; patch <d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.patch",
+        "cmd.patch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: missing patch file",
+      "script": "{ patch -i /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.patch",
+        "cmd.patch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: unknown option",
+      "script": "{ patch --bogus </dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.patch",
+        "cmd.patch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: invalid strip",
+      "script": "{ mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -p x <u.diff; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.patch",
+        "cmd.patch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: two hunks",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; seq 1 20 >f; seq 1 20 | sed 's/^2$/two/;s/^19$/nineteen/' >g; diff -u f g >d; patch <d; sed -n '2p;19p' f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: no newline marker",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'a' >f; printf 'b' >g; diff -u f g >d; patch <d; od -An -c f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: multiple files in one patch",
+      "script": "mkdir -p /tmp/p/o /tmp/p/n; cd /tmp/p; echo 1 >o/a; echo 2 >n/a; echo 3 >o/b; echo 4 >n/b; diff -ru o n >d; cd o; patch -p1 <../d; cat a b",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: dry run leaves file",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch --dry-run <u.diff >/dev/null; cmp f orig && echo unchanged",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: reverse unapplied",
+      "script": "{ mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -R -f <u.diff; echo \"status=$?\"; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.patch",
+        "cmd.patch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: binary refused",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'a\\000' >f; printf 'b\\000' >g; diff -a -u f g >d; patch <d; echo \"status=$?\"",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: context with offset",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; printf 'zero\\n' | cat - orig >f; patch -c <c.diff; cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt patch: output to stdout keeps file",
+      "script": "mkdir -p /tmp/p; cd /tmp/p; printf 'one\\ntwo\\nthree\\nfour\\nfive\\n' >f; printf 'one\\nTWO\\nthree\\nfour\\nfive\\nsix\\n' >g; touch -d '2001-01-01 UTC' f g; diff -u f g >u.diff; diff -c f g >c.diff; diff f g >n.diff; cp f orig; patch -o - f <u.diff >/tmp/o; cmp f orig && cat /tmp/o",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    }
+  ]
+}

@@ -57,7 +57,8 @@ use golem_common::model::tool::{
     ToolSource,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp, TransactionId,
+    AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp,
+    TransactionId,
 };
 use golem_common::read_only_lock;
 use golem_common::schema::tool::{CommandTree, Tool};
@@ -538,13 +539,17 @@ impl ComponentService for PanicComponentService {
     async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
 }
 
+fn test_component_id() -> ComponentId {
+    ComponentId(Uuid::from_u128(0xc0))
+}
+
 fn make_agent_metadata(
     agent_id: AgentId,
     created_by: AccountId,
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
-        component_id: agent_id.component_id,
+        component_id: test_component_id(),
         agent_type_name: None,
         canonical_key: None,
         agent_id,
@@ -557,7 +562,7 @@ fn make_agent_metadata(
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: AgentStatusRecord::default(),
-        original_phantom_id: None,
+        constructor_parameters: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
         create_request: golem_common::model::oplog::CreateRequest::new(
@@ -669,13 +674,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         package_metadata: None,
         object_store_key: String::new(),
     }));
-    let owner = OwnedAgentId::new(
-        environment_id,
-        &AgentId {
-            component_id,
-            agent_id: "source".to_string(),
-        },
-    );
+    let owner = OwnedAgentId::new(environment_id, &AgentId::from_parts(7, 1));
     let oplog_service = Arc::new(
         PrimaryOplogService::new(
             Arc::new(InMemoryIndexedStorage::new()),
@@ -719,10 +718,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         timestamp,
         plugin_grant_id: plugin.environment_plugin_grant_id,
         source_component_revision: source_revision,
-        target_agent_id: AgentId {
-            component_id: plugin.oplog_processor_component_id.unwrap(),
-            agent_id: OwnerKind::oplog_processor_instance_name(Uuid::new_v4()),
-        },
+        target_agent_id: AgentId::random_reserved(),
         confirmed_up_to: OplogIndex::from_u64(8),
         sending_up_to: OplogIndex::from_u64(8),
         last_batch_start: OplogIndex::INITIAL,
@@ -828,13 +824,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
     let grant_id = EnvironmentPluginGrantId::new();
     let revision = ComponentRevision::INITIAL;
     let environment_id = EnvironmentId::new();
-    let owner = OwnedAgentId::new(
-        environment_id,
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: OwnerKind::oplog_processor_instance_name(Uuid::new_v4()),
-        },
-    );
+    let owner = OwnedAgentId::new(environment_id, &AgentId::random_reserved());
     let components = Arc::new(MetadataComponentService(Component {
         id: component_id,
         revision,
@@ -956,22 +946,19 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
     }
 
     let projection = CreateProjectionParameters {
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "observed-create".to_string(),
-        },
+        agent_id: AgentId::from_parts(0, 1),
+        agent_type_name: None,
         owner_kind: OwnerKind::EphemeralExternalTool,
         agent_mode: AgentMode::Ephemeral,
         component_revision: revision,
         env: vec![("observed".to_string(), "value".to_string())],
         environment_id: EnvironmentId::new(),
         created_by: AccountId::new(),
-        parent: Some(owner.agent_id.clone()),
+        parent: Some(owner.agent_id),
         component_size: 73,
         initial_total_linear_memory_size: 41,
         initial_active_plugins: [grant_id].into_iter().collect(),
         local_agent_config: Vec::new(),
-        original_phantom_id: Some(Uuid::new_v4()),
         instance_id: Uuid::new_v4(),
         never_live: true,
     };
@@ -1009,7 +996,6 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         public.initial_total_linear_memory_size,
         projection.initial_total_linear_memory_size
     );
-    assert_eq!(public.original_phantom_id, projection.original_phantom_id);
     assert_eq!(public.instance_id, projection.instance_id);
     assert!(public.never_live);
     assert_eq!(public.initial_active_plugins.len(), 1);
@@ -1086,6 +1072,7 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
                     component_revision,
                     component_name: ComponentName("tools".to_string()),
                 },
+                shell: false,
             }),
         },
         AgentEntity::ToolMiddleware(middleware_name) => EntityActivationPolicy::ToolMiddleware {
@@ -1159,7 +1146,7 @@ fn test_entity_request(
                 },
             })
         }),
-        caller: crate::test_callers::agent_caller(owner.agent_id.clone()),
+        caller: crate::test_callers::agent_caller(owner.agent_id),
         plan: EntityInvocationPlanReference::Root { plan },
         authority_wallet: Vec::new(),
     };
@@ -1191,10 +1178,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
     );
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-        agent_id: "public-oplog-zero-start".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 2);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
@@ -1224,7 +1208,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
         oplog_service,
         &owned_agent_id,
         AgentMode::Durable,
-        owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
@@ -1261,10 +1245,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     );
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: golem_common::model::component::ComponentId::new(),
-        agent_id: "Agent(\"entity-attribution\")".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 3);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
@@ -1475,10 +1456,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         },
         result: Ok(()),
         audit: SecretRevealAudit {
-            calling_agent: AgentId {
-                component_id: golem_common::model::component::ComponentId(Uuid::nil()),
-                agent_id: "secret-reveal-auditor".to_string(),
-            },
+            calling_agent: AgentId::from_parts(7, 4),
             config_key: Some(vec!["database".to_string(), "password".to_string()]),
             timestamp: SerializableDateTime {
                 seconds: 1_700_000_003,
@@ -1653,7 +1631,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
-        owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
@@ -1807,7 +1785,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     ])
     .unwrap();
     for safe_metadata in [
-        "secret-reveal-auditor".to_string(),
+        AgentId::from_parts(7, 4).to_string(),
         "database".to_string(),
         "password".to_string(),
         "1700000002".to_string(),
@@ -1836,7 +1814,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
-        owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
@@ -1857,7 +1835,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         oplog_service,
         &owned_agent_id,
         AgentMode::Durable,
-        owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
@@ -1896,10 +1874,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
     );
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: golem_common::model::component::ComponentId::new(),
-        agent_id: "Agent(\"invalid-entity-attribution\")".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 5);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
@@ -2009,7 +1984,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
-        owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         ComponentRevision::INITIAL,
@@ -2036,7 +2011,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             ComponentRevision::INITIAL,
@@ -2078,10 +2053,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
     );
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-        agent_id: "public-oplog-p3".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 6);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
@@ -2089,7 +2061,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             &owned_agent_id,
             AgentMode::Durable,
             None,
-            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id, account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
             None,
@@ -2420,7 +2392,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             components.clone(),
             &owned_agent_id,
             AgentMode::Durable,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             ComponentRevision::new(1).unwrap(),
@@ -2630,10 +2602,7 @@ async fn open_test_oplog(
     );
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
-    let agent_id = AgentId {
-        component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-        agent_id: name.to_string(),
-    };
+    let agent_id = crate::test_agent_id(name);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
@@ -2720,7 +2689,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
-        owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         page_revision,
@@ -2750,7 +2719,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             omitted.oplog_index,
@@ -2776,7 +2745,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
-        owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         snapshot_index,
@@ -2811,7 +2780,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
             oplog_service,
             &owned_agent_id,
             AgentMode::Durable,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             large_log_index.next(),
@@ -2837,7 +2806,7 @@ async fn oplog_pages_end_at_the_byte_budget_and_resume_at_the_next_entry() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             ComponentRevision::INITIAL,
@@ -2892,7 +2861,7 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             ComponentRevision::INITIAL,
@@ -2947,7 +2916,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             ComponentRevision::INITIAL,
@@ -2980,7 +2949,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             ComponentRevision::INITIAL,
@@ -3097,7 +3066,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             revision,
@@ -3150,7 +3119,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         assert_eq!(
             check_oplog_cursor_query(&owned_agent_id, Some(&cursor), query),
             Err(WorkerExecutorError::StaleCursor {
-                agent_id: owned_agent_id.agent_id.clone(),
+                agent_id: owned_agent_id.agent_id,
                 next_oplog_index: indices[7],
                 reason: StaleCursorReason::QueryMismatch,
             }),
@@ -3229,7 +3198,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
                 assert_eq!(
                     error,
                     WorkerExecutorError::StaleCursor {
-                        agent_id: owned_agent_id.agent_id.clone(),
+                        agent_id: owned_agent_id.agent_id,
                         next_oplog_index: OplogIndex::from_u64(next_oplog_index),
                         reason: StaleCursorReason::PastEnd {
                             last_oplog_index: last_index,
@@ -3273,7 +3242,7 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
-            owned_agent_id.component_id(),
+            test_component_id(),
             OwnerKind::ComponentAgent,
             None,
             cursor,
@@ -3339,7 +3308,7 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
-        owned_agent_id.component_id(),
+        test_component_id(),
         OwnerKind::ComponentAgent,
         None,
         None,

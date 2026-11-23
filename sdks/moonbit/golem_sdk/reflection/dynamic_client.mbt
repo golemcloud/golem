@@ -1,82 +1,60 @@
 ///|
 /// Fully dynamic client for manually packed `SchemaValue` calls. Constructing
-/// this client performs no discovery or local lifecycle verification.
+/// this client performs no discovery or local lifecycle verification; the
+/// runtime authoritatively accepts or rejects every operation.
 pub(all) struct DynamicAgentClient {
   priv transport : Transport
-  reusable_identity : ParsedAgentId?
 }
 
 ///|
-pub fn DynamicAgentClient::from_agent_id(
-  agent_id : ParsedAgentId,
+/// Connects to the keyed agent of the constructor value, which the host
+/// creates when it is missing. For an ephemeral type every invocation runs on
+/// a new one-shot instance, whose ID the invocation metadata returns.
+pub fn DynamicAgentClient::upsert(
+  type_name : String,
+  constructor_value : @model.SchemaValue,
 ) -> DynamicAgentClient raise ReflectError {
-  let parts = agent_id.parts()
+  { transport: Transport::upsert(type_name, constructor_value), }
+}
+
+///|
+/// Connects to the existing agent with the given ID. An unknown ID, or the ID
+/// of an agent of another type, raises `Remote(NotFound(_))`.
+pub fn DynamicAgentClient::get_by_id(
+  type_name : String,
+  agent_id : @schema.AgentId,
+) -> DynamicAgentClient raise ReflectError {
+  { transport: Transport::get_by_id(type_name, agent_id), }
+}
+
+///|
+/// Creates a new durable agent. With `keyed`, the new agent is the keyed agent
+/// of the constructor value, and the creation raises `Remote(Conflict(_))`
+/// when that agent already exists; otherwise it has no key and a new ID.
+/// `config` entries are accepted without declaration-aware validation, and
+/// `env` adds environment variables to the ones the manifest defines.
+pub async fn DynamicAgentClient::create(
+  type_name : String,
+  constructor_value : @model.SchemaValue,
+  keyed~ : Bool = false,
+  config~ : Array[@common.TypedAgentConfigValue] = [],
+  env~ : Array[(String, String)] = [],
+) -> DynamicAgentClient {
   {
     transport: Transport::create(
-      parts.type_name,
-      parts.constructor_value,
-      parts.phantom_id,
+      type_name, constructor_value, keyed, config, env,
     ),
-    reusable_identity: Some(agent_id),
   }
 }
 
 ///|
-/// Attempts a durable lookup by manually constructing an identity without a
-/// phantom UUID. The runtime authoritatively accepts or rejects the operation.
-pub fn DynamicAgentClient::lookup(
-  type_name : String,
-  constructor_value : @model.SchemaValue,
-) -> DynamicAgentClient raise ReflectError {
-  DynamicAgentClient::from_agent_id(
-    ParsedAgentId::create(type_name, constructor_value),
-  )
-}
-
-///|
-/// Attempts to resume a durable phantom from a known UUID.
-pub fn DynamicAgentClient::resume_phantom(
-  type_name : String,
-  constructor_value : @model.SchemaValue,
-  phantom_id : @schema.Uuid,
-) -> DynamicAgentClient raise ReflectError {
-  DynamicAgentClient::from_agent_id(
-    ParsedAgentId::create(
-      type_name,
-      constructor_value,
-      phantom_id=Some(phantom_id),
-    ),
-  )
-}
-
-///|
-/// Generates a phantom UUID and exposes both the reusable agent identity and
-/// the UUID used to construct it.
-pub fn DynamicAgentClient::new_phantom(
-  type_name : String,
-  constructor_value : @model.SchemaValue,
-) -> CreatedPhantomClient raise ReflectError {
-  let phantom_id = @identity.new_phantom_id()
-  let agent_id = ParsedAgentId::create(
-    type_name,
-    constructor_value,
-    phantom_id=Some(phantom_id),
-  )
-  { agent_id, phantom_id, client: DynamicAgentClient::from_agent_id(agent_id), }
-}
-
-///|
-/// Constructs a raw ephemeral invocation address. No reusable pre-invocation
-/// identity is guaranteed; use the final identity returned in invocation
-/// metadata.
-pub fn DynamicAgentClient::ephemeral(
-  type_name : String,
-  constructor_value : @model.SchemaValue,
-) -> DynamicAgentClient raise ReflectError {
-  {
-    transport: Transport::create(type_name, constructor_value, None),
-    reusable_identity: None,
-  }
+/// The ID of the agent this client connects to. On an upsert client the host
+/// creates the agent when it is missing, without invoking a method. An
+/// ephemeral type has no agent ID before an invocation.
+pub async fn DynamicAgentClient::agent_id(
+  self : DynamicAgentClient,
+) -> @schema.AgentId {
+  self.transport.agent_id()
 }
 
 ///|

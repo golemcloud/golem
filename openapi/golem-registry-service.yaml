@@ -24,6 +24,8 @@ tags:
 - name: EnvironmentToolGrants
 - name: EnvironmentToolMiddlewareGrants
 - name: HealthCheck
+- name: Invocation
+  description: API working on the invocations of agents
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
 - name: McpDeployment
@@ -12622,18 +12624,6 @@ components:
             - Any
           value:
             $ref: '#/components/schemas/Empty'
-    AgentId:
-      type: object
-      title: AgentId
-      required:
-      - componentId
-      - agentId
-      properties:
-        componentId:
-          type: string
-          format: uuid
-        agentId:
-          type: string
     AgentMethodSchema:
       type: object
       required:
@@ -13857,7 +13847,8 @@ components:
           type: string
           format: uuid
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         invocationKey:
           type: string
           format: uuid

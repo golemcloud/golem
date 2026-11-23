@@ -113,20 +113,39 @@ pub using @caller {
 
 ///|
 /// Information available while constructing a fresh agent from a snapshot.
+/// `identity_fields` holds the constructor parameters that the host passes
+/// to `load`, in the form that `initialize` received them.
 pub(all) struct SnapshotRestoreContext {
-  agent_id : String
+  agent_id : @schema.AgentId
   agent_type : String
-  identity_fields : SnapshotIdentity
-  phantom_id : @schema.Uuid?
+  identity_fields : WireInput
 }
 
 ///|
-/// Decodes an identity field from the ambient agent ID.
+/// Decodes the constructor parameter at `index`. A restoration that does not
+/// decode a constructor parameter holding a resource fails.
 pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(
   self : SnapshotRestoreContext,
   index : Int32,
 ) -> T raise @common.AgentError {
-  decode_snapshot_identity_field(self.identity_fields, index)
+  decode_wire_param(self.identity_fields, index, "\{self.agent_type}::new")
+}
+
+///|
+/// Decodes the constructor parameters that `load` receives against the
+/// constructor schema of the registered agent type, as `initialize` decodes
+/// its input. The capabilities in `input` are dropped on failure.
+pub fn decode_snapshot_constructor(
+  agent_type : String,
+  input : @types.SchemaValueTree,
+) -> WireInput raise @common.AgentError {
+  guard get_registered_agent(agent_type) is Some(registered_agent) else {
+    @model.drop_wit_capabilities(input)
+    raise @common.AgentError::InvalidType("Agent type not found: \{agent_type}")
+  }
+  let @common.InputSchema::Parameters(fields) = registered_agent.agent_type.constructor_.input_schema
+  let arity = fields.filter(field => field.source is UserSupplied).length()
+  decode_wire_input(input, arity, "\{agent_type}::new")
 }
 
 ///|
@@ -234,7 +253,8 @@ pub async fn restore_and_set_instance(
             Err(error) => return Err(error)
           }
           context.identity_fields.finish() catch {
-            error => return Err("Invalid agent identity: \{repr(error)}")
+            error =>
+              return Err("Invalid constructor parameters: \{repr(error)}")
           }
           finish_restoration(registered_agent, Ok(restored))
         }

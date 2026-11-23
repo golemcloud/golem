@@ -7,7 +7,7 @@
 export type Uuid = { highBits: bigint; lowBits: bigint }
 
 export type ComponentId = { uuid: Uuid }
-export type AgentId = { componentId: ComponentId; agentId: string }
+export type AgentId = { uuid: Uuid }
 export type OplogIndex = bigint
 
 import type { StreamOutcome } from "golem:core/types@2.0.0"

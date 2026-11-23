@@ -59,10 +59,11 @@ object TransactionsSpec extends ZIOSpecDefault {
           js.Dynamic.literal(
             status = "running",
             agentId = js.Dynamic.literal(
-              agentId = "Order(1)",
-              componentId =
-                js.Dynamic.literal(uuid = js.Dynamic.literal(highBits = js.BigInt("0"), lowBits = js.BigInt("1")))
-            )
+              uuid = js.Dynamic.literal(highBits = js.BigInt("0"), lowBits = js.BigInt("2"))
+            ),
+            fingerprint = js.Dynamic.literal(highBits = js.BigInt("0"), lowBits = js.BigInt("3")),
+            environmentId =
+              js.Dynamic.literal(uuid = js.Dynamic.literal(highBits = js.BigInt("0"), lowBits = js.BigInt("1")))
           )
       ): js.Function0[js.Dynamic],
       resolveRetryPolicy = (
@@ -135,7 +136,7 @@ object TransactionsSpec extends ZIOSpecDefault {
           attempts == 2,
           host.elapsed == 30,
           host.tokens == List(Nil, List(1)),
-          host.contexts.head == "saga:urn:worker:00000000-0000-0000-0000-000000000001/Order(1):attempt=1,error-kind=operation-error,transaction-name=checkout",
+          host.contexts.head == "saga:urn:agent:00000000-0000-0000-0000-000000000001/00000000-0000-0000-0000-000000000002:attempt=1,error-kind=operation-error,transaction-name=checkout",
           host.contexts.last.contains("attempt=2"),
           host.waits == List(BigInt(10))
         )

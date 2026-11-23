@@ -40,9 +40,8 @@ let _enrichImpl:
   | null = null
 
 const readKey = (id: AgentId, start: OplogIndex): string =>
-  `${uuidToString(id.componentId.uuid)}::${id.agentId}::${start.toString()}`
-const searchKey = (id: AgentId, text: string): string =>
-  `${uuidToString(id.componentId.uuid)}::${id.agentId}::${text}`
+  `${uuidToString(id.uuid)}::${start.toString()}`
+const searchKey = (id: AgentId, text: string): string => `${uuidToString(id.uuid)}::${text}`
 
 export const __seedReadChunks = (
   agentId: AgentId,

@@ -17,14 +17,13 @@
 //! present and none when it is absent.
 
 use crate::Tracing;
-use golem_common::model::OwnedAgentId;
 use golem_common::model::oplog::public_oplog_entry::StartParams;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PublicOplogEntry, ReplayDivergence, ReplayHostCall, ReplayStep,
     StartIdentityField, UpdateFailureClass,
 };
 use golem_common::schema::{FromSchema, IntoTypedSchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::HasOplog;
 use golem_worker_executor_test_utils::{
@@ -120,7 +119,7 @@ async fn go_reads_the_requests_of_a_failed_update_divergence(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("DivergenceReaderAgent", "go-divergence-1");
+    let agent_id = agent_key!("DivergenceReaderAgent", "go-divergence-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -159,9 +158,8 @@ async fn go_reads_the_requests_of_a_failed_update_divergence(
         actual: host_call(&recorded, "recorded::scope", true, None),
         mismatched: vec![StartIdentityField::RequestPresence],
     };
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let worker_oplog = executor
-        .active_agent(&owned)
+        .active_agent(&worker_id)
         .await
         .expect("the agent is active")
         .primary()

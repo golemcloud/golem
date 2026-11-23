@@ -17,7 +17,6 @@ use golem_common::model::InvocationId;
 use super::*;
 use async_trait::async_trait;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::regions::OplogRegion;
@@ -164,13 +163,7 @@ impl WorkerService for RecordingWorkerService {
 }
 
 fn owned_agent_id() -> OwnedAgentId {
-    OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "test".to_string(),
-        },
-    )
+    OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1))
 }
 
 fn status_at(oplog_idx: u64) -> AgentStatusRecord {

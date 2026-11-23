@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::{AgentId, ShardEpoch};
+use golem_common::model::{OwnedAgentId, ShardEpoch};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -187,18 +187,12 @@ pub struct MultiSqliteIndexedStorage {
 struct DatabaseRoot {
     cache: Cache<String, (), Arc<ManagedStorage>, IndexedStorageError>,
     epochs: OnceCell<SqliteIndexedStorage>,
-    hash_cache: Mutex<HashCache>,
     listing_cache: Mutex<HashMap<String, CachedListing>>,
     root_dir: PathBuf,
     max_connections: u32,
     foreign_keys: bool,
     #[cfg(test)]
     snapshot_failure: AtomicUsize,
-}
-
-struct HashCache {
-    hash_per_agent_id: HashMap<AgentId, String>,
-    agent_id_per_hash: HashMap<String, AgentId>,
 }
 
 struct CachedListing {
@@ -345,10 +339,6 @@ impl MultiSqliteIndexedStorage {
                         },
                         "multi-sqlite-indexed",
                     ),
-                    hash_cache: Mutex::new(HashCache {
-                        hash_per_agent_id: HashMap::new(),
-                        agent_id_per_hash: HashMap::new(),
-                    }),
                     listing_cache: Mutex::new(HashMap::new()),
                     root_dir: root_dir.clone(),
                     max_connections,
@@ -362,59 +352,51 @@ impl MultiSqliteIndexedStorage {
         Self { root }
     }
 
-    async fn agent_id_hash(&self, agent_id: &AgentId) -> String {
-        let mut cache = self.root.hash_cache.lock().await;
-        if let Some(hash) = cache.hash_per_agent_id.get(agent_id) {
-            return hash.clone();
-        }
-        let hash = blake3::hash(agent_id.to_string().as_bytes()).to_string();
-        cache
-            .hash_per_agent_id
-            .insert(agent_id.clone(), hash.clone());
-        cache
-            .agent_id_per_hash
-            .insert(hash.clone(), agent_id.clone());
-        hash
-    }
-
-    async fn namespace_to_db(&self, namespace: &IndexedStorageNamespace) -> String {
+    fn namespace_to_db(namespace: &IndexedStorageNamespace) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog {
-                agent_id,
+                owned_agent_id,
                 agent_mode,
             }
             | IndexedStorageNamespace::StagedOpLog {
-                agent_id,
+                owned_agent_id,
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(*agent_mode);
-                format!("{mode}-oplog-{}.db", self.agent_id_hash(agent_id).await)
+                format!("{mode}-oplog-{}.db", Self::file_key(owned_agent_id))
             }
             IndexedStorageNamespace::CompressedOpLog {
-                agent_id,
+                owned_agent_id,
                 agent_mode,
                 level,
             } => {
                 let mode = super::agent_mode_prefix(*agent_mode);
                 format!(
-                    "{mode}-compressed-oplog-l{}-{}.db",
-                    level,
-                    self.agent_id_hash(agent_id).await
+                    "{mode}-compressed-oplog-l{level}-{}.db",
+                    Self::file_key(owned_agent_id)
                 )
             }
             IndexedStorageNamespace::BlobOplogManifest {
-                agent_id,
+                owned_agent_id,
                 agent_mode,
                 level,
             } => {
                 let mode = super::agent_mode_prefix(*agent_mode);
                 format!(
-                    "{mode}-blob-oplog-l{}-{}.db",
-                    level,
-                    self.agent_id_hash(agent_id).await
+                    "{mode}-blob-oplog-l{level}-{}.db",
+                    Self::file_key(owned_agent_id)
                 )
             }
         }
+    }
+
+    /// The agent's part of a database file name: `{env-uuid}_{agent-uuid}`, which holds no path
+    /// separator.
+    fn file_key(owned_agent_id: &OwnedAgentId) -> String {
+        format!(
+            "{}_{}",
+            owned_agent_id.environment_id, owned_agent_id.agent_id
+        )
     }
 
     fn db_prefix(namespace: &IndexedStorageMetaNamespace) -> String {
@@ -733,9 +715,15 @@ impl DatabaseRoot {
             .await
     }
 
+    /// The listing cache key of a database file: its name without the file key and the
+    /// extension. The file key holds `-` itself, so its fixed length is cut off.
     fn listing_prefix(db: &str) -> Option<&str> {
-        db.rsplit_once('-')
-            .map(|(prefix, _)| &db[..prefix.len() + 1])
+        const FILE_KEY_LEN: usize = 36 + 1 + 36;
+        let name = db.strip_suffix(".db")?;
+        name.len()
+            .checked_sub(FILE_KEY_LEN)
+            .map(|end| &db[..end])
+            .filter(|prefix| prefix.ends_with('-'))
     }
 
     async fn invalidate_creation(&self, db: &str) {
@@ -783,7 +771,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         new_epoch: ShardEpoch,
     ) -> Result<(), IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         let access = Access::SetEpoch {
             namespace: SqliteIndexedStorage::namespace(namespace.clone()),
@@ -806,7 +794,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         let access = Access::Delete {
             namespace: SqliteIndexedStorage::namespace(namespace.clone()),
@@ -845,7 +833,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<bool, IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         self.with_existing(db, move |s| async move {
             s.exists(svc_name, api_name, namespace, &key).await
@@ -932,7 +920,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         value: Vec<u8>,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         self.with_database(db, move |s| async move {
             s.append(
@@ -964,7 +952,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         if pairs.is_empty() {
             return Ok(());
         }
-        let db = self.namespace_to_db(namespace).await;
+        let db = Self::namespace_to_db(namespace);
         let namespace = namespace.clone();
         let key = key.to_string();
         self.with_database(db, move |s| async move {
@@ -992,8 +980,8 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         target_key: &str,
         expected_last_id: u64,
     ) -> Result<bool, IndexedStorageError> {
-        let source_db = self.namespace_to_db(&source_namespace).await;
-        let target_db = self.namespace_to_db(&target_namespace).await;
+        let source_db = Self::namespace_to_db(&source_namespace);
+        let target_db = Self::namespace_to_db(&target_namespace);
         if source_db != target_db {
             return Err(IndexedStorageError::Other(
                 "multi-SQLite cannot atomically move indexes across databases".to_string(),
@@ -1024,7 +1012,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<u64, IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         self.with_existing(db, move |s| async move {
             s.length(svc_name, api_name, namespace, &key).await
@@ -1040,7 +1028,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<(), IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         self.with_access(db, Access::PlainDelete, move |s| async move {
             s.delete(svc_name, api_name, namespace, &key).await
@@ -1059,7 +1047,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         start_id: u64,
         end_id: u64,
     ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         self.with_existing(db, move |s| async move {
             s.read(
@@ -1085,7 +1073,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         self.with_existing(db, move |s| async move {
             s.first(svc_name, api_name, entity_name, namespace, &key)
@@ -1103,7 +1091,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         self.with_existing(db, move |s| async move {
             s.last(svc_name, api_name, entity_name, namespace, &key)
@@ -1121,7 +1109,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         self.with_existing(db, move |s| async move {
             s.last_id(svc_name, api_name, entity_name, namespace, &key)
@@ -1140,7 +1128,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         id: u64,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         self.with_existing(db, move |s| async move {
             s.closest(svc_name, api_name, entity_name, namespace, &key, id)
@@ -1159,7 +1147,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         let access = Access::DropPrefix {
             namespace: SqliteIndexedStorage::namespace(namespace.clone()),
@@ -1189,7 +1177,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<bool, IndexedStorageError> {
-        let db = self.namespace_to_db(&namespace).await;
+        let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         let access = Access::DeleteEmpty {
             namespace: SqliteIndexedStorage::namespace(namespace.clone()),
