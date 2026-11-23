@@ -1211,7 +1211,7 @@ fn failed_update_divergence_requests_drop_their_owned_handles() {
 
 /// A guest supplies raw entries to `enrich-oplog-entries`, so the agent config of a raw `create`
 /// can hold owned streams and owned capability handles. They are deleted from the resource table
-/// in every config entry and the batch is rejected.
+/// in every config entry and the batch is rejected. A stream alone rejects the batch too.
 #[test]
 fn create_agent_config_rejection_drops_owned_stream_and_handles() {
     use golem_common::model::agent::{AgentMode, OwnerKind};
@@ -1264,8 +1264,14 @@ fn create_agent_config_rejection_drops_owned_stream_and_handles() {
             never_live: false,
         }),
     };
-    let oplog::OplogEntry::Create(mut raw) = oplog::OplogEntry::try_from(entry).unwrap() else {
-        panic!("expected create")
+    let raw_create = |local_agent_config| {
+        let oplog::OplogEntry::Create(mut raw) =
+            oplog::OplogEntry::try_from(entry.clone()).unwrap()
+        else {
+            panic!("expected create")
+        };
+        raw.local_agent_config = local_agent_config;
+        oplog::OplogEntry::Create(raw)
     };
     let config = |path: &str, value_nodes| oplog::RawLocalAgentConfigEntry {
         path: vec![path.to_string()],
@@ -1274,18 +1280,46 @@ fn create_agent_config_rejection_drops_owned_stream_and_handles() {
             root: 0,
         },
     };
-    raw.local_agent_config = vec![
-        config("stream", vec![wire::SchemaValueNode::StreamValue(stream)]),
-        config("secret", vec![wire::SchemaValueNode::SecretValue(secret)]),
-    ];
 
     let result = super::reject_quota_handles_in_oplog_entries(
-        vec![(1, oplog::OplogEntry::Create(raw))],
+        vec![(
+            1,
+            raw_create(vec![
+                config("stream", vec![wire::SchemaValueNode::StreamValue(stream)]),
+                config("secret", vec![wire::SchemaValueNode::SecretValue(secret)]),
+            ]),
+        )],
         &mut dropper,
     );
     assert!(dropper.table.get(&stream_probe).is_err());
     assert!(dropper.table.get(&secret_probe).is_err());
     assert!(
         matches!(result, Err(error) if error.starts_with("agent config value must not contain an owned handle"))
+    );
+
+    let only_stream = dropper
+        .table
+        .push(SchemaValueStreamHandleRep::new(
+            SchemaValueStream::from_host_endpoint(()),
+        ))
+        .unwrap();
+    let only_stream_probe = Resource::<SchemaValueStreamHandleRep>::new_borrow(only_stream.rep());
+    let result = super::reject_quota_handles_in_oplog_entries(
+        vec![(
+            1,
+            raw_create(vec![config(
+                "stream",
+                vec![
+                    wire::SchemaValueNode::BoolValue(false),
+                    wire::SchemaValueNode::StreamValue(only_stream),
+                ],
+            )]),
+        )],
+        &mut dropper,
+    );
+    assert!(dropper.table.get(&only_stream_probe).is_err());
+    assert_eq!(
+        result.err().as_deref(),
+        Some("agent config value must not contain an owned handle: stream at value node 1")
     );
 }
