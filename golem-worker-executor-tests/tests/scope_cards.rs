@@ -6322,6 +6322,21 @@ async fn guest_oplog_search_stops_at_the_granted_window(
         .into_typed::<Result<Option<Vec<u64>>, String>>()?;
     assert_eq!(new_search, Ok(Some(vec![100])));
     assert_eq!(executor.oplog_service_reads(&target.agent_id()), [window]);
+
+    let read = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "read_oplog_batch_size",
+            data_value!(target.agent_id(), 1u64),
+        )
+        .await?
+        .into_typed::<Result<Option<u64>, String>>()?;
+    assert_eq!(read, Ok(Some(100)));
+    assert_eq!(
+        executor.oplog_service_reads(&target.agent_id()),
+        [window, window]
+    );
     Ok(())
 }
 

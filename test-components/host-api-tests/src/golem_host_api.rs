@@ -213,6 +213,9 @@ pub trait GolemHostApi {
     /// Fails when the search has not ended after `max_batches` batches.
     fn continue_kept_oplog_search(&self, max_batches: u64) -> Result<Vec<u64>, String>;
     fn read_oplog_result(&self, agent_id: AgentId) -> Result<(), String>;
+    /// Reads the first batch of the agent's oplog from `start`, and gives the number of its
+    /// entries.
+    fn read_oplog_batch_size(&self, agent_id: AgentId, start: u64) -> Result<Option<u64>, String>;
     fn search_oplog_result(
         &mut self,
         agent_id: AgentId,
@@ -952,6 +955,13 @@ impl GolemHostApi for GolemHostApiImpl {
         GetOplog::new(wire_agent_id(agent_id), 0)
             .get_next()
             .map(|_| ())
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn read_oplog_batch_size(&self, agent_id: AgentId, start: u64) -> Result<Option<u64>, String> {
+        GetOplog::new(wire_agent_id(agent_id), start)
+            .get_next()
+            .map(|batch| batch.map(|entries| entries.len() as u64))
             .map_err(|error| format!("{error:?}"))
     }
 

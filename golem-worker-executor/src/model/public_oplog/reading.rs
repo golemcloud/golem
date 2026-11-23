@@ -57,7 +57,7 @@ impl ChunkAttribution for PublicOplogEntryAttribution {
     }
 }
 
-/// A chunk without attribution reads no entry outside the chunk.
+/// A chunk without attribution reads no owning `Start` of its entries.
 impl ChunkAttribution for () {
     async fn resolve(
         _resolver: &mut PublicOplogAttributionResolver<'_>,
@@ -214,8 +214,8 @@ pub async fn get_public_oplog_chunk(
     Ok(chunk)
 }
 
-/// Reads an oplog chunk for a guest. The chunk reads no entry outside it, and holds no
-/// attribution.
+/// Reads an oplog chunk for a guest. The chunk holds no attribution, so it reads no owning
+/// `Start` outside the chunk.
 pub async fn get_guest_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -445,8 +445,8 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
 
 /// Searches the oplog for a guest. The search reads no entry after `last_oplog_index`; the guest
 /// passes the `last_index` of its first result, so that its own entries, which every page adds,
-/// do not move the end of the search. The search reads no entry outside the chunks that it scans,
-/// and its result holds no attribution.
+/// do not move the end of the search. The result holds no attribution, so the search reads no
+/// owning `Start` outside the chunks that it scans.
 pub async fn search_guest_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
