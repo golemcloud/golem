@@ -81,6 +81,10 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("agent_update_v2")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("tool_streaming_moonbit")]
     PrecompiledComponent
 );
@@ -6389,6 +6393,114 @@ async fn guest_oplog_search_stops_at_the_granted_window(
         [(OplogIndex::from_u64(51), tip - 50)]
     );
     assert_eq!(later, Ok(Some(tip - 50)));
+    Ok(())
+}
+
+/// A guest batch that starts after index 1 decodes its first entries with the component revision
+/// of the last successful update before its start. The target runs `set`, which only the second
+/// revision has, between an update to that revision and an update away from it, so only that
+/// revision decodes the input of `set`.
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn a_later_guest_oplog_batch_decodes_with_the_revision_at_its_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+
+    let updated = executor
+        .component_dep(&context.default_environment_id, agent_update_v2)
+        .store()
+        .await?;
+    let target_agent = agent_key!("UpdateTest");
+    configure_scope_card_root(&authority, &updated, &target_agent)?;
+    let target = executor
+        .start_agent(&updated.id, target_agent.clone())
+        .await?;
+    let wait_for_successful_updates = async |count: usize| {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let metadata = executor.get_worker_metadata(&target).await?;
+                if golem_test_framework::dsl::update_counts(&metadata) == (0, count, 0) {
+                    break anyhow::Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?
+    };
+
+    let with_set = executor
+        .update_component(&updated.id, "it_agent_update_v3_release")
+        .await?;
+    executor
+        .manual_update_worker(&target, with_set.revision, false)
+        .await?;
+    wait_for_successful_updates(1).await?;
+    let set = executor
+        .invoke_and_await_agent(&updated, &target_agent, "set", data_value!(7u64))
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(set, 7);
+    let without_set = executor
+        .update_component(&updated.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&target, without_set.revision, false)
+        .await?;
+    wait_for_successful_updates(2).await?;
+
+    let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let updates = oplog
+        .iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_)))
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert_eq!(updates.len(), 2);
+    let start = updates[0].next();
+
+    let reader = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("GolemHostApi")
+        .try_update_agent_provision_config("GolemHostApi", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .push(parse_polymorphic_permission(
+                    "oplog(?env/*/*) @ * : read : *",
+                )?);
+            Ok::<_, golem_common::model::card::CardParseError>(())
+        })?
+        .store()
+        .await?;
+    let reader_agent = agent_key!("GolemHostApi", "later-oplog-batch-reader");
+    // The target keeps its card as the reader's card becomes the root card.
+    authority.add_card(
+        authority
+            .root_card()
+            .expect("the target card is the root card"),
+    );
+    configure_scope_card_root(&authority, &reader, &reader_agent)?;
+    executor
+        .start_agent(&reader.id, reader_agent.clone())
+        .await?;
+    let inputs = executor
+        .invoke_and_await_agent(
+            &reader,
+            &reader_agent,
+            "read_oplog_method_inputs",
+            data_value!(target.agent_id(), start.as_u64()),
+        )
+        .await?
+        .into_typed::<Result<Vec<(String, Vec<u64>)>, String>>()?;
+    assert_eq!(inputs, Ok(vec![("set".to_string(), vec![7])]));
     Ok(())
 }
 

@@ -216,6 +216,13 @@ pub trait GolemHostApi {
     /// Reads the first batch of the agent's oplog from `start`, and gives the number of its
     /// entries.
     fn read_oplog_batch_size(&self, agent_id: AgentId, start: u64) -> Result<Option<u64>, String>;
+    /// Reads the first batch of the agent's oplog from `start`, and gives the name of each agent
+    /// method invocation in it with the `u64` values of its decoded input.
+    fn read_oplog_method_inputs(
+        &self,
+        agent_id: AgentId,
+        start: u64,
+    ) -> Result<Vec<(String, Vec<u64>)>, String>;
     fn search_oplog_result(
         &mut self,
         agent_id: AgentId,
@@ -963,6 +970,44 @@ impl GolemHostApi for GolemHostApiImpl {
             .get_next()
             .map(|batch| batch.map(|entries| entries.len() as u64))
             .map_err(|error| format!("{error:?}"))
+    }
+
+    fn read_oplog_method_inputs(
+        &self,
+        agent_id: AgentId,
+        start: u64,
+    ) -> Result<Vec<(String, Vec<u64>)>, String> {
+        use golem_rust::bindings::golem::api::oplog::{AgentInvocation, PublicOplogEntry};
+
+        let entries = GetOplog::new(wire_agent_id(agent_id), start)
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .unwrap_or_default();
+        Ok(entries
+            .into_iter()
+            .filter_map(|entry| match entry {
+                PublicOplogEntry::AgentInvocationStarted(started) => match started.invocation {
+                    AgentInvocation::AgentMethodInvocation(method) => Some(method),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .map(|method| {
+                let values = method
+                    .function_input
+                    .value
+                    .value_nodes
+                    .iter()
+                    .filter_map(|node| match node {
+                        golem_rust::schema::wit::wire::SchemaValueNode::U64Value(value) => {
+                            Some(*value)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                (method.method_name, values)
+            })
+            .collect())
     }
 
     fn search_oplog_result(
