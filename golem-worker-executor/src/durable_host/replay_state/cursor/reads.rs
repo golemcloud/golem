@@ -148,7 +148,7 @@ impl CursorTx<'_> {
             if let BoundaryRead::ToleratingAbandoned {
                 settlement_after: Some(anchor),
             } = boundary
-                && self.st.first_settled_after(anchor).is_some()
+                && self.cursor.settled_after(anchor, None).is_some()
             {
                 // The walk ends at a settlement; the entries after it belong to the next
                 // invocation.
@@ -387,7 +387,7 @@ impl CursorTx<'_> {
     /// head is reported as the divergence it is. The invocation-boundary reader never waits on
     /// another Store: every entity body of the invocation has terminated before
     /// `AgentInvocationFinished`, so an unconsumed body entry there is dead history. The
-    /// open-anchor reader waits like an ordinary reader: the background work of its invocation,
+    /// open-anchor reader checks as an ordinary reader: the background work of its invocation,
     /// including entity bodies, still replays.
     pub(in crate::durable_host::replay_state) async fn check_parked_positional_read(
         &self,
@@ -403,7 +403,7 @@ impl CursorTx<'_> {
             // A positional reader never classifies a nested `Start` left at the head: its parent
             // may be a call of the reading Store.
             (_, HeadOwner::Unattributed | HeadOwner::ParentStart(_))
-            | (PositionalReader::Ordinary | PositionalReader::OpenAnchor, HeadOwner::Agent) => {
+            | (PositionalReader::Ordinary, HeadOwner::Agent) => {
                 return Ok(());
             }
             (PositionalReader::InvocationBoundary, _) => {
@@ -416,10 +416,7 @@ impl CursorTx<'_> {
                     mismatched: Vec::new(),
                 }));
             }
-            (
-                PositionalReader::Ordinary | PositionalReader::OpenAnchor,
-                HeadOwner::EntityBody(owner),
-            ) => owner,
+            (PositionalReader::Ordinary, HeadOwner::EntityBody(owner)) => owner,
         };
         if self
             .st
@@ -1400,8 +1397,9 @@ impl CursorTx<'_> {
             )));
         };
         export_returned.mark();
-        let settled_before = |st: &CursorState, bound: Option<OplogIndex>| {
-            st.first_settled_after(anchor)
+        let settled_before = |cursor: &ReplayCursor, bound: Option<OplogIndex>| {
+            cursor
+                .settled_after(anchor, None)
                 .filter(|settled| bound.is_none_or(|bound| *settled < bound))
         };
         let settled_first = |settled: OplogIndex| {
@@ -1413,7 +1411,7 @@ impl CursorTx<'_> {
                 ),
             )
         };
-        if let Some(settled) = settled_before(&self.st, None) {
+        if let Some(settled) = settled_before(self.cursor, None) {
             return Err(settled_first(settled));
         }
         let read = self
@@ -1425,7 +1423,7 @@ impl CursorTx<'_> {
                 |entry| is_invocation_terminal_of(entry, &invocation_id),
             )
             .await?;
-        if let Some(settled) = settled_before(&self.st, read.as_ref().map(|(index, _)| *index)) {
+        if let Some(settled) = settled_before(self.cursor, read.as_ref().map(|(index, _)| *index)) {
             return Err(settled_first(settled));
         }
         if read.is_some() {
@@ -1442,7 +1440,7 @@ impl CursorTx<'_> {
                 format!("{head:?} at {index}, before the terminal of invocation {invocation_id}"),
             ));
         }
-        self.check_parked_positional_read(PositionalReader::OpenAnchor)
+        self.check_parked_positional_read(PositionalReader::Ordinary)
             .await?;
         Ok(None)
     }
@@ -1465,7 +1463,11 @@ impl CursorTx<'_> {
                 "the invocation anchor {anchor} of invocation {invocation_id} is not open"
             )));
         }
-        if self.st.settled_after(anchor, &invocation_id).is_none() {
+        if self
+            .cursor
+            .settled_after(anchor, Some(&invocation_id))
+            .is_none()
+        {
             // Every guest task of the invocation exited, so nothing can claim the records left
             // before the settlement: the walk retains them for the abandoned-record tolerance.
             self.try_get_oplog_entry_inner(
@@ -1479,8 +1481,8 @@ impl CursorTx<'_> {
             )
             .await?;
         }
-        let settled = self.st.settled_after(anchor, &invocation_id);
-        if let Some(other) = self.st.first_settled_after(anchor)
+        let settled = self.cursor.settled_after(anchor, Some(&invocation_id));
+        if let Some(other) = self.cursor.settled_after(anchor, None)
             && settled.is_none_or(|settled| other < settled)
         {
             return Err(boundary_divergence(
@@ -1598,10 +1600,9 @@ impl CursorTx<'_> {
         }
     }
 
-    /// Finishes the wallet replay of the invocation anchored at `anchor`, closes the anchor at
-    /// the entry at `at`, and prunes the settlements no open or later anchor can need. A close at
-    /// the replay tail is at the entry after the replay target, where the live run appends the
-    /// settlement.
+    /// Finishes the wallet replay of the invocation anchored at `anchor` and closes the anchor at
+    /// the entry at `at`. A close at the replay tail is at the entry after the replay target,
+    /// where the live run appends the settlement.
     fn finish_closed_anchor(&mut self, anchor: OplogIndex, at: OplogIndex) {
         if let Some(wallet) = &self.cursor.wallet {
             wallet.finish_replayed_invocation();
@@ -1609,14 +1610,6 @@ impl CursorTx<'_> {
         let st = &mut *self.st;
         st.owners
             .close(anchor, at, |index| st.starts.get_retained(&index).is_some());
-        // An anchor needs only the settlements after it, and later anchors lie after this one.
-        let keep_from = self
-            .st
-            .owners
-            .first_open_invocation()
-            .map_or(anchor, |lowest_open| anchor.min(lowest_open))
-            .next();
-        self.st.settled_invocations = self.st.settled_invocations.split_off(&keep_from);
         self.notify_progress = true;
     }
 }

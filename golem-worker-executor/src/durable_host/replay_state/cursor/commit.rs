@@ -358,9 +358,6 @@ impl CursorTx<'_> {
                     wallet.finish_replayed_invocation();
                 }
             }
-            OplogEntry::AgentInvocationSettled { invocation_id, .. } => {
-                self.st.settled_invocations.insert(read_idx, *invocation_id);
-            }
             OplogEntry::CardTransferStarted {
                 transfer_id,
                 card_id,

@@ -119,7 +119,7 @@ impl ReplayState {
             stream_observations,
             transaction_markers,
             start_invocation_ids,
-            invocation_finishes,
+            invocation_boundaries,
         } = Self::scan_completion_markers(
             &oplog,
             metadata_floor,
@@ -149,7 +149,7 @@ impl ReplayState {
             delivery_failure: std::sync::Mutex::new(None),
             stream_observations: std::sync::Mutex::new(stream_observations),
             start_invocation_ids: std::sync::Mutex::new(start_invocation_ids),
-            invocation_finishes: std::sync::Mutex::new(invocation_finishes),
+            invocation_boundaries: std::sync::Mutex::new(invocation_boundaries),
             position: PublishedPosition {
                 last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
                 last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
@@ -170,7 +170,6 @@ impl ReplayState {
                 starts,
                 custom_subtrees: HashMap::new(),
                 owners: Default::default(),
-                settled_invocations: std::collections::BTreeMap::new(),
             }),
             unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
@@ -219,7 +218,7 @@ impl ReplayState {
         let mut stream_observations = StreamObservationPositions::new();
         let mut transaction_markers = TransactionMarkers::new();
         let mut start_invocation_ids = StartsByInvocationId::new();
-        let mut invocation_finishes = InvocationFinishes::new();
+        let mut invocation_boundaries = InvocationBoundaries::new();
         let mut next = from;
         while next <= to {
             let available = u64::from(to) - u64::from(next) + 1;
@@ -445,23 +444,48 @@ impl ReplayState {
                         }
                         None
                     }
-                    OplogEntry::AgentInvocationStarted { .. } => {
-                        invocation_finishes.insert(marker_idx, InvocationBoundary::Started);
+                    OplogEntry::AgentInvocationStarted { invocation_id, .. } => {
+                        invocation_boundaries.insert(
+                            marker_idx,
+                            RecordedBoundary {
+                                kind: BoundaryKind::Started,
+                                invocation_id,
+                            },
+                        );
                         None
                     }
-                    OplogEntry::AgentInvocationFinished { .. } => {
-                        invocation_finishes.insert(marker_idx, InvocationBoundary::Finished);
+                    OplogEntry::AgentInvocationFinished { invocation_id, .. } => {
+                        invocation_boundaries.insert(
+                            marker_idx,
+                            RecordedBoundary {
+                                kind: BoundaryKind::Finished,
+                                invocation_id,
+                            },
+                        );
                         None
                     }
                     OplogEntry::AgentInvocationFailed {
                         entity_parent_start_index: None,
+                        invocation_id,
                         ..
                     } => {
-                        invocation_finishes.insert(marker_idx, InvocationBoundary::LocalFailure);
+                        invocation_boundaries.insert(
+                            marker_idx,
+                            RecordedBoundary {
+                                kind: BoundaryKind::LocalFailure,
+                                invocation_id,
+                            },
+                        );
                         None
                     }
-                    OplogEntry::AgentInvocationSettled { .. } => {
-                        invocation_finishes.insert(marker_idx, InvocationBoundary::Settled);
+                    OplogEntry::AgentInvocationSettled { invocation_id, .. } => {
+                        invocation_boundaries.insert(
+                            marker_idx,
+                            RecordedBoundary {
+                                kind: BoundaryKind::Settled,
+                                invocation_id,
+                            },
+                        );
                         None
                     }
                     OplogEntry::CompletionDelivered { start_index, .. } => {
@@ -576,13 +600,13 @@ impl ReplayState {
             stream_observations,
             transaction_markers,
             start_invocation_ids,
-            invocation_finishes,
+            invocation_boundaries,
         })
     }
 
     /// The first visible invocation boundary (an `AgentInvocationStarted`, an invocation
     /// terminal or an `AgentInvocationSettled`) after the cursor and before `index`. Reads only
-    /// the scanned invocation finishes, never the oplog.
+    /// the scanned invocation boundaries, never the oplog.
     ///
     /// The `AgentInvocationStarted` of the next invocation keeps a boundary in place while the
     /// cursor drains an invocation's background work past its terminal and its settlement hint:
@@ -596,7 +620,7 @@ impl ReplayState {
             return None;
         }
         self.cursor
-            .invocation_finishes
+            .invocation_boundaries
             .lock()
             .unwrap()
             .range(after_cursor..index)
@@ -605,39 +629,42 @@ impl ReplayState {
     }
 
     /// The index of the invocation-local failure that terminates the invocation started at
-    /// `start`, when its recorded terminal is one. Its terminal precedes its
-    /// `AgentInvocationSettled` and the next `AgentInvocationStarted`, so it is the first
-    /// invocation boundary after `start`.
+    /// `start`, when its recorded terminal is one: the terminal of that invocation before the
+    /// next `AgentInvocationStarted`.
     pub(crate) fn recorded_local_failure_of_invocation(
         &self,
         start: OplogIndex,
     ) -> Option<OplogIndex> {
-        self.cursor
-            .invocation_finishes
-            .lock()
-            .unwrap()
+        let boundaries = self.cursor.invocation_boundaries.lock().unwrap();
+        let invocation_id = started_invocation(&boundaries, start)?;
+        boundaries
             .range(start.next()..)
-            .next()
+            .take_while(|(_, boundary)| boundary.kind != BoundaryKind::Started)
+            .find(|(_, boundary)| {
+                boundary.invocation_id == invocation_id
+                    && matches!(
+                        boundary.kind,
+                        BoundaryKind::Finished | BoundaryKind::LocalFailure
+                    )
+            })
             .and_then(|(index, boundary)| {
-                (*boundary == InvocationBoundary::LocalFailure).then_some(*index)
+                (boundary.kind == BoundaryKind::LocalFailure).then_some(*index)
             })
     }
 
-    /// Whether the recorded history closes the invocation anchored at `start`: an
+    /// Whether the recorded history closes the invocation anchored at `start`: its
     /// `AgentInvocationSettled` or the next `AgentInvocationStarted` follows it. Its background
     /// work then ended in the recorded run, with every remaining store task parked, so live work
     /// of such a task belongs to a later invocation.
     pub(crate) fn invocation_closed_in_history(&self, start: OplogIndex) -> bool {
-        self.cursor
-            .invocation_finishes
-            .lock()
-            .unwrap()
+        let boundaries = self.cursor.invocation_boundaries.lock().unwrap();
+        let invocation_id = started_invocation(&boundaries, start);
+        boundaries
             .range(start.next()..)
-            .any(|(_, boundary)| {
-                matches!(
-                    boundary,
-                    InvocationBoundary::Settled | InvocationBoundary::Started
-                )
+            .any(|(_, boundary)| match boundary.kind {
+                BoundaryKind::Started => true,
+                BoundaryKind::Settled => Some(boundary.invocation_id) == invocation_id,
+                BoundaryKind::Finished | BoundaryKind::LocalFailure => false,
             })
     }
 
@@ -726,7 +753,6 @@ impl ReplayState {
                     tx.st.replay_buffer.clear();
                     tx.prune_retained_starts(|idx| idx > new_target);
                     tx.st.owners.truncate_after(new_target);
-                    tx.st.settled_invocations.split_off(&new_target.next());
                     cursor
                         .completion_markers
                         .lock()
@@ -741,7 +767,7 @@ impl ReplayState {
                         entries.retain(|index, _| *index <= new_target);
                         !entries.is_empty()
                     });
-                    cursor.invocation_finishes.lock().unwrap().retain(|index, _| *index <= new_target);
+                    cursor.invocation_boundaries.lock().unwrap().retain(|index, _| *index <= new_target);
                     cursor.tool_attachment_reconstruction.lock().unwrap()
                         .truncate(new_target);
                 }
@@ -752,7 +778,7 @@ impl ReplayState {
                         stream_observations,
                         transaction_markers,
                         start_invocation_ids,
-                        invocation_finishes,
+                        invocation_boundaries,
                     } = Self::scan_completion_markers(
                         &cursor.oplog,
                         old_target.next(),
@@ -797,7 +823,7 @@ impl ReplayState {
                             current.entry(owner).or_default().extend(entries);
                         }
                     }
-                    cursor.invocation_finishes.lock().unwrap().extend(invocation_finishes);
+                    cursor.invocation_boundaries.lock().unwrap().extend(invocation_boundaries);
                     let mut current = cursor.tool_attachment_reconstruction.lock().unwrap();
                     current.starts.extend(attachments.starts);
                     current.accepted.extend(attachments.accepted);
@@ -828,5 +854,40 @@ impl ReplayState {
             Ok(())
         })
         .await
+    }
+}
+
+/// The invocation id of the visible `AgentInvocationStarted` at `start`.
+fn started_invocation(
+    boundaries: &InvocationBoundaries,
+    start: OplogIndex,
+) -> Option<golem_common::model::InvocationId> {
+    boundaries
+        .get(&start)
+        .filter(|boundary| boundary.kind == BoundaryKind::Started)
+        .map(|boundary| boundary.invocation_id)
+}
+
+impl ReplayCursor {
+    /// The index of the first `AgentInvocationSettled` after `anchor` that the cursor passed,
+    /// of the invocation `invocation_id`, or of any invocation without it.
+    pub(in crate::durable_host::replay_state) fn settled_after(
+        &self,
+        anchor: OplogIndex,
+        invocation_id: Option<&golem_common::model::InvocationId>,
+    ) -> Option<OplogIndex> {
+        let passed = self.last_replayed_index();
+        if passed <= anchor {
+            return None;
+        }
+        self.invocation_boundaries
+            .lock()
+            .unwrap()
+            .range(anchor.next()..=passed)
+            .find(|(_, boundary)| {
+                boundary.kind == BoundaryKind::Settled
+                    && invocation_id.is_none_or(|id| boundary.invocation_id == *id)
+            })
+            .map(|(index, _)| *index)
     }
 }

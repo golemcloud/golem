@@ -421,13 +421,6 @@ impl OwnerMap {
         open.max(closed)
     }
 
-    /// The lowest anchor of an open invocation.
-    pub(super) fn first_open_invocation(&self) -> Option<OplogIndex> {
-        self.open_invocations
-            .first_key_value()
-            .map(|(anchor, _)| *anchor)
-    }
-
     /// Closes the open invocation started at `anchor` at the entry at `at`, and drops the owners
     /// of its `Start`s except the ones `retained` still holds. Every invocation closes once.
     pub(super) fn close(

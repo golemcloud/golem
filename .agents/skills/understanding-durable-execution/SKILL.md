@@ -2071,7 +2071,7 @@ across invocations records its marker in the invocation that consumes it. While 
 boundary (a terminal, an `AgentInvocationSettled` or an `AgentInvocationStarted`) lies between
 the cursor and that marker, the marker wait parks its passive progress wait, so the invocation
 that recorded the `End` can settle and the consuming invocation can replay. Its cursor operations
-stay active. The wait finds that boundary in `invocation_finishes`, which the recovery metadata
+stay active. The wait finds that boundary in `invocation_boundaries`, which the recovery metadata
 scan builds and keeps in step with the replay target, so the wait adds no oplog reads. Completing
 the host channel without this boundary can wake the POST continuation early and exchange the
 import ordinals of concurrent response-body consumers. Response trailers share the same

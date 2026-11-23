@@ -7513,7 +7513,7 @@ async fn delivery_wait_behind_a_deleted_invocation_finish_stays_active() {
 
 #[test]
 #[test_r::timeout("30s")]
-async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
+async fn invocation_boundaries_follow_replay_target_shrink_and_regrowth() {
     use crate::durable_host::tail_work::TailWorkTracker;
 
     let (rs, oplog) = replay_state_and_oplog_over(vec![

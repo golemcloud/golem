@@ -320,11 +320,18 @@ type TransactionMarkers = HashMap<OplogIndex, std::collections::BTreeMap<OplogIn
 type StreamObservationPositions = std::collections::BTreeMap<OplogIndex, Option<OplogIndex>>;
 type StartsByInvocationId =
     HashMap<DurableInvocationId, std::collections::BTreeMap<OplogIndex, claims::RecordedStart>>;
-type InvocationFinishes = std::collections::BTreeMap<OplogIndex, InvocationBoundary>;
+type InvocationBoundaries = std::collections::BTreeMap<OplogIndex, RecordedBoundary>;
 
-/// The kind of an invocation boundary in [`InvocationFinishes`].
+/// An invocation boundary in [`InvocationBoundaries`]: its kind and the invocation it belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InvocationBoundary {
+struct RecordedBoundary {
+    kind: BoundaryKind,
+    invocation_id: golem_common::model::InvocationId,
+}
+
+/// The kind of a [`RecordedBoundary`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundaryKind {
     /// An `AgentInvocationStarted`.
     Started,
     /// An `AgentInvocationFinished`.
@@ -352,7 +359,7 @@ struct ScannedRecoveryMetadata {
     stream_observations: StreamObservationPositions,
     transaction_markers: TransactionMarkers,
     start_invocation_ids: StartsByInvocationId,
-    invocation_finishes: InvocationFinishes,
+    invocation_boundaries: InvocationBoundaries,
 }
 
 /// The consuming invocation whose earlier retained Starts must be claimed before a native read
@@ -635,13 +642,14 @@ struct ReplayCursor {
     /// extended by the scan of exactly the newly visible range when the replay target grows. A
     /// claim of an identified call looks its `Start` up here instead of scanning the oplog.
     start_invocation_ids: std::sync::Mutex<StartsByInvocationId>,
-    /// The visible invocation boundary positions up to the replay target: the
+    /// The visible invocation boundaries up to the replay target, with their invocation ids: the
     /// `AgentInvocationStarted` entries, the invocation terminals and the
     /// `AgentInvocationSettled` entries. Built and kept in sync with the
     /// visible prefix by the same scans as the delivery markers; an entry in a deleted region is
     /// not visible. A delivery wait looks up its invocation boundary here instead of reading the
-    /// oplog.
-    invocation_finishes: std::sync::Mutex<InvocationFinishes>,
+    /// oplog, and the settlement walks find the `AgentInvocationSettled` entries the cursor passed
+    /// here.
+    invocation_boundaries: std::sync::Mutex<InvocationBoundaries>,
     /// Published physical and claimed positions. Lock-free reads; writes hold `state`.
     position: PublishedPosition,
     /// The oplog index replay runs up to. Read lock-free everywhere; set at phase boundaries via
@@ -897,9 +905,6 @@ struct CursorState {
     /// The lifecycle of every invocation the cursor started, and the owners of the committed
     /// `Start`s.
     owners: owners::OwnerMap,
-    /// The `AgentInvocationSettled` entries the cursor committed or skipped as hints, with their
-    /// invocation ids. Entries no open or later anchor can need are pruned when an anchor closes.
-    settled_invocations: std::collections::BTreeMap<OplogIndex, golem_common::model::InvocationId>,
 }
 
 /// Whether `entry` is the primary invocation terminal (`AgentInvocationFinished`, or an
@@ -941,28 +946,6 @@ impl CursorState {
         self.replay_buffer
             .front()
             .is_some_and(|(_, entry)| self.is_returned_open_invocation_terminal(entry))
-    }
-
-    /// The index of the `AgentInvocationSettled` of `invocation_id` that the cursor committed or
-    /// skipped after `anchor`.
-    fn settled_after(
-        &self,
-        anchor: OplogIndex,
-        invocation_id: &golem_common::model::InvocationId,
-    ) -> Option<OplogIndex> {
-        self.settled_invocations
-            .range(anchor.next()..)
-            .find(|(_, settled)| *settled == invocation_id)
-            .map(|(index, _)| *index)
-    }
-
-    /// The first `AgentInvocationSettled` of any invocation that the cursor committed or skipped
-    /// after `anchor`.
-    fn first_settled_after(&self, anchor: OplogIndex) -> Option<OplogIndex> {
-        self.settled_invocations
-            .range(anchor.next()..)
-            .next()
-            .map(|(index, _)| *index)
     }
 }
 

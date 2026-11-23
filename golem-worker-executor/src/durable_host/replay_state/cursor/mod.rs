@@ -21,16 +21,16 @@ pub(super) use settling::historical_reconstruction_owner_failure;
 use super::claims::{AdmissionRefusal, RecordedStart, StartClaim, matching_admission_refusal};
 use super::{
     AbandonedStarts, AgentInvocationResult, AgentInvocationStartedEntry, Arc, AtomicBool,
-    AtomicOplogIndex, AtomicReplayTransitionPhase, BlockedOn, BootstrapTail, CHUNK_SIZE,
-    CompletionMarker, CompletionMarkers, CursorState, DeletedRegions, DurableInvocationId,
-    EntityAttribution, Future, GuestReadOrder, HashMap, HashSet, Hasher, HostFunctionName,
-    InvocationBoundary, InvocationContextStack, InvocationFinishes, LivePublicationOutcome,
+    AtomicOplogIndex, AtomicReplayTransitionPhase, BlockedOn, BootstrapTail, BoundaryKind,
+    CHUNK_SIZE, CompletionMarker, CompletionMarkers, CursorState, DeletedRegions,
+    DurableInvocationId, EntityAttribution, Future, GuestReadOrder, HashMap, HashSet, Hasher,
+    HostFunctionName, InvocationBoundaries, InvocationContextStack, LivePublicationOutcome,
     LogLevel, MetroHash128, MissingStart, Mutex, MutexGuard, Notify, Oplog, OplogEntry,
     OplogEntryLookupResult, OplogIndex, OplogOps, OplogRegion, OplogScopeProjection, Ordering,
-    OwnedAgentId, PublishedPosition, QuotaClass, ReplayCallHandle, ReplayCursor, ReplayDivergence,
-    ReplayEvent, ReplayStarts, ReplayState, ReplayStep, ReplayToLiveOutcome, ReplayTransitionPhase,
-    Resolution, RetainedStart, RetainedStartCounts, ScannedRecoveryMetadata, SettledAt,
-    StartClaimAttempt, StartsByInvocationId, StreamObservationPositions,
+    OwnedAgentId, PublishedPosition, QuotaClass, RecordedBoundary, ReplayCallHandle, ReplayCursor,
+    ReplayDivergence, ReplayEvent, ReplayStarts, ReplayState, ReplayStep, ReplayToLiveOutcome,
+    ReplayTransitionPhase, Resolution, RetainedStart, RetainedStartCounts, ScannedRecoveryMetadata,
+    SettledAt, StartClaimAttempt, StartsByInvocationId, StreamObservationPositions,
     ToolAttachmentReconstruction, TransactionMarkers, VecDeque, WorkerExecutorError, debug, warn,
 };
 #[cfg(any(test, feature = "test-utils"))]
@@ -142,9 +142,6 @@ pub(super) enum PositionalReader {
     /// The primary Store's walk to `AgentInvocationFinished` after the replayed guest produced
     /// its invocation result.
     InvocationBoundary,
-    /// The primary Store's read of the terminal of an open invocation anchor, while the
-    /// background work of that invocation still replays.
-    OpenAnchor,
 }
 
 /// The Store whose replay consumes an entry left at the cursor head, as the entry itself records
