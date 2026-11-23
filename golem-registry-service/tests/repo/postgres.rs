@@ -375,6 +375,25 @@ async fn test_environment_deletion_racing_runtime_derivation_from_descendant(
 }
 
 #[test]
+async fn test_account_deletion_holds(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_account_deletion_holds(deps).await;
+}
+
+#[test]
+async fn test_account_deletion_holds_are_hidden_from_other_users(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_account_deletion_holds_are_hidden_from_other_users(deps).await;
+}
+
+#[test]
+async fn test_oauth2_login_after_account_delete_creates_new_account(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_oauth2_login_after_account_delete_creates_new_account(deps).await;
+}
+
+#[test]
 async fn test_create_and_get_account(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_create_and_get_account(deps).await;
 }

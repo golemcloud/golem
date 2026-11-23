@@ -1,41 +1,46 @@
 import { symmetricDecrypt } from "better-auth/crypto"
 import type pg from "pg"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
+import { signInRateLimit } from "../src/Auth.ts"
 import type { BillingConfigShape } from "../src/BillingConfig.ts"
+import { breakAtHyphens } from "../src/Page.ts"
+import { closePool, RegistryDatabase } from "./registry.ts"
 import {
   authSecret,
   baseUrl,
   CookieJar,
-  dropSchema,
   FakeUpstreams,
   makeApp,
+  newClientAddress,
   newGitHubIdentity,
   queryPool,
   request,
-  signInWithGitHub,
-  testConfig
+  signInWithGitHub
 } from "./support.ts"
 
 describe("GitHub sign-in", () => {
+  // The registry tables in `public`: the bridge reads whether the linked account is deleted.
+  const registry = new RegistryDatabase()
   let config: BillingConfigShape
   let pool: pg.Pool
   let app: ReturnType<typeof makeApp>
   let upstreams: FakeUpstreams
 
-  beforeAll(() => {
-    config = testConfig()
-    pool = queryPool(config)
+  beforeAll(async () => {
+    await registry.create()
+    config = registry.configs.web
+    pool = queryPool(registry.ownerConfig)
     app = makeApp(config)
     // Effect's fetch client keeps the `fetch` it sees first, so the stub delegates to the fake
     // upstreams of the running test.
     vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) => upstreams.fetch(input, init))
-  })
+  }, 60_000)
 
   afterAll(async () => {
     vi.unstubAllGlobals()
     await app.dispose()
-    await dropSchema(pool, config.db.schema)
-    await pool.end()
+    await closePool(pool)
+    await registry.drop()
   })
 
   beforeEach(() => {
@@ -135,13 +140,17 @@ describe("GitHub sign-in", () => {
     ])
   })
 
+  /** Makes the GitHub identity of the test resolve to a new registry account, as after a delete. */
+  const newRegistryAccount = async () => {
+    const accountId = await registry.account()
+    upstreams.registryAccounts.set(upstreams.github.accessToken, { accountId, secret: `golem_${accountId}` })
+    return accountId
+  }
+
   it("refuses a session when the registry returns another account than the user has", async () => {
+    const linked = await newRegistryAccount()
     await signInWithGitHub(app.handler, new CookieJar())
-    const linked = upstreams.registryAccount.accountId
-    upstreams.registryAccounts.set(upstreams.github.accessToken, {
-      accountId: "0e9f2f4a-4f7c-4c55-9a3e-3b6a8f0d2c11",
-      secret: "golem_other"
-    })
+    await newRegistryAccount()
 
     const callback = await signInWithGitHub(app.handler, new CookieJar())
 
@@ -150,6 +159,40 @@ describe("GitHub sign-in", () => {
     )
     expect(await sessions()).toHaveLength(1)
     expect(await users()).toEqual([{ email: upstreams.github.email, golem_account_id: linked }])
+  })
+
+  it("refuses the user of a deleted account until the cleanup deletes the user", async () => {
+    const deleted = await newRegistryAccount()
+    await signInWithGitHub(app.handler, new CookieJar())
+    await registry.deleteAccount(deleted)
+    await newRegistryAccount()
+
+    const callback = await signInWithGitHub(app.handler, new CookieJar())
+
+    expect(new URL(callback.headers.get("location")!, baseUrl).searchParams.get("error")).toBe(
+      "unable_to_create_session"
+    )
+    expect(await sessions()).toHaveLength(1)
+    expect(await users()).toEqual([{ email: upstreams.github.email, golem_account_id: deleted }])
+  })
+
+  it("links a new user to the new account after the cleanup deletes the user of the deleted account", async () => {
+    const deleted = await newRegistryAccount()
+    await signInWithGitHub(app.handler, new CookieJar())
+    await registry.deleteAccount(deleted)
+    const replacement = await newRegistryAccount()
+    // What the cleanup does after it deletes the Polar customer of the deleted account.
+    await pool.query(`DELETE FROM "${config.db.schema}"."user" WHERE golem_account_id = $1`, [deleted])
+
+    const callback = await signInWithGitHub(app.handler, new CookieJar())
+
+    expect(new URL(callback.headers.get("location")!, baseUrl).searchParams.get("error")).toBeNull()
+    expect(await users()).toEqual([{ email: upstreams.github.email, golem_account_id: replacement }])
+    const sessionsOfNewUser = await sessions()
+    expect(sessionsOfNewUser).toHaveLength(1)
+    expect(await symmetricDecrypt({ key: authSecret, data: sessionsOfNewUser[0]!.golem_token! })).toBe(
+      `golem_${replacement}`
+    )
   })
 
   it("refuses a session for a user with more than one GitHub account", async () => {
@@ -198,12 +241,27 @@ describe("GitHub sign-in", () => {
     const body = await response.text()
 
     expect(response.status).toBe(200)
-    expect(body).toContain("You're on Free")
-    expect(body).toContain(upstreams.registryAccount.accountId)
+    expect(body).toContain("<h1>Free</h1>")
+    expect(body).toContain(breakAtHyphens(upstreams.registryAccount.accountId).value)
     expect(body).toContain("octocat@example.com")
     expect(body).toContain("golem profile new golem-cloud --url https://release.dev-api.golem.cloud --set-active")
-    expect(body).toMatch(/<button[^>]*disabled>Upgrade to Paid<\/button>/)
-    expect(body).toContain("Coming soon")
+    expect(body).toMatch(/<form method="post" action="\/billing\/checkout">\s*<button type="submit"[^>]*>Upgrade to Paid<\/button>/)
+  })
+
+  it("extends a session that is older than a day when the user opens the page", async () => {
+    // Better Auth extends a session to its full lifetime of 7 days once its `updateAge` of a day
+    // has passed, so the role of the web app updates sessions.
+    const jar = new CookieJar()
+    await signInWithGitHub(app.handler, jar)
+    await pool.query(`UPDATE "${config.db.schema}"."session" SET "expiresAt" = now() + interval '6 days'`)
+
+    const response = await request(app.handler, jar, "GET", "/")
+
+    expect(await response.text()).toContain("<h1>Free</h1>")
+    const extended = await pool.query<{ extended: boolean }>(
+      `SELECT "expiresAt" > now() + interval '6 days 12 hours' AS extended FROM "${config.db.schema}"."session"`
+    )
+    expect(extended.rows).toEqual([{ extended: true }])
   })
 
   it("shows the sign-in form without a session", async () => {
@@ -212,7 +270,7 @@ describe("GitHub sign-in", () => {
 
     expect(response.status).toBe(200)
     expect(body).toContain('action="/sign-in/github"')
-    expect(body).not.toContain("You're on Free")
+    expect(body).not.toContain("<h1>Free</h1>")
   })
 
   it("rejects a cross-origin sign-in form post", async () => {
@@ -221,6 +279,66 @@ describe("GitHub sign-in", () => {
     })
 
     expect(response.status).toBe(403)
+  })
+
+  it("limits the GitHub sign-ins that one client address starts", async () => {
+    const client = { origin: baseUrl, "x-forwarded-for": newClientAddress() }
+    const states = async () =>
+      Number(
+        (await pool.query<{ count: string }>(`SELECT count(*) FROM "${config.db.schema}"."verification"`)).rows[0]!
+          .count
+      )
+    const before = await states()
+
+    const locations: Array<string | null> = []
+    for (let attempt = 0; attempt <= signInRateLimit.max; attempt++) {
+      const response = await request(app.handler, new CookieJar(), "POST", "/sign-in/github", client)
+      expect(response.status).toBe(303)
+      locations.push(response.headers.get("location"))
+    }
+
+    for (const location of locations.slice(0, signInRateLimit.max)) {
+      expect(location).toMatch(/^https:\/\/github\.com\/login\/oauth\/authorize\?/)
+    }
+    expect(locations[signInRateLimit.max]).toBe("/?error=too_many_requests")
+    expect(await states()).toBe(before + signInRateLimit.max)
+    const page = await request(app.handler, new CookieJar(), "GET", "/?error=too_many_requests")
+    expect(await page.text()).toContain(`Wait ${signInRateLimit.window} seconds, then try again.`)
+    const otherClient = await request(app.handler, new CookieJar(), "POST", "/sign-in/github", {
+      origin: baseUrl,
+      "x-forwarded-for": newClientAddress()
+    })
+    expect(otherClient.headers.get("location")).toMatch(/^https:\/\/github\.com\/login\/oauth\/authorize\?/)
+  })
+
+  /** Posts the sign-in form with this `x-forwarded-for`, and returns where the app redirects. */
+  const startSignIn = async (forwardedFor: string) =>
+    (
+      await request(app.handler, new CookieJar(), "POST", "/sign-in/github", {
+        origin: baseUrl,
+        "x-forwarded-for": forwardedFor
+      })
+    ).headers.get("location")
+
+  const toGitHub = /^https:\/\/github\.com\/login\/oauth\/authorize\?/
+
+  // The client sends the first address. The gateway appends the second, the address that it sees.
+  it("counts a sign-in against the last X-Forwarded-For address, which the gateway appends", async () => {
+    for (const sent of ["203.0.113.9", "192.0.2.1", "203.0.113.9"]) {
+      expect(await startSignIn(`${sent}, 198.51.100.7`)).toMatch(toGitHub)
+    }
+
+    expect(await startSignIn("192.0.2.1, 198.51.100.7")).toBe("/?error=too_many_requests")
+    expect(await startSignIn("198.51.100.7")).toBe("/?error=too_many_requests")
+  })
+
+  it("gives two clients that send the same first X-Forwarded-For address their own limits", async () => {
+    for (let attempt = 0; attempt < signInRateLimit.max; attempt++) {
+      expect(await startSignIn("203.0.113.9, 198.51.100.20")).toMatch(toGitHub)
+    }
+
+    expect(await startSignIn("203.0.113.9, 198.51.100.20")).toBe("/?error=too_many_requests")
+    expect(await startSignIn("203.0.113.9, 198.51.100.21")).toMatch(toGitHub)
   })
 
   it("signs out", async () => {

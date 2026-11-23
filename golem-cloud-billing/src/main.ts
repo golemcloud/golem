@@ -1,9 +1,21 @@
 import { NodeRuntime } from "@effect/platform-node"
-import { Layer, Logger } from "effect"
+import { Effect, Layer, Logger } from "effect"
 import * as App from "./App.ts"
+import * as Commands from "./Commands.ts"
 
-App.layer.pipe(
-  Layer.provide(Logger.layer([Logger.consoleJson])),
-  Layer.launch,
-  NodeRuntime.runMain
-)
+const logger = Logger.layer([Logger.consoleJson])
+
+const command = process.argv[2]
+if (command === undefined) {
+  App.layer.pipe(Layer.provide(logger), Layer.launch, NodeRuntime.runMain)
+} else if (command === "push-usage") {
+  // The command logs its failure as JSON; runMain would report it again as plain text.
+  NodeRuntime.runMain(Commands.pushUsage.pipe(Effect.provide(logger)), { disableErrorReporting: true })
+} else if (command === "cleanup-deleted-accounts") {
+  NodeRuntime.runMain(Commands.cleanupDeletedAccounts.pipe(Effect.provide(logger)), { disableErrorReporting: true })
+} else if (command === "migrate") {
+  NodeRuntime.runMain(Commands.migrate.pipe(Effect.provide(logger)), { disableErrorReporting: true })
+} else {
+  process.stderr.write(`Unknown command: ${command}. Commands: migrate, push-usage, cleanup-deleted-accounts\n`)
+  process.exitCode = 2
+}

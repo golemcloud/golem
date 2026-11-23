@@ -1,15 +1,46 @@
 import { randomUUID } from "node:crypto"
-import { Layer, Redacted } from "effect"
+import { Layer, ManagedRuntime, Redacted } from "effect"
 import { FetchHttpClient, HttpRouter } from "effect/http"
 import type pg from "pg"
 import * as App from "../src/App.ts"
 import { BillingConfig, type BillingConfigShape } from "../src/BillingConfig.ts"
-import { makePool } from "../src/Database.ts"
+import * as Commands from "../src/Commands.ts"
+import * as Database from "../src/Database.ts"
 import * as Http from "../src/Http.ts"
+import { PolarConfig } from "../src/Polar.ts"
+import type { CheckoutStatus } from "../src/Subscriptions.ts"
 
 export const baseUrl = "http://localhost:3000"
 export const registryUrl = "http://registry.test"
 export const authSecret = "test-secret-that-is-at-least-32-characters-long"
+
+/**
+ * The registry token of the billing account, which has `view`, `set-plan` and `hold-deletion` on
+ * every account.
+ */
+export const registryBillingToken = "golem_billing_token"
+/** The account of the billing token: the holder of every deletion hold of the app. */
+export const billingAccountId = "5f0c2e7a-91d4-4b3c-8a6e-2d7b1c9e0f34"
+export const freePlanId = "6d3b6a42-2d71-4b0e-9b1a-1f4e7b3b2c10"
+export const paidPlanId = "9a1f3c2e-5b7d-4e8f-a6c4-2d1e0b9f8a73"
+export const suspendedPlanId = "3e8b1d47-0c2a-4f96-b5e1-7a9d2c4f6b08"
+export const overagePrices = {
+  perMillionGcu: "0.0112",
+  perGbHour: "0.045",
+  perDurableGbMonth: "0.27",
+  perEphemeralGbMonth: "0.24"
+}
+/** A plan that an administrator gave the account; subscriptions do not change it. */
+export const internalPlanId = "c4e2a9b1-7d3f-4a6e-8b5c-1f0e9d2c3b4a"
+/** The plan that the registry gives a new account; a subscription moves the account to Paid. */
+export const registryDefaultPlanId = "8d2f6b1e-4a7c-4e93-9b05-6c1d3e8f2a47"
+export const polarApiUrl = "https://sandbox-api.polar.test"
+export const polarWebToken = "polar_oat_web_token_for_the_tests"
+/** The Polar token of the cleanup, which can only delete customers. */
+export const polarCleanupToken = "polar_oat_cleanup_token_for_the_tests"
+export const polarProductId = "115e800a-2b62-42e0-97bf-9e8a5d6022b3"
+export const polarSettlementProductId = "7c1d9e2a-4b3f-4e8a-9d6c-2f5b8a1e3c47"
+export const webhookSecret = `whsec_${Buffer.from("a webhook secret of 32 bytes!!!!").toString("base64")}`
 
 const requireEnv = (name: string): string => {
   const value = process.env[name]
@@ -38,18 +69,31 @@ export const testConfig = (): BillingConfigShape => {
     github: { clientId: "test-client-id", clientSecret: Redacted.make("test-client-secret") },
     registryUrl: new URL(registryUrl),
     publicApiUrl: new URL("https://release.dev-api.golem.cloud"),
+    registryBillingToken: Redacted.make(registryBillingToken),
+    plans: { free: freePlanId, paid: paidPlanId, suspended: suspendedPlanId },
+    defaultPlanId: registryDefaultPlanId,
+    overagePrices,
+    pastDueGraceMs: 7 * 24 * 60 * 60 * 1000,
+    polar: {
+      apiUrl: new URL(polarApiUrl),
+      accessToken: Redacted.make(polarWebToken),
+      productId: polarProductId,
+      settlementProductId: polarSettlementProductId,
+      webhookSecret: Redacted.make(webhookSecret)
+    },
     db: {
       ...db,
       password: Redacted.make(db.password),
       maxConnections: 5,
       schema: `test_${randomUUID().replaceAll("-", "")}`,
+      registrySchema: "public",
       tls: "disable"
     }
   }
 }
 
 /** A pool with the settings of the app, for the queries of the tests. */
-export const queryPool = (config: BillingConfigShape) => makePool({ ...config.db, maxConnections: 2 })
+export const queryPool = (config: BillingConfigShape) => Database.makePool({ ...config.db, maxConnections: 2 })
 
 export const dropSchema = async (pool: pg.Pool, schema: string) => {
   await pool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
@@ -66,10 +110,35 @@ export const makeApp = (config: BillingConfigShape) =>
     { disableLogger: true }
   )
 
+/**
+ * The services of `Cleanup.cleanupDeletedAccounts` as the cleanup CronJob has them, with the
+ * database of `config` and the Polar API at `apiUrl` with `accessToken`.
+ */
+export const cleanupLayer = (config: BillingConfigShape, apiUrl: string, accessToken: string) =>
+  Commands.cleanupServices.pipe(
+    Layer.provideMerge(Database.layer),
+    Layer.provide(Layer.succeed(BillingConfig, config)),
+    Layer.provide(Layer.succeed(PolarConfig, { apiUrl: new URL(apiUrl), accessToken: Redacted.make(accessToken) }))
+  )
+
+/** The services of the app with `config` and its configuration, for calls outside a request. */
+export const makeServices = (config: BillingConfigShape) =>
+  ManagedRuntime.make(
+    App.services.pipe(Layer.provide(FetchHttpClient.layer), Layer.provideMerge(Layer.succeed(BillingConfig, config)))
+  )
+
 export interface RecordedRequest {
   readonly method: string
   readonly url: URL
   readonly headers: Headers
+  /** The JSON body of a POST or PUT, if it has one. */
+  readonly body: unknown
+}
+
+/** The plan of a fake registry account. */
+export interface RegistryPlan {
+  planId: string
+  revision: number
 }
 
 export interface RegistryAccount {
@@ -107,6 +176,63 @@ export class FakeUpstreams {
   github: GitHubIdentity = newGitHubIdentity(4242)
   readonly registryAccounts = new Map<string, RegistryAccount>()
   registryLoginStatus = 200
+  /** The status of `GET /v1/accounts/{account_id}`; with another status than 200, the read fails. */
+  accountReadStatus = 200
+  /** The plan of each account ID; an account starts on the free plan. */
+  readonly registryPlans = new Map<string, RegistryPlan>()
+  /** Whether the permission share of the billing account exists; without it the registry answers 404. */
+  billingShare = true
+  /** The number of plan changes that fail with 409 before one succeeds. */
+  planConflicts = 0
+  /** The monthly usage mode of each account ID; an account starts in `hardLimit`. */
+  readonly usageModes = new Map<string, "hardLimit" | "allowOverage">()
+  /** `monthly` of the limits of every account, as the registry reports it; `undefined` leaves it out. */
+  monthly: unknown = {
+    computeGcu: {
+      metering: "enabled",
+      planAmount: 100_000_000,
+      resolvedMonthlyAmount: 100_000_000,
+      usage: 2_500_000,
+      remaining: 97_500_000,
+      allowOverageUsage: 0,
+      unit: "GCU",
+      behavior: "hardLimit"
+    },
+    memoryGbSeconds: {
+      metering: "enabled",
+      planAmount: 3_285_000,
+      resolvedMonthlyAmount: 3_285_000,
+      usage: 900_000,
+      remaining: 2_385_000,
+      allowOverageUsage: 0,
+      unit: "GB-seconds",
+      behavior: "hardLimit"
+    },
+    durableStorageGbMonth: { metering: "disabled", planAmount: 5, unit: "GB-month" },
+    ephemeralStorageGbMonth: { metering: "unknown", planAmount: 5, unit: "GB-month" }
+  }
+  /** The reason of the deletion hold of the billing account on each account that has one. */
+  readonly deletionHolds = new Map<string, string>()
+  /** The accounts that the registry deleted; it answers 404 for them, as for an account it hides. */
+  readonly deletedAccounts = new Set<string>()
+  /**
+   * The checkouts of Polar by ID, with what `GET /v1/checkouts/{id}` reports. `POST /v1/checkouts/`
+   * creates `polar_c_1`, `polar_c_2` and so on, which Polar takes payments for 24 hours.
+   */
+  readonly checkouts = new Map<string, { status: CheckoutStatus; expiresAt: Date }>()
+  /** The status of `POST /v1/checkouts/`; with another status than 201, Polar creates no checkout. */
+  checkoutCreateStatus = 201
+  /** The external IDs of the Polar customers; `DELETE /v1/customers/external/{id}` removes one. */
+  readonly polarCustomers = new Set<string>()
+  /**
+   * Runs at `GET /v1/checkouts/{id}` before Polar answers. A status that it gives replaces the
+   * status in `checkouts`, as a replica of Polar that lags.
+   */
+  onCheckoutRead: ((checkoutId: string) => Promise<CheckoutStatus | undefined>) | undefined
+  /** Runs at `DELETE /v1/customers/external/{id}` after Polar deleted the customer, before it answers. */
+  onCustomerDelete: ((externalId: string) => Promise<void>) | undefined
+  /** Runs at `POST /v1/checkouts/` before Polar creates the checkout. */
+  onCheckoutCreate: (() => Promise<void>) | undefined
 
   /** The Golem account of the access token of `identity`, created on first use. */
   accountOf(identity: GitHubIdentity = this.github): RegistryAccount {
@@ -122,13 +248,65 @@ export class FakeUpstreams {
     return this.accountOf()
   }
 
+  planOf(accountId: string): RegistryPlan {
+    let plan = this.registryPlans.get(accountId)
+    if (plan === undefined) {
+      plan = { planId: freePlanId, revision: 0 }
+      this.registryPlans.set(accountId, plan)
+    }
+    return plan
+  }
+
+  private accountJson(accountId: string) {
+    const plan = this.planOf(accountId)
+    return {
+      id: accountId,
+      revision: plan.revision,
+      name: "Octo Cat",
+      email: this.github.email,
+      planId: plan.planId,
+      roles: [],
+      accountRootCardId: "0b7a4b6e-8c2b-4f63-bb0e-6a4cf7c1b9d2"
+    }
+  }
+
   readonly fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init)
     const url = new URL(request.url)
-    this.requests.push({ method: request.method, url, headers: request.headers })
+    const text = request.method === "POST" || request.method === "PUT" ? await request.text() : ""
+    let body: unknown = undefined
+    try {
+      body = text === "" ? undefined : JSON.parse(text)
+    } catch {
+      body = undefined
+    }
+    this.requests.push({ method: request.method, url, headers: request.headers, body })
     const route = `${request.method} ${url.origin}${url.pathname}`
     const bearer = request.headers.get("authorization")?.replace(/^Bearer /, "")
     switch (route) {
+      case `POST ${polarApiUrl}/v1/checkouts/`: {
+        if (bearer !== polarWebToken) {
+          return Response.json({ error: "invalid token" }, { status: 401 })
+        }
+        await this.onCheckoutCreate?.()
+        if (this.checkoutCreateStatus !== 201) {
+          return Response.json({ detail: "unavailable" }, { status: this.checkoutCreateStatus })
+        }
+        const id = `polar_c_${this.checkouts.size + 1}`
+        this.checkouts.set(id, { status: "open", expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) })
+        return Response.json(this.checkoutJson(id), { status: 201 })
+      }
+      case `POST ${polarApiUrl}/v1/customer-sessions/`:
+        return bearer === polarWebToken
+          ? Response.json(
+              {
+                id: "polar_cs_test",
+                token: "polar_cst_test",
+                customer_portal_url: "https://sandbox.polar.sh/golem/portal?customer_session_token=polar_cst_test"
+              },
+              { status: 201 }
+            )
+          : Response.json({ error: "invalid token" }, { status: 401 })
       case "POST https://github.com/login/oauth/access_token":
         this.accountOf(this.github)
         return Response.json({
@@ -165,30 +343,175 @@ export class FakeUpstreams {
           expiresAt: "2036-11-03T10:00:00Z"
         })
       }
-      default: {
-        const account = [...this.registryAccounts.values()].find(
-          (candidate) => route === `GET ${registryUrl}/v1/accounts/${candidate.accountId}`
-        )
-        if (account === undefined) {
-          return new Response(`No fake for ${route}`, { status: 599 })
-        }
-        return bearer === account.secret
+      case `GET ${registryUrl}/v1/me/token`:
+        return bearer === registryBillingToken
           ? Response.json({
-              id: account.accountId,
-              revision: 0,
-              name: "Octo Cat",
-              email: this.github.email,
-              planId: "6d3b6a42-2d71-4b0e-9b1a-1f4e7b3b2c10",
-              roles: [],
-              accountRootCardId: "0b7a4b6e-8c2b-4f63-bb0e-6a4cf7c1b9d2"
+              id: "1d6f0e3a-7c2b-4f5e-9a8d-3b4c5d6e7f80",
+              accountId: billingAccountId,
+              createdAt: "2026-11-03T10:00:00Z",
+              expiresAt: "2027-11-03T10:00:00Z"
             })
           : new Response(null, { status: 401 })
+      default: {
+        const checkout = /^\/v1\/checkouts\/([^/]+)$/.exec(url.pathname)
+        if (url.origin === polarApiUrl && checkout !== null && request.method === "GET") {
+          if (bearer !== polarWebToken) {
+            return Response.json({ error: "invalid token" }, { status: 401 })
+          }
+          if (!this.checkouts.has(checkout[1]!)) {
+            return Response.json({ detail: "Not found" }, { status: 404 })
+          }
+          const status = await this.onCheckoutRead?.(checkout[1]!)
+          return Response.json({ ...this.checkoutJson(checkout[1]!), ...(status === undefined ? {} : { status }) })
+        }
+        const customer = /^\/v1\/customers\/external\/([^/]+)$/.exec(url.pathname)
+        if (url.origin === polarApiUrl && customer !== null && request.method === "DELETE") {
+          if (bearer !== polarCleanupToken) {
+            return Response.json({ error: "invalid token" }, { status: 401 })
+          }
+          const externalId = decodeURIComponent(customer[1]!)
+          const deleted = this.polarCustomers.delete(externalId)
+          await this.onCustomerDelete?.(externalId)
+          return deleted ? new Response(null, { status: 204 }) : Response.json({ detail: "Not found" }, { status: 404 })
+        }
+        const match = /^\/v1\/accounts\/([0-9a-f-]{36})(\/plan|\/limits|\/monthly-usage-mode|\/deletion-holds\/([0-9a-f-]{36}))?$/.exec(url.pathname)
+        if (url.origin !== registryUrl || match === null) {
+          return new Response(`No fake for ${route}`, { status: 599 })
+        }
+        const accountId = match[1]!
+        const account = [...this.registryAccounts.values()].find((candidate) => candidate.accountId === accountId)
+        const isOwner = account !== undefined && bearer === account.secret
+        const isBilling = bearer === registryBillingToken && this.billingShare
+        if (this.deletedAccounts.has(accountId)) {
+          return new Response(null, { status: 404 })
+        }
+        if (match[3] !== undefined) {
+          if (!isBilling) {
+            return new Response(null, { status: 404 })
+          }
+          if (match[3] !== billingAccountId) {
+            return Response.json({ code: "FORBIDDEN" }, { status: 403 })
+          }
+          if (request.method === "PUT") {
+            const reason = (body as { reason: string }).reason
+            this.deletionHolds.set(accountId, reason)
+            return Response.json({
+              accountId,
+              holderAccountId: billingAccountId,
+              reason,
+              createdAt: "2026-11-04T10:00:00Z"
+            })
+          }
+          if (request.method === "DELETE") {
+            this.deletionHolds.delete(accountId)
+            return Response.json({})
+          }
+        }
+        if (match[2] === undefined && request.method === "GET") {
+          if (this.accountReadStatus !== 200) {
+            return Response.json({ error: "unavailable" }, { status: this.accountReadStatus })
+          }
+          // The billing token sees every account, also one that never signed in to the app.
+          return isOwner || isBilling ? Response.json(this.accountJson(accountId)) : new Response(null, { status: 404 })
+        }
+        if (match[2] === "/limits" && request.method === "GET") {
+          return isOwner
+            ? Response.json({
+                accountId,
+                monthlyUsageMode: this.usageModes.get(accountId) ?? "hardLimit",
+                overageAllowedByPlan: this.planOf(accountId).planId === paidPlanId,
+                ...(this.monthly === undefined ? {} : { monthly: this.monthly })
+              })
+            : new Response(null, { status: 404 })
+        }
+        if (match[2] === "/monthly-usage-mode" && request.method === "PUT") {
+          // Only the owner can enter paid-overage mode, and only on a plan with paid overage.
+          if (!isOwner) {
+            return Response.json({ code: "FORBIDDEN" }, { status: 403 })
+          }
+          const { mode } = body as { mode: "hardLimit" | "allowOverage" }
+          const current = this.usageModes.get(accountId) ?? "hardLimit"
+          if (mode === current) {
+            return Response.json({ errors: ["unchanged"], code: "MONTHLY_USAGE_MODE_UNCHANGED" }, { status: 400 })
+          }
+          if (mode === "allowOverage" && this.planOf(accountId).planId !== paidPlanId) {
+            return Response.json({ errors: ["not eligible"], code: "MONTHLY_USAGE_MODE_NOT_ELIGIBLE" }, { status: 400 })
+          }
+          this.usageModes.set(accountId, mode)
+          return Response.json({
+            actorAccountId: accountId,
+            changedAt: new Date().toISOString(),
+            source: "owner",
+            previousMode: current,
+            newMode: mode
+          })
+        }
+        if (match[2] === "/plan" && request.method === "PUT") {
+          if (isOwner) {
+            return Response.json({ code: "FORBIDDEN" }, { status: 403 })
+          }
+          if (!isBilling) {
+            return new Response(null, { status: 404 })
+          }
+          const update = body as { currentRevision: number; plan: string }
+          const plan = this.planOf(accountId)
+          if (this.planConflicts > 0) {
+            this.planConflicts--
+            plan.revision++
+            return Response.json({ code: "CONCURRENT_UPDATE" }, { status: 409 })
+          }
+          if (update.currentRevision !== plan.revision) {
+            return Response.json({ code: "CONCURRENT_UPDATE" }, { status: 409 })
+          }
+          plan.planId = update.plan
+          plan.revision++
+          // The registry sets an account on a plan without paid overage to hardLimit.
+          if (update.plan !== paidPlanId) {
+            this.usageModes.set(accountId, "hardLimit")
+          }
+          return Response.json(this.accountJson(accountId))
+        }
+        return new Response(`No fake for ${route}`, { status: 599 })
       }
+    }
+  }
+
+  /** The URL of the checkout page of the checkout. */
+  checkoutUrl(checkoutId: string): string {
+    return `https://sandbox.polar.sh/checkout/${checkoutId}`
+  }
+
+  private checkoutJson(checkoutId: string) {
+    const checkout = this.checkouts.get(checkoutId)!
+    return {
+      id: checkoutId,
+      url: this.checkoutUrl(checkoutId),
+      status: checkout.status,
+      expires_at: checkout.expiresAt.toISOString()
     }
   }
 
   registryLogins(): Array<RecordedRequest> {
     return this.requests.filter((request) => request.url.href.startsWith(`${registryUrl}/v1/login/oauth2`))
+  }
+
+  usageModeChanges(): Array<RecordedRequest> {
+    return this.requests.filter(
+      (request) => request.method === "PUT" && request.url.pathname.endsWith("/monthly-usage-mode")
+    )
+  }
+
+  /** The calls that place or remove a deletion hold. */
+  holdChanges(): Array<RecordedRequest> {
+    return this.requests.filter((request) => request.url.pathname.includes("/deletion-holds/"))
+  }
+
+  planChanges(): Array<RecordedRequest> {
+    return this.requests.filter((request) => request.method === "PUT" && request.url.pathname.endsWith("/plan"))
+  }
+
+  polarRequests(path: string): Array<RecordedRequest> {
+    return this.requests.filter((request) => request.url.href === `${polarApiUrl}${path}`)
   }
 }
 
@@ -229,11 +552,22 @@ export const request = async (
       method,
       headers: { cookie: jar.header(), ...headers },
       redirect: "manual",
-      ...(body === undefined ? {} : { body: JSON.stringify(body) })
+      ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) })
     })
   )
   jar.update(response)
   return response
+}
+
+let clientAddresses = 0
+
+/**
+ * A new client address, as the gateway sets it in `x-forwarded-for`. Better Auth limits the
+ * sign-ins of each address, so each sign-in of the tests comes from its own address.
+ */
+export const newClientAddress = (): string => {
+  clientAddresses++
+  return `198.18.${Math.floor(clientAddresses / 256)}.${clientAddresses % 256}`
 }
 
 /**
@@ -242,9 +576,11 @@ export const request = async (
  */
 export const signInWithGitHub = async (
   handler: (request: Request) => Promise<Response>,
-  jar: CookieJar
+  jar: CookieJar,
+  clientAddress: string = newClientAddress()
 ): Promise<Response> => {
-  const start = await request(handler, jar, "POST", "/sign-in/github", { origin: baseUrl })
+  const forwardedFor = { "x-forwarded-for": clientAddress }
+  const start = await request(handler, jar, "POST", "/sign-in/github", { origin: baseUrl, ...forwardedFor })
   if (start.status !== 303) {
     throw new Error(`The sign-in form returned ${start.status}: ${await start.text()}`)
   }
@@ -253,5 +589,5 @@ export const signInWithGitHub = async (
     throw new Error(`The sign-in form redirected to ${authorize.href}`)
   }
   const state = authorize.searchParams.get("state")!
-  return request(handler, jar, "GET", `/api/auth/callback/github?code=test-code&state=${state}`)
+  return request(handler, jar, "GET", `/api/auth/callback/github?code=test-code&state=${state}`, forwardedFor)
 }
