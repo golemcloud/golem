@@ -20,11 +20,12 @@
 
 use golem_common::model::InvocationId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use std::collections::BTreeMap;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::durable_host::attribution::ExportReturned;
 
-use super::cursor::{is_custom_invocation_start, is_entity_invocation_start};
+use super::cursor::{boundary_divergence, is_custom_invocation_start, is_entity_invocation_start};
 
 /// The invocation that owns a committed record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -421,8 +422,8 @@ impl OwnerMap {
             .map(|(anchor, _)| *anchor)
     }
 
-    /// Closes the invocation started at `anchor` at the entry at `at`, and drops the owners of its
-    /// `Start`s except the ones `retained` still holds.
+    /// Closes the open invocation started at `anchor` at the entry at `at`, and drops the owners
+    /// of its `Start`s except the ones `retained` still holds. Every invocation closes once.
     pub(super) fn close(
         &mut self,
         anchor: OplogIndex,
@@ -432,9 +433,20 @@ impl OwnerMap {
         if let Some(open) = self.open_invocations.remove(&anchor) {
             self.closed_invocations
                 .insert(anchor, ClosedInvocation { id: open.id, at });
-        } else if let Some(closed) = self.closed_invocations.get_mut(&anchor) {
-            closed.at = at;
+            self.prune_closed(anchor, retained);
         }
+    }
+
+    /// Drops the owners of the `Start`s of the closed invocation started at `anchor` that
+    /// `retained` no longer holds.
+    pub(super) fn prune_closed(
+        &mut self,
+        anchor: OplogIndex,
+        retained: impl Fn(OplogIndex) -> bool,
+    ) {
+        let Some(&ClosedInvocation { at, .. }) = self.closed_invocations.get(&anchor) else {
+            return;
+        };
         let pruned = &mut self.pruned;
         self.owners.retain(|index, owner| {
             let keep = owner.invocation != InvocationOwner::Anchor(anchor) || retained(*index);
@@ -533,10 +545,49 @@ impl super::CursorState {
         }
     }
 
+    /// Classifies the retained `Start`s recorded before `end` (all of them without `end`) for the
+    /// close of the invocation started at `closing`, whose primary guest tasks have exited, and
+    /// returns the invocation's own `Start`s. With no `closing` invocation every retained `Start`
+    /// is its own. `on_wait` decides each `Start` under a body that can still claim it, and a
+    /// `Start` that classifies as a divergence is reported as one. Every close of an invocation
+    /// classifies its retained `Start`s here.
+    pub(super) fn classify_retained(
+        &self,
+        reconstruction_claims: &crate::durable_host::concurrent::ReconstructionClaimState,
+        closing: Option<OplogIndex>,
+        end: Option<OplogIndex>,
+        mut on_wait: impl FnMut(OplogIndex) -> Result<(), WorkerExecutorError>,
+    ) -> Result<BTreeSet<OplogIndex>, WorkerExecutorError> {
+        let mut own = BTreeSet::new();
+        let below: Vec<OplogIndex> = self
+            .starts
+            .retained_keys()
+            .copied()
+            .filter(|index| end.is_none_or(|end| *index < end))
+            .collect();
+        for index in below {
+            let class = match closing {
+                Some(closing) => {
+                    self.classify(reconstruction_claims, index, closing, Some(closing))
+                }
+                None => Ok(Class::Own),
+            };
+            match class {
+                Ok(Class::Own) => {
+                    own.insert(index);
+                }
+                Ok(Class::Keep) => {}
+                Ok(Class::Wait) => on_wait(index)?,
+                Err(divergence) => return Err(boundary_divergence(index, divergence)),
+            }
+        }
+        Ok(own)
+    }
+
     /// Classifies the retained `Start` at `index` for the close of the invocation started at
     /// `closing`; `exited` is the invocation whose primary guest tasks have exited. An `Err` is
     /// the divergence the `Start` is.
-    pub(super) fn classify(
+    fn classify(
         &self,
         reconstruction_claims: &crate::durable_host::concurrent::ReconstructionClaimState,
         index: OplogIndex,

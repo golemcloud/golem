@@ -131,31 +131,11 @@ impl CursorTx<'_> {
         }
     }
 
-    /// [`Self::try_get_oplog_entry`] with the invocation-boundary tolerance for live-only
-    /// abandoned durable-call records enabled: never-claimed `Start`s (and the `End`/`Cancelled`
-    /// terminals closing them) are drained into `abandoned` instead of being handed to the
-    /// positional reader. Only the agent-invocation-finished reader uses this — see
-    /// [`AbandonedStarts`] for why the tolerance is sound there and nowhere else.
-    pub(in crate::durable_host::replay_state) async fn try_get_oplog_entry_at_invocation_boundary(
-        &mut self,
-        abandoned: &mut AbandonedStarts,
-        condition: impl FnMut(&OplogEntry) -> bool,
-    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
-        self.try_get_oplog_entry_inner(
-            None,
-            None,
-            BoundaryRead::InvocationBoundary(abandoned),
-            UnclaimedStarts::Retain,
-            condition,
-        )
-        .await
-    }
-
     async fn try_get_oplog_entry_inner(
         &mut self,
         expected_delivery: Option<(Option<OplogIndex>, OplogIndex)>,
         guest_order: Option<&GuestReadOrder>,
-        mut boundary: BoundaryRead<'_>,
+        boundary: BoundaryRead,
         unclaimed_starts: UnclaimedStarts,
         mut condition: impl FnMut(&OplogEntry) -> bool,
     ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
@@ -165,8 +145,10 @@ impl CursorTx<'_> {
             self.st.skip_hints_after_delivery = false;
         }
         loop {
-            if let BoundaryRead::Settlement { anchor, .. } = &boundary
-                && self.st.first_settled_after(*anchor).is_some()
+            if let BoundaryRead::ToleratingAbandoned {
+                settlement_after: Some(anchor),
+            } = boundary
+                && self.st.first_settled_after(anchor).is_some()
             {
                 // The walk ends at a settlement; the entries after it belong to the next
                 // invocation.
@@ -247,7 +229,7 @@ impl CursorTx<'_> {
                 }
                 if boundary.tolerates_abandoned()
                     && self.st.starts.get_retained(start_index).is_some()
-                    && !self.marker_body_can_still_consume(&boundary, *start_index)
+                    && !self.marker_body_can_still_consume(boundary, *start_index)
                 {
                     return Err(WorkerExecutorError::replay_divergence(ReplayDivergence {
                         oplog_index: read_idx,
@@ -368,21 +350,6 @@ impl CursorTx<'_> {
 
             if condition(&entry) {
                 self.commit_consumed_entry(read_idx, &entry).await?;
-                if let BoundaryRead::InvocationBoundary(abandoned) = &mut boundary
-                    && let Some((started, _)) = primary_invocation_terminal_id(&entry)
-                        .and_then(|id| self.st.owners.open_invocation(id))
-                {
-                    // The replayed guest has produced its invocation result: the retained
-                    // `Start`s of the invocation are live-only abandoned progress nobody can
-                    // claim anymore. The boundary read holds the Store outside the concurrent
-                    // runtime, so it cannot wait for a body.
-                    let own = self.classify_retained_at_boundary(started, read_idx)?;
-                    self.fold_retained_into_abandoned(abandoned, &own)?;
-                    let st = &mut *self.st;
-                    st.owners.close(started, read_idx, |index| {
-                        st.starts.get_retained(&index).is_some()
-                    });
-                }
                 return Ok(Some((read_idx, entry)));
             } else if unclaimed_starts == UnclaimedStarts::Retain
                 && Self::is_retainable_start(&entry)
@@ -1342,14 +1309,24 @@ impl ReplayState {
             if let Some(entry) = self
                 .with_tx(async |tx| {
                     let entry = tx
-                        .try_get_oplog_entry_at_invocation_boundary(
-                            abandoned,
+                        .try_get_oplog_entry_inner(
+                            None,
+                            None,
+                            BoundaryRead::ToleratingAbandoned {
+                                settlement_after: None,
+                            },
+                            UnclaimedStarts::Retain,
                             positional_reader_accepts(None),
                         )
                         .await?;
-                    if entry.is_none() {
-                        tx.check_parked_positional_read(PositionalReader::InvocationBoundary)
-                            .await?;
+                    match &entry {
+                        Some((index, entry)) => {
+                            tx.close_at_invocation_terminal(abandoned, *index, entry)?
+                        }
+                        None => {
+                            tx.check_parked_positional_read(PositionalReader::InvocationBoundary)
+                                .await?
+                        }
                     }
                     Ok(entry)
                 })
@@ -1368,6 +1345,44 @@ impl ReplayState {
 }
 
 impl CursorTx<'_> {
+    /// Closes the open invocation whose primary terminal the invocation-boundary read consumed at
+    /// `index`. The replayed guest has produced its invocation result, so the retained `Start`s of
+    /// the invocation are live-only abandoned progress nobody can claim anymore: they move into
+    /// `abandoned`. The boundary read holds the Store outside the concurrent runtime, so it cannot
+    /// wait for a body: a `Start` under a body that can still claim it is a divergence.
+    fn close_at_invocation_terminal(
+        &mut self,
+        abandoned: &mut AbandonedStarts,
+        index: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Result<(), WorkerExecutorError> {
+        let Some((anchor, _)) =
+            primary_invocation_terminal_id(entry).and_then(|id| self.st.owners.open_invocation(id))
+        else {
+            return Ok(());
+        };
+        let own = self.st.classify_retained(
+            &self.cursor.reconstruction_claims,
+            Some(anchor),
+            Some(index),
+            |start| {
+                Err(boundary_divergence(
+                    start,
+                    format!(
+                        "the retained Start at {start}, which lies under an entity body that can \
+                         still claim it, at the boundary of the invocation started at {anchor}"
+                    ),
+                ))
+            },
+        )?;
+        self.fold_retained_into_abandoned(abandoned, &own)?;
+        let st = &mut *self.st;
+        st.owners.close(anchor, index, |start| {
+            st.starts.get_retained(&start).is_some()
+        });
+        Ok(())
+    }
+
     /// One transaction of [`ReplayState::get_oplog_entry_agent_invocation_terminal_in_open_anchor`].
     /// Returns `None` while the reader must wait for cursor progress or at the replay tail.
     async fn try_get_open_anchor_terminal(
@@ -1456,7 +1471,9 @@ impl CursorTx<'_> {
             self.try_get_oplog_entry_inner(
                 None,
                 None,
-                BoundaryRead::Settlement { anchor },
+                BoundaryRead::ToleratingAbandoned {
+                    settlement_after: Some(anchor),
+                },
                 UnclaimedStarts::Retain,
                 |_| false,
             )
@@ -1515,9 +1532,19 @@ impl CursorTx<'_> {
                 ),
             ));
         };
-        let Some(own) = self.classify_retained_at_close(anchor, settled)? else {
+        let mut waiting = false;
+        let own = self.st.classify_retained(
+            &self.cursor.reconstruction_claims,
+            Some(anchor),
+            Some(settled),
+            |_| {
+                waiting = true;
+                Ok(())
+            },
+        )?;
+        if waiting {
             return Ok(None);
-        };
+        }
         let mut abandoned = AbandonedStarts::default();
         self.fold_retained_into_abandoned(&mut abandoned, &own)?;
         abandoned.finish(&self.cursor.owned_agent_id)?;
@@ -1530,10 +1557,13 @@ impl CursorTx<'_> {
     /// consume the marker.
     fn marker_body_can_still_consume(
         &self,
-        boundary: &BoundaryRead<'_>,
+        boundary: BoundaryRead,
         start_index: OplogIndex,
     ) -> bool {
-        let BoundaryRead::Settlement { anchor, .. } = boundary else {
+        let BoundaryRead::ToleratingAbandoned {
+            settlement_after: Some(anchor),
+        } = boundary
+        else {
             return false;
         };
         self.st
@@ -1544,79 +1574,9 @@ impl CursorTx<'_> {
                 self.st.body_can_still_consume(
                     &self.cursor.reconstruction_claims,
                     body,
-                    Some(*anchor),
+                    Some(anchor),
                 )
             })
-    }
-
-    /// Classifies the retained `Start`s recorded before `end` for the close of the invocation
-    /// started at `closing`, whose primary guest tasks have exited. Returns the indices of the
-    /// invocation's own `Start`s, or `None` when one of them lies under a body that can still
-    /// claim it. Every `Start` that classifies as a divergence is reported as one.
-    fn classify_retained_at_close(
-        &self,
-        closing: OplogIndex,
-        end: OplogIndex,
-    ) -> Result<Option<std::collections::BTreeSet<OplogIndex>>, WorkerExecutorError> {
-        let mut wait = false;
-        let own = self.classify_retained(closing, end, |_| {
-            wait = true;
-            Ok(())
-        })?;
-        Ok((!wait).then_some(own))
-    }
-
-    /// [`Self::classify_retained_at_close`] for a close that cannot wait for a body: a `Start`
-    /// under a body that can still claim it is reported as a divergence.
-    fn classify_retained_at_boundary(
-        &self,
-        closing: OplogIndex,
-        end: OplogIndex,
-    ) -> Result<std::collections::BTreeSet<OplogIndex>, WorkerExecutorError> {
-        self.classify_retained(closing, end, |index| {
-            Err(boundary_divergence(
-                index,
-                format!(
-                    "the retained Start at {index}, which lies under an entity body that can \
-                     still claim it, at the boundary of the invocation started at {closing}"
-                ),
-            ))
-        })
-    }
-
-    /// Classifies the retained `Start`s recorded before `end` for the close of the invocation
-    /// started at `closing`, returning the invocation's own `Start`s. `on_wait` decides each
-    /// `Start` under a body that can still claim it.
-    fn classify_retained(
-        &self,
-        closing: OplogIndex,
-        end: OplogIndex,
-        mut on_wait: impl FnMut(OplogIndex) -> Result<(), WorkerExecutorError>,
-    ) -> Result<std::collections::BTreeSet<OplogIndex>, WorkerExecutorError> {
-        let mut own = std::collections::BTreeSet::new();
-        let below: Vec<OplogIndex> = self
-            .st
-            .starts
-            .retained_keys()
-            .copied()
-            .filter(|index| *index < end)
-            .collect();
-        for index in below {
-            match self.st.classify(
-                &self.cursor.reconstruction_claims,
-                index,
-                closing,
-                Some(closing),
-            ) {
-                Ok(Class::Own) => {
-                    own.insert(index);
-                }
-                Ok(Class::Keep) => {}
-                Ok(Class::Wait) => on_wait(index)?,
-                Err(divergence) => return Err(boundary_divergence(index, divergence)),
-            }
-        }
-        Ok(own)
     }
 
     /// The entity body that consumes the entry at the cursor head, when a body records it: the

@@ -19,7 +19,6 @@ pub(super) use selection::{missing_start_waits_for, nearest_active_body};
 pub(super) use settling::historical_reconstruction_owner_failure;
 
 use super::claims::{AdmissionRefusal, RecordedStart, StartClaim, matching_admission_refusal};
-use super::owners::Class;
 use super::{
     AbandonedStarts, AgentInvocationResult, AgentInvocationStartedEntry, Arc, AtomicBool,
     AtomicOplogIndex, AtomicReplayTransitionPhase, BlockedOn, BootstrapTail, CHUNK_SIZE,
@@ -95,27 +94,29 @@ enum UnclaimedStarts {
 }
 
 /// The invocation-boundary rules a cursor read applies.
-enum BoundaryRead<'a> {
-    /// No invocation-boundary rule. The terminal of an open invocation anchor stays at the head
-    /// for the open-anchor reader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundaryRead {
+    /// No invocation-boundary rule. The terminal of an open invocation whose export returned
+    /// stays at the head for the open-anchor reader.
     None,
-    /// The walk to the terminal of an invocation without an open anchor. It tolerates live-only
-    /// abandoned durable-call records (see [`AbandonedStarts`]) and folds every retained `Start`
-    /// into `abandoned` when it consumes the terminal.
-    InvocationBoundary(&'a mut AbandonedStarts),
-    /// The read of the terminal of an open invocation anchor. Retained `Start`s stay retained for
-    /// the background work of the invocation.
+    /// The read of the terminal of an open invocation that records its result at the export's
+    /// return. Retained `Start`s stay retained for the background work of the invocation.
     OpenAnchor,
-    /// The walk to the `AgentInvocationSettled` of the invocation anchored at `anchor`, after its
-    /// background work ended. It tolerates live-only abandoned durable-call records like
-    /// [`Self::InvocationBoundary`] and stops once the cursor recorded an
-    /// `AgentInvocationSettled` after `anchor`.
-    Settlement { anchor: OplogIndex },
+    /// A walk to the end of an invocation whose guest tasks exited. It tolerates live-only
+    /// abandoned durable-call records (see [`AbandonedStarts`]). With `settlement_after`, the
+    /// anchor of an invocation that records its result at the export's return, the walk goes to
+    /// the `AgentInvocationSettled` of that invocation after its background work ended: it stops
+    /// once the cursor recorded an `AgentInvocationSettled` after the anchor, and a body that can
+    /// still claim a retained `Start` keeps the delivery marker of that `Start` at the head.
+    /// Without it the walk goes to the terminal of an invocation.
+    ToleratingAbandoned {
+        settlement_after: Option<OplogIndex>,
+    },
 }
 
-impl BoundaryRead<'_> {
-    fn tolerates_abandoned(&self) -> bool {
-        matches!(self, Self::InvocationBoundary(_) | Self::Settlement { .. })
+impl BoundaryRead {
+    fn tolerates_abandoned(self) -> bool {
+        matches!(self, Self::ToleratingAbandoned { .. })
     }
 }
 

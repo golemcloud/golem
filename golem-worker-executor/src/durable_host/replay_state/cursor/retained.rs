@@ -677,26 +677,16 @@ impl ReplayState {
         self.run_owned_cursor_op(move |state| async move {
             let mut st = state.cursor.state.lock().await;
             let ending = st.owners.last_invocation();
-            let mut own = Vec::new();
             let mut waiting = false;
-            let retained: Vec<OplogIndex> = st.starts.retained_keys().copied().collect();
-            for index in retained {
-                let class = match ending {
-                    Some(ending) => st.classify(
-                        &state.cursor.reconstruction_claims,
-                        index,
-                        ending,
-                        Some(ending),
-                    ),
-                    None => Ok(Class::Own),
-                };
-                match class {
-                    Ok(Class::Own) => own.push(index),
-                    Ok(Class::Wait) => waiting = true,
-                    Ok(Class::Keep) => {}
-                    Err(divergence) => return Err(boundary_divergence(index, divergence)),
-                }
-            }
+            let own = st.classify_retained(
+                &state.cursor.reconstruction_claims,
+                ending,
+                None,
+                |_| {
+                    waiting = true;
+                    Ok(())
+                },
+            )?;
             for index in &own {
                 reject_unclaimed_replay_effect(*index, &st.starts.get_retained(index).unwrap().entry)?;
             }
@@ -773,10 +763,13 @@ impl ReplayState {
                 .publish(st.starts.retained_summary());
             if !waiting && let Some(ending) = ending {
                 let st = &mut *st;
-                // The live run appends the settlement after the replay target.
-                st.owners.close(ending, replay_target.next(), |index| {
-                    st.starts.get_retained(&index).is_some()
-                });
+                let retained = |index| st.starts.get_retained(&index).is_some();
+                if st.owners.is_open(ending) {
+                    // The live run appends the terminal or the settlement after the replay target.
+                    st.owners.close(ending, replay_target.next(), retained);
+                } else {
+                    st.owners.prune_closed(ending, retained);
+                }
             }
             if released.is_empty() {
                 return Ok(());
