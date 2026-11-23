@@ -817,13 +817,17 @@ impl TestWorkerExecutor {
         };
         let mut rows = Vec::new();
         for entry in self.stored_oplog(agent_id).await {
-            let (prefix, payload) = match entry {
+            let (prefix, operation, payload) = match entry {
                 OplogEntry::Create { parameters, .. } => {
                     rows.push(("create".to_string(), parameters.create_request.caller));
                     continue;
                 }
-                OplogEntry::PendingAgentInvocation { payload, .. } => ("pending ", payload),
-                OplogEntry::AgentInvocationStarted { payload, .. } => ("", payload),
+                OplogEntry::PendingAgentInvocation {
+                    operation, payload, ..
+                } => ("pending ", operation, payload),
+                OplogEntry::AgentInvocationStarted {
+                    operation, payload, ..
+                } => ("", operation, payload),
                 OplogEntry::Start {
                     function_name,
                     request: Some(request),
@@ -868,7 +872,7 @@ impl TestWorkerExecutor {
                 }
                 _ => continue,
             };
-            let invocation: golem_common::model::AgentInvocationPayload = match payload {
+            let stored: golem_common::model::StoredAgentInvocationPayload = match payload {
                 OplogPayload::Inline(value) => *value,
                 OplogPayload::SerializedInline { bytes, .. } => {
                     golem_common::serialization::decode(&bytes)
@@ -891,6 +895,9 @@ impl TestWorkerExecutor {
                 )
                 .expect("the stored invocation payload decodes"),
             };
+            let invocation = stored
+                .with_operation(*operation)
+                .expect("the stored invocation payload matches its operation");
             use golem_common::model::AgentInvocationPayload as Payload;
             let (name, caller) = match invocation {
                 Payload::AgentInitialization { caller, .. } => ("initialize".to_string(), caller),

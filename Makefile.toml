@@ -639,7 +639,7 @@ command = "cargo"
 args = ["fmt", "--all"]
 
 [tasks.fix-clippy]
-description = "Runs clippy checks and applies fixes"
+description = "Applies host-only Clippy fixes; review cfg-gated references before accepting deletions (see AGENTS.md)"
 install_crate = "clippy"
 command = "cargo"
 args = [
@@ -832,7 +832,7 @@ description = "Runs worker executor tests only (group 3/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group3" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group3" -- --skip ":tag:latency" --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-group4]
@@ -841,7 +841,16 @@ description = "Runs worker executor tests only (group 4/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group4" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group4" -- --skip ":tag:latency" --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+'''
+
+[tasks.worker-executor-tests-latency]
+dependencies = ["wit", "ensure-builtin-artifacts"]
+description = "Runs timing-sensitive worker executor tests without unrelated test contention"
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:latency" -- --report-time --nocapture --test-threads=1 %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-group5]

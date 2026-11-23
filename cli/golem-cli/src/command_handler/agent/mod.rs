@@ -628,7 +628,7 @@ impl AgentCommandHandler {
         let selected_agent_name = agent_id_match.display_name();
         let environment = &agent_id_match.environment;
         let wait_for_invocation = !trigger && stdout_format == InvocationStdoutFormat::Value;
-        let live_output = (!no_stream).then(|| {
+        let live_output = (!no_stream && stdout_format != InvocationStdoutFormat::Raw).then(|| {
             Arc::new(LiveOutput::new(
                 self.ctx.clone(),
                 environment.environment_id,

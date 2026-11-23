@@ -372,7 +372,7 @@ writefile ${MAIN_VALIDATION_REPORT_DIR}/cli.status ${failed}
 
 [tasks.main-validation-exclusive]
 private = true
-env = { MAIN_VALIDATION_TASKS = "check-configs diff-openapi check-docs-openapi check-docs-skills check-reflection-conformance check-ai-contract check-builtin-artifacts check-clippy check-clippy-javascript-tool-process-bridge main-validation-schema main-validation-embedded check-rustfmt check-rustfmt-dev-tools check-rustfmt-javascript-tool-process-bridge check-wit test-javascript-tool-process-backend check-shared-crates-versioning validate-sdk-rust-check validate-sdk-rust-tool validate-sdk-rust-ui test-component-middleware-unit-tests main-validation-bash dev-tools-tests check-clippy-dev-tools validate-sdk-go validate-skill-harness validate-sdk-scala validate-sdk-ts validate-sdk-effect validate-sdk-moonbit main-validation-scala main-validation-xfs main-validation-docker" }
+env = { MAIN_VALIDATION_TASKS = "check-configs diff-openapi check-docs-openapi check-docs-skills check-reflection-conformance check-ai-contract check-builtin-artifacts check-clippy check-clippy-javascript-tool-process-bridge main-validation-schema main-validation-embedded check-rustfmt check-rustfmt-dev-tools check-rustfmt-javascript-tool-process-bridge check-wit test-javascript-tool-process-backend check-shared-crates-versioning validate-sdk-rust-check validate-sdk-rust-tool validate-sdk-rust-ui test-component-middleware-unit-tests main-validation-bash dev-tools-tests check-clippy-dev-tools validate-sdk-go validate-skill-harness validate-sdk-scala validate-sdk-ts validate-sdk-effect validate-sdk-moonbit main-validation-scala main-validation-latency main-validation-xfs main-validation-docker" }
 run_task = { name = ["main-validation-final-parallel", "main-validation-privileged"] }
 
 [tasks.main-validation-final-parallel]
@@ -409,8 +409,16 @@ run_task = "main-validation-check-tasks"
 
 [tasks.main-validation-privileged]
 private = true
-env = { MAIN_VALIDATION_TASKS = "main-validation-xfs main-validation-docker", MAIN_VALIDATION_CHECK_LANE = "privileged", MAIN_VALIDATION_REQUIRES = "" }
+env = { MAIN_VALIDATION_TASKS = "main-validation-latency main-validation-xfs main-validation-docker", MAIN_VALIDATION_CHECK_LANE = "privileged", MAIN_VALIDATION_REQUIRES = "" }
 run_task = "main-validation-check-tasks"
+
+[tasks.main-validation-latency]
+private = true
+script_runner = "@duckscript"
+script = '''
+set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json"
+exec --fail-on-error cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|ensure-builtin-artifacts)$" worker-executor-tests-latency
+'''
 
 [tasks.main-validation-check-tasks]
 private = true
@@ -431,6 +439,8 @@ for task in ${tasks}
         end
     elif eq ${task} main-validation-scala
         set_env MAIN_VALIDATION_REQUIRES "prepare-sdk-scala prepare-sdk-ts build-cli-test-bins main-validation-service-native"
+    elif eq ${task} main-validation-latency
+        set_env MAIN_VALIDATION_REQUIRES "main-validation-executor-native main-validation-fixtures"
     elif eq ${task} main-validation-xfs
         set_env MAIN_VALIDATION_REQUIRES "main-validation-executor-native main-validation-fixtures"
     elif eq ${task} main-validation-docker
