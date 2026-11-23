@@ -299,7 +299,9 @@ impl PublicInvocationSession {
             selector: Box::new(InvocationSelector {
                 agent_type: agent.agent_type.to_string(),
                 application: application.to_string(),
-                constructor_parameters,
+                target: golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                    constructor_parameters,
+                },
                 environment: environment.to_string(),
                 method: method.to_string(),
             }),
