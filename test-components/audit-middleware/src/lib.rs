@@ -229,27 +229,18 @@ fn owner_summary() -> OwnerSummary {
     }
 }
 
-fn principal_summary(principal: Principal) -> PrincipalSummary {
-    match principal {
-        Principal::Anonymous => PrincipalSummary::Anonymous,
-        Principal::Oidc(oidc) => PrincipalSummary::Oidc {
-            issuer: oidc.issuer,
-            subject: oidc.sub,
-        },
-        Principal::Agent(agent) => PrincipalSummary::Agent {
-            agent_id: golem_rust::Uuid::from_u64_pair(
-                agent.agent_id.uuid.high_bits,
-                agent.agent_id.uuid.low_bits,
-            )
-            .to_string(),
-        },
-        Principal::GolemUser(user) => PrincipalSummary::GolemUser {
-            account_id: golem_rust::Uuid::from_u64_pair(
-                user.account_id.uuid.high_bits,
-                user.account_id.uuid.low_bits,
-            )
-            .to_string(),
-        },
+fn principal_summary(principal: &Principal) -> PrincipalSummary {
+    let Some(principal_ref) = principal.principal_ref() else {
+        return PrincipalSummary::Anonymous;
+    };
+    let issuer = principal_ref.issuer().to_string();
+    let subject = principal_ref.subject().to_string();
+    match principal.kind() {
+        PrincipalKind::User => PrincipalSummary::User { issuer, subject },
+        PrincipalKind::Account => PrincipalSummary::Account { issuer, subject },
+        PrincipalKind::Agent => PrincipalSummary::Agent { issuer, subject },
+        PrincipalKind::Tool => PrincipalSummary::Tool { issuer, subject },
+        PrincipalKind::Anonymous => PrincipalSummary::Anonymous,
     }
 }
 

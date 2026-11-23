@@ -375,15 +375,27 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .get_public_state()
                     .event_service()
                     .get_last_invocation_errors();
+                // A refused memory growth can heal on a new instance with new memory permits, as
+                // after an out-of-memory invocation; on this instance the next save traps at once.
+                // Other failures of the save hook would repeat, so the instance stays.
+                let out_of_memory = error == AgentError::OutOfMemory;
                 let error = error.to_string(&stderr);
-                Err(self
-                    .fail_update(
-                        target_revision,
-                        update_attempt_index,
-                        format!("failed to get a snapshot for manual update: {error}"),
-                        UpdateFailureClass::Other,
-                    )
-                    .await)
+                Err(
+                    match self
+                        .fail_update(
+                            target_revision,
+                            update_attempt_index,
+                            format!("failed to get a snapshot for manual update: {error}"),
+                            UpdateFailureClass::Other,
+                        )
+                        .await
+                    {
+                        CommandOutcome::Continue if out_of_memory => {
+                            CommandOutcome::BreakInnerLoop(RetryDecision::ReacquirePermits)
+                        }
+                        outcome => outcome,
+                    },
+                )
             }
             Ok(InvokeResult::Exited { .. }) => Err(self
                 .fail_update(

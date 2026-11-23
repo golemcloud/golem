@@ -61,8 +61,9 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
     pub(crate) async fn start_pending_invocation(
         &self,
         idempotency_key: InvocationId,
+        operation: golem_common::model::InvocationRequestOperation,
         payload: golem_common::model::oplog::OplogPayload<
-            golem_common::model::AgentInvocationPayload,
+            golem_common::model::StoredAgentInvocationPayload,
         >,
         context: golem_common::model::invocation_context::InvocationContextStack,
         wallet_pin: golem_common::model::card::InvocationWalletPin,
@@ -88,6 +89,7 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
             .oplog
             .add_agent_invocation_started_from_pending(
                 idempotency_key,
+                operation,
                 payload,
                 context,
                 wallet_pin,

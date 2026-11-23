@@ -320,13 +320,26 @@ To revert some of the last invocations, use the `--number-of-invocations` parame
 golem agent revert 'CounterAgent("my-counter")' --number-of-invocations 3
 ```
 
-## Cancelling a pending invocation
+## Inspecting and cancelling invocations
 
-If an invocation is enqueued for an agent, but it has not been started yet, it can be removed from the invocation queue by using it's idempotency key:
+The `golem invocation` commands select an invocation by its agent and idempotency key, or by its invocation ID (`<agent ID>.<UUID>`), as listed by `golem invocation list`:
 
 ```shell copy
-golem agent cancel-invocation 'CounterAgent("my-counter")' my-key
+golem invocation get --agent 'CounterAgent("my-counter")' --idempotency-key my-key
+golem invocation list --agent 'CounterAgent("my-counter")' --status pending --status scheduled
 ```
+
+`invocation get` shows the state of the invocation (`scheduled`, `pending`, `running`, `waiting`, `retrying`, `interrupted`, `completed`, `failed` or `cancelled`) and, once it finished, its result. When the key was used for more than one method of the agent, it shows the invocation of each method, and `--method` selects one. It exits with code 130 when an invocation it shows was cancelled. `invocation list` lists the invocations of an agent, newest change first, and prints a cursor for the next page.
+
+A key is found only for the account that made the invocation, and invocations made through an HTTP route are not found by their key. An invocation ID is resolved in the current environment; select another one with `--environment`.
+
+If an invocation is enqueued or scheduled for an agent, but it has not been started yet, it can be cancelled:
+
+```shell copy
+golem invocation cancel --agent 'CounterAgent("my-counter")' --idempotency-key my-key
+```
+
+A running invocation cannot be cancelled. An invocation that already finished keeps its result.
 
 ## Shell access
 

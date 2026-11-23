@@ -222,7 +222,7 @@ async fn follow_pages(
     let mut pages = Vec::new();
     loop {
         let page = structured(&call(client, tool, arguments.clone()).await).clone();
-        let cursor = page.get("cursor").cloned();
+        let cursor = page.get("cursor").filter(|value| !value.is_null()).cloned();
         pages.push(page);
         let Some(cursor) = cursor else {
             return pages;
@@ -351,6 +351,7 @@ async fn mcp_serve_offers_one_tool_per_management_command() {
             &[
                 "agent_id",
                 "arguments",
+                "expected_fingerprint",
                 "function_name",
                 "idempotency_key",
                 "schedule_at",

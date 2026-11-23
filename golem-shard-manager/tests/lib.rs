@@ -19,8 +19,8 @@ mod shard_management;
 
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
-use std::sync::Arc;
-use test_r::{sequential_suite, test_dep};
+use std::sync::{Arc, Once};
+use test_r::{sequential_suite, test, test_dep};
 
 test_r::enable!();
 
@@ -29,12 +29,22 @@ sequential_suite!(etcd_backed);
 #[derive(Debug)]
 pub struct Tracing;
 
+static TRACING_INIT: Once = Once::new();
+
 #[test_dep(scope = PerWorker)]
 pub fn tracing() -> Tracing {
-    init_tracing_with_default_debug_env_filter(
-        &TracingConfig::test_pretty_without_time("shard-manager-tests").with_env_overrides(),
-    );
+    TRACING_INIT.call_once(|| {
+        init_tracing_with_default_debug_env_filter(
+            &TracingConfig::test_pretty_without_time("shard-manager-tests").with_env_overrides(),
+        );
+    });
     Tracing
+}
+
+#[test]
+fn tracing_can_be_initialized_again_after_a_test_retry() {
+    tracing();
+    tracing();
 }
 
 /// One etcd server per test worker, shared by every module under `etcd_backed`.
