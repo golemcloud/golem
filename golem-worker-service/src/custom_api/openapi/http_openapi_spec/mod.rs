@@ -383,22 +383,15 @@ fn build_request_body(
             let constructor = render_input_schema(graph, constructor, components)?;
             parameters["x-golem-constructor-schema"] = constructor;
             Some(request_body_value(
-                "Create request. parameters is a canonical tagged record of the user-supplied constructor fields in declaration order. config and env override the agent configuration and environment. Only unkeyed creation is supported.",
+                "Create request. parameters is a canonical tagged record of the user-supplied constructor fields in declaration order. Only parameters and optional keyed: false are accepted. config and env overrides are rejected, including empty values. Only unkeyed creation is supported.",
                 vec![(
                     "application/json".into(),
                     json!({
                         "type": "object",
                         "required": ["parameters"],
+                        "additionalProperties": false,
                         "properties": {
                             "parameters": parameters,
-                            "config": {"type": "array", "default": [], "items": {
-                                "type": "object", "required": ["path", "value"],
-                                "properties": {
-                                    "path": {"type": "array", "items": {"type": "string"}},
-                                    "value": {}
-                                }
-                            }},
-                            "env": {"type": "object", "additionalProperties": {"type": "string"}, "default": {}},
                             "keyed": {"const": false, "default": false}
                         }
                     }),

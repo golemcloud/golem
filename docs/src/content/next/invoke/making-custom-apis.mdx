@@ -877,7 +877,7 @@ Authentication and authorization run before selection; a UUID is an address, not
 
 The creation option declares a full, exact **POST** path, not a suffix relative to the mount. It is valid only on an ID mount. Its path accepts literals and system variables, not constructor or agent ID captures. Creation inherits the mount's authentication and CORS settings.
 
-Send the existing agent-create request envelope: `parameters` contains the constructor inputs as canonical tagged SchemaValue JSON; optional `config` and `env` supply configuration and environment overrides. Omit `keyed` or set it to `false`; `keyed: true` is rejected. This is not the ordinary endpoint body format with one field per method parameter.
+Send only `parameters`, containing the constructor inputs as canonical tagged SchemaValue JSON, and optionally `keyed: false`. Mounted creation rejects `env`, `config`, and other unknown fields with `400 Bad Request`, even when their values are empty or null. `keyed: true` is also rejected. Route authentication does not grant configuration authority; use authorized operator REST creation or SDK creation for overrides. This is not the ordinary endpoint body format with one field per method parameter.
 
 Creation waits for the constructor to complete and returns `201 Created` with an `AgentReference` JSON body (`agentId` and `agentFingerprint`). The `Location` header addresses the new agent through the ID mount: `/decisions?instance=<agentId>` for the query example, or `/decisions/<agentId>` for a path ID mount. Insert the method suffix before the query string to call an endpoint: `/decisions/state?instance=<agentId>` or `/decisions/<agentId>/state`.
 

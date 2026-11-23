@@ -20,6 +20,7 @@ use super::{ResponseBody, RichRequest, RichRouteBehaviour, RouteExecutionResult}
 use crate::api::agents::CreateAgentRequest;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::schema::ExternalSchemaValue;
 use golem_schema::http::{FileMapping, FileResponseHeader};
 use golem_service_base::custom_api::{
     AgentSelection, CreateAgentBehaviour, MountAgent, MountFileSource, MountTarget, PathSegment,
@@ -31,6 +32,14 @@ use std::sync::Arc;
 
 use crate::config::HttpSessionLimits;
 use crate::service::worker::{AgentBinding, WorkerService};
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MountedCreateRequest {
+    parameters: ExternalSchemaValue,
+    #[serde(default)]
+    keyed: bool,
+}
 
 /// Owns mounted-route selection and both mounted storage backends. Guest HTTP value/body
 /// adaptation remains in [`RawHandler`], while invocation transport/recovery remains in
@@ -91,11 +100,16 @@ impl MountedDispatch {
         let body = request
             .underlying
             .take_body()
-            .into_json::<CreateAgentRequest>()
+            .into_json::<serde_json::Map<String, serde_json::Value>>()
             .await
             .map_err(|error| RequestHandlerError::BodyIsNotValidJson {
                 error: error.to_string(),
             })?;
+        let body: MountedCreateRequest = serde_json::from_value(body.into()).map_err(|error| {
+            RequestHandlerError::BodyIsNotValidJson {
+                error: error.to_string(),
+            }
+        })?;
         if body.keyed {
             return Err(RequestHandlerError::InvalidParameter {
                 name: "keyed".into(),
@@ -113,7 +127,12 @@ impl MountedDispatch {
                 behavior.agent.component_id,
                 selected.route.environment_id,
                 &behavior.agent.agent_type,
-                body,
+                CreateAgentRequest {
+                    parameters: body.parameters,
+                    config: Vec::new(),
+                    env: Default::default(),
+                    keyed: false,
+                },
                 key,
                 super::call_agent::caller_from_request(request)?,
             )

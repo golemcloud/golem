@@ -78,6 +78,33 @@ async fn mounted_create_returns_constructor_state_and_anonymous_distinct_ids(
     let agent = context(deps).await?;
     for (prefix, query) in [("selected-query", true), ("selected-path", false)] {
         let key = Uuid::new_v4().to_string();
+        for (field, value) in [
+            (
+                "env",
+                json!({"PAYMENT_API_URL": "https://untrusted.example"}),
+            ),
+            ("env", json!({})),
+            ("config", json!([{"path": ["admin"], "value": true}])),
+            ("config", json!([])),
+        ] {
+            let parameters = golem_common::schema::ExternalSchemaValue::try_from(
+                agent_key!("SelectedQueryAgent", "constructor from body")
+                    .parameters
+                    .value()
+                    .clone(),
+            )
+            .map_err(anyhow::Error::msg)?;
+            let mut body = json!({"parameters": parameters});
+            body[field] = value;
+            let response = agent
+                .client
+                .post(agent.base_url.join(&format!("/{prefix}/create"))?)
+                .json(&body)
+                .send()
+                .await?;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+            assert!(!response.headers().contains_key("location"));
+        }
         let mut ids = Vec::new();
         for _ in 0..2 {
             let parameters = golem_common::schema::ExternalSchemaValue::try_from(
@@ -91,7 +118,7 @@ async fn mounted_create_returns_constructor_state_and_anonymous_distinct_ids(
                 .client
                 .post(agent.base_url.join(&format!("/{prefix}/create"))?)
                 .header("idempotency-key", &key)
-                .json(&json!({"parameters": parameters, "config": [], "env": {}, "keyed": false}))
+                .json(&json!({"parameters": parameters, "keyed": false}))
                 .send()
                 .await?;
             assert_eq!(response.status(), StatusCode::CREATED);
@@ -137,7 +164,7 @@ async fn mounted_create_returns_constructor_state_and_anonymous_distinct_ids(
             let response = agent
                 .client
                 .post(agent.base_url.join(&format!("/{prefix}/create"))?)
-                .json(&json!({"parameters": parameters, "keyed": keyed, "config": [], "env": {}}))
+                .json(&json!({"parameters": parameters, "keyed": keyed}))
                 .send()
                 .await?;
             assert_eq!(response.status(), expected);

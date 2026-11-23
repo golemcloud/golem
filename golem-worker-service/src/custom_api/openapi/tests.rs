@@ -625,21 +625,44 @@ fn create_agent_openapi_projects_canonical_envelope_reference_and_location() {
         assert_eq!(constructor["properties"]["decision"]["type"], "string");
         let envelope = body;
         assert!(envelope["properties"].get("parameters").is_some());
-        assert!(envelope["properties"].get("config").is_some());
-        assert!(envelope["properties"].get("env").is_some());
+        assert!(envelope["properties"].get("config").is_none());
+        assert!(envelope["properties"].get("env").is_none());
+        assert_eq!(envelope["additionalProperties"], false);
         let mut schema = body.clone();
         schema["components"] = spec["components"].clone();
         let validator = jsonschema::validator_for(&schema).unwrap();
         let request = json!({
-            "parameters": { "kind": "record", "value": { "fields": [{ "kind": "string", "value": "ready" }] } },
-            "config": [{ "path": ["setting"], "value": "override" }],
-            "env": { "SETTING": "override" }
+            "parameters": { "kind": "record", "value": { "fields": [{ "kind": "string", "value": "ready" }] } }
         });
         assert!(
             serde_json::from_value::<crate::api::agents::CreateAgentRequest>(request.clone())
                 .is_ok()
         );
         assert!(validator.is_valid(&request));
+        let mut explicit_unkeyed = request.clone();
+        explicit_unkeyed["keyed"] = json!(false);
+        assert!(validator.is_valid(&explicit_unkeyed));
+        for (field, value) in [
+            ("env", json!({"SETTING": "override"})),
+            ("env", json!({})),
+            ("env", Value::Null),
+            (
+                "config",
+                json!([{"path": ["setting"], "value": "override"}]),
+            ),
+            ("config", json!([])),
+            ("config", Value::Null),
+        ] {
+            let mut overrides = request.clone();
+            overrides[field] = value;
+            assert!(!validator.is_valid(&overrides), "{overrides}");
+            if !overrides[field].is_null() {
+                assert!(
+                    serde_json::from_value::<crate::api::agents::CreateAgentRequest>(overrides)
+                        .is_ok()
+                );
+            }
+        }
         let mut malformed = request.clone();
         malformed["parameters"] = json!({ "kind": "string", "value": "not a constructor record" });
         assert!(!validator.is_valid(&malformed));

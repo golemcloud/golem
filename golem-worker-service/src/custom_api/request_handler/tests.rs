@@ -694,7 +694,91 @@ fn create_request(authenticated: bool) -> Request {
     if authenticated {
         request = request.header("x-golem-session", r#"{"subject":"create-user"}"#);
     }
-    request.body(r#"{"parameters":{"kind":"record","value":{"fields":[]}},"env":{"CREATE_PROBE":"forwarded"}}"#)
+    request.body(r#"{"parameters":{"kind":"record","value":{"fields":[]}}}"#)
+}
+
+#[test]
+async fn create_dispatch_rejects_array_envelope_required_to_be_object_by_openapi() {
+    let body = r#"[{"kind":"record","value":{"fields":[]}},false]"#;
+    let mut observed = Vec::new();
+    for kind in ["create-path", "create-query"] {
+        for authenticated in [false, true] {
+            let harness = invocation_harness();
+            let endpoint = create_endpoint(&harness, kind, authenticated);
+            harness
+                .creates
+                .responses
+                .lock()
+                .unwrap()
+                .push_back(Box::pin(async {
+                    Ok(golem_common::model::AgentFingerprint::new())
+                }));
+            let mut request = create_request(authenticated);
+            request.set_body(body);
+            let response = endpoint.execute(request).await;
+            observed.push((kind, authenticated, response.status()));
+        }
+    }
+    assert_eq!(
+        observed,
+        vec![
+            ("create-path", false, StatusCode::BAD_REQUEST),
+            ("create-path", true, StatusCode::BAD_REQUEST),
+            ("create-query", false, StatusCode::BAD_REQUEST),
+            ("create-query", true, StatusCode::BAD_REQUEST),
+        ],
+        "OpenAPI requires an object envelope, not a positional array: {body}"
+    );
+}
+
+#[test]
+async fn create_dispatch_rejects_overrides_before_creating_an_agent() {
+    for kind in ["create-path", "create-query"] {
+        for authenticated in [false, true] {
+            let harness = invocation_harness();
+            let endpoint = create_endpoint(&harness, kind, authenticated);
+            for (field, value) in [
+                (
+                    "env",
+                    serde_json::json!({"PAYMENT_API_URL": "https://untrusted.example"}),
+                ),
+                ("env", serde_json::json!({})),
+                ("env", serde_json::Value::Null),
+                (
+                    "config",
+                    serde_json::json!([{"path": ["admin"], "value": true}]),
+                ),
+                ("config", serde_json::json!([])),
+                ("config", serde_json::Value::Null),
+                ("unexpected", serde_json::json!(true)),
+            ] {
+                let mut body = serde_json::json!({
+                    "parameters": {"kind": "record", "value": {"fields": []}}
+                });
+                body[field] = value;
+                harness
+                    .creates
+                    .responses
+                    .lock()
+                    .unwrap()
+                    .push_back(Box::pin(async {
+                        Ok(golem_common::model::AgentFingerprint::new())
+                    }));
+                let mut request = create_request(authenticated);
+                request.set_body(poem::Body::from_json(&body).unwrap());
+                let response = endpoint.execute(request).await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::BAD_REQUEST,
+                    "{kind}: {authenticated}: {body}"
+                );
+                assert!(!response.headers().contains_key(http::header::LOCATION));
+                let error: serde_json::Value = response.into_body().into_json().await.unwrap();
+                assert!(error.to_string().contains(field), "{error}");
+                assert!(harness.creates.calls.lock().unwrap().is_empty());
+            }
+        }
+    }
 }
 
 #[test]
@@ -716,7 +800,13 @@ async fn create_dispatch_returns_reference_and_selector_location_without_caller_
                     .lock()
                     .unwrap()
                     .push_back(Box::pin(async move { Ok(fingerprint) }));
-                let response = endpoint.execute(create_request(authenticated)).await;
+                let mut request = create_request(authenticated);
+                if index == 1 {
+                    request.set_body(
+                        r#"{"parameters":{"kind":"record","value":{"fields":[]}},"keyed":false}"#,
+                    );
+                }
+                let response = endpoint.execute(request).await;
                 assert_eq!(
                     response.status(),
                     StatusCode::CREATED,
@@ -771,10 +861,7 @@ async fn create_dispatch_returns_reference_and_selector_location_without_caller_
                 }
                 assert!(call.auth.idempotency_scope().is_none());
                 assert!(!call.ignore_already_existing);
-                assert_eq!(
-                    call.environment_variables.get("CREATE_PROBE").unwrap(),
-                    "forwarded"
-                );
+                assert!(call.environment_variables.is_empty());
                 assert!(call.config.is_empty());
                 assert!(call.idempotency_key.is_some());
                 let (target, constructor, _) = call.target.invoke_fields();
