@@ -263,7 +263,10 @@ fn router_agent(name: &str, path: &str) -> AgentTypeSchema {
     let mut agent = agent_type_with_secret_config(
         AgentTypeName(name.into()),
         vec!["key".into()],
-        SchemaType::string(),
+        SchemaType::secret(SecretSpec {
+            inner: Box::new(SchemaType::string()),
+            category: None,
+        }),
     );
     agent.kind = golem_common::schema::AgentTypeKind::HttpRouter;
     agent.mode = AgentMode::Ephemeral;
@@ -1486,7 +1489,10 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
         let mut agent = agent_type_with_secret_config(
             AgentTypeName("site".into()),
             vec!["key".into()],
-            SchemaType::string(),
+            SchemaType::secret(SecretSpec {
+                inner: Box::new(SchemaType::string()),
+                category: None,
+            }),
         );
         agent.kind = kind;
         if kind == AgentTypeKind::HttpRouter {
