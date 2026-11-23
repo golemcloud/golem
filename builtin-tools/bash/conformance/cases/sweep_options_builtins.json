@@ -1,0 +1,6656 @@
+{
+  "tier": "sweep",
+  "description": "Option sweep, part G: every option of Bash's builtins as this shell provides them.\n\nLeft out, because they are refused or deliberately different by documentation: bg, fg, fc,\numask, ulimit, `enable -n`, `exec -a/-c/-l` as exec's own options, `wait -p/-f`, prompt\nexpansion, `trap -l` (the wasm target lists fewer signals), listings of every builtin or command\n(commands here are builtins, not files on PATH) and the interactive-only builtins (bind, help,\nhistory). Everything else is compared with Bash exactly.",
+  "cases": [
+    {
+      "name": "opt .: with arguments",
+      "script": "printf 'echo \"$# $1 $2\"\\n' >/tmp/s; . /tmp/s a b",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: keeps caller arguments",
+      "script": "printf 'echo \"$1\"\\n' >/tmp/s; set -- outer; . /tmp/s",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: missing file",
+      "script": ". /tmp/nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: no argument",
+      "script": ".; echo \"status=$?\"",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: return status",
+      "script": "printf 'return 3\\necho no\\n' >/tmp/s; . /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: last status",
+      "script": "printf 'false\\n' >/tmp/s; . /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: directory",
+      "script": ". /tmp; echo \"status=$?\"",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: relative name in cwd",
+      "script": "cd /tmp; printf 'echo found\\n' >rel.sh; . rel.sh; echo \"status=$?\"",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: path search",
+      "script": "mkdir /tmp/bin; printf 'echo via path\\n' >/tmp/bin/p.sh; PATH=/tmp/bin; . p.sh; echo \"status=$?\"",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: sourcepath off",
+      "script": "mkdir /tmp/bin; printf 'echo via path\\n' >/tmp/bin/p.sh; PATH=/tmp/bin; shopt -u sourcepath; . p.sh; echo \"status=$?\"",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: sets variables",
+      "script": "printf 'X=1\\nf() { echo f$X; }\\n' >/tmp/s; . /tmp/s; f",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: syntax error in file",
+      "script": "printf 'if\\n' >/tmp/s; . /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: double dash",
+      "script": "printf 'echo dd\\n' >/tmp/s; . -- /tmp/s",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: BASH_SOURCE",
+      "script": "printf 'echo \"${BASH_SOURCE[0]}\"\\n' >/tmp/s; . /tmp/s",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt .: invalid option",
+      "script": ". -z /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "builtin.."
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: with arguments",
+      "script": "printf 'echo \"$# $1 $2\"\\n' >/tmp/s; source /tmp/s a b",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: keeps caller arguments",
+      "script": "printf 'echo \"$1\"\\n' >/tmp/s; set -- outer; source /tmp/s",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: missing file",
+      "script": "source /tmp/nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: no argument",
+      "script": "source; echo \"status=$?\"",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: return status",
+      "script": "printf 'return 3\\necho no\\n' >/tmp/s; source /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: last status",
+      "script": "printf 'false\\n' >/tmp/s; source /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: directory",
+      "script": "source /tmp; echo \"status=$?\"",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: relative name in cwd",
+      "script": "cd /tmp; printf 'echo found\\n' >rel.sh; source rel.sh; echo \"status=$?\"",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: path search",
+      "script": "mkdir /tmp/bin; printf 'echo via path\\n' >/tmp/bin/p.sh; PATH=/tmp/bin; source p.sh; echo \"status=$?\"",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: sourcepath off",
+      "script": "mkdir /tmp/bin; printf 'echo via path\\n' >/tmp/bin/p.sh; PATH=/tmp/bin; shopt -u sourcepath; source p.sh; echo \"status=$?\"",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: sets variables",
+      "script": "printf 'X=1\\nf() { echo f$X; }\\n' >/tmp/s; source /tmp/s; f",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: syntax error in file",
+      "script": "printf 'if\\n' >/tmp/s; source /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: double dash",
+      "script": "printf 'echo dd\\n' >/tmp/s; source -- /tmp/s",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: BASH_SOURCE",
+      "script": "printf 'echo \"${BASH_SOURCE[0]}\"\\n' >/tmp/s; source /tmp/s",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt source: invalid option",
+      "script": "source -z /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt :: arguments expanded",
+      "script": ": ${X:=set}; echo $X",
+      "tags": [
+        "builtin.:"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt :: redirection creates file",
+      "script": ": >/tmp/c; ls /tmp",
+      "tags": [
+        "builtin.:"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt :: status after failure",
+      "script": "false; :; echo \"status=$?\"",
+      "tags": [
+        "builtin.:"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt true: arguments ignored",
+      "script": "true --help -x; echo \"status=$?\"",
+      "tags": [
+        "builtin.true"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt false: arguments ignored",
+      "script": "false --help; echo \"status=$?\"",
+      "tags": [
+        "builtin.false"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt true: in pipeline",
+      "script": "true | false; echo \"status=$?\"",
+      "tags": [
+        "builtin.true"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt false: negated",
+      "script": "! false; echo \"status=$?\"",
+      "tags": [
+        "builtin.false"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -e f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -e f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -e nosuch",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -e nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -f f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -f f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -f d",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -f d; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -d d",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -d d; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -d f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -d f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -s f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -s f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -s e",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -s e; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -h l",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -h l; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -L l",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -L l; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -L f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -L f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -h dl",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -h dl; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -e dl",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -e dl; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -b f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -b f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -c /dev/null",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -c /dev/null; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -c f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -c f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -p f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -p f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -S f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -S f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -t 5",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -t 5; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression f -nt old",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test f -nt old; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression old -nt f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test old -nt f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression old -ot new",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test old -ot new; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression new -ot old",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test new -ot old; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression nosuch -nt f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test nosuch -nt f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression f -nt nosuch",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test f -nt nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression f -ef l",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test f -ef l; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression f -ef e",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test f -ef e; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -z ''",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -z ''; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -z x",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -z x; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -n ''",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -n ''; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -n x",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -n x; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression x",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test x; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression ''",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test ''; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression a = a",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test a = a; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression a == a",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test a == a; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression a != b",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test a != b; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression a = b",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test a = b; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression a '<' b",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test a '<' b; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression b '>' a",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test b '>' a; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression 1 -eq 1",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test 1 -eq 1; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression 1 -ne 2",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test 1 -ne 2; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression 2 -lt 10",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test 2 -lt 10; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression 10 -le 10",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test 10 -le 10; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression 3 -gt 2",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test 3 -gt 2; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression 3 -ge 4",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test 3 -ge 4; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression ' 1 ' -eq 1",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test ' 1 ' -eq 1; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -1 -lt 0",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -1 -lt 0; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression 0x10 -eq 16",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test 0x10 -eq 16; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression 010 -eq 8",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test 010 -eq 8; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression a -eq 1",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test a -eq 1; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression 1 -eq",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test 1 -eq; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -v HOME",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -v HOME; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -v PWD",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -v PWD; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -R x",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -R x; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression ! -e f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test ! -e f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression ! ''",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test ! ''; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -e f -a -d d",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -e f -a -d d; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -e f -a -e nosuch",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -e f -a -e nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -e nosuch -o -d d",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -e nosuch -o -d d; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression \\( -e f \\)",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test \\( -e f \\); echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression \\( -e f -o -e g \\) -a -d d",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test \\( -e f -o -e g \\) -a -d d; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression ! \\( -z x \\)",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test ! \\( -z x \\); echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -o errexit",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -o errexit; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -o bogus",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -o bogus; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression a b c",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test a b c; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -x",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -x; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression =",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test =; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression a =",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test a =; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -e f -a",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -e f -a; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression ! ! x",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test ! ! x; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression x -a ''",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test x -a ''; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression '(' x ')'",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test '(' x ')'; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -n",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -n; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -z",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression a -a b -o ''",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test a -a b -o ''; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression 99999999999999999999 -gt 1",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test 99999999999999999999 -gt 1; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression 1 -eq 1.0",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test 1 -eq 1.0; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -l",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -l; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: expression -a f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; test -a f; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -e f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -e f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -e nosuch",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -e nosuch ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -f f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -f f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -f d",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -f d ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -d d",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -d d ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -d f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -d f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -s f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -s f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -s e",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -s e ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -h l",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -h l ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -L l",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -L l ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -L f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -L f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -h dl",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -h dl ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -e dl",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -e dl ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -b f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -b f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -c /dev/null",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -c /dev/null ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -c f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -c f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -p f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -p f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -S f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -S f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -t 5",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -t 5 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression f -nt old",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ f -nt old ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression old -nt f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ old -nt f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression old -ot new",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ old -ot new ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression new -ot old",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ new -ot old ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression nosuch -nt f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ nosuch -nt f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression f -nt nosuch",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ f -nt nosuch ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression f -ef l",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ f -ef l ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression f -ef e",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ f -ef e ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -z ''",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -z '' ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -z x",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -z x ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -n ''",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -n '' ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -n x",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -n x ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression x",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ x ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression ''",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ '' ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression a = a",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ a = a ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression a == a",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ a == a ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression a != b",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ a != b ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression a = b",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ a = b ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression a '<' b",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ a '<' b ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression b '>' a",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ b '>' a ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression 1 -eq 1",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ 1 -eq 1 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression 1 -ne 2",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ 1 -ne 2 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression 2 -lt 10",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ 2 -lt 10 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression 10 -le 10",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ 10 -le 10 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression 3 -gt 2",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ 3 -gt 2 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression 3 -ge 4",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ 3 -ge 4 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression ' 1 ' -eq 1",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ ' 1 ' -eq 1 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -1 -lt 0",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -1 -lt 0 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression 0x10 -eq 16",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ 0x10 -eq 16 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression 010 -eq 8",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ 010 -eq 8 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression a -eq 1",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ a -eq 1 ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression 1 -eq",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ 1 -eq ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -v HOME",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -v HOME ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -v PWD",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -v PWD ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -R x",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -R x ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression ! -e f",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ ! -e f ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression ! ''",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ ! '' ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -e f -a -d d",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -e f -a -d d ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -e f -a -e nosuch",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -e f -a -e nosuch ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression -e nosuch -o -d d",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ -e nosuch -o -d d ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: expression \\( -e f \\)",
+      "script": "mkdir -p /tmp/t/d; cd /tmp/t; printf x >f; : >e; ln -s f l; ln -s nosuch dl; touch -d 2000-01-01 old; touch -d 2010-01-01 new; [ \\( -e f \\) ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: missing bracket",
+      "script": "[ x; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: extra bracket",
+      "script": "[ x ] ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt [: empty",
+      "script": "[ ]; echo \"status=$?\"",
+      "tags": [
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: no arguments",
+      "script": "test; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: variable set with array index",
+      "script": "a=(1 2); test -v 'a[1]'; echo \"status=$?\"; test -v 'a[5]'; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt test: nameref -R",
+      "script": "declare -n r=x; test -R r; echo \"status=$?\"",
+      "tags": [
+        "builtin.test"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt alias: define and list",
+      "script": "alias ll='ls -l' a1=b; alias",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt alias: print one",
+      "script": "alias x='echo hi'; alias x",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt alias: p option",
+      "script": "alias x=y; alias -p",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt alias: missing",
+      "script": "alias nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt alias: not expanded without expand_aliases",
+      "script": "alias hi='echo alias'; hi; echo \"status=$?\"",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt alias: expanded with expand_aliases",
+      "script": "shopt -s expand_aliases\nalias hi='echo alias'\nhi",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt alias: trailing space chains",
+      "script": "shopt -s expand_aliases\nalias a='echo ' b=bee\na b",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt alias: quoting in listing",
+      "script": "alias q=\"it's\"; alias q",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt alias: invalid name",
+      "script": "alias 'a b=c'; echo \"status=$?\"",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt alias: empty value",
+      "script": "alias e=; alias e",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt alias: invalid option",
+      "script": "alias -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unalias: remove",
+      "script": "alias x=y; unalias x; alias x; echo \"status=$?\"",
+      "tags": [
+        "builtin.unalias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unalias: all",
+      "script": "alias x=y z=w; unalias -a; alias; echo done",
+      "tags": [
+        "builtin.unalias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unalias: missing",
+      "script": "unalias nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.unalias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unalias: no argument",
+      "script": "unalias; echo \"status=$?\"",
+      "tags": [
+        "builtin.unalias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt break: nested levels",
+      "script": "for i in 1 2; do for j in a b; do echo $i$j; break 2; done; done",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt break: level larger than depth",
+      "script": "for i in 1 2; do break 5; done; echo after $i",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt break: zero",
+      "script": "for i in 1 2; do break 0; done; echo \"status=$?\"",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt break: negative",
+      "script": "for i in 1; do break -1; done; echo \"status=$?\"",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt break: non numeric",
+      "script": "for i in 1; do break x; done; echo \"status=$?\"",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt break: outside loop",
+      "script": "break; echo \"status=$?\"",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt break: in while condition",
+      "script": "i=0; while break; do echo body; done; echo out",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt break: in function called from loop",
+      "script": "f() { break; }; for i in 1 2; do f; echo $i; done; echo \"status=$?\"",
+      "tags": [
+        "builtin.break"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt continue: nested levels",
+      "script": "for i in 1 2; do for j in a b; do continue 2; echo no; done; echo no; done; echo $i$j",
+      "tags": [
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt continue: zero",
+      "script": "for i in 1; do continue 0; done; echo \"status=$?\"",
+      "tags": [
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt continue: outside loop",
+      "script": "continue; echo \"status=$?\"",
+      "tags": [
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt continue: in until",
+      "script": "i=0; until [ $i -ge 3 ]; do i=$((i+1)); [ $i = 2 ] && continue; echo $i; done",
+      "tags": [
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt continue: too many arguments",
+      "script": "for i in 1; do continue 1 2; done; echo \"status=$?\"",
+      "tags": [
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt builtin: bypasses function",
+      "script": "echo() { printf 'fn\\n'; }; builtin echo real",
+      "tags": [
+        "builtin.builtin"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt builtin: not a builtin",
+      "script": "builtin nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.builtin"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt builtin: no arguments",
+      "script": "builtin; echo \"status=$?\"",
+      "tags": [
+        "builtin.builtin"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt builtin: status of builtin",
+      "script": "builtin false; echo \"status=$?\"",
+      "tags": [
+        "builtin.builtin"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt builtin: keyword is not builtin",
+      "script": "builtin if; echo \"status=$?\"",
+      "tags": [
+        "builtin.builtin"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: bypasses function",
+      "script": "cd() { echo fn; }; command cd /tmp; pwd",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: v builtin",
+      "script": "command -v cd",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: v function",
+      "script": "f() { :; }; command -v f",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: v keyword",
+      "script": "command -v if",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: v alias",
+      "script": "alias a='echo x'; command -v a",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: v missing",
+      "script": "command -v nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: V builtin",
+      "script": "command -V cd",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: V function",
+      "script": "f() { :; }; command -V f",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: V keyword",
+      "script": "command -V while",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: V missing",
+      "script": "command -V nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: p with builtin",
+      "script": "command -p echo ok",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: missing command",
+      "script": "command nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: no arguments",
+      "script": "command; echo \"status=$?\"",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: v several",
+      "script": "f() { :; }; command -v f cd nosuch if; echo \"status=$?\"",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt command: invalid option",
+      "script": "command -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: builtin",
+      "script": "type cd",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: keyword",
+      "script": "type if",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: function",
+      "script": "f() { echo x; }; type f",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: alias",
+      "script": "alias a='echo x'; type a",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: missing",
+      "script": "type nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: t forms",
+      "script": "f() { :; }; alias a=b; type -t f a cd if; type -t nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: f skips functions",
+      "script": "cd() { :; }; type -f cd",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: p nothing for builtin",
+      "script": "type -p cd; echo \"status=$?\"",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: P missing",
+      "script": "type -P nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: several with missing",
+      "script": "type cd nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: invalid option",
+      "script": "type -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt type: function with body",
+      "script": "f() { if true; then echo a; fi; for x in 1; do :; done; }; type f",
+      "tags": [
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt hash: empty table",
+      "script": "hash; echo \"status=$?\"",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt hash: not found",
+      "script": "hash nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt hash: p and t",
+      "script": "hash -p /tmp/x myname; hash -t myname",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt hash: p and listing",
+      "script": "hash -p /tmp/x myname; hash",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt hash: l listing",
+      "script": "hash -p /tmp/x myname; hash -l",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt hash: d removes",
+      "script": "hash -p /tmp/x myname; hash -d myname; hash -t myname; echo \"status=$?\"",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt hash: r clears",
+      "script": "hash -p /tmp/x myname; hash -r; hash; echo \"status=$?\"",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt hash: t missing",
+      "script": "hash -t nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt hash: d missing",
+      "script": "hash -d nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt hash: hashall off",
+      "script": "set +h; hash nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt caller: outside function",
+      "script": "caller; echo \"status=$?\"",
+      "tags": [
+        "builtin.caller"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt caller: in function",
+      "script": "f() { caller; }; f",
+      "tags": [
+        "builtin.caller"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt caller: frame zero",
+      "script": "f() { caller 0; }; f",
+      "tags": [
+        "builtin.caller"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt caller: nested frames",
+      "script": "g() { caller 0; caller 1; caller 2; echo \"status=$?\"; }; f() { g; }; f",
+      "tags": [
+        "builtin.caller"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt caller: invalid frame",
+      "script": "f() { caller x; }; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.caller"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt caller: in sourced file",
+      "script": "printf 'caller\\n' >/tmp/s; . /tmp/s",
+      "tags": [
+        "builtin.caller"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: logical",
+      "script": "mkdir -p /tmp/c/real/sub; cd /tmp/c; ln -s real link; cd link && pwd && cd .. && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: physical",
+      "script": "mkdir -p /tmp/c/real/sub; cd /tmp/c; ln -s real link; cd -P link && pwd && cd .. && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: L option",
+      "script": "mkdir -p /tmp/c/real/sub; cd /tmp/c; ln -s real link; cd -L link/sub && pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: e option",
+      "script": "mkdir -p /tmp/c/real/sub; cd /tmp/c; ln -s real link; cd -Pe link; echo \"status=$?\"",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: dash",
+      "script": "mkdir -p /tmp/c/real/sub; cd /tmp/c; ln -s real link; cd real; cd -; cd -",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: dash without OLDPWD",
+      "script": "unset OLDPWD; cd -; echo \"status=$?\"",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: home not set",
+      "script": "unset HOME; cd; echo \"status=$?\"",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: home set",
+      "script": "HOME=/tmp; cd; pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: cdpath",
+      "script": "mkdir -p /tmp/c/real/sub; cd /tmp/c; ln -s real link; CDPATH=/tmp/c; cd /; cd real; pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: cdpath dot",
+      "script": "mkdir -p /tmp/c/real/sub; cd /tmp/c; ln -s real link; CDPATH=:/tmp/c; cd real; pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: missing",
+      "script": "cd /tmp/nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: not a directory",
+      "script": "printf x >/tmp/f; cd /tmp/f; echo \"status=$?\"",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: too many arguments",
+      "script": "cd /tmp /; echo \"status=$?\"",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: empty argument",
+      "script": "cd /tmp; cd ''; echo \"status=$?\"; pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: double dash",
+      "script": "cd -- /tmp; pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: invalid option",
+      "script": "cd -z /tmp; echo \"status=$?\"",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: cdable vars",
+      "script": "shopt -s cdable_vars; d=/tmp; cd d; pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: updates PWD and OLDPWD",
+      "script": "cd /tmp; cd /; echo \"$PWD $OLDPWD\"",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: dot dot from root",
+      "script": "cd /..; pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: trailing slashes",
+      "script": "cd /tmp///; pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: relative with dot dot",
+      "script": "mkdir -p /tmp/c/real/sub; cd /tmp/c; ln -s real link; cd real/sub/../sub/.; pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt cd: physical option set",
+      "script": "mkdir -p /tmp/c/real/sub; cd /tmp/c; ln -s real link; set -P; cd link; pwd",
+      "tags": [
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pwd: logical",
+      "script": "mkdir -p /tmp/c/real/sub; cd /tmp/c; ln -s real link; cd link; pwd -L",
+      "tags": [
+        "builtin.pwd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pwd: physical",
+      "script": "mkdir -p /tmp/c/real/sub; cd /tmp/c; ln -s real link; cd link; pwd -P",
+      "tags": [
+        "builtin.pwd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pwd: PWD tampered",
+      "script": "cd /tmp; PWD=/nope; pwd",
+      "tags": [
+        "builtin.pwd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pwd: invalid option",
+      "script": "pwd -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.pwd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pwd: extra argument",
+      "script": "pwd x; echo \"status=$?\"",
+      "tags": [
+        "builtin.pwd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pwd: directory removed",
+      "script": "mkdir /tmp/g; cd /tmp/g; rmdir /tmp/g; pwd; echo \"status=$?\"",
+      "tags": [
+        "builtin.pwd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pushd: push and list",
+      "script": "mkdir -p /tmp/a /tmp/b; cd /; pushd /tmp/a; pushd /tmp/b; dirs",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pushd: swap",
+      "script": "mkdir -p /tmp/a; cd /; pushd /tmp/a >/dev/null; pushd; pwd",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pushd: no other directory",
+      "script": "pushd; echo \"status=$?\"",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pushd: rotate plus",
+      "script": "mkdir -p /tmp/a /tmp/b; cd /; pushd /tmp/a >/dev/null; pushd /tmp/b >/dev/null; pushd +1; pwd",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pushd: rotate minus",
+      "script": "mkdir -p /tmp/a /tmp/b; cd /; pushd /tmp/a >/dev/null; pushd /tmp/b >/dev/null; pushd -0; pwd",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pushd: no change",
+      "script": "mkdir -p /tmp/a; cd /; pushd -n /tmp/a; pwd",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pushd: missing directory",
+      "script": "pushd /tmp/nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pushd: index out of range",
+      "script": "pushd +3; echo \"status=$?\"",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt pushd: invalid argument",
+      "script": "pushd -x; echo \"status=$?\"",
+      "tags": [
+        "builtin.pushd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt popd: pop",
+      "script": "mkdir -p /tmp/a; cd /; pushd /tmp/a >/dev/null; popd; pwd",
+      "tags": [
+        "builtin.popd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt popd: empty stack",
+      "script": "popd; echo \"status=$?\"",
+      "tags": [
+        "builtin.popd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt popd: plus index",
+      "script": "mkdir -p /tmp/a /tmp/b; cd /; pushd /tmp/a >/dev/null; pushd /tmp/b >/dev/null; popd +1; pwd",
+      "tags": [
+        "builtin.popd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt popd: minus index",
+      "script": "mkdir -p /tmp/a /tmp/b; cd /; pushd /tmp/a >/dev/null; pushd /tmp/b >/dev/null; popd -1; pwd",
+      "tags": [
+        "builtin.popd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt popd: no change",
+      "script": "mkdir -p /tmp/a; cd /; pushd /tmp/a >/dev/null; popd -n; pwd",
+      "tags": [
+        "builtin.popd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt popd: out of range",
+      "script": "mkdir -p /tmp/a; cd /; pushd /tmp/a >/dev/null; popd +5; echo \"status=$?\"",
+      "tags": [
+        "builtin.popd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirs: plain",
+      "script": "cd /tmp; dirs",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirs: clear",
+      "script": "mkdir -p /tmp/a; cd /; pushd /tmp/a >/dev/null; dirs -c; dirs",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirs: long",
+      "script": "HOME=/tmp; mkdir -p /tmp/a; cd /tmp/a; dirs; dirs -l",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirs: per line",
+      "script": "mkdir -p /tmp/a; cd /; pushd /tmp/a >/dev/null; dirs -p",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirs: verbose",
+      "script": "mkdir -p /tmp/a; cd /; pushd /tmp/a >/dev/null; dirs -v",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirs: plus index",
+      "script": "mkdir -p /tmp/a; cd /; pushd /tmp/a >/dev/null; dirs +1; dirs -0",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirs: out of range",
+      "script": "dirs +3; echo \"status=$?\"",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirs: invalid option",
+      "script": "dirs -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt dirs: DIRSTACK array",
+      "script": "mkdir -p /tmp/a; cd /; pushd /tmp/a >/dev/null; echo \"${DIRSTACK[@]}\"",
+      "tags": [
+        "builtin.dirs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: words with prefix",
+      "script": "compgen -W 'apple apricot banana' ap",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: words no match",
+      "script": "compgen -W 'a b' z; echo \"status=$?\"",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: functions",
+      "script": "fa() { :; }; fb() { :; }; compgen -A function f",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: variables",
+      "script": "zz1=1 zz2=2; compgen -v zz",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: aliases",
+      "script": "alias al1=x al2=y; compgen -a al",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: keywords",
+      "script": "compgen -k | sort",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: keywords prefix",
+      "script": "compgen -k th",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: files",
+      "script": "mkdir -p /tmp/cg/sub; cd /tmp/cg; touch f1 f2 .h; compgen -f | sort",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: files prefix",
+      "script": "mkdir -p /tmp/cg; cd /tmp/cg; touch f1 f2 g1; compgen -f f | sort",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: directories",
+      "script": "mkdir -p /tmp/cg/d1 /tmp/cg/d2; cd /tmp/cg; touch file; compgen -d | sort",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: directory action",
+      "script": "mkdir -p /tmp/cg/d1; cd /tmp/cg; compgen -A directory d",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: exported",
+      "script": "export ZEXP=1; compgen -e ZEX",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: export action",
+      "script": "export ZEXP=1; compgen -A export ZE",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: setopt action",
+      "script": "compgen -A setopt err",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: shopt action",
+      "script": "compgen -A shopt ext",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: arrayvar action",
+      "script": "arr1=(1); compgen -A arrayvar arr",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: prefix and suffix",
+      "script": "compgen -W 'a b' -P '<' -S '>'",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: filter pattern",
+      "script": "compgen -W 'ab ac bd' -X 'a*'",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: negated filter",
+      "script": "compgen -W 'ab ac bd' -X '!a*'",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: variable action",
+      "script": "zq=1; compgen -A variable zq",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: word list expansion",
+      "script": "x=1; compgen -W '$x \"a b\"'",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: jobs action",
+      "script": "sleep 1 & compgen -j; kill %1; wait; echo \"status=$?\"",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: invalid action",
+      "script": "compgen -A bogus; echo \"status=$?\"",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: invalid option",
+      "script": "compgen -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: function name",
+      "script": "g() { COMPREPLY=(one two); }; compgen -F g; echo \"status=$?\"",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: no options",
+      "script": "compgen x; echo \"status=$?\"",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compgen: variable output",
+      "script": "compgen -V arr -W 'a b c'; echo \"${arr[@]}\"",
+      "tags": [
+        "builtin.compgen"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt complete: list empty",
+      "script": "complete -p; echo \"status=$?\"",
+      "tags": [
+        "builtin.complete"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt complete: define and print",
+      "script": "complete -W 'a b' mycmd; complete -p mycmd",
+      "tags": [
+        "builtin.complete"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt complete: function and options",
+      "script": "complete -o nospace -F f mycmd; complete -p mycmd",
+      "tags": [
+        "builtin.complete"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt complete: remove",
+      "script": "complete -W x mycmd; complete -r mycmd; complete -p mycmd; echo \"status=$?\"",
+      "tags": [
+        "builtin.complete"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt complete: print missing",
+      "script": "complete -p nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.complete"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt complete: remove all",
+      "script": "complete -W x a; complete -W y b; complete -r; complete -p; echo done",
+      "tags": [
+        "builtin.complete"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt complete: default and empty",
+      "script": "complete -D -W d; complete -E -W e; complete -p",
+      "tags": [
+        "builtin.complete"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt complete: invalid option",
+      "script": "complete -z x; echo \"status=$?\"",
+      "tags": [
+        "builtin.complete"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compopt: outside completion",
+      "script": "compopt -o nospace; echo \"status=$?\"",
+      "tags": [
+        "builtin.compopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compopt: for named command",
+      "script": "complete -W x mycmd; compopt -o nospace mycmd; complete -p mycmd",
+      "tags": [
+        "builtin.compopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt compopt: invalid option name",
+      "script": "compopt -o bogus x; echo \"status=$?\"",
+      "tags": [
+        "builtin.compopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: print variable",
+      "script": "declare x=1; declare -p x",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: integer",
+      "script": "declare -i n; n='2+3'; echo $n; n=abc; echo $n",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: lowercase",
+      "script": "declare -l s=HeLLo; echo $s; s=ABC; echo $s",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: uppercase",
+      "script": "declare -u s=hi; echo $s",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: indexed array",
+      "script": "declare -a a=(x y); declare -p a",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: associative array",
+      "script": "declare -A m=([k]=v [a]=b); echo \"${m[k]} ${#m[@]}\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: readonly",
+      "script": "declare -r r=1; r=2; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: export",
+      "script": "declare -x E=1; sh -c 'echo $E'",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: remove export",
+      "script": "export E=1; declare +x E; sh -c 'echo \"[$E]\"'",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: nameref",
+      "script": "declare -n ref=target; target=5; echo $ref; ref=6; echo $target",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: functions names",
+      "script": "f() { :; }; g() { :; }; declare -F",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: function body",
+      "script": "f() { echo \"$1\"; }; declare -f f",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: function missing",
+      "script": "declare -f nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: invalid identifier",
+      "script": "declare 1x=2; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: print missing",
+      "script": "declare -p nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: print variable",
+      "script": "typeset x=1; typeset -p x",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: integer",
+      "script": "typeset -i n; n='2+3'; echo $n; n=abc; echo $n",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: lowercase",
+      "script": "typeset -l s=HeLLo; echo $s; s=ABC; echo $s",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: uppercase",
+      "script": "typeset -u s=hi; echo $s",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: indexed array",
+      "script": "typeset -a a=(x y); typeset -p a",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: associative array",
+      "script": "typeset -A m=([k]=v [a]=b); echo \"${m[k]} ${#m[@]}\"",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: readonly",
+      "script": "typeset -r r=1; r=2; echo \"status=$?\"",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: export",
+      "script": "typeset -x E=1; sh -c 'echo $E'",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: remove export",
+      "script": "export E=1; typeset +x E; sh -c 'echo \"[$E]\"'",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: nameref",
+      "script": "typeset -n ref=target; target=5; echo $ref; ref=6; echo $target",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: functions names",
+      "script": "f() { :; }; g() { :; }; typeset -F",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: function body",
+      "script": "f() { echo \"$1\"; }; typeset -f f",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: function missing",
+      "script": "typeset -f nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: invalid identifier",
+      "script": "typeset 1x=2; echo \"status=$?\"",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt typeset: print missing",
+      "script": "typeset -p nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.typeset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: print attributes",
+      "script": "declare -ix n=3; declare -p n",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: print several",
+      "script": "a=1 b=2; declare -p a b",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: print quoting",
+      "script": "v=\"it's \\\"q\\\" $\"; declare -p v",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: print newline value",
+      "script": "v=$'a\\nb'; declare -p v",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: print array sparse",
+      "script": "a[3]=x a[7]=y; declare -p a",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: print assoc",
+      "script": "declare -A m=([b]=2); declare -p m",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: print empty array",
+      "script": "declare -a e=(); declare -p e",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: print declared unset",
+      "script": "declare u; declare -p u",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: global from function",
+      "script": "f() { declare -g G=1; }; f; echo $G",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: local by default in function",
+      "script": "f() { declare L=1; }; f; echo \"[$L]\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: trace attribute",
+      "script": "f() { :; }; declare -t f; declare -F f; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: indexed to assoc error",
+      "script": "a=(1); declare -A a; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: assoc to indexed error",
+      "script": "declare -A m; declare -a m; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: readonly removal error",
+      "script": "declare -r r=1; declare +r r; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: integer arithmetic append",
+      "script": "declare -i n=5; n+=3; echo $n",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: lowercase then uppercase",
+      "script": "declare -l x; declare -u x; x=aB; echo $x",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: nameref to array element",
+      "script": "a=(1 2); declare -n r='a[1]'; echo $r",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: nameref loop",
+      "script": "declare -n a=b; declare -n b=a; echo $a; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: nameref invalid",
+      "script": "declare -n r=1bad; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: I option inherits",
+      "script": "x=out; f() { declare -I x; echo \"[$x]\"; }; f",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: p all attributes filtered",
+      "script": "declare -r RO=1; declare -p RO",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: array append",
+      "script": "declare -a a=(1); a+=(2 3); declare -p a",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: assoc append",
+      "script": "declare -A m=([a]=1); m+=([b]=2); echo ${m[b]}",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: compound assign with index",
+      "script": "declare -a a=([2]=c [0]=a); echo ${a[@]}",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: p function flag",
+      "script": "f() { :; }; declare -pf f",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: F with name",
+      "script": "f() { :; }; declare -F f nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: invalid option",
+      "script": "declare -z x; echo \"status=$?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: uppercase integer",
+      "script": "declare -iu x=3; echo $x",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: export function",
+      "script": "f() { echo exported; }; declare -fx f; bash -c f",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: plus i removes",
+      "script": "declare -i n; declare +i n; n=1+1; echo $n",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt declare: print arrays of attribute",
+      "script": "declare -a a=(1) b=(2); declare -pa | grep -E ' (a|b)='",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: outside function",
+      "script": "local x=1; echo \"status=$?\"",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: shadowing",
+      "script": "x=g; f() { local x=l; echo $x; }; f; echo $x",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: dynamic scope",
+      "script": "f() { local x=f; g; }; g() { echo $x; }; x=g; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: array",
+      "script": "f() { local -a a=(1 2); echo ${#a[@]}; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: assoc",
+      "script": "f() { local -A m=([k]=v); echo ${m[k]}; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: readonly",
+      "script": "f() { local -r x=1; x=2; }; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: integer",
+      "script": "f() { local -i n=2*3; echo $n; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: nameref",
+      "script": "f() { local -n r=$1; r=set; }; f out; echo $out",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: no value unset",
+      "script": "x=g; f() { local x; echo \"[${x-unset}]\"; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: list locals",
+      "script": "f() { local a=1 b; local; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: dash saves options",
+      "script": "f() { local -; set -e; }; f; echo $- | grep -c e",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: status of command substitution",
+      "script": "f() { local x=$(false); echo $?; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: invalid name",
+      "script": "f() { local 1x; }; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: unset local reveals global",
+      "script": "x=g; f() { local x=l; unset x; echo \"[${x-unset}]\"; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: localvar_inherit",
+      "script": "shopt -s localvar_inherit; x=g; f() { local x; echo \"[$x]\"; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt local: localvar_unset",
+      "script": "shopt -s localvar_unset; x=g; f() { local x=l; unset x; echo \"[${x-unset}]\"; }; f",
+      "tags": [
+        "builtin.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readonly: assign error",
+      "script": "readonly r=1; r=2; echo \"status=$?\"; echo $r",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readonly: print",
+      "script": "readonly r=1; readonly -p | grep ' r='",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readonly: array",
+      "script": "readonly -a a=(1 2); a[0]=3; echo \"status=$?\"",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readonly: assoc",
+      "script": "readonly -A m=([k]=v); echo ${m[k]}",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readonly: function",
+      "script": "f() { echo f; }; readonly -f f; f() { echo g; }; echo \"status=$?\"",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readonly: unset error",
+      "script": "readonly r=1; unset r; echo \"status=$?\"",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readonly: existing variable",
+      "script": "x=1; readonly x; x=2; echo \"status=$?\"",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readonly: invalid name",
+      "script": "readonly 1x=2; echo \"status=$?\"",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readonly: invalid option",
+      "script": "readonly -z x; echo \"status=$?\"",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readonly: local shadow error",
+      "script": "readonly r=1; f() { local r=2; }; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt export: name value",
+      "script": "export E=1; sh -c 'echo $E'",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt export: existing",
+      "script": "E=2; export E; sh -c 'echo $E'",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt export: remove",
+      "script": "export E=1; export -n E; sh -c 'echo \"[$E]\"'",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt export: function",
+      "script": "f() { echo fx; }; export -f f; sh -c f",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt export: function missing",
+      "script": "export -f nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt export: print filtered",
+      "script": "export ZZE=1; export -p | grep ZZE",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt export: invalid name",
+      "script": "export 1x=1; echo \"status=$?\"",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt export: invalid option",
+      "script": "export -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt export: array export",
+      "script": "export A=(1 2); sh -c 'echo \"[$A]\"'",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt export: unset but exported",
+      "script": "export U; sh -c 'echo \"[${U-unset}]\"'; export -p | grep -c ' U$'",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt export: allexport",
+      "script": "set -a; AX=1; sh -c 'echo $AX'",
+      "tags": [
+        "builtin.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: variable",
+      "script": "x=1; unset x; echo \"[${x-unset}]\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: function",
+      "script": "f() { :; }; unset -f f; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: v option",
+      "script": "x=1; unset -v x; echo \"[${x-unset}]\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: function fallback",
+      "script": "f() { echo f; }; unset f; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: array element",
+      "script": "a=(1 2 3); unset 'a[1]'; echo \"${a[@]} ${#a[@]}\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: whole array",
+      "script": "a=(1 2); unset a; echo \"${#a[@]}\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: assoc element",
+      "script": "declare -A m=([a]=1 [b]=2); unset 'm[a]'; echo \"${!m[@]}\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: nameref n",
+      "script": "declare -n r=x; x=1; unset -n r; echo \"$x [${r-unset}]\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: through nameref",
+      "script": "declare -n r=x; x=1; unset r; echo \"[${x-unset}]\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: missing ok",
+      "script": "unset nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: invalid name",
+      "script": "unset 1x; echo \"status=$?\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: both f and v",
+      "script": "unset -f -v x; echo \"status=$?\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: special variable",
+      "script": "unset PWD; echo \"[${PWD-unset}]\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unset: negative index",
+      "script": "a=(1 2 3); unset 'a[-1]'; echo \"${a[@]}\"",
+      "tags": [
+        "builtin.unset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -n x",
+      "script": "echo -n x; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e 'a\\tb'",
+      "script": "echo -e 'a\\tb'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -E 'a\\tb'",
+      "script": "echo -E 'a\\tb'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -ne 'x\\n'",
+      "script": "echo -ne 'x\\n'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -en 'y'",
+      "script": "echo -en 'y'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments 'a\\tb'",
+      "script": "echo 'a\\tb'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e 'a\\cb'",
+      "script": "echo -e 'a\\cb'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e '\\0101'",
+      "script": "echo -e '\\0101'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e '\\101'",
+      "script": "echo -e '\\101'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e '\\x41\\x4'",
+      "script": "echo -e '\\x41\\x4'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e '\\u00e9'",
+      "script": "echo -e '\\u00e9'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e '\\U0001F600'",
+      "script": "echo -e '\\U0001F600'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e '\\e[0m' | od -An -c",
+      "script": "echo -e '\\e[0m' | od -An -c; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e '\\\\'",
+      "script": "echo -e '\\\\'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e 'a\\'",
+      "script": "echo -e 'a\\'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments --",
+      "script": "echo --; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -",
+      "script": "echo -; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -x",
+      "script": "echo -x; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -nx",
+      "script": "echo -nx; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -n -e 'a\\n'",
+      "script": "echo -n -e 'a\\n'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e -n 'b'",
+      "script": "echo -e -n 'b'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments '-n'",
+      "script": "echo '-n'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments \"-n \"",
+      "script": "echo \"-n \"; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -eE 'a\\tb'",
+      "script": "echo -eE 'a\\tb'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -Ee 'a\\tb'",
+      "script": "echo -Ee 'a\\tb'; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments none",
+      "script": "echo ; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments a  b",
+      "script": "echo a  b; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: arguments -e '\\a\\b\\f\\v\\r' | od -An -c",
+      "script": "echo -e '\\a\\b\\f\\v\\r' | od -An -c; echo \"[status=$?]\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: xpg_echo",
+      "script": "shopt -s xpg_echo; echo 'a\\tb'; echo -e 'c\\td'",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt echo: write error",
+      "script": "echo x >&-; echo \"status=$?\"",
+      "tags": [
+        "builtin.echo"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt enable: known builtin",
+      "script": "enable echo; echo \"status=$?\"",
+      "tags": [
+        "builtin.enable"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt enable: unknown builtin",
+      "script": "enable nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.enable"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt enable: special builtins",
+      "script": "enable -s",
+      "tags": [
+        "builtin.enable"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt enable: disabled list empty",
+      "script": "enable -n; echo \"status=$?\"",
+      "tags": [
+        "builtin.enable"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt enable: print one",
+      "script": "enable -p cd 2>&1 | head -n 3; echo \"status=$?\"",
+      "tags": [
+        "builtin.enable"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt enable: invalid option",
+      "script": "enable -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.enable"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt enable: load from file",
+      "script": "enable -f /tmp/nosuch.so x; echo \"status=$?\"",
+      "tags": [
+        "builtin.enable"
+      ],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: enable -f is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: WASI has no dynamic loading, so enable -f (a builtin from a shared object) is refused with bash-tool's canonical refusal (README, Commands)"
+      }
+    },
+    {
+      "name": "opt enable: delete",
+      "script": "enable -d echo; echo \"status=$?\"",
+      "tags": [
+        "builtin.enable"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt eval: concatenates",
+      "script": "eval echo '$((1+2))' 'a'",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt eval: status",
+      "script": "eval false; echo \"status=$?\"",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt eval: empty",
+      "script": "eval; echo \"status=$?\"; eval ''; echo \"status=$?\"",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt eval: syntax error",
+      "script": "eval 'if'; echo \"status=$?\"; echo continued",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt eval: defines function",
+      "script": "eval 'f() { echo defined; }'; f",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt eval: nested quoting",
+      "script": "x='a b'; eval \"echo \\\"$x\\\"\"",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt eval: exit inside",
+      "script": "eval 'exit 3'; echo no",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt eval: double dash",
+      "script": "eval -- echo ok",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt eval: invalid option",
+      "script": "eval -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt eval: LINENO in eval",
+      "script": "eval 'echo $LINENO'",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: redirect then close",
+      "script": "exec 3>/tmp/x; echo a >&3; exec 3>&-; cat /tmp/x",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: read descriptor",
+      "script": "printf 'l1\\nl2\\n' >/tmp/x; exec 4</tmp/x; read -u 4 a; read -u 4 b; echo $b$a",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: move descriptor",
+      "script": "exec 5>/tmp/x; exec 6>&5-; echo moved >&6; cat /tmp/x; echo hi >&5; echo \"status=$?\"",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: missing command",
+      "script": "exec nosuch; echo after",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: command with dash-l argument",
+      "script": "printf 'a\\nb\\n' >/tmp/f; exec wc -l /tmp/f",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: command with dash-c argument",
+      "script": "printf 'a\\nb\\n' >/tmp/f; exec grep -c a /tmp/f",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: command with dash-a argument",
+      "script": "exec printf '%s\\n' -a",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: command after double dash",
+      "script": "exec -- echo dd",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: stdout redirect persists",
+      "script": "exec >/tmp/o; echo into; exec >&2; cat /tmp/o >&2",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: stderr to stdout",
+      "script": "exec 2>&1; ls /tmp/nosuch; echo \"status=$?\"",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: invalid option",
+      "script": "exec -z echo; echo \"status=$?\"",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: status of exec",
+      "script": "exec true; echo no",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: bad descriptor",
+      "script": "exec 3<&9; echo \"status=$?\"",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: execfail shopt",
+      "script": "shopt -s execfail; exec nosuch; echo survived $?",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exec: in subshell",
+      "script": "(exec echo sub); echo parent",
+      "tags": [
+        "builtin.exec"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: code",
+      "script": "exit 5",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: wraps 256",
+      "script": "exit 256",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: negative",
+      "script": "exit -1",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: non numeric",
+      "script": "exit abc; echo after",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: too many arguments",
+      "script": "exit 1 2; echo after $?",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: default last status",
+      "script": "false; exit",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: in subshell",
+      "script": "(exit 4); echo $?",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: in function",
+      "script": "f() { exit 6; }; f; echo no",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: with exit trap",
+      "script": "trap 'echo trap $?' EXIT; exit 3",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: large number",
+      "script": "exit 99999999999999999999",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: plus sign",
+      "script": "exit +7",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt exit: in command substitution",
+      "script": "x=$(exit 9); echo $?",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt return: outside function",
+      "script": "return 1; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt return: value",
+      "script": "f() { return 7; }; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt return: wraps",
+      "script": "f() { return 300; }; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt return: default last",
+      "script": "f() { false; return; }; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt return: non numeric",
+      "script": "f() { return x; }; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt return: negative",
+      "script": "f() { return -2; }; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt return: too many arguments",
+      "script": "f() { return 1 2; }; f; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt return: from sourced file",
+      "script": "printf 'return 4\\n' >/tmp/s; . /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt return: in subshell of function",
+      "script": "f() { (return 3); echo sub=$?; }; f",
+      "tags": [
+        "builtin.return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec ab: args -a -b x rest",
+      "script": "f() { while getopts 'ab:' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -a -b x rest",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec ab: args -ab x",
+      "script": "f() { while getopts 'ab:' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -ab x",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec ab: args -bfoo",
+      "script": "f() { while getopts 'ab:' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -bfoo",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec ab: args -z",
+      "script": "f() { while getopts 'ab:' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -z",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec ab: args -b",
+      "script": "f() { while getopts 'ab:' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -b",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec :ab: args -z",
+      "script": "f() { while getopts ':ab:' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -z",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec :ab: args -b",
+      "script": "f() { while getopts ':ab:' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -b",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec a args -a -- -a",
+      "script": "f() { while getopts 'a' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -a -- -a",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec a args rest -a",
+      "script": "f() { while getopts 'a' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f rest -a",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec a args -",
+      "script": "f() { while getopts 'a' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec ab args -ba",
+      "script": "f() { while getopts 'ab' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -ba",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec a: args -a ''",
+      "script": "f() { while getopts 'a:' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -a ''",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec a args -aa",
+      "script": "f() { while getopts 'a' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -aa",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec x:y: args -x 1 -y 2",
+      "script": "f() { while getopts 'x:y:' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -x 1 -y 2",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec a args --",
+      "script": "f() { while getopts 'a' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f --",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec a args -a --bogus",
+      "script": "f() { while getopts 'a' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -a --bogus",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec a args none",
+      "script": "f() { while getopts 'a' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f ",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: spec empty args -a",
+      "script": "f() { while getopts '' o; do echo \"$o[${OPTARG-}]\"; done; echo \"ind=$OPTIND\"; }; f -a",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: OPTERR zero",
+      "script": "f() { OPTERR=0; getopts a o; echo \"$o $?\"; }; f -z",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: explicit arguments",
+      "script": "getopts ab: o -b val; echo \"$o $OPTARG $OPTIND\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: OPTIND reset",
+      "script": "getopts a o -a; OPTIND=1; getopts a o -a; echo $o $OPTIND",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: missing arguments",
+      "script": "getopts; echo \"status=$?\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: invalid name",
+      "script": "getopts a 1x -a; echo \"status=$?\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: end status",
+      "script": "set --; getopts a o; echo \"status=$?\"; echo \"[$o]\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: digit option",
+      "script": "getopts 1 o -1; echo $o",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt getopts: colon in spec position",
+      "script": "getopts 'a:' o -a; echo \"$o [$OPTARG]\"; echo \"status=$?\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt jobs: none",
+      "script": "jobs; echo \"status=$?\"",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt jobs: running",
+      "script": "sleep 1 & jobs; kill %1; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt jobs: running only",
+      "script": "sleep 1 & jobs -r; kill %1; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt jobs: stopped only",
+      "script": "sleep 1 & jobs -s; echo st=$?; kill %1; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt jobs: pids count",
+      "script": "sleep 1 & jobs -p | wc -l; kill %1; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt jobs: spec missing",
+      "script": "jobs %3; echo \"status=$?\"",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt jobs: invalid option",
+      "script": "jobs -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt jobs: finished job",
+      "script": "true & wait; jobs; echo \"status=$?\"",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt jobs: two jobs marks",
+      "script": "sleep 1 & sleep 1 & jobs; kill %1 %2; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt jobs: x option",
+      "script": "sleep 1 & jobs -x echo %1 | grep -c '^[0-9]'; kill %1; wait",
+      "tags": [
+        "builtin.jobs"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: list number",
+      "script": "kill -l 9; kill -l 15",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: list name",
+      "script": "kill -l KILL; kill -l SIGTERM",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: list exit status",
+      "script": "kill -l 143",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: invalid signal",
+      "script": "kill -s BOGUS 1; echo \"status=$?\"",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: signal name option",
+      "script": "{ sleep 5 & kill -s TERM $!; wait $!; echo \"status=$?\"; } 2>&1 | sed 's/[0-9][0-9]*/N/g'",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: signal number option",
+      "script": "{ sleep 5 & kill -n 9 $!; wait $!; echo \"status=$?\"; } 2>/dev/null",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: dash name",
+      "script": "{ sleep 5 & kill -INT $!; wait $!; echo \"status=$?\"; } 2>&1 | sed 's/[0-9][0-9]*/N/g'",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: dash sig name",
+      "script": "{ sleep 5 & kill -SIGHUP $!; wait $!; echo \"status=$?\"; } 2>/dev/null",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: job spec",
+      "script": "sleep 5 & kill %1; wait %1; echo \"status=$?\"",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: zero signal",
+      "script": "sleep 1 & kill -0 $!; echo \"status=$?\"; kill %1; wait",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: no such job",
+      "script": "kill %4; echo \"status=$?\"",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: no arguments",
+      "script": "kill; echo \"status=$?\"",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: invalid pid",
+      "script": "kill abc; echo \"status=$?\"",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: L option",
+      "script": "kill -L 2 | head -n 1",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt kill: list bad number",
+      "script": "kill -l 200; echo \"status=$?\"",
+      "tags": [
+        "builtin.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wait: no jobs",
+      "script": "wait; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wait: status of job",
+      "script": "(exit 4) & wait $!; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wait: job spec",
+      "script": "(exit 5) & wait %1; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wait: n any",
+      "script": "(exit 6) & wait -n; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wait: n no jobs",
+      "script": "wait -n; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wait: not a child",
+      "script": "wait 99999; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wait: no such job",
+      "script": "wait %3; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wait: invalid id",
+      "script": "wait abc; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wait: several",
+      "script": "(exit 1) & a=$!; (exit 2) & b=$!; wait $a $b; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wait: already waited",
+      "script": "(exit 3) & p=$!; wait $p; wait $p; echo \"status=$?\"",
+      "tags": [
+        "builtin.wait"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt disown: no jobs",
+      "script": "disown; echo \"status=$?\"",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt disown: job",
+      "script": "sleep 0.05 & disown %1; jobs; echo \"status=$?\"; sleep 0.3",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt disown: all",
+      "script": "sleep 0.05 & sleep 0.05 & disown -a; jobs; echo end; sleep 0.3",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt disown: h keeps listing",
+      "script": "sleep 1 & disown -h %1; jobs | wc -l; kill %1; wait",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt disown: running only",
+      "script": "sleep 0.05 & disown -r; jobs | wc -l; sleep 0.3",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt disown: no such job",
+      "script": "disown %5; echo \"status=$?\"",
+      "tags": [
+        "builtin.disown"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: assign",
+      "script": "let x=2*3; echo $x",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: several",
+      "script": "let a=1 b=a+1; echo $a $b",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: zero status",
+      "script": "let 0; echo \"status=$?\"",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: nonzero status",
+      "script": "let 5; echo \"status=$?\"",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: spaces quoted",
+      "script": "let 'y = 4 + 5'; echo $y",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: no arguments",
+      "script": "let; echo \"status=$?\"",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: syntax error",
+      "script": "let '1 +'; echo \"status=$?\"",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: division by zero",
+      "script": "let 1/0; echo \"status=$?\"",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: increment",
+      "script": "i=1; let i++ ++i; echo $i",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: base notation",
+      "script": "let 'x = 16#ff + 2#10'; echo $x",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: comma operator",
+      "script": "let 'x = (1, 2)'; echo $x",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: ternary",
+      "script": "let 'x = 0 ? 1 : 2'; echo $x",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: invalid base",
+      "script": "let 'x = 99#1'; echo \"status=$?\"",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt let: exponent negative",
+      "script": "let 'x = 2 ** -1'; echo \"status=$?\"",
+      "tags": [
+        "builtin.let"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt logout: not login shell",
+      "script": "logout; echo \"status=$?\"",
+      "tags": [
+        "builtin.logout"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt times: status",
+      "script": "times >/dev/null; echo \"status=$?\"",
+      "tags": [
+        "builtin.times"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt times: line count",
+      "script": "times | wc -l",
+      "tags": [
+        "builtin.times"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt times: extra argument",
+      "script": "times x >/dev/null; echo \"status=$?\"",
+      "tags": [
+        "builtin.times"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: lines",
+      "script": "mapfile a <<< $'x\\ny'; declare -p a",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: strip",
+      "script": "mapfile -t a <<< $'x\\ny'; declare -p a",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: count",
+      "script": "printf '1\\n2\\n3\\n' | { mapfile -n 2 a; declare -p a; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: origin",
+      "script": "a=(k k k); mapfile -O 1 -t a <<< $'x\\ny'; declare -p a",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: skip",
+      "script": "mapfile -s 1 -t a <<< $'x\\ny\\nz'; declare -p a",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: delimiter",
+      "script": "printf 'a,b,c' | { mapfile -d , -t a; declare -p a; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: nul delimiter",
+      "script": "printf 'a\\0b\\0' | { mapfile -d '' a; declare -p a; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: descriptor",
+      "script": "printf 'q\\nr\\n' >/tmp/m; mapfile -t -u 3 a 3</tmp/m; declare -p a",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: default MAPFILE",
+      "script": "mapfile <<< $'m\\n'; declare -p MAPFILE",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: callback",
+      "script": "printf 'a\\nb\\nc\\n' | { mapfile -t -C 'echo cb' -c 2 a; declare -p a; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: invalid array",
+      "script": "mapfile 1x <<< a; echo \"status=$?\"",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: bad descriptor",
+      "script": "mapfile -u 9 a; echo \"status=$?\"",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: invalid count",
+      "script": "mapfile -n x a <<< a; echo \"status=$?\"",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: no trailing newline",
+      "script": "printf 'a\\nb' | { mapfile a; declare -p a; }",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: empty input",
+      "script": "mapfile a </dev/null; declare -p a",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt mapfile: invalid quantum",
+      "script": "mapfile -c 0 -C echo a <<< a; echo \"status=$?\"",
+      "tags": [
+        "builtin.mapfile"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: lines",
+      "script": "readarray a <<< $'x\\ny'; declare -p a",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: strip",
+      "script": "readarray -t a <<< $'x\\ny'; declare -p a",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: count",
+      "script": "printf '1\\n2\\n3\\n' | { readarray -n 2 a; declare -p a; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: origin",
+      "script": "a=(k k k); readarray -O 1 -t a <<< $'x\\ny'; declare -p a",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: skip",
+      "script": "readarray -s 1 -t a <<< $'x\\ny\\nz'; declare -p a",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: delimiter",
+      "script": "printf 'a,b,c' | { readarray -d , -t a; declare -p a; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: nul delimiter",
+      "script": "printf 'a\\0b\\0' | { readarray -d '' a; declare -p a; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: descriptor",
+      "script": "printf 'q\\nr\\n' >/tmp/m; readarray -t -u 3 a 3</tmp/m; declare -p a",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: default MAPFILE",
+      "script": "readarray <<< $'m\\n'; declare -p MAPFILE",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: callback",
+      "script": "printf 'a\\nb\\nc\\n' | { readarray -t -C 'echo cb' -c 2 a; declare -p a; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: invalid array",
+      "script": "readarray 1x <<< a; echo \"status=$?\"",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: bad descriptor",
+      "script": "readarray -u 9 a; echo \"status=$?\"",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: invalid count",
+      "script": "readarray -n x a <<< a; echo \"status=$?\"",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: no trailing newline",
+      "script": "printf 'a\\nb' | { readarray a; declare -p a; }",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: empty input",
+      "script": "readarray a </dev/null; declare -p a",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt readarray: invalid quantum",
+      "script": "readarray -c 0 -C echo a <<< a; echo \"status=$?\"",
+      "tags": [
+        "builtin.readarray"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: default REPLY",
+      "script": "read <<< '  a b  '; echo \"[$REPLY]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: fields",
+      "script": "read a b <<< 'x y z'; echo \"[$a][$b]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: raw",
+      "script": "read -r a <<< 'a\\b'; echo \"$a\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: backslash processing",
+      "script": "read a <<< 'a\\b'; echo \"$a\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: continuation",
+      "script": "printf 'a\\\\\\nb\\n' | { read a; echo \"$a\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: array",
+      "script": "read -a arr <<< 'p q r'; declare -p arr",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: delimiter",
+      "script": "read -d , a <<< 'x,y'; echo \"$a\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: empty delimiter",
+      "script": "printf 'a\\nb\\0c' | { read -d '' a; echo \"$a\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: n chars",
+      "script": "read -n 2 a <<< 'abcd'; echo \"$a\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: N chars",
+      "script": "read -N 3 a <<< $'a\\nbc'; echo \"$a\" | od -An -c",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: n with fields",
+      "script": "read -n 3 a b <<< 'x yz'; echo \"[$a][$b]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: silent",
+      "script": "read -s a <<< 'hid'; echo \"$a\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: prompt not shown without tty",
+      "script": "read -p 'prompt> ' a <<< 'v'; echo \"$a\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: timeout zero",
+      "script": "read -t 0 <<< 'x'; echo \"status=$?\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: timeout with input",
+      "script": "read -t 1 a <<< 'x'; echo \"$a\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: descriptor",
+      "script": "exec 3<<<'fd3'; read -u 3 a; echo $a",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: eof status",
+      "script": "read a </dev/null; echo \"status=$?\"; echo \"[$a]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: partial line status",
+      "script": "printf 'nonl' | { read a; echo \"$? $a\"; }",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: custom IFS",
+      "script": "IFS=: read a b <<< 'x:y:z'; echo \"[$a][$b]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: IFS whitespace trim",
+      "script": "IFS=' ' read a <<< '  pad  '; echo \"[$a]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: empty IFS",
+      "script": "IFS= read a <<< '  pad  '; echo \"[$a]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: invalid name",
+      "script": "read 1x <<< a; echo \"status=$?\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: invalid option",
+      "script": "read -z a <<< a; echo \"status=$?\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: bad descriptor",
+      "script": "read -u 9 a; echo \"status=$?\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: invalid timeout",
+      "script": "read -t x a <<< a; echo \"status=$?\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: invalid count",
+      "script": "read -n x a <<< a; echo \"status=$?\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: i without e",
+      "script": "read -i def a <<< 'v'; echo \"$a\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: e without tty",
+      "script": "read -e a <<< 'v'; echo \"$a\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: array with IFS",
+      "script": "IFS=, read -ra arr <<< 'a,,b'; declare -p arr",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: fewer fields",
+      "script": "read a b c <<< 'one'; echo \"[$a][$b][$c]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: in while loop",
+      "script": "printf '1\\n2\\n' | while read l; do echo \"<$l>\"; done",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: n zero",
+      "script": "read -n 0 a <<< 'x'; echo \"status=$?\"; echo \"[$a]\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: delimiter multi-char uses first",
+      "script": "read -d ab a <<< 'xaby'; echo \"$a\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt read: N ignores delimiter",
+      "script": "read -N 4 -d b a <<< 'abcdef'; echo \"$a\"",
+      "tags": [
+        "builtin.read"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: positional",
+      "script": "set -- a 'b c'; echo \"$# $2\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: clear positional",
+      "script": "set -- a; set --; echo $#",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: dash turns off x and v",
+      "script": "set -xv; set -; echo \"$-\" | tr -d hBc",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: dash dash with option-like",
+      "script": "set -- -x; echo $1",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: o listing",
+      "script": "set -o",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: plus o listing",
+      "script": "set +o",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: o one option",
+      "script": "set -o errexit; set -o | grep errexit",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: invalid option",
+      "script": "set -Q; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: invalid o name",
+      "script": "set -o bogus; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: errexit",
+      "script": "set -e; false; echo no",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: nounset",
+      "script": "set -u; echo $nope; echo no",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: xtrace",
+      "script": "set -x; echo hi; set +x",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: verbose",
+      "script": "set -v; echo hi",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: noglob",
+      "script": "cd /tmp; touch g1; set -f; echo g*",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: noclobber",
+      "script": "echo a >/tmp/n; set -C; echo b >/tmp/n; echo \"status=$?\"; cat /tmp/n",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: noclobber override",
+      "script": "echo a >/tmp/n; set -C; echo b >|/tmp/n; cat /tmp/n",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: allexport",
+      "script": "set -a; V=1; sh -c 'echo $V'",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: noexec",
+      "script": "set -n; echo not run",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: physical",
+      "script": "mkdir -p /tmp/r; cd /tmp; ln -s r l2; set -P; cd l2; pwd",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: keyword",
+      "script": "set -k; f() { echo $A; }; f A=1",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: hashall off",
+      "script": "set +h; echo $- | grep -c h",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: braceexpand off",
+      "script": "set +B; echo {a,b}",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: errtrace",
+      "script": "set -E; trap 'echo err' ERR; f() { false; }; f",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: functrace",
+      "script": "set -T; trap 'echo dbg' DEBUG; f() { :; }; f 2>/dev/null | head -n 3",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: pipefail",
+      "script": "set -o pipefail; false | true; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: posix",
+      "script": "set -o posix; shopt -qo posix && echo on",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: monitor",
+      "script": "set -m; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: notify",
+      "script": "set -b; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: onecmd",
+      "script": "set -t; echo one; echo two",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: histexpand",
+      "script": "set -H; echo 'a!b'",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: emacs option",
+      "script": "set -o emacs; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: vi option",
+      "script": "set -o vi; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: ignoreeof",
+      "script": "set -o ignoreeof; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: interactive-comments off",
+      "script": "set +o interactive-comments; echo a #b",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: privileged",
+      "script": "set -p; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: nolog",
+      "script": "set -o nolog; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: history option",
+      "script": "set -o history; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: dollar dash",
+      "script": "echo $- | tr -d c",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: combined",
+      "script": "set -eu -o pipefail; echo $- | tr -d hBc",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: plus combined",
+      "script": "set -eu; set +eu; echo $- | tr -d hBc",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: set x with PS4",
+      "script": "PS4='+ '; set -x; : a",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: set x nested level",
+      "script": "set -x; echo $(echo in)",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: positional over nine",
+      "script": "set -- 1 2 3 4 5 6 7 8 9 ten; echo ${10} $10",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: dash first word",
+      "script": "set - a b; echo $# $1",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: o without argument",
+      "script": "set -o >/dev/null; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt set: plus o invalid",
+      "script": "set +o bogus; echo \"status=$?\"",
+      "tags": [
+        "builtin.set"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shift: default",
+      "script": "set -- a b c; shift; echo \"$*\"",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shift: count",
+      "script": "set -- a b c; shift 2; echo \"$*\"",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shift: too many",
+      "script": "set -- a; shift 2; echo \"status=$?\"; echo $#",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shift: negative",
+      "script": "set -- a; shift -1; echo \"status=$?\"",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shift: non numeric",
+      "script": "set -- a; shift x; echo \"status=$?\"",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shift: zero",
+      "script": "set -- a b; shift 0; echo $#",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shift: shift_verbose",
+      "script": "shopt -s shift_verbose; set --; shift; echo \"status=$?\"",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shift: in function",
+      "script": "f() { shift; echo \"$@\"; }; f a b c",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shift: too many arguments",
+      "script": "set -- a b; shift 1 1; echo \"status=$?\"",
+      "tags": [
+        "builtin.shift"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: print one",
+      "script": "shopt extglob",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: p one",
+      "script": "shopt -p nullglob",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: set and query",
+      "script": "shopt -s nullglob; shopt -q nullglob; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: query unset",
+      "script": "shopt -q failglob; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: query several",
+      "script": "shopt -s dotglob; shopt -q dotglob nullglob; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: invalid name",
+      "script": "shopt -s bogus; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: set and unset together",
+      "script": "shopt -s -u extglob; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: o options",
+      "script": "shopt -o errexit; shopt -so errexit; shopt -po errexit; set +e",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: list enabled",
+      "script": "shopt -s | wc -l",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: list all count",
+      "script": "shopt | wc -l",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: p all count",
+      "script": "shopt -p | wc -l",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: list all",
+      "script": "shopt",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: invalid option",
+      "script": "shopt -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: read only login_shell",
+      "script": "shopt -s login_shell; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: restricted_shell",
+      "script": "shopt restricted_shell",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: nullglob",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s nullglob; echo x*; echo end",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: failglob",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s failglob; echo x*; echo after",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: dotglob",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s dotglob; echo *",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: nocaseglob",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s nocaseglob; echo b*",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: globstar",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s globstar; echo **/*.txt",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: globstar off",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; echo **/*.txt",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: extglob",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s extglob\necho !(a*)",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: extglob at",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s extglob\necho @(a|B).txt",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: globskipdots",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s dotglob; echo .*",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: globskipdots off",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -u globskipdots; echo .*",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: globasciiranges",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s globasciiranges; echo [a-z]*",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: nocasematch",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s nocasematch; [[ ABC == abc ]] && echo m; case X in x) echo c;; esac",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: lastpipe",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s lastpipe; set +m; echo v | read x; echo \"[$x]\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: expand_aliases off",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -u expand_aliases; alias q='echo a'; q; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: xpg_echo",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s xpg_echo; echo 'a\\nb'",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: sourcepath",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt sourcepath",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: cdable_vars",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s cdable_vars; v=/tmp; cd v; pwd",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: inherit_errexit",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s inherit_errexit; set -e; x=$(false; echo no); echo \"[$x]\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: inherit_errexit off",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; set -e; x=$(false; echo yes); echo \"[$x]\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: patsub_replacement",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; x=abc; echo \"${x/b/[&]}\"; shopt -u patsub_replacement; echo \"${x/b/[&]}\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: extquote",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; x=a; echo \"${x:-$'t\\tb'}\" | od -An -c",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: assoc_expand_once",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s assoc_expand_once; declare -A m; k='a]'; m[$k]=1; echo ${!m[@]}",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: checkjobs",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s checkjobs; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: huponexit",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s huponexit; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: execfail",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt execfail",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: gnu_errfmt",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s gnu_errfmt; cd /nosuch",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: varredir_close",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s varredir_close; { echo x >&$fd; } {fd}>/tmp/v; cat /tmp/v",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: nullglob with array",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s nullglob; a=(zz*); echo ${#a[@]}",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: failglob in case",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s failglob; case x in zz*) ;; esac; echo ok",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: dotglob with globstar",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s dotglob globstar; echo ** | tr ' ' '\\n' | head -n 4",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: noexpand_translation",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s noexpand_translation; echo $\"hi\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: compat option",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s compat42; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: array_expand_once",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s array_expand_once; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: bash_source_fullpath",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt bash_source_fullpath; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: localvar_inherit off",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt localvar_inherit",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: progcomp",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt progcomp",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: hostcomplete",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt hostcomplete",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: interactive_comments",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt interactive_comments",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: mailwarn",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt mailwarn",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: nocaseglob ranges",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s nocaseglob; echo [A-B]*",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: dirspell",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s dirspell; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shopt: cdspell",
+      "script": "mkdir -p /tmp/gl/sub/deep; cd /tmp/gl; touch a.txt B.txt .hidden sub/c.txt sub/deep/d.txt; shopt -s cdspell; cd /tm; echo \"status=$?\"",
+      "tags": [
+        "builtin.shopt"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: print",
+      "script": "trap 'echo x' EXIT; trap -p; trap - EXIT",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: print one",
+      "script": "trap 'echo t' TERM; trap -p TERM",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: print unset",
+      "script": "trap -p INT; echo \"status=$?\"",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: ignore",
+      "script": "trap '' HUP; trap -p HUP",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: reset",
+      "script": "trap 'echo t' INT; trap - INT; trap -p INT; echo end",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: reset with signal only",
+      "script": "trap 'echo t' INT; trap INT; trap -p INT; echo end",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: invalid signal",
+      "script": "trap 'echo' BOGUS; echo \"status=$?\"",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: signal number",
+      "script": "trap 'echo n' 15; trap -p TERM",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: sig prefix",
+      "script": "trap 'echo s' SIGINT; trap -p INT",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: lowercase name",
+      "script": "trap 'echo s' int; trap -p INT; echo \"status=$?\"",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: several signals",
+      "script": "trap 'echo m' INT TERM; trap -p INT TERM",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: exit number zero",
+      "script": "trap 'echo zero' 0; echo body",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: no arguments",
+      "script": "trap; echo \"status=$?\"",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: invalid option",
+      "script": "trap -z; echo \"status=$?\"",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: list in subshell",
+      "script": "trap 'echo x' TERM; (trap -p TERM); echo end",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: err",
+      "script": "trap 'echo err $?' ERR; false; true",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: debug",
+      "script": "trap 'echo dbg' DEBUG; :; trap - DEBUG",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: return",
+      "script": "f() { :; }; trap 'echo ret' RETURN; f; trap - RETURN",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: kill self term",
+      "script": "trap 'echo caught' TERM; kill -TERM $$; echo after",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: P option",
+      "script": "trap 'echo x' INT; trap -P INT; echo \"status=$?\"",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: dash dash",
+      "script": "trap -- 'echo dd' EXIT",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt trap: numeric exit listing",
+      "script": "trap 'echo x' 0; trap -p EXIT",
+      "tags": [
+        "builtin.trap"
+      ],
+      "options": {}
+    }
+  ]
+}

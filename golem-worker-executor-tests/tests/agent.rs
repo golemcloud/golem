@@ -1032,16 +1032,25 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
             })
             .await;
         let key = IdempotencyKey::fresh();
+        let invocation_id = external_invocation_id(&executor, &worker, &key, method).await?;
         executor
             .invoke_agent_with_key(&component, &agent, &key, method, data_value!())
             .await?;
         gate.entered().await;
-        let invocation_id = external_invocation_id(&executor, &worker, &key, method).await?;
-        let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
-        let anchor = entries.iter().find(|entry| matches!(
-            &entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
-                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == invocation_id)
-        )).expect("the gated invocation start must be committed").oplog_index;
+        // The gate holds the status actor's append receipt, so inspect storage directly.
+        let entries = executor.stored_oplog(&worker.agent_id).await;
+        let anchor = OplogIndex::from_u64(
+            entries
+                .iter()
+                .position(|entry| {
+                    matches!(
+                        entry, OplogEntry::AgentInvocationStarted { invocation_id: started, .. }
+                            if *started == invocation_id
+                    )
+                })
+                .expect("the gated invocation start must be committed") as u64
+                + 1,
+        );
         // Deliberately forge an incompatible completed outcome. Reconstruction must not
         // accept a successful body or an actual Wasm trap as the recorded method error.
         let terminal = OplogEntry::agent_invocation_failed(
@@ -1100,6 +1109,65 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
             "recorded outcome changed: {lookup:#}"
         );
     }
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+async fn lookup_of_a_completed_method_returns_its_value_and_revision(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{
+        AgentInvocationMode, InvocationFreshnessDisposition, InvocationStatus,
+        invocation_session_result,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let agent = agent_key!("RpcBlockingCounter", "lookup-value");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "inc_by", data_value!(5u64))
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let awaited = executor
+        .invoke_and_await_agent_with_key(&component, &agent, &key, "get_value", data_value!())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "inc_by", data_value!(2u64))
+        .await?;
+    let invocation_id = external_invocation_id(&executor, &worker, &key, "get_value").await?;
+
+    let lookup = executor
+        .invoke_agent_session(InvocationStart {
+            target: Some(id_target(&worker)),
+            mode: AgentInvocationMode::Lookup as i32,
+            idempotency_key: Some(IdempotencyKey::new(invocation_id.to_string()).into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
+            caller: Some(callers::anonymous().into()),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(lookup.status, Some(InvocationStatus::Complete as i32));
+    assert_eq!(lookup.component_revision, Some(component.revision.get()));
+    let Some(invocation_session_result::Result::MethodResult(value)) = lookup.result else {
+        anyhow::bail!("expected the method result, got {:?}", lookup.result);
+    };
+    assert_eq!(
+        Some(&SchemaValue::try_from(value).map_err(anyhow::Error::msg)?),
+        awaited.value()
+    );
+    assert_eq!(awaited.into_typed::<u64>()?, 5);
     Ok(())
 }
 
@@ -3556,6 +3624,7 @@ pub(crate) async fn create_unkeyed_agent_at(
             environment_id: Some(component.environment_id.into()),
             ignore_already_existing: true,
             auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })
         .await?

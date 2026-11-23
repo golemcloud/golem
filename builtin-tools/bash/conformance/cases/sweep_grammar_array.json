@@ -1,0 +1,2830 @@
+{
+  "tier": "sweep",
+  "description": "Grammar sweep: indexed and associative arrays and namerefs, generated from fixed tables of\nassignments and accesses (see sweep_grammar_param.py for the scheme).",
+  "cases": [
+    {
+      "name": "gram array indexed list: count",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x 'y z' ''); p \"${#a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed list: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x 'y z' ''); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed list: star quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x 'y z' ''); p \"${a[*]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed list: slice",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x 'y z' ''); p \"${a[@]:1:2}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed list: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x 'y z' ''); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed explicit indices: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=([3]=c [1]=a); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed explicit indices: values unquoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=([3]=c [1]=a); p ${a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed explicit indices: last element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=([3]=c [1]=a); p \"${a[-1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed explicit indices: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=([3]=c [1]=a); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed explicit indices: length of first",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=([3]=c [1]=a); p \"${#a}\" \"${#a[0]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed mixed indices: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x [5]=y z); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed mixed indices: element one",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x [5]=y z); p \"${a[1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed mixed indices: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x [5]=y z); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed mixed indices: suffix literal",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x [5]=y z); p \"$a[1]\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed append list: keys",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a+=(y 'z w'); p \"${!a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed append list: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a+=(y 'z w'); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed append list: bare name",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a+=(y 'z w'); p \"$a\" \"${a}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed append list: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a+=(y 'z w'); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed append to element: count",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); a[1]+=suffix; p \"${#a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed append to element: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); a[1]+=suffix; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed append to element: star quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); a[1]+=suffix; p \"${a[*]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed append to element: slice",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); a[1]+=suffix; p \"${a[@]:1:2}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed append to element: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); a[1]+=suffix; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed element beyond end: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a[10]=far; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed element beyond end: values unquoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a[10]=far; p ${a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed element beyond end: last element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a[10]=far; p \"${a[-1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed element beyond end: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a[10]=far; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed element beyond end: length of first",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a[10]=far; p \"${#a}\" \"${#a[0]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed negative index assignment: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y z); a[-1]=last; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed negative index assignment: element one",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y z); a[-1]=last; p \"${a[1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed negative index assignment: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y z); a[-1]=last; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed negative index assignment: suffix literal",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y z); a[-1]=last; p \"$a[1]\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed arithmetic index: keys",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; i=1; a=(x y z); a[i+1]=two; p \"${!a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed arithmetic index: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; i=1; a=(x y z); a[i+1]=two; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed arithmetic index: bare name",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; i=1; a=(x y z); a[i+1]=two; p \"$a\" \"${a}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed arithmetic index: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; i=1; a=(x y z); a[i+1]=two; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed octal index: count",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[010]=eight; p \"${#a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed octal index: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[010]=eight; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed octal index: star quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[010]=eight; p \"${a[*]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed octal index: slice",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[010]=eight; p \"${a[@]:1:2}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed octal index: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[010]=eight; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed hex index: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[0x10]=sixteen; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed hex index: values unquoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[0x10]=sixteen; p ${a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed hex index: last element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[0x10]=sixteen; p \"${a[-1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed hex index: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[0x10]=sixteen; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed hex index: length of first",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[0x10]=sixteen; p \"${#a}\" \"${#a[0]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed quoted arithmetic index: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a['1+1']=q; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed quoted arithmetic index: element one",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a['1+1']=q; p \"${a[1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed quoted arithmetic index: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a['1+1']=q; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed quoted arithmetic index: suffix literal",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a['1+1']=q; p \"$a[1]\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed name index: keys",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; k=2; a[k]=byname; p \"${!a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed name index: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; k=2; a[k]=byname; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed name index: bare name",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; k=2; a[k]=byname; p \"$a\" \"${a}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed name index: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; k=2; a[k]=byname; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset name index: count",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; unset k; a[k]=zero; p \"${#a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset name index: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; unset k; a[k]=zero; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset name index: star quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; unset k; a[k]=zero; p \"${a[*]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset name index: slice",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; unset k; a[k]=zero; p \"${a[@]:1:2}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset name index: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; unset k; a[k]=zero; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed split assignment: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='p  q r'; a=($v); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed split assignment: values unquoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='p  q r'; a=($v); p ${a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed split assignment: last element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='p  q r'; a=($v); p \"${a[-1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed split assignment: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='p  q r'; a=($v); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed split assignment: length of first",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; v='p  q r'; a=($v); p \"${#a}\" \"${#a[0]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed glob assignment: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; cd /tmp; : > f1; : > f2; a=(f*); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed glob assignment: element one",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; cd /tmp; : > f1; : > f2; a=(f*); p \"${a[1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed glob assignment: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; cd /tmp; : > f1; : > f2; a=(f*); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed glob assignment: suffix literal",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; cd /tmp; : > f1; : > f2; a=(f*); p \"$a[1]\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed brace assignment: keys",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=({1..3} {x,y}); p \"${!a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed brace assignment: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=({1..3} {x,y}); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed brace assignment: bare name",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=({1..3} {x,y}); p \"$a\" \"${a}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed brace assignment: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=({1..3} {x,y}); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed command substitution assignment: count",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=($(printf 'l1\\nl 2\\n')); p \"${#a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed command substitution assignment: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=($(printf 'l1\\nl 2\\n')); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed command substitution assignment: star quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=($(printf 'l1\\nl 2\\n')); p \"${a[*]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed command substitution assignment: slice",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=($(printf 'l1\\nl 2\\n')); p \"${a[@]:1:2}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed command substitution assignment: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=($(printf 'l1\\nl 2\\n')); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed empty: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed empty: values unquoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(); p ${a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed empty: last element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(); p \"${a[-1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed empty: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed empty: length of first",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(); p \"${#a}\" \"${#a[0]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed scalar becomes array: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=scalar; a[1]=one; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed scalar becomes array: element one",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=scalar; a[1]=one; p \"${a[1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed scalar becomes array: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=scalar; a[1]=one; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed scalar becomes array: suffix literal",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=scalar; a[1]=one; p \"$a[1]\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed declare -a: keys",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; declare -a a=(d1 d2); p \"${!a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed declare -a: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; declare -a a=(d1 d2); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed declare -a: bare name",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; declare -a a=(d1 d2); p \"$a\" \"${a}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed declare -a: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; declare -a a=(d1 d2); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed copy: count",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; b=(x 'y z'); a=(\"${b[@]}\"); p \"${#a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed copy: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; b=(x 'y z'); a=(\"${b[@]}\"); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed copy: star quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; b=(x 'y z'); a=(\"${b[@]}\"); p \"${a[*]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed copy: slice",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; b=(x 'y z'); a=(\"${b[@]}\"); p \"${a[@]:1:2}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed copy: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; b=(x 'y z'); a=(\"${b[@]}\"); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed sparse after unset: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y z); unset 'a[1]'; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed sparse after unset: values unquoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y z); unset 'a[1]'; p ${a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed sparse after unset: last element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y z); unset 'a[1]'; p \"${a[-1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed sparse after unset: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y z); unset 'a[1]'; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed sparse after unset: length of first",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y z); unset 'a[1]'; p \"${#a}\" \"${#a[0]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed whole unset then element: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); unset a; a[2]=new; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed whole unset then element: element one",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); unset a; a[2]=new; p \"${a[1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed whole unset then element: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); unset a; a[2]=new; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed whole unset then element: suffix literal",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); unset a; a[2]=new; p \"$a[1]\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed element with spaces in index: keys",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[ 1 ]=spaced; p \"${!a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed element with spaces in index: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[ 1 ]=spaced; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed element with spaces in index: bare name",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[ 1 ]=spaced; p \"$a\" \"${a}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed element with spaces in index: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[ 1 ]=spaced; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed assignment with += in list: count",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a+=([5]=y); p \"${#a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed assignment with += in list: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a+=([5]=y); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed assignment with += in list: star quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a+=([5]=y); p \"${a[*]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed assignment with += in list: slice",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a+=([5]=y); p \"${a[@]:1:2}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed assignment with += in list: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a+=([5]=y); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed read -a: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -ra a <<< 'r1 r2'; p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed read -a: values unquoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -ra a <<< 'r1 r2'; p ${a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed read -a: last element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -ra a <<< 'r1 r2'; p \"${a[-1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed read -a: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -ra a <<< 'r1 r2'; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed read -a: length of first",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -ra a <<< 'r1 r2'; p \"${#a}\" \"${#a[0]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed assignment of a quoted list: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=('(x)' '[1]=y'); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed assignment of a quoted list: element one",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=('(x)' '[1]=y'); p \"${a[1]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed assignment of a quoted list: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=('(x)' '[1]=y'); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed assignment of a quoted list: suffix literal",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=('(x)' '[1]=y'); p \"$a[1]\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed ifs during assignment: keys",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; IFS=,; v='c1,c2'; a=($v); p \"${!a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed ifs during assignment: values quoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; IFS=,; v='c1,c2'; a=($v); p \"${a[@]}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed ifs during assignment: bare name",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; IFS=,; v='c1,c2'; a=($v); p \"$a\" \"${a}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed ifs during assignment: declare -p",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; IFS=,; v='c1,c2'; a=($v); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed negative index beyond start read",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); echo \"[${a[-3]}]\"; echo status=$?",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed negative index beyond start write",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); a[-3]=z; echo status=$?; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed negative index of sparse",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=([2]=x [7]=y); echo \"${a[-1]} [${a[-2]}]\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset negative index",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y z); unset 'a[-1]'; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset element unquoted",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; cd /tmp; a=(x y); unset a[0]; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset element with a matching file",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; cd /tmp; : > a0; a=(x y); unset a[0]; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset at subscript",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); unset 'a[@]'; echo \"${#a[@]} ${a-unset}\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset star subscript",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); unset 'a[*]'; declare -p a 2>&1",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset whole",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); unset a; declare -p a; echo status=$?",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed assign at subscript",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a[@]=y; echo status=$?",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed bad subscript expression",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a[1+]=y; echo status=$?",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed empty subscript",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); a[]=y; echo status=$?; echo ${a[]}; echo status=$?",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed subscript with a string that names a variable",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; k=3; j=k; a[j]=v; echo ${!a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed subscript with side effects",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; i=0; a[i++]=x; a[i++]=y; echo ${a[@]} $i",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed nested subscript",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(1 2 3); echo ${a[a[0]]} ${a[a[a[0]]]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed array in arithmetic",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(4 5); echo $(( a[0] * a[1] )) $(( a )) $(( a[5] ))",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed increment an element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(1); (( a[0]++ )); (( a[3] += 2 )); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed length of a sparse array",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=([100]=x); echo ${#a[@]} ${!a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed large index",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a[9223372036854775807]=big; echo ${!a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed slice of a sparse array",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=([1]=a [5]=b [9]=c); echo ${a[@]:2} / ${a[@]:6:1} / ${a[@]: -1}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed slice with negative length",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(a b c d); echo ${a[@]:1:-1}; echo status=$?",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed quoted empty elements survive",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=('' x ''); p() { echo $#; }; p \"${a[@]}\"; p ${a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed star with empty IFS",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); IFS=; echo \"${a[*]}\"; p() { echo $#; }; p ${a[*]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed iteration by index",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x [4]=y z); for i in \"${!a[@]}\"; do echo \"$i=${a[i]}\"; done",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed readonly array element assignment",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x); readonly a; a[1]=y; echo status=$?; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed readonly array append",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; readonly -a a=(x); a+=(y); echo status=$?",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed local array in a function",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(g); f() { local a=(l1 l2); echo ${a[@]}; }; f; echo ${a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed local copy of a global array",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(g1 g2); f() { local a=(\"${a[@]}\" l); echo ${a[@]}; }; f",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed array passed by name",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; f() { local -n arr=$1; arr+=(added); }; a=(x); f a; echo ${a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed array of arrays is not a thing",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=((1 2) 3); echo status=$?",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed compound assignment in declare with spaces",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; declare -a a=( 1  2 ); echo ${#a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed array expansion in a for loop with IFS",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=('x y' z); IFS=; for e in ${a[@]}; do echo \"<$e>\"; done",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed pattern operators on each element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(apple banana cherry); echo ${a[@]#?} ${a[@]%a*} ${a[@]/an/AN} ${a[@]^^}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed transform on each element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=('x y' \"it's\"); echo ${a[@]@Q}; echo ${a[@]@A}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed default on an empty array",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(); echo \"[${a[@]:-empty}]\" \"[${a[*]-unset}]\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed default on an array with an empty element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(''); echo \"[${a[@]:-empty}]\" \"[${a[@]-unset}]\"",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed length of each element is not a thing",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(ab c); echo ${#a[@]} ${#a[*]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed BASH_REMATCH is an array",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; [[ ab =~ (a)(b) ]]; echo ${#BASH_REMATCH[@]} ${BASH_REMATCH[@]:1}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed PIPESTATUS is an array",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; true | false | (exit 3); a=(\"${PIPESTATUS[@]}\"); echo ${a[@]}",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed FUNCNAME is an array",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; f() { echo ${#FUNCNAME[@]} ${FUNCNAME[@]}; }; g() { f; }; g",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed array exported is not",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; export a=(x); bash -c 'echo \"[${a-unset}]\"'",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed mapfile then modify",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; mapfile -t a <<< $'1\\n2'; a[5]=6; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed printf -v into an element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; printf -v 'a[2]' '%s-%s' p q; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed read into an element",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; read -r 'a[1]' <<< line; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed unset in a loop over keys",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(1 2 3 4); for i in \"${!a[@]}\"; do (( a[i] % 2 )) && unset \"a[$i]\"; done; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed append to an unset array",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; unset a; a+=(x); a+=y; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed string append to an array name",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; a=(x y); a+=z; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed element assignment keeps attributes",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; declare -ai a=(1+1); a[1]=2*3; declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array indexed uppercase attribute on elements",
+      "script": "p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; declare -au a=(x); a+=(y); declare -p a",
+      "tags": [
+        "param.array.indexed"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key plain",
+      "script": "declare -A m; kv=var; x=X; m[k]=val; echo \"status=$?\"; declare -p m; echo \"[${m[k]}]\"; unset \"m[k]\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key plain",
+      "script": "kv=var; x=X; declare -A m=([k]=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc test key plain",
+      "script": "kv=var; declare -A m=([k]=v); [[ -v m[k] ]] && echo set || echo unset",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key with space",
+      "script": "declare -A m; kv=var; x=X; m['a b']=val; echo \"status=$?\"; declare -p m; echo \"[${m['a b']}]\"; unset \"m['a b']\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key with space",
+      "script": "kv=var; x=X; declare -A m=(['a b']=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key empty",
+      "script": "declare -A m; kv=var; x=X; m['']=val; echo \"status=$?\"; declare -p m; echo \"[${m['']}]\"; unset \"m['']\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key empty",
+      "script": "kv=var; x=X; declare -A m=(['']=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc test key empty",
+      "script": "kv=var; declare -A m=(['']=v); [[ -v m[''] ]] && echo set || echo unset",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key star",
+      "script": "declare -A m; kv=var; x=X; m['*']=val; echo \"status=$?\"; declare -p m; echo \"[${m['*']}]\"; unset \"m['*']\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key star",
+      "script": "kv=var; x=X; declare -A m=(['*']=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key at",
+      "script": "declare -A m; kv=var; x=X; m['@']=val; echo \"status=$?\"; declare -p m; echo \"[${m['@']}]\"; unset \"m['@']\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key at",
+      "script": "kv=var; x=X; declare -A m=(['@']=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key digits",
+      "script": "declare -A m; kv=var; x=X; m[10]=val; echo \"status=$?\"; declare -p m; echo \"[${m[10]}]\"; unset \"m[10]\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key digits",
+      "script": "kv=var; x=X; declare -A m=([10]=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key expression",
+      "script": "declare -A m; kv=var; x=X; m[1+1]=val; echo \"status=$?\"; declare -p m; echo \"[${m[1+1]}]\"; unset \"m[1+1]\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key expression",
+      "script": "kv=var; x=X; declare -A m=([1+1]=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key quote",
+      "script": "declare -A m; kv=var; x=X; m[\"it's\"]=val; echo \"status=$?\"; declare -p m; echo \"[${m[\"it's\"]}]\"; unset \"m[\"it's\"]\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key quote",
+      "script": "kv=var; x=X; declare -A m=([\"it's\"]=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc test key quote",
+      "script": "kv=var; declare -A m=([\"it's\"]=v); [[ -v m[\"it's\"] ]] && echo set || echo unset",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key bracket",
+      "script": "declare -A m; kv=var; x=X; m[']']=val; echo \"status=$?\"; declare -p m; echo \"[${m[']']}]\"; unset \"m[']']\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key bracket",
+      "script": "kv=var; x=X; declare -A m=([']']=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc test key bracket",
+      "script": "kv=var; declare -A m=([']']=v); [[ -v m[']'] ]] && echo set || echo unset",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key dollar",
+      "script": "declare -A m; kv=var; x=X; m['$x']=val; echo \"status=$?\"; declare -p m; echo \"[${m['$x']}]\"; unset \"m['$x']\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key dollar",
+      "script": "kv=var; x=X; declare -A m=(['$x']=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key variable",
+      "script": "declare -A m; kv=var; x=X; m[$kv]=val; echo \"status=$?\"; declare -p m; echo \"[${m[$kv]}]\"; unset \"m[$kv]\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key variable",
+      "script": "kv=var; x=X; declare -A m=([$kv]=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key unicode",
+      "script": "declare -A m; kv=var; x=X; m[é]=val; echo \"status=$?\"; declare -p m; echo \"[${m[é]}]\"; unset \"m[é]\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key unicode",
+      "script": "kv=var; x=X; declare -A m=([é]=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc test key unicode",
+      "script": "kv=var; declare -A m=([é]=v); [[ -v m[é] ]] && echo set || echo unset",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key negative",
+      "script": "declare -A m; kv=var; x=X; m[-1]=val; echo \"status=$?\"; declare -p m; echo \"[${m[-1]}]\"; unset \"m[-1]\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key negative",
+      "script": "kv=var; x=X; declare -A m=([-1]=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key dash",
+      "script": "declare -A m; kv=var; x=X; m['-']=val; echo \"status=$?\"; declare -p m; echo \"[${m['-']}]\"; unset \"m['-']\"; echo \"after unset ${#m[@]}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc literal key dash",
+      "script": "kv=var; x=X; declare -A m=(['-']=lit); echo \"status=$?\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc declare required",
+      "script": "m[a]=1; m[b]=2; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc keys and values",
+      "script": "declare -A m=([one]=1); m[two]=2; echo ${#m[@]}; for k in one two; do echo \"$k=${m[$k]}\"; done",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key value pair list",
+      "script": "declare -A m=(k1 v1 k2 v2); echo ${m[k1]} ${m[k2]} ${#m[@]}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key value pair list odd",
+      "script": "declare -A m=(k1 v1 k2); declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc mixed pair styles",
+      "script": "declare -A m=([a]=1 b 2); echo status=$?; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assignment without declare -A after declare",
+      "script": "declare -A m; m=([x]=1 [y]=2); echo ${m[x]}${m[y]}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc append element",
+      "script": "declare -A m=([k]=a); m[k]+=b; echo ${m[k]}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc append list",
+      "script": "declare -A m=([a]=1); m+=([b]=2); echo ${m[a]}${m[b]} ${#m[@]}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc append bare string",
+      "script": "declare -A m=([a]=1); m+=x; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc bare assignment",
+      "script": "declare -A m; m=x; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc bare expansion",
+      "script": "declare -A m=([0]=zero [k]=v); echo \"[$m]\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc count and keys sorted by loop",
+      "script": "declare -A m=([c]=3 [a]=1 [b]=2); for k in a b c; do [[ -v m[$k] ]] && echo -n \"$k \"; done; echo ${#m[@]}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key order of declare -p",
+      "script": "declare -A m=([one]=1 [two]=2 [three]=3 [four]=4); declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc key order of expansion",
+      "script": "declare -A m=([one]=1 [two]=2 [three]=3 [four]=4); echo ${!m[@]}; echo ${m[@]}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc unset element",
+      "script": "declare -A m=([a]=1 [b]=2); unset 'm[a]'; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc unset whole",
+      "script": "declare -A m=([a]=1); unset m; m[x]=1; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc default on missing key",
+      "script": "declare -A m; echo \"${m[z]:-dflt} ${m[z]-unset}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc length of an element",
+      "script": "declare -A m=([k]=hello); echo ${#m[k]}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc pattern operators",
+      "script": "declare -A m=([k]=hello); echo ${m[k]^^} ${m[k]#h} ${m[k]/l/L}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc keys with arithmetic look are strings",
+      "script": "declare -A m; m[1+1]=a; m[2]=b; echo \"${m[1+1]}${m[2]}\"; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc subscript expansion",
+      "script": "declare -A m; k='a b'; m[$k]=1; m[\"$k\"]+=2; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc subscript with command substitution",
+      "script": "declare -A m; m[$(echo key)]=v; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc local assoc in a function",
+      "script": "f() { local -A lm=([k]=v); echo ${lm[k]}; }; f; declare -p lm 2>&1; echo status=$?",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc declare -A in a function is local",
+      "script": "f() { declare -A fm=([k]=v); }; f; echo \"[${fm[k]-unset}]\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc declare -gA in a function",
+      "script": "f() { declare -gA gm=([k]=v); }; f; echo ${gm[k]}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc convert indexed to assoc",
+      "script": "a=(1); declare -A a; echo status=$?",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc convert assoc to indexed",
+      "script": "declare -A m; declare -a m; echo status=$?",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc readonly assoc",
+      "script": "declare -rA m=([k]=v); m[k]=w; echo status=$?",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc integer assoc",
+      "script": "declare -Ai m=([k]=1+2); m[j]=3*3; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc lowercase assoc",
+      "script": "declare -Al m=([K]=VAL); declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc in arithmetic",
+      "script": "declare -A m=([k]=5); echo $(( m[k] * 2 )); (( m[j] = 7 )); echo ${m[j]}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc slice",
+      "script": "declare -A m=([a]=1); echo \"${m[@]:0:1}\"",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc with nameref",
+      "script": "declare -A m=([k]=v); declare -n r=m; r[j]=w; echo ${m[k]}${m[j]}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc nameref to an assoc element",
+      "script": "declare -A m=([k]=v); declare -n r='m[k]'; r=changed; echo ${m[k]}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc key with a closing bracket in a variable",
+      "script": "declare -A m; k='a]b'; m[$k]=1; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc key quoting in declare -p",
+      "script": "declare -A m=([\"a'b\"]='c\"d' ['$x']='`y`'); declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc @A transform",
+      "script": "declare -A m=([k]='v w'); echo ${m@A}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc @K transform",
+      "script": "declare -A m=([k]='v w'); echo ${m[@]@K}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc keys @k transform",
+      "script": "declare -A m=([k]='v w'); echo ${m[@]@k}",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc in a for loop over keys",
+      "script": "declare -A m=([only]=1); for k in \"${!m[@]}\"; do echo \"$k\"; done",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc exported is not",
+      "script": "declare -Ax m=([k]=v); bash -c 'echo \"[${m-unset}]\"'",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc mapfile into assoc",
+      "script": "declare -A m; mapfile -t m <<< x; echo status=$?",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc read -a into assoc",
+      "script": "declare -A m; read -ra m <<< 'a b'; echo status=$?",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc with an empty key via variable",
+      "script": "declare -A m; e=; m[$e]=v; echo status=$?",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array assoc assoc unset with a glob-looking key",
+      "script": "cd /tmp; : > mk; declare -A m=([mk]=1 ['m*']=2); unset 'm[m*]'; declare -p m",
+      "tags": [
+        "param.array.assoc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: scalar",
+      "script": "t=value; declare -n r=t; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: scalar",
+      "script": "t=value; declare -n r=t; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref unset: scalar",
+      "script": "t=value; declare -n r=t; echo \"decl=$?\"; unset r; declare -p t 2>&1; declare -p r 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref length: scalar",
+      "script": "t=value; declare -n r=t; echo \"decl=$?\"; echo \"${#r}\" \"${#r[@]}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: scalar",
+      "script": "t=value; declare -n r=t; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref arithmetic: scalar",
+      "script": "t=value; declare -n r=t; echo \"decl=$?\"; (( r += 1 )); echo \"status=$? ${r}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: unset scalar",
+      "script": "unset t; declare -n r=t; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: unset scalar",
+      "script": "unset t; declare -n r=t; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref append: unset scalar",
+      "script": "unset t; declare -n r=t; echo \"decl=$?\"; r+=X; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref name: unset scalar",
+      "script": "unset t; declare -n r=t; echo \"decl=$?\"; echo \"${!r}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: unset scalar",
+      "script": "unset t; declare -n r=t; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: array",
+      "script": "t=(a b c); declare -n r=t; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: array",
+      "script": "t=(a b c); declare -n r=t; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref unset -n: array",
+      "script": "t=(a b c); declare -n r=t; echo \"decl=$?\"; unset -n r; declare -p r 2>&1; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref elements: array",
+      "script": "t=(a b c); declare -n r=t; echo \"decl=$?\"; echo \"${r[@]}\" \"${!r[@]}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: array",
+      "script": "t=(a b c); declare -n r=t; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: array element",
+      "script": "t=(a b c); declare -n r=t[1]; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: array element",
+      "script": "t=(a b c); declare -n r=t[1]; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref unset: array element",
+      "script": "t=(a b c); declare -n r=t[1]; echo \"decl=$?\"; unset r; declare -p t 2>&1; declare -p r 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref length: array element",
+      "script": "t=(a b c); declare -n r=t[1]; echo \"decl=$?\"; echo \"${#r}\" \"${#r[@]}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: array element",
+      "script": "t=(a b c); declare -n r=t[1]; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref arithmetic: array element",
+      "script": "t=(a b c); declare -n r=t[1]; echo \"decl=$?\"; (( r += 1 )); echo \"status=$? ${r}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: assoc",
+      "script": "declare -A t=([k]=v); declare -n r=t; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: assoc",
+      "script": "declare -A t=([k]=v); declare -n r=t; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref append: assoc",
+      "script": "declare -A t=([k]=v); declare -n r=t; echo \"decl=$?\"; r+=X; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref name: assoc",
+      "script": "declare -A t=([k]=v); declare -n r=t; echo \"decl=$?\"; echo \"${!r}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: assoc",
+      "script": "declare -A t=([k]=v); declare -n r=t; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: assoc element",
+      "script": "declare -A t=([k]=v); declare -n r=t[k]; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: assoc element",
+      "script": "declare -A t=([k]=v); declare -n r=t[k]; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref unset -n: assoc element",
+      "script": "declare -A t=([k]=v); declare -n r=t[k]; echo \"decl=$?\"; unset -n r; declare -p r 2>&1; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref elements: assoc element",
+      "script": "declare -A t=([k]=v); declare -n r=t[k]; echo \"decl=$?\"; echo \"${r[@]}\" \"${!r[@]}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: assoc element",
+      "script": "declare -A t=([k]=v); declare -n r=t[k]; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: integer",
+      "script": "declare -i t=5; declare -n r=t; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: integer",
+      "script": "declare -i t=5; declare -n r=t; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref unset: integer",
+      "script": "declare -i t=5; declare -n r=t; echo \"decl=$?\"; unset r; declare -p t 2>&1; declare -p r 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref length: integer",
+      "script": "declare -i t=5; declare -n r=t; echo \"decl=$?\"; echo \"${#r}\" \"${#r[@]}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: integer",
+      "script": "declare -i t=5; declare -n r=t; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref arithmetic: integer",
+      "script": "declare -i t=5; declare -n r=t; echo \"decl=$?\"; (( r += 1 )); echo \"status=$? ${r}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: readonly",
+      "script": "readonly t=ro; declare -n r=t; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: readonly",
+      "script": "readonly t=ro; declare -n r=t; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref append: readonly",
+      "script": "readonly t=ro; declare -n r=t; echo \"decl=$?\"; r+=X; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref name: readonly",
+      "script": "readonly t=ro; declare -n r=t; echo \"decl=$?\"; echo \"${!r}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: readonly",
+      "script": "readonly t=ro; declare -n r=t; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: another nameref",
+      "script": "t2=deep; declare -n t=t2; declare -n r=t; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: another nameref",
+      "script": "t2=deep; declare -n t=t2; declare -n r=t; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref unset -n: another nameref",
+      "script": "t2=deep; declare -n t=t2; declare -n r=t; echo \"decl=$?\"; unset -n r; declare -p r 2>&1; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref elements: another nameref",
+      "script": "t2=deep; declare -n t=t2; declare -n r=t; echo \"decl=$?\"; echo \"${r[@]}\" \"${!r[@]}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: another nameref",
+      "script": "t2=deep; declare -n t=t2; declare -n r=t; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: positional",
+      "script": "set -- p1; declare -n r=1; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: positional",
+      "script": "set -- p1; declare -n r=1; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref unset: positional",
+      "script": "set -- p1; declare -n r=1; echo \"decl=$?\"; unset r; declare -p t 2>&1; declare -p r 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref length: positional",
+      "script": "set -- p1; declare -n r=1; echo \"decl=$?\"; echo \"${#r}\" \"${#r[@]}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: positional",
+      "script": "set -- p1; declare -n r=1; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref arithmetic: positional",
+      "script": "set -- p1; declare -n r=1; echo \"decl=$?\"; (( r += 1 )); echo \"status=$? ${r}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: invalid name",
+      "script": "declare -n r='a b'; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: invalid name",
+      "script": "declare -n r='a b'; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref append: invalid name",
+      "script": "declare -n r='a b'; echo \"decl=$?\"; r+=X; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref name: invalid name",
+      "script": "declare -n r='a b'; echo \"decl=$?\"; echo \"${!r}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: invalid name",
+      "script": "declare -n r='a b'; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: itself",
+      "script": "declare -n r=r; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: itself",
+      "script": "declare -n r=r; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref unset -n: itself",
+      "script": "declare -n r=r; echo \"decl=$?\"; unset -n r; declare -p r 2>&1; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref elements: itself",
+      "script": "declare -n r=r; echo \"decl=$?\"; echo \"${r[@]}\" \"${!r[@]}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: itself",
+      "script": "declare -n r=r; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref read: empty",
+      "script": "declare -n r=''; echo \"decl=$?\"; echo \"[${r}]\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assign: empty",
+      "script": "declare -n r=''; echo \"decl=$?\"; r=new; echo \"status=$?\"; declare -p t 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref unset: empty",
+      "script": "declare -n r=''; echo \"decl=$?\"; unset r; declare -p t 2>&1; declare -p r 2>&1",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref length: empty",
+      "script": "declare -n r=''; echo \"decl=$?\"; echo \"${#r}\" \"${#r[@]}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare -p: empty",
+      "script": "declare -n r=''; echo \"decl=$?\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref arithmetic: empty",
+      "script": "declare -n r=''; echo \"decl=$?\"; (( r += 1 )); echo \"status=$? ${r}\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref unset nameref assignment sets the reference",
+      "script": "declare -n r; r=t; t=through; echo \"$r\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref to a nameref chain assignment",
+      "script": "declare -n a=b b=c; a=end; echo \"$c\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref circular reference warning",
+      "script": "declare -n a=b; declare -n b=a; echo \"[$a]\"; echo status=$?",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref self reference",
+      "script": "declare -n s=s; echo status=$?",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref change target with declare -n",
+      "script": "x=1 y=2; declare -n r=x; declare -n r=y; echo $r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref assignment to a nameref retargets only with -n",
+      "script": "x=1 y=2; declare -n r=x; r=y; echo $x $y $r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref declare +n",
+      "script": "t=v; declare -n r=t; declare +n r; echo \"$r\"; declare -p r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref in a for loop over names",
+      "script": "a=1 b=2; declare -n r; for r in a b; do echo \"$r\"; done",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref local -n to a caller variable",
+      "script": "f() { local -n out=$1; out=\"from f\"; }; f result; echo \"$result\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref local -n shadowing its target name",
+      "script": "f() { local -n v=v; v=x; }; v=orig; f; echo \"$v\"; echo status=$?",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref local -n to a local of the caller",
+      "script": "g() { local -n gr=$1; gr=set-by-g; }; f() { local l=orig; g l; echo \"$l\"; }; f",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref to an array element with an expression index",
+      "script": "a=(x y z); i=1; declare -n r='a[i+1]'; echo $r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref to an unset array element then assign",
+      "script": "a=(x); declare -n r='a[3]'; r=new; declare -p a",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref to whole array appended",
+      "script": "a=(x); declare -n r=a; r+=(y z); declare -p a",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref element access",
+      "script": "a=(x y); declare -n r=a; echo ${r[1]}; r[2]=z; declare -p a",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref with -i attribute",
+      "script": "declare -in r=t; t=1+1; echo $r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref to a special variable",
+      "script": "declare -n r=PIPESTATUS; true | false; echo ${r[@]}",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref to a readonly nameref",
+      "script": "t=1; declare -rn r=t; declare -n r=u; echo status=$?",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref exported",
+      "script": "t=exp; declare -nx r=t; bash -c 'echo \"[${r-unset}] [${t-unset}]\"'",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref to a variable named by expansion",
+      "script": "name=target; declare -n r=$name; target=ok; echo $r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref in a subshell",
+      "script": "t=1; declare -n r=t; ( r=2; echo $t ); echo $t",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref array keys",
+      "script": "declare -A m=([k]=v); declare -n r=m; echo ${!r[@]}",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref indirect expansion of a nameref",
+      "script": "t=v; declare -n r=t; echo ${!r}",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref invalid target at use",
+      "script": "declare -n r=t; t=1; unset t; r=2; echo $t",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref to positional is refused",
+      "script": "declare -n r=1; echo status=$?",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref typeset -n",
+      "script": "t=v; typeset -n r=t; echo $r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref in arithmetic context",
+      "script": "x=3; declare -n r=x; echo $(( r * 2 )); (( r++ )); echo $x",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref to an assoc key with spaces",
+      "script": "declare -A m=(['a b']=v); declare -n r='m[a b]'; echo \"$r\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref declared without -n is plain",
+      "script": "t=v; declare r=t; echo $r",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram array nameref nameref -p listing",
+      "script": "t=v; declare -n r=t; declare -p r; declare -n",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    }
+  ]
+}

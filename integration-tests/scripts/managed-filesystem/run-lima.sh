@@ -78,7 +78,8 @@ fi
 # Keep LIMA_HOME unchanged so VM disks never enter the persistent image cache.
 if [[ $(uname -s) == Linux ]]; then
   images=$(limactl template yq "${template}" '.images')
-  image_key=$(printf '%s' "${images}" | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+  image_key=$(printf '%s' "${images}" | sha256sum)
+  image_key=${image_key%% *}
   export XDG_CACHE_HOME="${repo_root}/.validation-cache/lima-images-v1/${image_key}"
   mkdir -p "${XDG_CACHE_HOME}"
 fi
@@ -90,10 +91,28 @@ while read -r name; do
   fi
 done < <(limactl list --format '{{.Name}}')
 
+mounts=(--mount-only "${repo_root}:w")
+if [[ ${GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES:-0} == 1 ]]; then
+  # Native snapshot provenance reopens metadata here; guest evidence is written here too.
+  report_dir=$(dirname "${GOLEM_MANAGED_XFS_EXECUTABLE_CHECKSUMS:?reuse requires GOLEM_MANAGED_XFS_EXECUTABLE_CHECKSUMS}")
+  report_dir=$(cd "${report_dir}" && pwd -L)
+  report_target=$(cd "${report_dir}" && pwd -P)
+  report_directories=("${report_dir}")
+  if [[ ${report_target} != "${report_dir}" ]]; then
+    report_directories+=("${report_target}")
+  fi
+  for directory in "${report_directories[@]}"; do
+    case ${directory}/ in
+      "${repo_root}/"*) ;;
+      *) mounts+=(--mount-only "${directory}:w") ;;
+    esac
+  done
+fi
+
 if [[ ${exists} == false ]]; then
-  limactl start --name "${instance}" --mount-only "${repo_root}:w" "${template}"
+  limactl start --name "${instance}" "${mounts[@]}" "${template}"
 else
-  limactl start "${instance}"
+  limactl start "${mounts[@]}" "${instance}"
 fi
 
 guest_home=$(limactl shell "${instance}" -- printenv HOME)
@@ -114,7 +133,9 @@ for ((run = 1; run <= runs; run++)); do
     GOLEM_MANAGED_XFS_VALIDATE_CACHE_ONLY="${GOLEM_MANAGED_XFS_VALIDATE_CACHE_ONLY:-0}" \
     GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES="${GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES:-0}" \
     GOLEM_MANAGED_XFS_CARGO_TEST_R="${GOLEM_MANAGED_XFS_CARGO_TEST_R:-cargo-test-r}" \
-    GOLEM_MANAGED_XFS_BINARIES_METADATA="${GOLEM_MANAGED_XFS_BINARIES_METADATA:-}" \
+    GOLEM_MANAGED_XFS_SELECTION="${GOLEM_MANAGED_XFS_SELECTION:-}" \
+    GOLEM_MANAGED_XFS_SELECTION_DIGEST="${GOLEM_MANAGED_XFS_SELECTION_DIGEST:-}" \
+    GOLEM_MANAGED_XFS_EXECUTABLE_CHECKSUMS="${GOLEM_MANAGED_XFS_EXECUTABLE_CHECKSUMS:-}" \
     "${filesystem_isolation_environment[@]}" \
     GOLEM_FILESYSTEM_BENCH_QUICK="${GOLEM_FILESYSTEM_BENCH_QUICK:-0}" \
     GOLEM_FILESYSTEM_BENCH_SINGLE_AGENT="${GOLEM_FILESYSTEM_BENCH_SINGLE_AGENT:-0}" \

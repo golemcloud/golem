@@ -176,18 +176,37 @@ impl Operation {
             Self::FileSplice => "tcp_file_blocking_splice_p2",
         }
     }
-    fn assert_result(self, result: golem_test_framework::dsl::AgentResult) -> anyhow::Result<()> {
+    /// The durable call of the TCP input part of the operation.
+    fn input_function(self) -> &'static str {
+        match self {
+            Self::Skip => "sockets::tcp::input_stream::blocking_skip",
+            Self::Read | Self::Splice | Self::FileSplice => {
+                "sockets::tcp::input_stream::blocking_read"
+            }
+        }
+    }
+
+    /// Checks the result of the method, with the number of lost connections the fixture saw
+    /// before it reconnected.
+    fn assert_result(
+        self,
+        result: golem_test_framework::dsl::AgentResult,
+        losses: u32,
+    ) -> anyhow::Result<()> {
         match self {
             Self::Read => {
-                ensure!(result.into_typed::<Result<Vec<u8>, String>>()? == Ok(vec![b'x']))
+                let result = result.into_typed::<Result<(u32, Vec<u8>), String>>()?;
+                ensure!(result == Ok((losses, vec![b'x'])), "{result:?}")
             }
             Self::Skip | Self::Splice => {
-                ensure!(result.into_typed::<Result<u64, String>>()? == Ok(1))
+                let result = result.into_typed::<Result<(u32, u64), String>>()?;
+                ensure!(result == Ok((losses, 1)), "{result:?}")
             }
             Self::FileSplice => {
+                let result = result.into_typed::<Result<(u32, (u64, Vec<u8>)), String>>()?;
                 ensure!(
-                    result.into_typed::<Result<(u64, Vec<u8>), String>>()? == Ok((1, vec![b'x'])),
-                    "the actual file must contain exactly the one spliced byte"
+                    result == Ok((losses, (1, vec![b'x']))),
+                    "the actual file must contain exactly the one spliced byte: {result:?}"
                 );
             }
         }
@@ -195,11 +214,22 @@ impl Operation {
     }
 }
 
-fn completed_setup(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<OplogIndex> {
+/// The connect poll and the TCP input Start of an invocation that made one connection and then
+/// started the input of `operation`. Every other Start has its terminal; the input Start may be
+/// pending.
+fn input_setup(
+    entries: &[PublicOplogEntryWithIndex],
+    operation: Operation,
+) -> anyhow::Result<(OplogIndex, OplogIndex)> {
     let polls = poll_starts(entries);
     ensure!(
         polls.len() == 1,
         "exactly one connect poll, no input poll: {entries:#?}"
+    );
+    let inputs = starts_of(entries, operation.input_function());
+    ensure!(
+        inputs.len() == 1,
+        "exactly one TCP input Start: {entries:#?}"
     );
     for entry in entries {
         ensure!(
@@ -209,16 +239,34 @@ fn completed_setup(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<Oplo
         if let PublicOplogEntry::Start(start) = &entry.entry {
             ensure!(start.parent_start_index.is_none() && start.observational_owner.is_none());
             ensure!(
-                !start.function_name.contains("streams"),
-                "raw TCP has NoHostStart: {start:?}"
-            );
-            ensure!(
-                terminal_count(entries, entry.oplog_index) == 1,
+                entry.oplog_index == inputs[0] || terminal_count(entries, entry.oplog_index) == 1,
                 "setup Start must be completed: {entry:?}"
             );
         }
     }
-    Ok(polls[0])
+    Ok((polls[0], inputs[0]))
+}
+
+fn starts_of(entries: &[PublicOplogEntryWithIndex], function_name: &str) -> Vec<OplogIndex> {
+    entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start) if start.function_name == function_name => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether the End of `start` records the `connection-reset` of a lost connection.
+fn ends_with_connection_loss(entries: &[PublicOplogEntryWithIndex], start: OplogIndex) -> bool {
+    entries.iter().any(|entry| match &entry.entry {
+        PublicOplogEntry::End(end) => {
+            end.start_index == start && format!("{end:?}").contains("connection reset")
+        }
+        _ => false,
+    })
 }
 
 async fn pending_input(
@@ -356,13 +404,13 @@ async fn pending_input(
             .await
             .context("first TCP connection")??;
         let mut connections = 1;
-        // Completed setup and a silent peer do not establish native Poll::Pending.
-        let (entries, connect_start) = tokio::time::timeout(Duration::from_secs(10), async {
+        // The input Start is recorded before its native wait begins.
+        let (entries, (connect_start, input_start)) = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 executor.commit_oplog(&id).await?;
                 let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
-                if let Ok(start) = completed_setup(&entries) {
-                    break Ok::<_, anyhow::Error>((entries, start));
+                if let Ok(setup) = input_setup(&entries, operation) {
+                    break Ok::<_, anyhow::Error>((entries, setup));
                 }
                 ensure!(!request_is_finished(&invocation));
                 tokio::task::yield_now().await;
@@ -394,9 +442,10 @@ async fn pending_input(
                 "pending splice must not send or close before input arrives"
             );
         }
+        ensure!(terminal_count(&entries, input_start) == 0, "the input is pending");
         info!(
-            ?resource, ?mode, ?operation, %key, ?id, %connect_start, ?initial, connections,
-            "P2 connect completed; peer has sent no data"
+            ?resource, ?mode, ?operation, %key, ?id, %connect_start, %input_start, ?initial, connections,
+            "P2 connect completed; TCP input Start recorded; peer has sent no data"
         );
 
         if resource == Resource::Compute {
@@ -460,8 +509,12 @@ async fn pending_input(
             ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "stop changed the complete committed prefix");
         }
         ensure!(
-            completed_setup(&stopped)? == connect_start,
-            "interruption must preserve completed setup and NoHostStart"
+            input_setup(&stopped, operation)? == (connect_start, input_start),
+            "interruption must preserve the completed setup"
+        );
+        ensure!(
+            terminal_count(&stopped, input_start) == 0,
+            "interruption cannot invent an input terminal"
         );
         let entries = worker
             .oplog()
@@ -536,7 +589,7 @@ async fn pending_input(
         }
         info!(
             ?resource, ?mode, ?operation, connections,
-            "Monthly stop closed TCP connection before peer release; NoHostStart"
+            "Monthly stop closed TCP connection before peer release; input Start left incomplete"
         );
 
         if durable {
@@ -548,10 +601,12 @@ async fn pending_input(
             start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
             join_request(&mut refresh, "policy refresh").await?;
             executor.resume(&owned, false).await?;
+            // Replay does not connect again: the pending input fails with the lost connection,
+            // and the fixture reconnects.
             let (mut resumed_peer, _) =
                 tokio::time::timeout(Duration::from_secs(10), listener.accept())
                     .await
-                    .context("P2 reconnect during reconstruction")??;
+                    .context("fixture reconnect after the visible loss")??;
             connections += 1;
             resumed_peer.write_all(b"x").await?;
             if matches!(operation, Operation::Splice) {
@@ -560,17 +615,23 @@ async fn pending_input(
                 ensure!(echoed == *b"x", "same-connection splice output");
             }
             let resumed = join_request(&mut invocation, "invocation result").await??;
-            operation.assert_result(resumed)?;
+            operation.assert_result(resumed, 1)?;
             let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             if let Some(prefix) = &prefix {
                 let last = *prefix.last_key_value().unwrap().0;
                 ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "reconstruction changed the complete committed prefix");
             }
+            let polls = poll_starts(&recovered);
             ensure!(
-                poll_starts(&recovered) == poll_starts(&stopped),
-                "reconstruction cannot add a raw TCP Start"
+                polls.len() == 2 && polls[0] == connect_start,
+                "replay keeps the connect poll; the reconnect adds one: {polls:?}"
             );
-            ensure!(completed_setup(&recovered)? == connect_start);
+            ensure!(
+                terminal_count(&recovered, input_start) == 1
+                    && ends_with_connection_loss(&recovered, input_start),
+                "the pending input completes with the lost connection"
+            );
+            ensure!(starts_of(&recovered, operation.input_function()).len() == 2);
             assert_settled_history(&recovered)?;
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             let cached = executor
@@ -582,7 +643,7 @@ async fn pending_input(
                     data_value!(port),
                 )
                 .await?;
-            operation.assert_result(cached)?;
+            operation.assert_result(cached, 1)?;
             ensure!(
                 count_agent_invocation_pair_since(
                     &executor.get_oplog(&owned, OplogIndex::INITIAL).await?,
@@ -613,7 +674,7 @@ async fn pending_input(
             let (fresh, _) = tokio::time::timeout(Duration::from_secs(10), async {
                 tokio::try_join!(fresh, fresh_peer)
             }).await??;
-            operation.assert_result(fresh)?;
+            operation.assert_result(fresh, 0)?;
             ensure!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err(), "exactly three native connections expected");
             let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
@@ -621,7 +682,7 @@ async fn pending_input(
             connections += 1;
             info!(
                 ?resource, ?operation, %connect_start, connections,
-                "Native input re-executed; cached lookup did not connect; fresh invocation succeeded"
+                "Pending input completed with the lost connection; fixture reconnected; cached lookup did not connect; fresh invocation succeeded"
             );
         } else if matches!(operation, Operation::Splice | Operation::FileSplice) {
             let mut grant = policy;
@@ -673,7 +734,7 @@ async fn pending_input(
                 tokio::try_join!(probe, probe_peer)
             })
             .await??;
-            operation.assert_result(probe_result)?;
+            operation.assert_result(probe_result, 0)?;
             ensure!(
                 tokio::time::timeout(Duration::from_millis(100), listener.accept())
                     .await
@@ -732,11 +793,7 @@ fn assert_settled_history(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Resu
         .oplog_index;
     for entry in entries {
         match &entry.entry {
-            PublicOplogEntry::Start(start) => {
-                ensure!(
-                    !start.function_name.contains("streams"),
-                    "raw TCP has NoHostStart"
-                );
+            PublicOplogEntry::Start(_) => {
                 ensure!(
                     terminal_count(entries, entry.oplog_index) == 1,
                     "unsettled/duplicate Start: {entry:?}"

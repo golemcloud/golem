@@ -44,8 +44,9 @@ use golem_common::model::oplog::{
     UpdateDescription,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
-    DurableStreamSessionStatus, OwnedAgentId, ScanCursor, ShardEpoch, Timestamp,
+    AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
+    AgentStatusRecord, DurableStreamSessionStatus, InvocationRequestOperation, OwnedAgentId,
+    ScanCursor, ShardEpoch, StoredAgentInvocationPayload, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;

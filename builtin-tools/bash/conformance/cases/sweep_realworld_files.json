@@ -1,0 +1,3955 @@
+{
+  "tier": "sweep",
+  "description": "Real-world usage: tldr-pages examples for the file and path commands.\n\nSource: tldr-pages (https://github.com/tldr-pages/tldr, CC BY 4.0), pages/common and pages/linux\nat commit 8cf22035e60b167ebf224c1c527b27e0b5dca24d; see ../NOTICE. Placeholders are bound to a\nsmall project tree the script creates first. Each example also runs against the target shapes an\nagent meets: a target that exists or not, a directory, a missing source, a trailing slash, a name\nwith a space. Output whose order is the filesystem's (find, grep -r, verbose cp/rm) is sorted.\nLong listings (`ls -l`, `stat` without `-c`) and permission or owner examples are left out.",
+  "cases": [
+    {
+      "name": "real tldr cp: copy a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp a.txt c.txt && cat c.txt",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy over an existing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp a.txt b.txt && cat b.txt",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp nope.txt c.txt",
+      "tags": [
+        "cmd.cp",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy a directory without -r",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp dir d2",
+      "tags": [
+        "cmd.cp",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy into a missing directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp a.txt nodir/c.txt",
+      "tags": [
+        "cmd.cp",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy a file onto itself",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp a.txt a.txt",
+      "tags": [
+        "cmd.cp",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy a file with spaces in its name",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nprintf 'sp\\n' >'my file.txt' && cp 'my file.txt' 'your file.txt' && cat 'your file.txt'",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy an empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\n: >e && cp e f && wc -c f",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy into a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp a.txt dir && ls dir && cat dir/a.txt",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy into a directory with a trailing slash",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp a.txt dir/ && ls dir",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy into a missing directory with a trailing slash",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp a.txt nodir/",
+      "tags": [
+        "cmd.cp",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy a file onto a directory name that is a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp a.txt b.txt/",
+      "tags": [
+        "cmd.cp",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: recursive copy to a new directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ncp -r src copy && find copy | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: recursive copy into an existing directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nmkdir dest && cp -r src dest && find dest | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: recursive copy (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ncp --recursive src copy && find copy -type f | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: recursive copy of a directory's contents",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nmkdir dest && cp -r src/. dest && find dest | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: recursive copy with a trailing slash",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ncp -r src/ copy && find copy -type f | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: recursive copy of hidden files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ncp -r .hidden h2 && cat h2/key",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: recursive copy of an empty directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ncp -r src/empty e2 && ls -a e2",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: recursive copy of a missing directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ncp -r nosrc copy",
+      "tags": [
+        "cmd.cp",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: recursive copy into itself",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ncp -r src src/lib",
+      "tags": [
+        "cmd.cp",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: verbose recursive copy",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ncp -vr src copy | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: verbose recursive copy (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ncp --verbose --recursive docs copy | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: verbose copy of one file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp -v a.txt c.txt",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy multiple files to a target directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp -t dir a.txt b.txt && ls dir",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy multiple files to a target directory (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp --target-directory dir a.txt b.txt && ls dir",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: target directory that is missing",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp -t nodir a.txt",
+      "tags": [
+        "cmd.cp",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy multiple files to a non-directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp a.txt b.txt c.txt",
+      "tags": [
+        "cmd.cp",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: interactive copy declined",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp a.txt dir/ && printf 'new\\n' >a.txt && echo n | cp -i *.txt dir; cat dir/a.txt",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: interactive copy accepted",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp a.txt dir/ && printf 'new\\n' >a.txt && echo y | cp -i a.txt dir; cat dir/a.txt",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: interactive copy (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\necho n | cp --interactive a.txt b.txt; cat b.txt",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: interactive copy with no conflict",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\ncp -i a.txt dir && cat dir/a.txt",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: follow a symbolic link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln -s a.txt link && cp -L link dir && cat dir/link && [ -L dir/link ] || echo not-a-link",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: follow a symbolic link (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln -s a.txt link && cp --dereference link dir && cat dir/link",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy a symbolic link without -L",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln -s a.txt link && cp link c && cat c",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy with parents",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nmkdir dest && cp --parents src/lib/math.rs dest && find dest | sort",
+      "tags": [
+        "cmd.cp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cp: copy with parents to a missing directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ncp --parents src/lib/math.rs nodest",
+      "tags": [
+        "cmd.cp",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: rename a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv a.txt c.txt && ls && cat c.txt",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: rename a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv dir dir2 && ls",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: rename over an existing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv a.txt b.txt && ls && cat b.txt",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: rename a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv nope.txt c.txt",
+      "tags": [
+        "cmd.mv",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: rename into a missing directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv a.txt nodir/c.txt",
+      "tags": [
+        "cmd.mv",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: rename a file onto itself",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv a.txt a.txt",
+      "tags": [
+        "cmd.mv",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: rename a file with spaces",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv a.txt 'new name.txt' && ls",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: move into a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv a.txt dir && ls . dir",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: move into a directory with a trailing slash",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv a.txt dir/ && ls dir",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: move a directory into itself",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv dir dir/sub",
+      "tags": [
+        "cmd.mv",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: move a directory over a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv dir a.txt",
+      "tags": [
+        "cmd.mv",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: move a file over a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmkdir -p d2/a.txt && mv a.txt d2",
+      "tags": [
+        "cmd.mv",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: move multiple files into a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv a.txt b.txt dir && ls dir",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: move multiple files to a non-directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv a.txt b.txt c.txt",
+      "tags": [
+        "cmd.mv",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: force",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv -f a.txt b.txt && cat b.txt",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: force (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv --force a.txt b.txt && cat b.txt",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: interactive declined",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\necho n | mv -i a.txt b.txt; cat a.txt b.txt",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: interactive accepted",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\necho y | mv -i a.txt b.txt; ls; cat b.txt",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: interactive (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\necho n | mv --interactive a.txt b.txt; ls",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: no clobber",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv -n a.txt b.txt; echo \"status=$?\"; cat a.txt b.txt",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: no clobber (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv --no-clobber a.txt b.txt; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: no clobber without a conflict",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv -n a.txt c.txt; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: verbose",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv -v a.txt c.txt",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: verbose (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv --verbose a.txt b.txt dir",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: target directory from find and xargs",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nmkdir logs && touch x.log y.log src/z.log && find . -path ./logs -prune -o -type f -name '*.log' -print0 | xargs -0 mv -t logs && ls logs",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: target directory (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nmv --target-directory dir a.txt b.txt && ls dir",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mv: target directory with no input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nprintf '' | xargs -0 mv -t dir; echo \"status=$?\"",
+      "tags": [
+        "cmd.mv"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: remove files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nrm a.txt b.txt && ls",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: remove a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nrm nope.txt; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.rm",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: remove a directory without -r",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nrm dir",
+      "tags": [
+        "cmd.rm",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: remove files and a missing one",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nrm a.txt nope.txt b.txt; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.rm",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: force ignores missing files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nrm -f a.txt nope.txt && ls",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: force (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nrm --force nope.txt && echo ok",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: force with no operands",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nrm -f && echo ok",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: no operands",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nrm",
+      "tags": [
+        "cmd.rm",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: interactive declined",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\necho n | rm -i a.txt; ls",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: interactive accepted",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\necho y | rm -i a.txt; ls",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: interactive (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nprintf 'y\\nn\\n' | rm --interactive a.txt b.txt; ls",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: verbose",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nrm -v a.txt b.txt",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: verbose (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nrm --verbose a.txt",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: recursive",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrm -r src notes.txt && ls -A",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: recursive (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrm --recursive docs && ls",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: recursive verbose",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrm -rv src | sort",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: recursive on a missing path",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrm -r nosuch",
+      "tags": [
+        "cmd.rm",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: recursive force on a missing path",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrm -rf nosuch && echo ok",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: remove the current directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrm -r .",
+      "tags": [
+        "cmd.rm",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: empty directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrm -d src/empty && ls src",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: empty directory (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrm --dir src/empty && ls src",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: non-empty directory with -d",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrm -d src",
+      "tags": [
+        "cmd.rm",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: a file with -d",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrm -d notes.txt && ls",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rm: a file named with a dash",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\n: >-x && rm -- -x && ls",
+      "tags": [
+        "cmd.rm"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rmdir: remove directories",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nmkdir d1 d2 && rmdir d1 d2 && ls",
+      "tags": [
+        "cmd.rmdir"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rmdir: remove a non-empty directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrmdir src",
+      "tags": [
+        "cmd.rmdir",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rmdir: remove a missing directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrmdir nosuch",
+      "tags": [
+        "cmd.rmdir",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rmdir: remove a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrmdir notes.txt",
+      "tags": [
+        "cmd.rmdir",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rmdir: remove with a trailing slash",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nrmdir src/empty/ && ls src",
+      "tags": [
+        "cmd.rmdir"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rmdir: remove nested directories with parents",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a/b/c && rmdir -p a/b/c && ls -A",
+      "tags": [
+        "cmd.rmdir"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rmdir: remove nested directories with parents (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a/b/c && rmdir --parents a/b/c && ls -A",
+      "tags": [
+        "cmd.rmdir"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rmdir: parents stops at a non-empty directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a/b/c && : >a/f && rmdir -p a/b/c; echo \"status=$?\"; find a | sort",
+      "tags": [
+        "cmd.rmdir",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr rmdir: clean a directory of empty directories",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir e1 e2 full && : >full/f && : >file && rmdir *; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.rmdir",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mkdir: create directories",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir d1 d2 && ls",
+      "tags": [
+        "cmd.mkdir"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mkdir: create with parents",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a/b c/d && find . | sort",
+      "tags": [
+        "cmd.mkdir"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mkdir: create with parents (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir --parents a/b && find a | sort",
+      "tags": [
+        "cmd.mkdir"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mkdir: parents of an existing directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a && mkdir -p a && echo ok",
+      "tags": [
+        "cmd.mkdir"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mkdir: parents through a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >f && mkdir -p f/g",
+      "tags": [
+        "cmd.mkdir",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mkdir: nested brace expansion",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p path/{a,b}/{x,y,z}/{h,i,j} && find path -type d | wc -l && ls path/b/z",
+      "tags": [
+        "cmd.mkdir"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mkdir: verbose parents",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -pv a/b/c",
+      "tags": [
+        "cmd.mkdir"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mkdir: name with spaces",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir 'my dir' && ls",
+      "tags": [
+        "cmd.mkdir"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: relative symbolic link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln -s a.txt link && readlink link && cat link",
+      "tags": [
+        "cmd.ln"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: relative symbolic link (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln --symbolic a.txt link && cat link",
+      "tags": [
+        "cmd.ln"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: symbolic link to a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln -s dir dlink && touch dir/x && ls dlink",
+      "tags": [
+        "cmd.ln"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: symbolic link in a subdirectory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln -s ../a.txt dir/up && cat dir/up",
+      "tags": [
+        "cmd.ln"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: dangling symbolic link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln -s nope.txt link && readlink link; cat link",
+      "tags": [
+        "cmd.ln",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: symbolic link over an existing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln -s a.txt b.txt",
+      "tags": [
+        "cmd.ln",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: force a symbolic link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln -s a.txt link && ln -sf b.txt link && cat link",
+      "tags": [
+        "cmd.ln"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: force a symbolic link (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln -s a.txt link && ln --symbolic --force b.txt link && readlink link",
+      "tags": [
+        "cmd.ln"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: hard link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln /tmp/w/a.txt hard && cat hard && [ a.txt -ef hard ] && echo same",
+      "tags": [
+        "cmd.ln"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: hard link to a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln /tmp/w/nope.txt hard",
+      "tags": [
+        "cmd.ln",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: hard link to a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln dir hard",
+      "tags": [
+        "cmd.ln",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ln: hard link into a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln a.txt dir && cat dir/a.txt",
+      "tags": [
+        "cmd.ln"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr link: hard link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nlink a.txt hard && cat hard",
+      "tags": [
+        "cmd.link"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr link: existing new name",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nlink a.txt b.txt",
+      "tags": [
+        "cmd.link",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr link: missing existing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nlink nope.txt hard",
+      "tags": [
+        "cmd.link",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr link: extra operand",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nlink a.txt b c",
+      "tags": [
+        "cmd.link",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unlink: remove a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nunlink a.txt && ls",
+      "tags": [
+        "cmd.unlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unlink: remove a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nunlink nope.txt",
+      "tags": [
+        "cmd.unlink",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unlink: remove a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nunlink dir",
+      "tags": [
+        "cmd.unlink",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr unlink: remove a symbolic link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\n' >a.txt && printf 'two\\n' >b.txt && mkdir dir\nln -s a.txt link && unlink link && ls",
+      "tags": [
+        "cmd.unlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: create files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch a b && ls",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: touch an existing file keeps its content",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\necho keep >a && touch a && cat a",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: no create with access time",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -c -a a b; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: no create with modification time",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch a && touch -c -m a b; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: no create (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch --no-create -m a; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: specific time",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch a && touch -c -t 202001011200.30 a b && ls && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: specific time without seconds",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -t 202001011200 a && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: specific time with a century-less year",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -t 9912312359 a && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: reference file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -t 201506070809 ref && touch a && touch -c -r ref a b && ls && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: reference file (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -t 201506070809 ref && touch --no-create --reference ref a; ls; touch --reference ref a && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: missing reference file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -r nope a",
+      "tags": [
+        "cmd.touch",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: parse a date string 2020-11-14",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -d '2020-11-14' a && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: parse a date string 14 nov 2020",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -d '14 nov 2020' a && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: parse a date string 2020-11-14 10:30:00",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -d '2020-11-14 10:30:00' a && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: parse a date string @1600000000",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -d '@1600000000' a && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: parse a date string 2020-11-14T10:30:00Z",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -d '2020-11-14T10:30:00Z' a && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: parse a date string nov 14 2020 10:30",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -d 'nov 14 2020 10:30' a && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: parse a date string (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch --date '2021-03-04 05:06' a && date -r a +%Y-%m-%dT%H:%M:%S",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: invalid date string",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -d 'not a date' a",
+      "tags": [
+        "cmd.touch",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: increasing numbers",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch file{1..10} && ls",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: letter range",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch file{a..e} && ls",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: into a missing directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch nodir/a",
+      "tags": [
+        "cmd.touch",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr touch: order by time",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -d 2020-01-03 c && touch -d 2020-01-01 a && touch -d 2020-01-02 b && ls -t && ls -tr",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: set a size of 10K",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello world\\n' >f && truncate -s 10K f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: set a size of 10KB",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello world\\n' >f && truncate -s 10KB f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: set a size of 1M",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello world\\n' >f && truncate -s 1M f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: set a size of 1G",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello world\\n' >f && truncate -s 1G f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: set a size of 3",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello world\\n' >f && truncate -s 3 f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: set a size of 0",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello world\\n' >f && truncate -s 0 f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: create a new file with a size",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntruncate -s 10K f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: set a size (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntruncate --size 2K f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: extend a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello\\n' >f && truncate -s +50K f && stat -c '%s %n' f && head -c 8 f | od -c",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: shrink a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntruncate -s 5000 f && truncate -s -2K f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: shrink below zero",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abc' >f && truncate -s -2K f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: empty a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello\\n' >f && truncate -s 0 f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: empty without creating",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntruncate -s 0 -c f; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: empty without creating (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'x' >f && truncate --size 0 --no-create f g && ls && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: round up to a multiple",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello' >f && truncate -s %4 f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: round down to a multiple",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello world' >f && truncate -s /4 f && stat -c '%s %n' f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: invalid size",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntruncate -s 10Q f",
+      "tags": [
+        "cmd.truncate",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr truncate: a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir d && truncate -s 0 d",
+      "tags": [
+        "cmd.truncate",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: one per line",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls -1",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: one per line of a subdirectory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls -1 src",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: all files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls -a",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: all files (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls --all",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: almost all files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls -A",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: classify",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nln -s notes.txt link && ls -F",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: classify (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls --classify src",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: sorted by size recursively",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p s/t && printf '1' >s/small && printf '12345' >s/big && printf '123' >s/t/mid && printf '12' >s/t/two && cd s && ls -S big small && ls -S t && ls -R",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: sorted by size in reverse",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '1' >a && printf '12345' >b && printf '123' >c && ls -Sr",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: sorted by time reversed",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -d 2020-01-03 c && touch -d 2020-01-01 a && touch -d 2020-01-02 b && ls -tr",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: sorted by time reversed (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch -d 2020-01-03 c && touch -d 2020-01-01 a && touch -d 2020-01-02 b && ls -t --reverse",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: recursive",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls -R",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: recursive (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls --recursive src",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: only directories",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls -d */",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: only directories (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls --directory */",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: only directories when there are none",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch f && ls -d */",
+      "tags": [
+        "cmd.ls",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: a missing path",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls nosuch",
+      "tags": [
+        "cmd.ls",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: a missing path among others",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls nosuch notes.txt src",
+      "tags": [
+        "cmd.ls",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: one file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls notes.txt",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: names needing quotes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch 'a b' \"it's\" 'x*y' && ls",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: one per line of names needing quotes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch 'a b' \"it's\" && ls -1",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: reverse",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls -r",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: comma separated",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls -m",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: directory itself",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls -d src",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: several directories",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls src docs",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: hidden directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nls -a .hidden",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: sort by extension",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch b.txt a.rs c.md d && ls -X",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr ls: natural version sort",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntouch f10 f9 f1 f100 && ls -v",
+      "tags": [
+        "cmd.ls"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: files by extension",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -name '*.rs' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: files by extension from a path",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind src -name '*.rs' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: files by extension with an absolute path",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind /tmp/w/src -name '*.rs' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: files by extension with no match",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -name '*.py'; echo \"status=$?\"",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: files by extension in a missing directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind nosuch -name '*.rs'",
+      "tags": [
+        "cmd.find",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: unquoted pattern that matches in the cwd",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ntouch x.rs && find . -name *.rs | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: multiple path and name patterns",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -path '*/lib/*.rs' -or -name '*note*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: multiple path and name patterns with -o",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -path '*/src/*' -o -name '*.md' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: directories case-insensitively",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -type d -iname '*LIB*'",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: directories case-insensitively with no match",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -type d -iname '*NONE*' | wc -l",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: excluding a path",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -name '*.rs' -not -path '*/lib/*'",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: excluding a path with !",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -type f ! -path './src/*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: size range at depth 1",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntruncate -s 600K big.bin && truncate -s 20M huge.bin && truncate -s 100K small.bin && mkdir d && truncate -s 700K d/deep.bin && find . -maxdepth 1 -size +500k -size -10M",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: size in blocks and bytes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '1234' >f4 && : >f0 && truncate -s 1000 f1000 && find . -type f -size -2 | sort && find . -type f -size 4c && find . -type f -size +999c",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: exec per file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -name '*.rs' -exec wc -l {} \\; | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: exec per file on a missing command",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -name 'main.rs' -exec nosuchcmd {} \\;; echo \"status=$?\"",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: exec per file that fails",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -name '*.rs' -exec grep -q nothing {} \\; ; echo \"status=$?\"",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: files modified today to one command",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -daystart -mtime -1 -type f -exec ls {} + ",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: files modified long ago",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ntouch -d 2001-01-01 notes.txt && find . -type f -mtime +365",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: empty files deleted verbosely",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -type f -empty -delete -print && ls",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: empty directories deleted verbosely",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nmkdir -p x/y && find . -type d -empty -delete -print | sort && ls",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: empty entries",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -empty | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: maxdepth and mindepth",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -mindepth 2 -maxdepth 2 | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: type l",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nln -s notes.txt link && find . -type l",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: follow links",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nln -s src slink && find -L . -name 'main.rs' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: name with a character class",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -name '[mn]*' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: regex",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -regex '.*/[a-z]+\\.rs' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: print0 to xargs",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -name '*.rs' -print0 | xargs -0 grep -c fn | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: prune a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -path ./src -prune -o -type f -print | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr find: newer than a file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\ntouch -d 2001-01-01 old && touch -d 2002-01-01 notes.txt && find . -newer old -name '*.txt' | sort",
+      "tags": [
+        "cmd.find"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr stat: size and name",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello' >f && stat -c \"%s %n\" f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr stat: size and name (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello' >f && stat --format \"%s %n\" f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr stat: size and name of several files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello' >f && : >e && stat -c \"%s %n\" f e",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr stat: size of a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nstat -c \"%s %n\" nope",
+      "tags": [
+        "cmd.stat",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr stat: file type names",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'x' >f && : >e && mkdir d && ln -s f l && stat -c '%F %n' f e d l",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr stat: printf format with escapes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello' >f && stat --printf '%s\\t%n\\n' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr stat: link target",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'x' >f && ln -s f l && stat -c '%N' l",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe ascii text",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello world\\n' >t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief ascii text",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello world\\n' >t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime ascii text",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello world\\n' >t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe empty",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief empty",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime empty",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe utf-8 text",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'caf\\303\\251 na\\303\\257ve\\n' >t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief utf-8 text",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'caf\\303\\251 na\\303\\257ve\\n' >t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime utf-8 text",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'caf\\303\\251 na\\303\\257ve\\n' >t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe crlf text",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\r\\nb\\r\\n' >t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief crlf text",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\r\\nb\\r\\n' >t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime crlf text",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\r\\nb\\r\\n' >t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe no final newline",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abc' >t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief no final newline",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abc' >t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime no final newline",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abc' >t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe shell script",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '#!/bin/sh\\necho hi\\n' >t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief shell script",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '#!/bin/sh\\necho hi\\n' >t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime shell script",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '#!/bin/sh\\necho hi\\n' >t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe json",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '{\"a\": [1, 2]}\\n' >t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief json",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '{\"a\": [1, 2]}\\n' >t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime json",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '{\"a\": [1, 2]}\\n' >t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe gzip",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '\\037\\213\\010\\000\\000\\000\\000\\000\\000\\003' >t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief gzip",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '\\037\\213\\010\\000\\000\\000\\000\\000\\000\\003' >t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime gzip",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '\\037\\213\\010\\000\\000\\000\\000\\000\\000\\003' >t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe png",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '\\211PNG\\r\\n\\032\\n\\000\\000\\000\\rIHDR\\000\\000\\000\\001\\000\\000\\000\\001\\010\\006\\000\\000\\000' >t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief png",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '\\211PNG\\r\\n\\032\\n\\000\\000\\000\\rIHDR\\000\\000\\000\\001\\000\\000\\000\\001\\010\\006\\000\\000\\000' >t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime png",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '\\211PNG\\r\\n\\032\\n\\000\\000\\000\\rIHDR\\000\\000\\000\\001\\000\\000\\000\\001\\010\\006\\000\\000\\000' >t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe pdf",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%%PDF-1.4\\n' >t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief pdf",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%%PDF-1.4\\n' >t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime pdf",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '%%PDF-1.4\\n' >t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe zip",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'PK\\003\\004\\024\\000\\000\\000' >t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief zip",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'PK\\003\\004\\024\\000\\000\\000' >t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime zip",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'PK\\003\\004\\024\\000\\000\\000' >t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe binary zeros",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntruncate -s 64 t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief binary zeros",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntruncate -s 64 t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime binary zeros",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ntruncate -s 64 t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: describe symbolic link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'x\\n' >target && ln -s target t\nfile t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief symbolic link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'x\\n' >target && ln -s target t\nfile -b t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime symbolic link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'x\\n' >target && ln -s target t\nfile -i t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: brief (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello\\n' >t && file --brief t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: mime (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello\\n' >t && file --mime t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: uncompress a zip",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'PK\\003\\004\\024\\000\\000\\000' >t.zip && file -z t.zip",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: uncompress (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello\\n' >t && file --uncompress t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: special files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello\\n' >t && file -s t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: special files (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello\\n' >t && file --special-files /dev/null",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: keep going",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello\\n' >t && file -k t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: keep going (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf '{\"a\":1}\\n' >t && file --keep-going t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: several files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello\\n' >a && : >b && mkdir c && file a b c",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nfile nope; echo \"status=$?\"",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr file: names from a pipe with -f",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'hello\\n' >a && : >b && printf 'a\\nb\\n' | file -f -",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: target of a link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink fl && readlink rl",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: target of a dangling link",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink dangling",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: target of a regular file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink real/f",
+      "tags": [
+        "cmd.readlink",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: target of a missing path",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink nope",
+      "tags": [
+        "cmd.readlink",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: canonicalize rl",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink -f rl; echo \"status=$?\"",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: canonicalize fl",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink -f fl; echo \"status=$?\"",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: canonicalize rl/sub/..",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink -f rl/sub/..; echo \"status=$?\"",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: canonicalize real/./sub/../f",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink -f real/./sub/../f; echo \"status=$?\"",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: canonicalize dangling",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink -f dangling; echo \"status=$?\"",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: canonicalize nope/x",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink -f nope/x; echo \"status=$?\"",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: canonicalize rl/nope",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink -f rl/nope; echo \"status=$?\"",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: canonicalize .",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink -f .; echo \"status=$?\"",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: canonicalize (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink --canonicalize rl/sub",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: canonicalize existing",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink -e dangling; echo \"status=$?\"; readlink -e fl",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: canonicalize missing",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink -m nope/x/../y",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr readlink: no newline",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nreadlink -n fl; echo '|'",
+      "tags": [
+        "cmd.readlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: absolute path of real/f",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath real/f; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: absolute path of rl",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath rl; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: absolute path of fl",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath fl; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: absolute path of rl/sub/..",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath rl/sub/..; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: absolute path of real/./sub/../f",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath real/./sub/../f; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: absolute path of dangling",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath dangling; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: absolute path of nope",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath nope; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: absolute path of nope/x",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath nope/x; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: absolute path of .",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath .; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: absolute path of /tmp/w//real/",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath /tmp/w//real/; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: require all components",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath -e real/f && realpath -e nope/x; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: require all components (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath --canonicalize-existing dangling; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: logical",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath -L rl/sub/..",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: logical (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath --logical rl/..",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: no symlinks",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath -s rl/sub/.. fl",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: no symlinks (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath --no-symlinks rl",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: quiet",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath -q -e nope; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: quiet (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath --quiet -e nope; echo \"status=$?\"",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: relative to",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath --relative-to=real/sub real/f",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr realpath: several paths",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p real/sub && printf 'x\\n' >real/f && ln -s real rl && ln -s real/f fl && ln -s nope dangling\nrealpath real fl nope",
+      "tags": [
+        "cmd.realpath"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: file name of 'path/to/file.txt'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -- 'path/to/file.txt'; echo \"status=$?\"",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: file name of 'path/to/dir/'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -- 'path/to/dir/'; echo \"status=$?\"",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: file name of 'file'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -- 'file'; echo \"status=$?\"",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: file name of '/'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -- '/'; echo \"status=$?\"",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: file name of '//'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -- '//'; echo \"status=$?\"",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: file name of ''",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -- ''; echo \"status=$?\"",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: file name of 'a//b//'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -- 'a//b//'; echo \"status=$?\"",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: file name of '/usr/lib/'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -- '/usr/lib/'; echo \"status=$?\"",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: file name of '.hidden'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -- '.hidden'; echo \"status=$?\"",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: file name of '-'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -- '-'; echo \"status=$?\"",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: remove suffix .txt from path/to/file.txt",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename 'path/to/file.txt' '.txt'",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: remove suffix file.txt from file.txt",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename 'file.txt' 'file.txt'",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: remove suffix .gz from archive.tar.gz",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename 'archive.tar.gz' '.gz'",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: remove suffix .md from x.txt",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename 'x.txt' '.md'",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: remove suffix r from dir/",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename 'dir/' 'r'",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: several with -a",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -a a/b c/d/ e",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: suffix with -s",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -s .rs src/main.rs src/lib.rs",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: zero terminated",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename -z a/b | od -c",
+      "tags": [
+        "cmd.basename"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr basename: no operand",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nbasename",
+      "tags": [
+        "cmd.basename",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: parent of 'path/to/file'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname -- 'path/to/file'",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: parent of 'path/to/dir/'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname -- 'path/to/dir/'",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: parent of 'file'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname -- 'file'",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: parent of '/'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname -- '/'",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: parent of '//'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname -- '//'",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: parent of '/usr'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname -- '/usr'",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: parent of 'a//b//'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname -- 'a//b//'",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: parent of ''",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname -- ''",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: parent of './x'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname -- './x'",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: parent of '../x/y'",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname -- '../x/y'",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: several paths",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname a/b c/d/e /f",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: zero delimited",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname -z a/b c/d | od -c",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: zero delimited (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname --zero a/b | tr '\\0' '\\n'",
+      "tags": [
+        "cmd.dirname"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr dirname: no operand",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\ndirname",
+      "tags": [
+        "cmd.dirname",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: empty temporary file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nf=$(mktemp) && case $f in /tmp/tmp.??????????) echo \"name ok\";; *) echo \"unexpected $f\";; esac; [ -f \"$f\" ] && echo exists",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: custom directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir tdir && f=$(mktemp -p /tmp/w/tdir) && case $f in /tmp/w/tdir/tmp.??????????) echo \"name ok\";; *) echo \"unexpected $f\";; esac; [ -f \"$f\" ] && echo exists",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: custom directory (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir tdir && f=$(mktemp --tmpdir=/tmp/w/tdir) && case $f in /tmp/w/tdir/tmp.??????????) echo \"name ok\";; *) echo \"unexpected $f\";; esac; [ -f \"$f\" ] && echo exists",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: custom path template",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nf=$(mktemp /tmp/example.XXXXXXXX) && case $f in /tmp/example.????????) echo \"name ok\";; *) echo \"unexpected $f\";; esac; [ -f \"$f\" ] && echo exists",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: custom file name template",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nf=$(mktemp -t example.XXXXXXXX) && case $f in /tmp/example.????????) echo \"name ok\";; *) echo \"unexpected $f\";; esac; [ -f \"$f\" ] && echo exists",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: template with a relative path",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nf=$(mktemp rel.XXXXXX) && case $f in rel.??????) echo \"name ok\";; *) echo \"unexpected $f\";; esac; [ -f \"$f\" ] && echo exists",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: suffix",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nf=$(mktemp --suffix .ext) && case $f in /tmp/tmp.??????????.ext) echo \"name ok\";; *) echo \"unexpected $f\";; esac; [ -f \"$f\" ] && echo exists",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nf=$(mktemp -d) && case $f in /tmp/tmp.??????????) echo \"name ok\";; *) echo \"unexpected $f\";; esac; [ -d \"$f\" ] && echo exists",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: directory (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nf=$(mktemp --directory) && case $f in /tmp/tmp.??????????) echo \"name ok\";; *) echo \"unexpected $f\";; esac; [ -d \"$f\" ] && echo exists",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: dry run",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nf=$(mktemp -u) && case $f in /tmp/tmp.??????????) echo \"name ok\";; *) echo \"unexpected $f\";; esac; [ -e \"$f\" ] && echo exists || echo absent",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: dry run (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nf=$(mktemp --dry-run) && case $f in /tmp/tmp.??????????) echo \"name ok\";; *) echo \"unexpected $f\";; esac; [ -e \"$f\" ] && echo exists || echo absent",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: two calls give two names",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\na=$(mktemp) && b=$(mktemp) && [ \"$a\" != \"$b\" ] && echo distinct",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr mktemp: quiet failure",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmktemp -q /nodir/x.XXXXXX; echo \"status=$?\"",
+      "tags": [
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: normal",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\ntwo\\nthree\\nfour\\n' >old && printf 'one\\n2\\nthree  \\nfour\\nfive\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: ignoring white space",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\ntwo\\nthree\\nfour\\n' >old && printf 'one\\n2\\nthree  \\nfour\\nfive\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -w old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: side by side",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\ntwo\\nthree\\nfour\\n' >old && printf 'one\\n2\\nthree  \\nfour\\nfive\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -y old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: unified",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\ntwo\\nthree\\nfour\\n' >old && printf 'one\\n2\\nthree  \\nfour\\nfive\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -u old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: patch treating missing files as empty",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\ntwo\\nthree\\nfour\\n' >old && printf 'one\\n2\\nthree  \\nfour\\nfive\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -a -u -N old new > diff.patch; echo \"status=$?\"; cat diff.patch",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: minimal in color",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\ntwo\\nthree\\nfour\\n' >old && printf 'one\\n2\\nthree  \\nfour\\nfive\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -d --color=always old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: normal of identical files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\n' >old && cp old new && touch -d '2020-01-01 00:00:00' old new\ndiff old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: ignoring white space of identical files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\n' >old && cp old new && touch -d '2020-01-01 00:00:00' old new\ndiff -w old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: side by side of identical files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\n' >old && cp old new && touch -d '2020-01-01 00:00:00' old new\ndiff -y old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: unified of identical files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\n' >old && cp old new && touch -d '2020-01-01 00:00:00' old new\ndiff -u old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: patch treating missing files as empty of identical files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\n' >old && cp old new && touch -d '2020-01-01 00:00:00' old new\ndiff -a -u -N old new > diff.patch; echo \"status=$?\"; cat diff.patch",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: minimal in color of identical files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\n' >old && cp old new && touch -d '2020-01-01 00:00:00' old new\ndiff -d --color=always old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: normal with a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\n' >old && touch -d '2020-01-01 00:00:00' old\ndiff old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: ignoring white space with a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\n' >old && touch -d '2020-01-01 00:00:00' old\ndiff -w old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: side by side with a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\n' >old && touch -d '2020-01-01 00:00:00' old\ndiff -y old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: unified with a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\n' >old && touch -d '2020-01-01 00:00:00' old\ndiff -u old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: patch treating missing files as empty with a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\n' >old && touch -d '2020-01-01 00:00:00' old\ndiff -a -u -N old new > diff.patch; echo \"status=$?\"; cat diff.patch",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: minimal in color with a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\n' >old && touch -d '2020-01-01 00:00:00' old\ndiff -d --color=always old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: normal without final newlines",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb' >old && printf 'a\\nc' >new && touch -d '2020-01-01 00:00:00' old new\ndiff old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: ignoring white space without final newlines",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb' >old && printf 'a\\nc' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -w old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: side by side without final newlines",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb' >old && printf 'a\\nc' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -y old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: unified without final newlines",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb' >old && printf 'a\\nc' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -u old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: patch treating missing files as empty without final newlines",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb' >old && printf 'a\\nc' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -a -u -N old new > diff.patch; echo \"status=$?\"; cat diff.patch",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: minimal in color without final newlines",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb' >old && printf 'a\\nc' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -d --color=always old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: normal of an empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >old && printf 'a\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: ignoring white space of an empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >old && printf 'a\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -w old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: side by side of an empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >old && printf 'a\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -y old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: unified of an empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >old && printf 'a\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -u old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: patch treating missing files as empty of an empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >old && printf 'a\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -a -u -N old new > diff.patch; echo \"status=$?\"; cat diff.patch",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: minimal in color of an empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >old && printf 'a\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -d --color=always old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: normal with CRLF",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\r\\nb\\r\\n' >old && printf 'a\\nb\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: ignoring white space with CRLF",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\r\\nb\\r\\n' >old && printf 'a\\nb\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -w old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: side by side with CRLF",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\r\\nb\\r\\n' >old && printf 'a\\nb\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -y old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: unified with CRLF",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\r\\nb\\r\\n' >old && printf 'a\\nb\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -u old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: patch treating missing files as empty with CRLF",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\r\\nb\\r\\n' >old && printf 'a\\nb\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -a -u -N old new > diff.patch; echo \"status=$?\"; cat diff.patch",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: minimal in color with CRLF",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\r\\nb\\r\\n' >old && printf 'a\\nb\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -d --color=always old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: normal of binary files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\000b' >old && printf 'a\\000c' >new && touch -d '2020-01-01 00:00:00' old new\ndiff old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: ignoring white space of binary files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\000b' >old && printf 'a\\000c' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -w old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: side by side of binary files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\000b' >old && printf 'a\\000c' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -y old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: unified of binary files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\000b' >old && printf 'a\\000c' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -u old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: patch treating missing files as empty of binary files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\000b' >old && printf 'a\\000c' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -a -u -N old new > diff.patch; echo \"status=$?\"; cat diff.patch",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: minimal in color of binary files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\000b' >old && printf 'a\\000c' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -d --color=always old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: normal of whitespace-only changes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\n  c\\n' >old && printf 'a  b\\nc\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: ignoring white space of whitespace-only changes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\n  c\\n' >old && printf 'a  b\\nc\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -w old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: side by side of whitespace-only changes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\n  c\\n' >old && printf 'a  b\\nc\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -y old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: unified of whitespace-only changes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\n  c\\n' >old && printf 'a  b\\nc\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -u old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: patch treating missing files as empty of whitespace-only changes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\n  c\\n' >old && printf 'a  b\\nc\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -a -u -N old new > diff.patch; echo \"status=$?\"; cat diff.patch",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: minimal in color of whitespace-only changes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a b\\n  c\\n' >old && printf 'a  b\\nc\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff -d --color=always old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: ignoring white space (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\ntwo\\nthree\\nfour\\n' >old && printf 'one\\n2\\nthree  \\nfour\\nfive\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff --ignore-all-space old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: side by side (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\ntwo\\nthree\\nfour\\n' >old && printf 'one\\n2\\nthree  \\nfour\\nfive\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff --side-by-side old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: unified (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\ntwo\\nthree\\nfour\\n' >old && printf 'one\\n2\\nthree  \\nfour\\nfive\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff --unified old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: patch (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\ntwo\\nthree\\nfour\\n' >old && printf 'one\\n2\\nthree  \\nfour\\nfive\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff --text --unified --new-file old nope",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: minimal (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'one\\ntwo\\nthree\\nfour\\n' >old && printf 'one\\n2\\nthree  \\nfour\\nfive\\n' >new && touch -d '2020-01-01 00:00:00' old new\ndiff --minimal --color=always old new",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: directories recursively",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a/sub b/sub a/only && printf '1\\n' >a/f && printf '2\\n' >b/f && printf 's\\n' >a/sub/s && printf 's\\n' >b/sub/s && printf 'x\\n' >b/newfile && touch -d '2020-01-01 00:00:00' a/f b/f b/newfile\ndiff -r a b",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: directories recursively (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a/sub b/sub a/only && printf '1\\n' >a/f && printf '2\\n' >b/f && printf 's\\n' >a/sub/s && printf 's\\n' >b/sub/s && printf 'x\\n' >b/newfile && touch -d '2020-01-01 00:00:00' a/f b/f b/newfile\ndiff --recursive a b",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: directories brief",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a/sub b/sub a/only && printf '1\\n' >a/f && printf '2\\n' >b/f && printf 's\\n' >a/sub/s && printf 's\\n' >b/sub/s && printf 'x\\n' >b/newfile && touch -d '2020-01-01 00:00:00' a/f b/f b/newfile\ndiff -r -q a b",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: directories brief (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a/sub b/sub a/only && printf '1\\n' >a/f && printf '2\\n' >b/f && printf 's\\n' >a/sub/s && printf 's\\n' >b/sub/s && printf 'x\\n' >b/newfile && touch -d '2020-01-01 00:00:00' a/f b/f b/newfile\ndiff --recursive --brief a b",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: directories unified new-file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a/sub b/sub a/only && printf '1\\n' >a/f && printf '2\\n' >b/f && printf 's\\n' >a/sub/s && printf 's\\n' >b/sub/s && printf 'x\\n' >b/newfile && touch -d '2020-01-01 00:00:00' a/f b/f b/newfile\ndiff -ruN a b",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: identical directories",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir a b && printf '1\\n' >a/f && cp a/f b/f && diff -r a b && echo same",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: directory and file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a/sub b/sub a/only && printf '1\\n' >a/f && printf '2\\n' >b/f && printf 's\\n' >a/sub/s && printf 's\\n' >b/sub/s && printf 'x\\n' >b/newfile && touch -d '2020-01-01 00:00:00' a/f b/f b/newfile\ndiff a/f b && echo ok",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr diff: directories without -r",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p a/sub b/sub a/only && printf '1\\n' >a/f && printf '2\\n' >b/f && printf 's\\n' >a/sub/s && printf 's\\n' >b/sub/s && printf 'x\\n' >b/newfile && touch -d '2020-01-01 00:00:00' a/f b/f b/newfile\ndiff a b",
+      "tags": [
+        "cmd.diff"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: first difference",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abcdef\\nline2\\n' >f1 && printf 'abXdef\\nline2\\n' >f2\ncmp f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: print bytes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abcdef\\nline2\\n' >f1 && printf 'abXdef\\nline2\\n' >f2\ncmp -b f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: every difference",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abcdef\\nline2\\n' >f1 && printf 'abXdef\\nline2\\n' >f2\ncmp -l f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: quiet",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abcdef\\nline2\\n' >f1 && printf 'abXdef\\nline2\\n' >f2\ncmp -s f1 f2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: first difference of identical files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'same\\n' >f1 && cp f1 f2\ncmp f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: print bytes of identical files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'same\\n' >f1 && cp f1 f2\ncmp -b f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: every difference of identical files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'same\\n' >f1 && cp f1 f2\ncmp -l f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: quiet of identical files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'same\\n' >f1 && cp f1 f2\ncmp -s f1 f2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: first difference where one is a prefix",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abc' >f1 && printf 'abcdef' >f2\ncmp f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: print bytes where one is a prefix",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abc' >f1 && printf 'abcdef' >f2\ncmp -b f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: every difference where one is a prefix",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abc' >f1 && printf 'abcdef' >f2\ncmp -l f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: quiet where one is a prefix",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abc' >f1 && printf 'abcdef' >f2\ncmp -s f1 f2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: first difference of an empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >f1 && printf 'x' >f2\ncmp f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: print bytes of an empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >f1 && printf 'x' >f2\ncmp -b f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: every difference of an empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >f1 && printf 'x' >f2\ncmp -l f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: quiet of an empty file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\n: >f1 && printf 'x' >f2\ncmp -s f1 f2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: first difference on a later line",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\nc\\n' >f1 && printf 'a\\nb\\nd\\n' >f2\ncmp f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: print bytes on a later line",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\nc\\n' >f1 && printf 'a\\nb\\nd\\n' >f2\ncmp -b f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: every difference on a later line",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\nc\\n' >f1 && printf 'a\\nb\\nd\\n' >f2\ncmp -l f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: quiet on a later line",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\nb\\nc\\n' >f1 && printf 'a\\nb\\nd\\n' >f2\ncmp -s f1 f2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: first difference with a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a' >f1\ncmp f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: print bytes with a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a' >f1\ncmp -b f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: every difference with a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a' >f1\ncmp -l f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: quiet with a missing file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a' >f1\ncmp -s f1 f2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: first difference of high bytes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\351b' >f1 && printf 'a\\352b' >f2\ncmp f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: print bytes of high bytes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\351b' >f1 && printf 'a\\352b' >f2\ncmp -b f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: every difference of high bytes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\351b' >f1 && printf 'a\\352b' >f2\ncmp -l f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: quiet of high bytes",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'a\\351b' >f1 && printf 'a\\352b' >f2\ncmp -s f1 f2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: print bytes (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abcdef\\nline2\\n' >f1 && printf 'abXdef\\nline2\\n' >f2\ncmp --print-bytes f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: every difference (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abcdef\\nline2\\n' >f1 && printf 'abXdef\\nline2\\n' >f2\ncmp --verbose f1 f2",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cmp: quiet (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nprintf 'abcdef\\nline2\\n' >f1 && printf 'abXdef\\nline2\\n' >f2\ncmp --quiet f1 f2; echo \"status=$?\"",
+      "tags": [
+        "cmd.cmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: apply with names from the diff",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj/src && patch -i ../../p0.diff && cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: apply with names from the diff (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj/src && patch --input ../../p0.diff && cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: apply to a specific file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncp proj/src/f target && patch -i p0.diff target && cat target",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: apply to a specific file (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncp proj/src/f target && patch --input p0.diff target && cat target",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: write the result to another file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\npatch -i p0.diff proj/src/f -o out && cat out && cat proj/src/f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: write the result to another file (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\npatch --input p0.diff proj/src/f --output out && cat out",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: strip one component",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj && patch -i ../p1.diff -p 1 && cat src/f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: strip one component (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj && patch --input ../p1.diff --strip 1 && cat src/f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: strip zero components on an a/ b/ diff",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj && patch -p0 -i ../p1.diff; echo \"status=$?\"",
+      "tags": [
+        "cmd.patch",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: reverse",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj/src && patch -i ../../p0.diff && patch -i ../../p0.diff -R && cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: reverse (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj/src && patch -i ../../p0.diff && patch --input ../../p0.diff --reverse && cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: already applied",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj/src && patch -i ../../p0.diff && patch -i ../../p0.diff; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.patch",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: apply with an offset",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj/src && printf 'x\\ny\\n' | cat - f >g && mv g f && patch -i ../../p0.diff && cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: a hunk that fails",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj/src && printf 'q\\nr\\ns\\nt\\nu\\n' >f && patch -i ../../p0.diff; echo \"status=$?\"; ls; cat f.rej",
+      "tags": [
+        "cmd.patch",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: dry run",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj/src && patch --dry-run -i ../../p0.diff && cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: from stdin",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\ncd proj/src && patch < ../../p0.diff && cat f",
+      "tags": [
+        "cmd.patch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: missing patch file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\npatch -i nope.diff",
+      "tags": [
+        "cmd.patch",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: missing target file",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\npatch -i p0.diff nope; echo \"status=$?\"",
+      "tags": [
+        "cmd.patch",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr patch: garbage input",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w && cd /tmp/w\nmkdir -p proj/src && printf 'a\\nb\\nc\\nd\\ne\\n' >proj/src/f && cp proj/src/f proj/src/f.orig && printf 'a\\nB\\nc\\nd\\nE\\n' >proj/src/f.new && (cd proj && diff -u --label a/src/f --label b/src/f src/f.orig src/f.new >../p1.diff); (cd proj/src && diff -u --label f --label f f.orig f.new >../../p0.diff); rm proj/src/f.orig proj/src/f.new\nprintf 'not a patch\\n' | patch proj/src/f; echo \"status=$?\"",
+      "tags": [
+        "cmd.patch",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr grep: recursive ignoring binary files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nprintf 'TODO\\000bin' >src/blob.bin\ngrep -rI \"TODO\" . | sort",
+      "tags": [
+        "cmd.grep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr grep: recursive ignoring binary files (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nprintf 'TODO\\000bin' >src/blob.bin\ngrep --recursive --binary-files=without-match \"TODO\" . | sort",
+      "tags": [
+        "cmd.grep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr grep: recursive including binary files",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nprintf 'TODO\\000bin' >src/blob.bin\ngrep -r \"TODO\" . | sort",
+      "tags": [
+        "cmd.grep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr grep: recursive in a directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nprintf 'TODO\\000bin' >src/blob.bin\ngrep -rI \"TODO\" src",
+      "tags": [
+        "cmd.grep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr grep: recursive with no match",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nprintf 'TODO\\000bin' >src/blob.bin\ngrep -rI \"NOTHERE\" .; echo \"status=$?\"",
+      "tags": [
+        "cmd.grep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr grep: recursive in a missing directory",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nprintf 'TODO\\000bin' >src/blob.bin\ngrep -rI \"TODO\" nosuch",
+      "tags": [
+        "cmd.grep",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cut: fields of NUL-terminated find output",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -print0 | sort -z | cut -z -d \"/\" -f 2 | tr '\\0' '\\n' | uniq",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr cut: fields of NUL-terminated find output (long)",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . -print0 | sort -z | cut --zero-terminated --delimiter \"/\" --fields 2 | tr '\\0' '\\n' | uniq",
+      "tags": [
+        "cmd.cut"
+      ],
+      "options": {}
+    },
+    {
+      "name": "real tldr wc: count find output",
+      "script": "mkdir -p /tmp/w && cd /tmp/w\nmkdir -p /tmp/w/src/lib /tmp/w/src/empty /tmp/w/docs /tmp/w/.hidden && cd /tmp/w\nprintf 'fn main() {}\\n' >src/main.rs\nprintf 'pub fn add() {}\\n// TODO: sub\\n' >src/lib/math.rs\nprintf '# Title\\nTODO here\\n' >docs/README.md\nprintf 'secret\\n' >.hidden/key\nprintf 'plain notes\\n' >notes.txt\n: >empty.txt\nfind . | wc",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    }
+  ]
+}

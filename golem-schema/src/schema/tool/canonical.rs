@@ -136,6 +136,71 @@ pub enum CanonicalSurfaceRef {
     BodyFlag { index: usize },
 }
 
+/// Names needed to order options and flags, without their schemas or values.
+#[derive(Default)]
+pub struct CanonicalNamedSurfaces<'a> {
+    pub options: Vec<(&'a str, &'a [String])>,
+    pub flags: Vec<(&'a str, &'a [String])>,
+}
+
+/// Schema-free input layout shared by native tools and generated descriptors.
+#[derive(Default)]
+pub struct CanonicalInputLayout<'a> {
+    /// Globals in root-to-command path order, paired with their node index.
+    pub globals: Vec<(usize, CanonicalNamedSurfaces<'a>)>,
+    pub positionals: Vec<&'a str>,
+    pub tail: Option<&'a str>,
+    pub local: CanonicalNamedSurfaces<'a>,
+}
+
+impl CanonicalInputLayout<'_> {
+    pub fn into_surfaces(self) -> Vec<CanonicalSurfaceRef> {
+        let mut body_names: BTreeSet<&str> = BTreeSet::new();
+        for name in &self.positionals {
+            body_names.insert(name);
+        }
+        if let Some(name) = self.tail {
+            body_names.insert(name);
+        }
+        for (name, aliases) in self.local.options.iter().chain(&self.local.flags) {
+            body_names.insert(name);
+            body_names.extend(aliases.iter().map(String::as_str));
+        }
+        let shadowed = |name: &str, aliases: &[String]| {
+            body_names.contains(name)
+                || aliases
+                    .iter()
+                    .any(|alias| body_names.contains(alias.as_str()))
+        };
+        let mut surfaces = Vec::new();
+        for (node, globals) in &self.globals {
+            for (index, (name, aliases)) in globals.options.iter().enumerate() {
+                if !shadowed(name, aliases) {
+                    surfaces.push(CanonicalSurfaceRef::GlobalOption { node: *node, index });
+                }
+            }
+            for (index, (name, aliases)) in globals.flags.iter().enumerate() {
+                if !shadowed(name, aliases) {
+                    surfaces.push(CanonicalSurfaceRef::GlobalFlag { node: *node, index });
+                }
+            }
+        }
+        surfaces.extend(
+            (0..self.positionals.len()).map(|index| CanonicalSurfaceRef::BodyPositional { index }),
+        );
+        if self.tail.is_some() {
+            surfaces.push(CanonicalSurfaceRef::BodyTail);
+        }
+        surfaces.extend(
+            (0..self.local.options.len()).map(|index| CanonicalSurfaceRef::BodyOption { index }),
+        );
+        surfaces.extend(
+            (0..self.local.flags.len()).map(|index| CanonicalSurfaceRef::BodyFlag { index }),
+        );
+        surfaces
+    }
+}
+
 impl CanonicalInputModel {
     /// Splits a record value into per-field [`CanonicalInputValue`]s following
     /// this model's field order.
@@ -175,23 +240,42 @@ impl Tool {
     /// Returns `None` when a segment does not match or the selected command
     /// has no body.
     pub fn command_index_by_path(&self, command_path: &[String]) -> Option<usize> {
+        self.resolve_command_path(command_path)
+            .map(|(index, _)| index)
+    }
+
+    /// The canonical form of `command_path`: each segment replaced by the name of the
+    /// subcommand it matches by name or alias. Returns `None` when
+    /// [`Tool::command_index_by_path`] does, so only a path that selects a command body has a
+    /// canonical form.
+    pub fn canonical_command_path(&self, command_path: &[String]) -> Option<Vec<String>> {
+        self.resolve_command_path(command_path)
+            .map(|(_, path)| path)
+    }
+
+    fn resolve_command_path(&self, command_path: &[String]) -> Option<(usize, Vec<String>)> {
         let mut current = 0usize;
         if self.commands.nodes.is_empty() {
             return None;
         }
+        let mut canonical = Vec::with_capacity(command_path.len());
         for segment in command_path {
-            let next = self.commands.nodes[current]
+            let (next, node) = self.commands.nodes[current]
                 .subcommands
                 .iter()
                 .find_map(|idx| {
                     let idx = idx.as_usize()?;
                     let node = self.commands.nodes.get(idx)?;
                     (node.name == *segment || node.aliases.iter().any(|alias| alias == segment))
-                        .then_some(idx)
+                        .then_some((idx, node))
                 })?;
+            canonical.push(node.name.clone());
             current = next;
         }
-        self.commands.nodes[current].body.as_ref().map(|_| current)
+        self.commands.nodes[current]
+            .body
+            .as_ref()
+            .map(|_| (current, canonical))
     }
 
     /// The inherited globals in scope for `command_index`, collected along the
@@ -238,76 +322,56 @@ impl Tool {
             .nodes
             .get(command_index)
             .and_then(|c| c.body.as_ref());
-        // Body surface names include option/flag aliases, so an inherited
-        // global is shadowed when *any* of its surface names (long or alias)
-        // collides with any body-local surface name. A well-formed tool never
-        // has such a collision, but this method may be called on a
-        // not-yet-validated tool, and surfacing the body-local field is the
-        // least misleading fallback.
-        let mut body_names: BTreeSet<&str> = BTreeSet::new();
-        if let Some(body) = body {
-            for p in &body.positionals.fixed {
-                body_names.insert(p.name.as_str());
-            }
-            if let Some(t) = &body.positionals.tail {
-                body_names.insert(t.name.as_str());
-            }
-            for o in &body.options {
-                body_names.insert(o.long.as_str());
-                body_names.extend(o.aliases.iter().map(String::as_str));
-            }
-            for f in &body.flags {
-                body_names.insert(f.long.as_str());
-                body_names.extend(f.aliases.iter().map(String::as_str));
-            }
-        }
-
-        let shadowed = |long: &str, aliases: &[String]| {
-            body_names.contains(long)
-                || aliases
-                    .iter()
-                    .any(|alias| body_names.contains(alias.as_str()))
+        let mut layout = CanonicalInputLayout {
+            globals: self
+                .path_to(command_index)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|index| {
+                    let node = self.commands.nodes.get(index)?;
+                    Some((
+                        index,
+                        CanonicalNamedSurfaces {
+                            options: node
+                                .globals
+                                .options
+                                .iter()
+                                .map(|o| (o.long.as_str(), o.aliases.as_slice()))
+                                .collect(),
+                            flags: node
+                                .globals
+                                .flags
+                                .iter()
+                                .map(|f| (f.long.as_str(), f.aliases.as_slice()))
+                                .collect(),
+                        },
+                    ))
+                })
+                .collect(),
+            ..Default::default()
         };
-
-        let mut surfaces = Vec::new();
-        for node_index in self.path_to(command_index).unwrap_or_default() {
-            let Some(node) = self.commands.nodes.get(node_index) else {
-                continue;
-            };
-            for (index, option) in node.globals.options.iter().enumerate() {
-                if shadowed(&option.long, &option.aliases) {
-                    continue;
-                }
-                surfaces.push(CanonicalSurfaceRef::GlobalOption {
-                    node: node_index,
-                    index,
-                });
-            }
-            for (index, flag) in node.globals.flags.iter().enumerate() {
-                if shadowed(&flag.long, &flag.aliases) {
-                    continue;
-                }
-                surfaces.push(CanonicalSurfaceRef::GlobalFlag {
-                    node: node_index,
-                    index,
-                });
-            }
-        }
         if let Some(body) = body {
-            surfaces.extend(
-                (0..body.positionals.fixed.len())
-                    .map(|index| CanonicalSurfaceRef::BodyPositional { index }),
-            );
-            if body.positionals.tail.is_some() {
-                surfaces.push(CanonicalSurfaceRef::BodyTail);
-            }
-            surfaces.extend(
-                (0..body.options.len()).map(|index| CanonicalSurfaceRef::BodyOption { index }),
-            );
-            surfaces
-                .extend((0..body.flags.len()).map(|index| CanonicalSurfaceRef::BodyFlag { index }));
+            layout.positionals = body
+                .positionals
+                .fixed
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect();
+            layout.tail = body.positionals.tail.as_ref().map(|p| p.name.as_str());
+            layout.local = CanonicalNamedSurfaces {
+                options: body
+                    .options
+                    .iter()
+                    .map(|o| (o.long.as_str(), o.aliases.as_slice()))
+                    .collect(),
+                flags: body
+                    .flags
+                    .iter()
+                    .map(|f| (f.long.as_str(), f.aliases.as_slice()))
+                    .collect(),
+            };
         }
-        surfaces
+        layout.into_surfaces()
     }
 
     /// The canonical input field for one surface reference of the command at
@@ -1126,6 +1190,50 @@ mod tests {
             Some(1)
         );
         assert_eq!(tool.command_index_by_path(&["missing".to_string()]), None);
+    }
+
+    #[test]
+    fn canonical_command_path_replaces_aliases_by_names() {
+        let tool = grep_tool();
+        assert_eq!(tool.canonical_command_path(&[]), Some(vec![]));
+        assert_eq!(
+            tool.canonical_command_path(&["substitute".to_string()]),
+            Some(vec!["replace".to_string()])
+        );
+        assert_eq!(
+            tool.canonical_command_path(&["replace".to_string()]),
+            Some(vec!["replace".to_string()])
+        );
+        assert_eq!(tool.canonical_command_path(&["missing".to_string()]), None);
+
+        let mut tool = grep_tool();
+        tool.commands.nodes[1].body = None;
+        assert_eq!(
+            tool.canonical_command_path(&["substitute".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn validation_bounds_the_operation_of_every_command() {
+        use crate::schema::tool::validation::{ToolValidationError, validate_tool};
+        use crate::schema::tool::{MAX_INVOCATION_OPERATION_BYTES, tool_operation};
+
+        // `tool:grep/` plus the subcommand name; an alias never reaches an operation.
+        let longest = MAX_INVOCATION_OPERATION_BYTES - "tool:grep/".len();
+        let mut tool = grep_tool();
+        tool.commands.nodes[1].name = format!("r{}", "e".repeat(longest - 1));
+        tool.commands.nodes[1].aliases = vec![format!("s{}", "e".repeat(longest))];
+        validate_tool(&tool).unwrap();
+
+        tool.commands.nodes[1].name = format!("r{}", "e".repeat(longest));
+        let operation = tool_operation(&"grep", &[tool.commands.nodes[1].name.clone()]);
+        assert_eq!(operation.len(), MAX_INVOCATION_OPERATION_BYTES + 1);
+        assert!(
+            validate_tool(&tool)
+                .unwrap_err()
+                .contains(&ToolValidationError::OperationTooLong { operation })
+        );
     }
 
     #[test]

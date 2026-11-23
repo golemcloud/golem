@@ -1,0 +1,4354 @@
+{
+  "tier": "sweep",
+  "description": "Edge inputs: invalid UTF-8 and binary bytes, made with printf and $'...' inside the script, through\npipes, read, mapfile, command substitution, parameter expansion, the text filters and file names.\n\nGenerated from fixed tables with plain loops, so every Python 3 produces the same scripts.",
+  "cases": [
+    {
+      "name": "edge bytes: cat lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | cat | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | cat | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | cat | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | cat | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat nul",
+      "script": "printf 'a\\000b\\nzz\\n' | cat | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | cat | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | cat | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -v lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | cat -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -v truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | cat -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -v surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | cat -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -v latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | cat -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -v nul",
+      "script": "printf 'a\\000b\\nzz\\n' | cat -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -v crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | cat -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -v controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | cat -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -A lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -A truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -A surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -A latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -A nul",
+      "script": "printf 'a\\000b\\nzz\\n' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -A crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cat -A controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -c lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | head -c 3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -c truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | head -c 3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -c surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | head -c 3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -c latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | head -c 3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -c nul",
+      "script": "printf 'a\\000b\\nzz\\n' | head -c 3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -c crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | head -c 3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -c controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | head -c 3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -n lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | head -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -n truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | head -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -n surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | head -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -n latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | head -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -n nul",
+      "script": "printf 'a\\000b\\nzz\\n' | head -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -n crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | head -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: head -n controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | head -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -c lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | tail -c 5 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -c truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | tail -c 5 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -c surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | tail -c 5 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -c latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | tail -c 5 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -c nul",
+      "script": "printf 'a\\000b\\nzz\\n' | tail -c 5 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -c crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | tail -c 5 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -c controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | tail -c 5 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -n lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | tail -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -n truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | tail -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -n surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | tail -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -n latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | tail -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -n nul",
+      "script": "printf 'a\\000b\\nzz\\n' | tail -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -n crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | tail -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tail -n controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | tail -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -b lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | cut -b 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -b truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | cut -b 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -b surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | cut -b 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -b latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | cut -b 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -b nul",
+      "script": "printf 'a\\000b\\nzz\\n' | cut -b 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -b crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | cut -b 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -b controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | cut -b 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -c lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | cut -c 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -c truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | cut -c 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -c surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | cut -c 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -c latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | cut -c 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -c nul",
+      "script": "printf 'a\\000b\\nzz\\n' | cut -c 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -c crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | cut -c 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -c controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | cut -c 2-3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -f lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | cut -d ' ' -f 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -f truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | cut -d ' ' -f 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -f surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | cut -d ' ' -f 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -f latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | cut -d ' ' -f 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -f nul",
+      "script": "printf 'a\\000b\\nzz\\n' | cut -d ' ' -f 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -f crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | cut -d ' ' -f 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cut -f controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | cut -d ' ' -f 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -d lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | tr -d '\\377\\000' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -d truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | tr -d '\\377\\000' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -d surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | tr -d '\\377\\000' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -d latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | tr -d '\\377\\000' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -d nul",
+      "script": "printf 'a\\000b\\nzz\\n' | tr -d '\\377\\000' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -d crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | tr -d '\\377\\000' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -d controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | tr -d '\\377\\000' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr high range lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | tr '\\200-\\377' '?'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr high range truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | tr '\\200-\\377' '?'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr high range surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | tr '\\200-\\377' '?'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr high range latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | tr '\\200-\\377' '?'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr high range nul",
+      "script": "printf 'a\\000b\\nzz\\n' | tr '\\200-\\377' '?'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr high range crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | tr '\\200-\\377' '?'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr high range controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | tr '\\200-\\377' '?'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -c lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | tr -c 'a-z\\n' '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -c truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | tr -c 'a-z\\n' '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -c surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | tr -c 'a-z\\n' '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -c latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | tr -c 'a-z\\n' '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -c nul",
+      "script": "printf 'a\\000b\\nzz\\n' | tr -c 'a-z\\n' '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -c crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | tr -c 'a-z\\n' '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -c controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | tr -c 'a-z\\n' '.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr upper lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | tr a-z A-Z | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr upper truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | tr a-z A-Z | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr upper surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | tr a-z A-Z | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr upper latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | tr a-z A-Z | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr upper nul",
+      "script": "printf 'a\\000b\\nzz\\n' | tr a-z A-Z | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr upper crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | tr a-z A-Z | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr upper controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | tr a-z A-Z | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -s lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | tr -s 'z' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -s truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | tr -s 'z' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -s surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | tr -s 'z' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -s latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | tr -s 'z' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -s nul",
+      "script": "printf 'a\\000b\\nzz\\n' | tr -s 'z' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -s crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | tr -s 'z' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tr -s controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | tr -s 'z' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | sort | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | sort | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | sort | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | sort | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort nul",
+      "script": "printf 'a\\000b\\nzz\\n' | sort | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | sort | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | sort | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort -u lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | sort -u | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort -u truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | sort -u | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort -u surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | sort -u | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort -u latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | sort -u | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort -u nul",
+      "script": "printf 'a\\000b\\nzz\\n' | sort -u | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort -u crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | sort -u | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sort -u controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | sort -u | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: uniq -c lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | uniq -c | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: uniq -c truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | uniq -c | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: uniq -c surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | uniq -c | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: uniq -c latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | uniq -c | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: uniq -c nul",
+      "script": "printf 'a\\000b\\nzz\\n' | uniq -c | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: uniq -c crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | uniq -c | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: uniq -c controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | uniq -c | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -c lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -c truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -c surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -c latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -c nul",
+      "script": "printf 'a\\000b\\nzz\\n' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -c crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -c controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -m lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -m truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -m surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -m latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -m nul",
+      "script": "printf 'a\\000b\\nzz\\n' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -m crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -m controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | wc -m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -l lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -l truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -l surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -l latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -l nul",
+      "script": "printf 'a\\000b\\nzz\\n' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -l crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -l controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -w lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -w truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -w surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -w latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -w nul",
+      "script": "printf 'a\\000b\\nzz\\n' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -w crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -w controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -L lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -L truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -L surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -L latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -L nul",
+      "script": "printf 'a\\000b\\nzz\\n' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -L crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: wc -L controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | wc -L",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c dot lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | grep -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c dot truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | grep -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c dot surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | grep -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c dot latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | grep -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c dot nul",
+      "script": "printf 'a\\000b\\nzz\\n' | grep -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c dot crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | grep -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c dot controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | grep -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep a lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | grep a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep a truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | grep a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep a surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | grep a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep a latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | grep a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep a nul",
+      "script": "printf 'a\\000b\\nzz\\n' | grep a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep a crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | grep a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep a controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | grep a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -a lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | grep -a a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -a truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | grep -a a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -a surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | grep -a a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -a latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | grep -a a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -a nul",
+      "script": "printf 'a\\000b\\nzz\\n' | grep -a a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -a crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | grep -a a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -a controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | grep -a a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c a lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | grep -c a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c a truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | grep -c a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c a surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | grep -c a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c a latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | grep -c a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c a nul",
+      "script": "printf 'a\\000b\\nzz\\n' | grep -c a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c a crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | grep -c a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -c a controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | grep -c a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -v lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | grep -v zz; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -v truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | grep -v zz; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -v surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | grep -v zz; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -v latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | grep -v zz; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -v nul",
+      "script": "printf 'a\\000b\\nzz\\n' | grep -v zz; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -v crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | grep -v zz; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -v controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | grep -v zz; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -o lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | grep -o '[a-z]'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -o truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | grep -o '[a-z]'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -o surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | grep -o '[a-z]'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -o latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | grep -o '[a-z]'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -o nul",
+      "script": "printf 'a\\000b\\nzz\\n' | grep -o '[a-z]'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -o crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | grep -o '[a-z]'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -o controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | grep -o '[a-z]'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -q lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | grep -q a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -q truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | grep -q a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -q surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | grep -q a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -q latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | grep -q a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -q nul",
+      "script": "printf 'a\\000b\\nzz\\n' | grep -q a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -q crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | grep -q a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -q controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | grep -q a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -l lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | grep -l a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -l truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | grep -l a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -l surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | grep -l a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -l latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | grep -l a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -l nul",
+      "script": "printf 'a\\000b\\nzz\\n' | grep -l a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -l crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | grep -l a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -l controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | grep -l a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -n lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | grep -n z; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -n truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | grep -n z; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -n surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | grep -n z; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -n latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | grep -n z; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -n nul",
+      "script": "printf 'a\\000b\\nzz\\n' | grep -n z; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -n crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | grep -n z; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep -n controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | grep -n z; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed any char lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | sed 's/./X/g' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed any char truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | sed 's/./X/g' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed any char surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | sed 's/./X/g' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed any char latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | sed 's/./X/g' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed any char nul",
+      "script": "printf 'a\\000b\\nzz\\n' | sed 's/./X/g' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed any char crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | sed 's/./X/g' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed any char controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | sed 's/./X/g' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -n l lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -n l truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -n l surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -n l latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -n l nul",
+      "script": "printf 'a\\000b\\nzz\\n' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -n l crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -n l controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | sed -n l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed s lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | sed 's/a/A/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed s truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | sed 's/a/A/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed s surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | sed 's/a/A/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed s latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | sed 's/a/A/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed s nul",
+      "script": "printf 'a\\000b\\nzz\\n' | sed 's/a/A/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed s crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | sed 's/a/A/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed s controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | sed 's/a/A/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed line count lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | sed -n '$='",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed line count truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | sed -n '$='",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed line count surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | sed -n '$='",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed line count latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | sed -n '$='",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed line count nul",
+      "script": "printf 'a\\000b\\nzz\\n' | sed -n '$='",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed line count crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | sed -n '$='",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed line count controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | sed -n '$='",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed y lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | sed 'y/abz/ABZ/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed y truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | sed 'y/abz/ABZ/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed y surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | sed 'y/abz/ABZ/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed y latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | sed 'y/abz/ABZ/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed y nul",
+      "script": "printf 'a\\000b\\nzz\\n' | sed 'y/abz/ABZ/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed y crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | sed 'y/abz/ABZ/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed y controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | sed 'y/abz/ABZ/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: rev lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | rev | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: rev truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | rev | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: rev surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | rev | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: rev latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | rev | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: rev nul",
+      "script": "printf 'a\\000b\\nzz\\n' | rev | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: rev crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | rev | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: rev controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | rev | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tac lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | tac | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tac truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | tac | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tac surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | tac | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tac latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | tac | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tac nul",
+      "script": "printf 'a\\000b\\nzz\\n' | tac | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tac crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | tac | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tac controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | tac | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: fold lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | fold -w 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: fold truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | fold -w 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: fold surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | fold -w 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: fold latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | fold -w 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: fold nul",
+      "script": "printf 'a\\000b\\nzz\\n' | fold -w 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: fold crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | fold -w 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: fold controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | fold -w 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: nl lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | nl | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: nl truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | nl | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: nl surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | nl | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: nl latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | nl | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: nl nul",
+      "script": "printf 'a\\000b\\nzz\\n' | nl | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: nl crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | nl | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: nl controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | nl | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: paste -s lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | paste -s -d , | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: paste -s truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | paste -s -d , | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: paste -s surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | paste -s -d , | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: paste -s latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | paste -s -d , | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: paste -s nul",
+      "script": "printf 'a\\000b\\nzz\\n' | paste -s -d , | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: paste -s crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | paste -s -d , | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: paste -s controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | paste -s -d , | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: od -c lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | od -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: od -c truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | od -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: od -c surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | od -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: od -c latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | od -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: od -c nul",
+      "script": "printf 'a\\000b\\nzz\\n' | od -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: od -c crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | od -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: od -c controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | od -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 nul",
+      "script": "printf 'a\\000b\\nzz\\n' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 round trip lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | base64 | base64 -d | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 round trip truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | base64 | base64 -d | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 round trip surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | base64 | base64 -d | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 round trip latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | base64 | base64 -d | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 round trip nul",
+      "script": "printf 'a\\000b\\nzz\\n' | base64 | base64 -d | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 round trip crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | base64 | base64 -d | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: base64 round trip controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | base64 | base64 -d | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cksum lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cksum truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cksum surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cksum latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cksum nul",
+      "script": "printf 'a\\000b\\nzz\\n' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cksum crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cksum controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: expand lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | expand | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: expand truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | expand | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: expand surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | expand | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: expand latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | expand | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: expand nul",
+      "script": "printf 'a\\000b\\nzz\\n' | expand | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: expand crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | expand | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: expand controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | expand | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | file -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | file -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | file -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | file -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file nul",
+      "script": "printf 'a\\000b\\nzz\\n' | file -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | file -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | file -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -R lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | jq -R . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -R truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | jq -R . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -R surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | jq -R . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -R latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | jq -R . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -R nul",
+      "script": "printf 'a\\000b\\nzz\\n' | jq -R . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -R crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | jq -R . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -R controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | jq -R . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -Rs length lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | jq -Rs length",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -Rs length truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | jq -Rs length",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -Rs length surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | jq -Rs length",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -Rs length latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | jq -Rs length",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -Rs length nul",
+      "script": "printf 'a\\000b\\nzz\\n' | jq -Rs length",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -Rs length crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | jq -Rs length",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: jq -Rs length controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | jq -Rs length",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tee lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | tee /tmp/t >/dev/null; od -An -tx1 /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tee truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | tee /tmp/t >/dev/null; od -An -tx1 /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tee surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | tee /tmp/t >/dev/null; od -An -tx1 /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tee latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | tee /tmp/t >/dev/null; od -An -tx1 /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tee nul",
+      "script": "printf 'a\\000b\\nzz\\n' | tee /tmp/t >/dev/null; od -An -tx1 /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tee crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | tee /tmp/t >/dev/null; od -An -tx1 /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: tee controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | tee /tmp/t >/dev/null; od -An -tx1 /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: xargs lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | xargs echo | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: xargs truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | xargs echo | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: xargs surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | xargs echo | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: xargs latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | xargs echo | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: xargs nul",
+      "script": "printf 'a\\000b\\nzz\\n' | xargs echo | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: xargs crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | xargs echo | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: xargs controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | xargs echo | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: split lone ff",
+      "script": "cd /tmp && printf 'a\\xffb\\nzz\\n' | split -l 1 && cat xa* | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: split truncated",
+      "script": "cd /tmp && printf 'ab\\xc3\\nzz\\n' | split -l 1 && cat xa* | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: split surrogate",
+      "script": "cd /tmp && printf 'a\\xed\\xa0\\x80b\\nzz\\n' | split -l 1 && cat xa* | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: split latin1",
+      "script": "cd /tmp && printf 'caf\\xe9 ol\\xe9\\nzz\\n' | split -l 1 && cat xa* | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: split nul",
+      "script": "cd /tmp && printf 'a\\000b\\nzz\\n' | split -l 1 && cat xa* | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: split crlf",
+      "script": "cd /tmp && printf 'a b\\r\\nzz\\r\\n' | split -l 1 && cat xa* | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: split controls",
+      "script": "cd /tmp && printf 'a\\001\\033[1mb\\177\\nzz\\n' | split -l 1 && cat xa* | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -r lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | { IFS= read -r l; printf %s \"$l\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -r truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | { IFS= read -r l; printf %s \"$l\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -r surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | { IFS= read -r l; printf %s \"$l\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -r latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | { IFS= read -r l; printf %s \"$l\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -r nul",
+      "script": "printf 'a\\000b\\nzz\\n' | { IFS= read -r l; printf %s \"$l\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -r crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | { IFS= read -r l; printf %s \"$l\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -r controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | { IFS= read -r l; printf %s \"$l\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read length lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | { IFS= read -r l; echo \"${#l}\"; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read length truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | { IFS= read -r l; echo \"${#l}\"; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read length surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | { IFS= read -r l; echo \"${#l}\"; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read length latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | { IFS= read -r l; echo \"${#l}\"; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read length nul",
+      "script": "printf 'a\\000b\\nzz\\n' | { IFS= read -r l; echo \"${#l}\"; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read length crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | { IFS= read -r l; echo \"${#l}\"; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read length controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | { IFS= read -r l; echo \"${#l}\"; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read loop lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | while IFS= read -r l; do printf '%s|' \"$l\"; done | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read loop truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | while IFS= read -r l; do printf '%s|' \"$l\"; done | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read loop surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | while IFS= read -r l; do printf '%s|' \"$l\"; done | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read loop latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | while IFS= read -r l; do printf '%s|' \"$l\"; done | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read loop nul",
+      "script": "printf 'a\\000b\\nzz\\n' | while IFS= read -r l; do printf '%s|' \"$l\"; done | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read loop crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | while IFS= read -r l; do printf '%s|' \"$l\"; done | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read loop controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | while IFS= read -r l; do printf '%s|' \"$l\"; done | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -a lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | { read -r -a w; echo \"${#w[@]}\"; printf %s \"${w[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -a truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | { read -r -a w; echo \"${#w[@]}\"; printf %s \"${w[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -a surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | { read -r -a w; echo \"${#w[@]}\"; printf %s \"${w[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -a latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | { read -r -a w; echo \"${#w[@]}\"; printf %s \"${w[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -a nul",
+      "script": "printf 'a\\000b\\nzz\\n' | { read -r -a w; echo \"${#w[@]}\"; printf %s \"${w[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -a crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | { read -r -a w; echo \"${#w[@]}\"; printf %s \"${w[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: read -a controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | { read -r -a w; echo \"${#w[@]}\"; printf %s \"${w[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: mapfile lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' | { mapfile -t a; echo \"${#a[@]}\"; printf %s \"${a[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: mapfile truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' | { mapfile -t a; echo \"${#a[@]}\"; printf %s \"${a[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: mapfile surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' | { mapfile -t a; echo \"${#a[@]}\"; printf %s \"${a[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: mapfile latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' | { mapfile -t a; echo \"${#a[@]}\"; printf %s \"${a[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: mapfile nul",
+      "script": "printf 'a\\000b\\nzz\\n' | { mapfile -t a; echo \"${#a[@]}\"; printf %s \"${a[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: mapfile crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' | { mapfile -t a; echo \"${#a[@]}\"; printf %s \"${a[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: mapfile controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' | { mapfile -t a; echo \"${#a[@]}\"; printf %s \"${a[0]}\" | od -An -tx1; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution lone ff",
+      "script": "x=$(printf 'a\\xffb\\nzz\\n'); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution truncated",
+      "script": "x=$(printf 'ab\\xc3\\nzz\\n'); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution surrogate",
+      "script": "x=$(printf 'a\\xed\\xa0\\x80b\\nzz\\n'); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution latin1",
+      "script": "x=$(printf 'caf\\xe9 ol\\xe9\\nzz\\n'); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution nul",
+      "script": "x=$(printf 'a\\000b\\nzz\\n'); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution crlf",
+      "script": "x=$(printf 'a b\\r\\nzz\\r\\n'); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution controls",
+      "script": "x=$(printf 'a\\001\\033[1mb\\177\\nzz\\n'); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution length lone ff",
+      "script": "x=$(printf 'a\\xffb\\nzz\\n'); echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution length truncated",
+      "script": "x=$(printf 'ab\\xc3\\nzz\\n'); echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution length surrogate",
+      "script": "x=$(printf 'a\\xed\\xa0\\x80b\\nzz\\n'); echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution length latin1",
+      "script": "x=$(printf 'caf\\xe9 ol\\xe9\\nzz\\n'); echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution length nul",
+      "script": "x=$(printf 'a\\000b\\nzz\\n'); echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution length crlf",
+      "script": "x=$(printf 'a b\\r\\nzz\\r\\n'); echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: command substitution length controls",
+      "script": "x=$(printf 'a\\001\\033[1mb\\177\\nzz\\n'); echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file substitution lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' > /tmp/f; x=$(</tmp/f); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file substitution truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' > /tmp/f; x=$(</tmp/f); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file substitution surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' > /tmp/f; x=$(</tmp/f); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file substitution latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' > /tmp/f; x=$(</tmp/f); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file substitution nul",
+      "script": "printf 'a\\000b\\nzz\\n' > /tmp/f; x=$(</tmp/f); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file substitution crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' > /tmp/f; x=$(</tmp/f); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file substitution controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' > /tmp/f; x=$(</tmp/f); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c variable lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c variable truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c variable surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c variable latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c variable nul",
+      "script": "x=$'a\\000b\\nzz\\n'; printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c variable crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c variable controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c length lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c length truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c length surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c length latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c length nul",
+      "script": "x=$'a\\000b\\nzz\\n'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c length crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c length controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c substring lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; printf %s \"${x:1:2}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c substring truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; printf %s \"${x:1:2}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c substring surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; printf %s \"${x:1:2}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c substring latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; printf %s \"${x:1:2}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c substring nul",
+      "script": "x=$'a\\000b\\nzz\\n'; printf %s \"${x:1:2}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c substring crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; printf %s \"${x:1:2}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c substring controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; printf %s \"${x:1:2}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c replace lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; printf %s \"${x//z/Z}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c replace truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; printf %s \"${x//z/Z}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c replace surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; printf %s \"${x//z/Z}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c replace latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; printf %s \"${x//z/Z}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c replace nul",
+      "script": "x=$'a\\000b\\nzz\\n'; printf %s \"${x//z/Z}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c replace crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; printf %s \"${x//z/Z}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c replace controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; printf %s \"${x//z/Z}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c upper lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; printf %s \"${x^^}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c upper truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; printf %s \"${x^^}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c upper surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; printf %s \"${x^^}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c upper latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; printf %s \"${x^^}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c upper nul",
+      "script": "x=$'a\\000b\\nzz\\n'; printf %s \"${x^^}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c upper crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; printf %s \"${x^^}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c upper controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; printf %s \"${x^^}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c printf q lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c printf q truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c printf q surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c printf q latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c printf q nul",
+      "script": "x=$'a\\000b\\nzz\\n'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c printf q crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c printf q controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; printf '%q\\n' \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c transform Q lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c transform Q truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c transform Q surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c transform Q latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c transform Q nul",
+      "script": "x=$'a\\000b\\nzz\\n'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c transform Q crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c transform Q controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c declare -p lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c declare -p truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c declare -p surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c declare -p latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c declare -p nul",
+      "script": "x=$'a\\000b\\nzz\\n'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c declare -p crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c declare -p controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c echo lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; echo \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c echo truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; echo \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c echo surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; echo \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c echo latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; echo \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c echo nul",
+      "script": "x=$'a\\000b\\nzz\\n'; echo \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c echo crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; echo \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c echo controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; echo \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c herestring lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; od -An -tx1 <<< \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c herestring truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; od -An -tx1 <<< \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c herestring surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; od -An -tx1 <<< \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c herestring latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; od -An -tx1 <<< \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c herestring nul",
+      "script": "x=$'a\\000b\\nzz\\n'; od -An -tx1 <<< \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c herestring crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; od -An -tx1 <<< \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c herestring controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; od -An -tx1 <<< \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c array lone ff",
+      "script": "a=($'a\\xffb\\nzz\\n'); echo \"${#a[@]}\"; printf '%s|' \"${a[@]}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c array truncated",
+      "script": "a=($'ab\\xc3\\nzz\\n'); echo \"${#a[@]}\"; printf '%s|' \"${a[@]}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c array surrogate",
+      "script": "a=($'a\\xed\\xa0\\x80b\\nzz\\n'); echo \"${#a[@]}\"; printf '%s|' \"${a[@]}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c array latin1",
+      "script": "a=($'caf\\xe9 ol\\xe9\\nzz\\n'); echo \"${#a[@]}\"; printf '%s|' \"${a[@]}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c array nul",
+      "script": "a=($'a\\000b\\nzz\\n'); echo \"${#a[@]}\"; printf '%s|' \"${a[@]}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c array crlf",
+      "script": "a=($'a b\\r\\nzz\\r\\n'); echo \"${#a[@]}\"; printf '%s|' \"${a[@]}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c array controls",
+      "script": "a=($'a\\001\\033[1mb\\177\\nzz\\n'); echo \"${#a[@]}\"; printf '%s|' \"${a[@]}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c word split lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c word split truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c word split surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c word split latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c word split nul",
+      "script": "x=$'a\\000b\\nzz\\n'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c word split crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c word split controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c pattern lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; case $x in a*) echo a;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c pattern truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; case $x in a*) echo a;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c pattern surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; case $x in a*) echo a;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c pattern latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; case $x in a*) echo a;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c pattern nul",
+      "script": "x=$'a\\000b\\nzz\\n'; case $x in a*) echo a;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c pattern crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; case $x in a*) echo a;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c pattern controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; case $x in a*) echo a;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c to file lone ff",
+      "script": "x=$'a\\xffb\\nzz\\n'; printf '%s' \"$x\" > /tmp/f; wc -c < /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c to file truncated",
+      "script": "x=$'ab\\xc3\\nzz\\n'; printf '%s' \"$x\" > /tmp/f; wc -c < /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c to file surrogate",
+      "script": "x=$'a\\xed\\xa0\\x80b\\nzz\\n'; printf '%s' \"$x\" > /tmp/f; wc -c < /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c to file latin1",
+      "script": "x=$'caf\\xe9 ol\\xe9\\nzz\\n'; printf '%s' \"$x\" > /tmp/f; wc -c < /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c to file nul",
+      "script": "x=$'a\\000b\\nzz\\n'; printf '%s' \"$x\" > /tmp/f; wc -c < /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c to file crlf",
+      "script": "x=$'a b\\r\\nzz\\r\\n'; printf '%s' \"$x\" > /tmp/f; wc -c < /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: ansi-c to file controls",
+      "script": "x=$'a\\001\\033[1mb\\177\\nzz\\n'; printf '%s' \"$x\" > /tmp/f; wc -c < /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: echo -e lone ff",
+      "script": "echo -e 'a\\xffb\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: echo -e truncated",
+      "script": "echo -e 'ab\\xc3\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: echo -e surrogate",
+      "script": "echo -e 'a\\xed\\xa0\\x80b\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: echo -e latin1",
+      "script": "echo -e 'caf\\xe9 ol\\xe9\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: echo -e nul",
+      "script": "echo -e 'a\\000b\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: echo -e crlf",
+      "script": "echo -e 'a b\\r\\nzz\\r\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: echo -e controls",
+      "script": "echo -e 'a\\001\\033[1mb\\177\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: printf %b lone ff",
+      "script": "printf '%b' 'a\\xffb\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: printf %b truncated",
+      "script": "printf '%b' 'ab\\xc3\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: printf %b surrogate",
+      "script": "printf '%b' 'a\\xed\\xa0\\x80b\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: printf %b latin1",
+      "script": "printf '%b' 'caf\\xe9 ol\\xe9\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: printf %b nul",
+      "script": "printf '%b' 'a\\000b\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: printf %b crlf",
+      "script": "printf '%b' 'a b\\r\\nzz\\r\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: printf %b controls",
+      "script": "printf '%b' 'a\\001\\033[1mb\\177\\nzz\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file operand lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' > /tmp/f; file /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file operand truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' > /tmp/f; file /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file operand surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' > /tmp/f; file /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file operand latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' > /tmp/f; file /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file operand nul",
+      "script": "printf 'a\\000b\\nzz\\n' > /tmp/f; file /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file operand crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' > /tmp/f; file /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: file operand controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' > /tmp/f; file /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: stat size lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' > /tmp/f; stat -c %s /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: stat size truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' > /tmp/f; stat -c %s /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: stat size surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' > /tmp/f; stat -c %s /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: stat size latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' > /tmp/f; stat -c %s /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: stat size nul",
+      "script": "printf 'a\\000b\\nzz\\n' > /tmp/f; stat -c %s /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: stat size crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' > /tmp/f; stat -c %s /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: stat size controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' > /tmp/f; stat -c %s /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff nul",
+      "script": "printf 'a\\000b\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff -a lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff -a /tmp/a /tmp/b | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff -a truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff -a /tmp/a /tmp/b | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff -a surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff -a /tmp/a /tmp/b | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff -a latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff -a /tmp/a /tmp/b | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff -a nul",
+      "script": "printf 'a\\000b\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff -a /tmp/a /tmp/b | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff -a crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff -a /tmp/a /tmp/b | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: diff -a controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; diff -a /tmp/a /tmp/b | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cmp lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; cmp /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cmp truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; cmp /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cmp surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; cmp /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cmp latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; cmp /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cmp nul",
+      "script": "printf 'a\\000b\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; cmp /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cmp crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; cmp /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: cmp controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' > /tmp/a; printf 'zz\\n' > /tmp/b; cmp /tmp/a /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: comm lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' > /tmp/a; comm -12 /tmp/a /tmp/a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: comm truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' > /tmp/a; comm -12 /tmp/a /tmp/a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: comm surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' > /tmp/a; comm -12 /tmp/a /tmp/a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: comm latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' > /tmp/a; comm -12 /tmp/a /tmp/a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: comm nul",
+      "script": "printf 'a\\000b\\nzz\\n' > /tmp/a; comm -12 /tmp/a /tmp/a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: comm crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' > /tmp/a; comm -12 /tmp/a /tmp/a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: comm controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' > /tmp/a; comm -12 /tmp/a /tmp/a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep file lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' > /tmp/f; grep z /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep file truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' > /tmp/f; grep z /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep file surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' > /tmp/f; grep z /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep file latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' > /tmp/f; grep z /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep file nul",
+      "script": "printf 'a\\000b\\nzz\\n' > /tmp/f; grep z /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep file crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' > /tmp/f; grep z /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: grep file controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' > /tmp/f; grep z /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -i lone ff",
+      "script": "printf 'a\\xffb\\nzz\\n' > /tmp/f; sed -i 's/z/Q/' /tmp/f; od -An -tx1 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -i truncated",
+      "script": "printf 'ab\\xc3\\nzz\\n' > /tmp/f; sed -i 's/z/Q/' /tmp/f; od -An -tx1 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -i surrogate",
+      "script": "printf 'a\\xed\\xa0\\x80b\\nzz\\n' > /tmp/f; sed -i 's/z/Q/' /tmp/f; od -An -tx1 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -i latin1",
+      "script": "printf 'caf\\xe9 ol\\xe9\\nzz\\n' > /tmp/f; sed -i 's/z/Q/' /tmp/f; od -An -tx1 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -i nul",
+      "script": "printf 'a\\000b\\nzz\\n' > /tmp/f; sed -i 's/z/Q/' /tmp/f; od -An -tx1 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -i crlf",
+      "script": "printf 'a b\\r\\nzz\\r\\n' > /tmp/f; sed -i 's/z/Q/' /tmp/f; od -An -tx1 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes: sed -i controls",
+      "script": "printf 'a\\001\\033[1mb\\177\\nzz\\n' > /tmp/f; sed -i 's/z/Q/' /tmp/f; od -An -tx1 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: sort -z",
+      "script": "printf 'b\\000a\\000c\\000' | sort -z | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: sort -z unterminated",
+      "script": "printf 'b\\000a\\000c' | sort -z | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: sort -z -r",
+      "script": "printf 'b\\000a\\000c\\000' | sort -rz | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: sort -z -r unterminated",
+      "script": "printf 'b\\000a\\000c' | sort -rz | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: head -z",
+      "script": "printf 'b\\000a\\000c\\000' | head -z -n 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: head -z unterminated",
+      "script": "printf 'b\\000a\\000c' | head -z -n 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: tail -z",
+      "script": "printf 'b\\000a\\000c\\000' | tail -z -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: tail -z unterminated",
+      "script": "printf 'b\\000a\\000c' | tail -z -n 1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: uniq -z",
+      "script": "printf 'b\\000a\\000c\\000' | sort -z | uniq -z -c | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: uniq -z unterminated",
+      "script": "printf 'b\\000a\\000c' | sort -z | uniq -z -c | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: grep -z",
+      "script": "printf 'b\\000a\\000c\\000' | grep -z a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: grep -z unterminated",
+      "script": "printf 'b\\000a\\000c' | grep -z a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: grep -z -c",
+      "script": "printf 'b\\000a\\000c\\000' | grep -zc . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: grep -z -c unterminated",
+      "script": "printf 'b\\000a\\000c' | grep -zc . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: sed -z",
+      "script": "printf 'b\\000a\\000c\\000' | sed -z 's/^/>/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: sed -z unterminated",
+      "script": "printf 'b\\000a\\000c' | sed -z 's/^/>/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: cut -z",
+      "script": "printf 'b\\000a\\000c\\000' | cut -z -c1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: cut -z unterminated",
+      "script": "printf 'b\\000a\\000c' | cut -z -c1 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: xargs -0",
+      "script": "printf 'b\\000a\\000c\\000' | xargs -0 echo | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: xargs -0 unterminated",
+      "script": "printf 'b\\000a\\000c' | xargs -0 echo | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: xargs -0 -n1",
+      "script": "printf 'b\\000a\\000c\\000' | xargs -0 -n 1 echo | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: xargs -0 -n1 unterminated",
+      "script": "printf 'b\\000a\\000c' | xargs -0 -n 1 echo | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: tr to newline",
+      "script": "printf 'b\\000a\\000c\\000' | tr '\\0' '\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: tr to newline unterminated",
+      "script": "printf 'b\\000a\\000c' | tr '\\0' '\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: read -d empty",
+      "script": "printf 'b\\000a\\000c\\000' | while IFS= read -r -d '' x; do echo \"[$x]\"; done | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: read -d empty unterminated",
+      "script": "printf 'b\\000a\\000c' | while IFS= read -r -d '' x; do echo \"[$x]\"; done | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: mapfile -d empty",
+      "script": "printf 'b\\000a\\000c\\000' | { mapfile -t -d '' a; echo \"${#a[@]} ${a[2]}\"; } | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: mapfile -d empty unterminated",
+      "script": "printf 'b\\000a\\000c' | { mapfile -t -d '' a; echo \"${#a[@]} ${a[2]}\"; } | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: paste -z",
+      "script": "printf 'b\\000a\\000c\\000' | paste -z -s -d , | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: paste -z unterminated",
+      "script": "printf 'b\\000a\\000c' | paste -z -s -d , | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: nl -z",
+      "script": "printf 'b\\000a\\000c\\000' | nl -z | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: nl -z unterminated",
+      "script": "printf 'b\\000a\\000c' | nl -z | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: wc -l",
+      "script": "printf 'b\\000a\\000c\\000' | wc -l | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: wc -l unterminated",
+      "script": "printf 'b\\000a\\000c' | wc -l | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: tac -s",
+      "script": "printf 'b\\000a\\000c\\000' | tac -s '' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: tac -s unterminated",
+      "script": "printf 'b\\000a\\000c' | tac -s '' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: jq -R",
+      "script": "printf 'b\\000a\\000c\\000' | jq -R . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: jq -R unterminated",
+      "script": "printf 'b\\000a\\000c' | jq -R . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: od",
+      "script": "printf 'b\\000a\\000c\\000' | od -An -c | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes nul: od unterminated",
+      "script": "printf 'b\\000a\\000c' | od -An -c | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: touch invalid name",
+      "script": "touch \"$(printf '/tmp/n\\377')\"; echo status=$?; ls /tmp | od -An -c",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=1\n"
+        },
+        "stderr": {
+          "text": "touch: setting times of \"/tmp/n\\xFF\": Illegal byte sequence\n"
+        },
+        "reason": "WASI names files with Unicode strings, so a file name holding bytes that are not UTF-8 cannot exist: creating one fails with EILSEQ (Illegal byte sequence) instead of creating a file with a different name (README, deliberate limits)"
+      }
+    },
+    {
+      "name": "edge bytes names: redirect invalid name",
+      "script": "echo x > $'/tmp/n\\xff'; echo status=$?; ls /tmp | od -An -c",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=1\n"
+        },
+        "stderr": {
+          "base64": "YmFzaDogbGluZSAxOiAvdG1wL27/OiBJbGxlZ2FsIGJ5dGUgc2VxdWVuY2UK"
+        },
+        "reason": "WASI names files with Unicode strings, so a file name holding bytes that are not UTF-8 cannot exist: creating one fails with EILSEQ (Illegal byte sequence) instead of creating a file with a different name (README, deliberate limits)"
+      }
+    },
+    {
+      "name": "edge bytes names: mkdir invalid name",
+      "script": "mkdir $'/tmp/d\\xc3'; echo status=$?; ls /tmp | od -An -c",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=1\n"
+        },
+        "stderr": {
+          "text": "mkdir: cannot create directory ‘/tmp/d�’: Illegal byte sequence\n"
+        },
+        "reason": "WASI names files with Unicode strings, so a file name holding bytes that are not UTF-8 cannot exist: creating one fails with EILSEQ (Illegal byte sequence) instead of creating a file with a different name (README, deliberate limits)"
+      }
+    },
+    {
+      "name": "edge bytes names: glob invalid name",
+      "script": "cd /tmp && : > $'n\\xff' && for f in *; do printf %s \"$f\" | od -An -tx1; done",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 1,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "base64": "YmFzaDogbGluZSAxOiBu/zogSWxsZWdhbCBieXRlIHNlcXVlbmNlCg=="
+        },
+        "reason": "WASI names files with Unicode strings, so a file name holding bytes that are not UTF-8 cannot exist: creating one fails with EILSEQ (Illegal byte sequence) instead of creating a file with a different name (README: file names)"
+      }
+    },
+    {
+      "name": "edge bytes names: find invalid name",
+      "script": "cd /tmp && : > $'n\\xff'; find . -name 'n*' | od -An -c",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "base64": "YmFzaDogbGluZSAxOiBu/zogSWxsZWdhbCBieXRlIHNlcXVlbmNlCg=="
+        },
+        "reason": "WASI names files with Unicode strings, so a file name holding bytes that are not UTF-8 cannot exist: creating one fails with EILSEQ (Illegal byte sequence) instead of creating a file with a different name (README, deliberate limits)"
+      }
+    },
+    {
+      "name": "edge bytes names: ls -b invalid name",
+      "script": "cd /tmp && : > $'n\\xff'; ls -b",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "base64": "YmFzaDogbGluZSAxOiBu/zogSWxsZWdhbCBieXRlIHNlcXVlbmNlCg=="
+        },
+        "reason": "WASI names files with Unicode strings, so a file name holding bytes that are not UTF-8 cannot exist: creating one fails with EILSEQ (Illegal byte sequence) instead of creating a file with a different name (README, deliberate limits)"
+      }
+    },
+    {
+      "name": "edge bytes names: ls quoted invalid name",
+      "script": "cd /tmp && : > $'n\\xff'; ls --quoting-style=shell-escape",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "base64": "YmFzaDogbGluZSAxOiBu/zogSWxsZWdhbCBieXRlIHNlcXVlbmNlCg=="
+        },
+        "reason": "WASI names files with Unicode strings, so a file name holding bytes that are not UTF-8 cannot exist: creating one fails with EILSEQ (Illegal byte sequence) instead of creating a file with a different name (README, deliberate limits)"
+      }
+    },
+    {
+      "name": "edge bytes names: rm invalid name",
+      "script": "cd /tmp && : > $'n\\xff'; rm $'n\\xff'; echo status=$?; ls | wc -l",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=1\n0\n"
+        },
+        "stderr": {
+          "base64": "YmFzaDogbGluZSAxOiBu/zogSWxsZWdhbCBieXRlIHNlcXVlbmNlCnJtOiBjYW5ub3QgcmVtb3ZlICJuXHhGRiI6IElsbGVnYWwgYnl0ZSBzZXF1ZW5jZQo="
+        },
+        "reason": "WASI names files with Unicode strings, so a file name holding bytes that are not UTF-8 cannot exist: creating one fails with EILSEQ (Illegal byte sequence) instead of creating a file with a different name (README, deliberate limits)"
+      }
+    },
+    {
+      "name": "edge bytes names: newline name",
+      "script": "cd /tmp && : > $'a\\nb'; ls | od -An -c; ls -b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: newline name glob",
+      "script": "cd /tmp && : > $'a\\nb'; for f in *; do printf '[%s]\\n' \"$f\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: newline name find",
+      "script": "cd /tmp && : > $'a\\nb'; find . -name 'a*' -print0 | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: tab name",
+      "script": "cd /tmp && : > $'a\\tb'; ls; ls -b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: escape name",
+      "script": "cd /tmp && : > $'a\\033b'; ls | od -An -c; ls -b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: backslash name",
+      "script": "cd /tmp && : > 'a\\b'; ls; ls --quoting-style=c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: dash name",
+      "script": "cd /tmp && : > ./-n; ls; cat -- -n; rm -- -n; ls | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: space-only name",
+      "script": "cd /tmp && : > ' '; ls | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: quote names",
+      "script": "cd /tmp && : > \"it's\" && : > 'say \"hi\"'; ls; ls -Q",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: glob chars in name",
+      "script": "cd /tmp && : > '[a]' && : > '*'; ls; printf '%s\\n' \\[*",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: xargs -0 invalid name",
+      "script": "cd /tmp && : > $'n\\xff'; printf 'n\\377\\000' | xargs -0 ls",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 123,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "base64": "YmFzaDogbGluZSAxOiBu/zogSWxsZWdhbCBieXRlIHNlcXVlbmNlCmxzOiBjYW5ub3QgYWNjZXNzICJuXHhGRiI6IElsbGVnYWwgYnl0ZSBzZXF1ZW5jZQo="
+        },
+        "reason": "WASI names files with Unicode strings, so a file name holding bytes that are not UTF-8 cannot exist: creating one fails with EILSEQ (Illegal byte sequence) instead of creating a file with a different name (README, deliberate limits)"
+      }
+    },
+    {
+      "name": "edge bytes names: basename invalid",
+      "script": "basename $'/tmp/a\\xffb/c\\xfe' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: dirname invalid",
+      "script": "dirname $'/tmp/a\\xffb/c' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes names: cd invalid name",
+      "script": "mkdir $'/tmp/d\\xff' && cd $'/tmp/d\\xff' && pwd | od -An -tx1",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 1,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "mkdir: cannot create directory ‘/tmp/d�’: Illegal byte sequence\n"
+        },
+        "reason": "fixture: WASI file names are Unicode strings, so a name that is not valid UTF-8 (the byte 0xff) cannot be created; mkdir fails with EILSEQ and its message shows the byte as U+FFFD"
+      }
+    },
+    {
+      "name": "edge bytes args: grep invalid pattern",
+      "script": "printf 'a\\377b\\nzz\\n' | grep -c $'\\xff'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: grep -a invalid pattern",
+      "script": "printf 'a\\377b\\nzz\\n' | grep -a $'\\xff' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: grep -F invalid pattern",
+      "script": "printf 'a\\377b\\nzz\\n' | grep -aF $'\\xff' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: sed invalid pattern",
+      "script": "printf 'a\\377b\\n' | sed $'s/\\xff/X/'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: sed invalid replacement",
+      "script": "printf 'ab\\n' | sed $'s/a/\\xff/' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: tr invalid set",
+      "script": "printf 'a\\377b\\n' | tr $'\\xff' X",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: cut -d invalid",
+      "script": "printf 'a\\377b\\n' | cut -d $'\\xff' -f 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: sort -t invalid",
+      "script": "printf 'b\\377a\\na\\377b\\n' | sort -t $'\\xff' -k 2 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: IFS invalid",
+      "script": "IFS=$'\\xff'; x=$'a\\xffb'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: case invalid pattern",
+      "script": "x=$'a\\xffb'; case $x in a$'\\xff'b) echo match;; *) echo no;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: cond invalid pattern",
+      "script": "x=$'a\\xffb'; [[ $x == a?b ]] && echo one || echo other",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: cond regex invalid",
+      "script": "x=$'a\\xffb'; [[ $x =~ ^a.b$ ]] && echo one || echo other",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: cond regex invalid before the match",
+      "script": "x=$'\\xffab'; [[ $x =~ ab ]]; echo $? \"${BASH_REMATCH[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: cond regex invalid after the match",
+      "script": "x=$'ab\\xff'; [[ $x =~ a ]]; echo $?; x=$'abc\\xff'; [[ $x =~ a ]]; echo $? \"${BASH_REMATCH[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: cond regex invalid in the pattern",
+      "script": "x=$'a\\xffb'; p=$'^a\\xffb$'; [[ $x =~ $p ]]; echo $?; [[ $x =~ \"a\"$'\\xff'\"b\" ]]; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: cond regex invalid with a back-reference",
+      "script": "x=$'\\xffaa'; [[ $x =~ (a)\\1 ]]; echo $? \"${BASH_REMATCH[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: trim invalid",
+      "script": "x=$'a\\xffb'; printf %s \"${x#a?}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: printf arg invalid",
+      "script": "printf '%s\\n' $'\\xff\\xfe' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: printf %c invalid",
+      "script": "printf '%c' $'\\xff' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: printf char code invalid",
+      "script": "printf '%d\\n' \"'\"$'\\xff'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: echo arg invalid",
+      "script": "echo $'\\xc3' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: expr length invalid",
+      "script": "expr length $'a\\xffb'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: test -n invalid",
+      "script": "[ -n $'\\xff' ] && echo nonempty",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: test = invalid",
+      "script": "[ $'\\xff' = $'\\xff' ] && echo equal",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: export invalid",
+      "script": "export V=$'\\xff'; sh -c 'printf %s \"$V\"' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: env invalid",
+      "script": "V=$'\\xfe' env | grep -a '^V=' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: sh -c invalid",
+      "script": "sh -c 'printf %s \"$1\"' sh $'\\xff' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: function arg invalid",
+      "script": "f() { printf %s \"$1\"; }; f $'\\xff' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: array element invalid",
+      "script": "a=(x $'\\xff'); printf %s \"${a[1]}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: assoc key invalid",
+      "script": "declare -A m; m[$'\\xff']=1; printf %s \"${!m[@]}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: heredoc invalid expansion",
+      "script": "x=$'\\xff'; cat <<EOF | od -An -tx1\n$x\nEOF",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: jq arg invalid",
+      "script": "jq -n --arg v $'\\xff' '$v' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: jq invalid json string",
+      "script": "printf '\"a\\377b\"\\n' | jq . | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: seq separator invalid",
+      "script": "seq -s $'\\xff' 3 | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: nl separator invalid",
+      "script": "printf 'a\\n' | nl -s $'\\xff' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: paste delimiter invalid",
+      "script": "printf '1\\n2\\n' | paste -s -d $'\\xff' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: join -t invalid",
+      "script": "printf 'k\\377a\\n' > /tmp/a; join -t $'\\xff' /tmp/a /tmp/a | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: read -d invalid",
+      "script": "IFS= read -r -d $'\\xff' x < <(printf 'ab\\377cd'); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: mapfile -d invalid",
+      "script": "mapfile -t -d $'\\xff' a < <(printf 'a\\377b\\377'); echo \"${#a[@]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: printf %q control",
+      "script": "printf '%q\\n' $'a\\x01\\x7f\\tb'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: transform Q control",
+      "script": "x=$'a\\x01\\x7f\\tb'; echo \"${x@Q}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: transform E",
+      "script": "x='a\\x41\\u00e9\\xff'; printf %s \"${x@E}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: xtrace control",
+      "script": "set -x; : $'a\\x01b\\xff'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: declare -p control",
+      "script": "x=$'\\x01\\n\\xff'; declare -p x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: dollar-quote nul",
+      "script": "x=$'a\\000b'; echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: dollar-quote octal high",
+      "script": "x=$'\\377\\376'; printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: dollar-quote control-x",
+      "script": "x=$'\\cA\\c?'; printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: command substitution nul warning",
+      "script": "x=$(printf 'a\\000b'); echo \"${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: command substitution trailing crlf",
+      "script": "x=$(printf 'a\\r\\n\\n'); printf %s \"$x\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: read crlf",
+      "script": "IFS= read -r l < <(printf 'a\\r\\n'); echo \"${#l}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge bytes args: mapfile crlf",
+      "script": "mapfile -t a < <(printf 'a\\r\\nb\\r\\n'); printf %s \"${a[0]}\" | od -An -tx1",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

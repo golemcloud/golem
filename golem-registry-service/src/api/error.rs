@@ -738,6 +738,9 @@ impl From<ComponentError> for ApiError {
             ComponentError::DuplicateAgentTypeName(_) => {
                 Self::bad_request(api::error_code::DUPLICATE_AGENT_TYPE_NAME, error)
             }
+            ComponentError::AgentMethodNameTooLong { .. } => {
+                Self::bad_request(api::error_code::AGENT_METHOD_NAME_TOO_LONG, error)
+            }
             ComponentError::DuplicateToolName(_) => {
                 Self::bad_request(api::error_code::DUPLICATE_TOOL_NAME, error)
             }

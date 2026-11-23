@@ -61,7 +61,7 @@ struct BatchCallback {
     #[allow(dead_code)]
     account_id: String,
     #[allow(dead_code)]
-    component_id: String,
+    agent_type: Option<String>,
     first_entry_index: u64,
     entry_count: u64,
     invocations: Vec<InvocationRecord>,
@@ -796,12 +796,12 @@ async fn oplog_processor_p3_entries(deps: &EnvBasedTestDependencies) -> anyhow::
     let all_batches = wait_for_invocations(&received_batches, 5, Duration::from_secs(300)).await;
     let batches: Vec<BatchCallback> = all_batches
         .iter()
-        .filter(|b| b.source_worker_id.contains("HttpClient2"))
+        .filter(|b| b.source_worker_id == worker_id.agent_id.to_string())
         .cloned()
         .collect();
     let cancel_batches: Vec<BatchCallback> = all_batches
         .iter()
-        .filter(|b| b.source_worker_id.contains("HttpClient4"))
+        .filter(|b| b.source_worker_id == cancel_worker_id.agent_id.to_string())
         .cloned()
         .collect();
 

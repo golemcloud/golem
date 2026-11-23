@@ -1122,7 +1122,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             .parent
                                             .get_last_known_status()
                                             .await
-                                            .current_idempotency_key;
+                                            .current_idempotency_key()
+                                            .copied();
                                         let recorded = match kind {
                                             InterruptKind::EntityCancellation => unreachable!("entity cancellation cannot interrupt the owner"),
                                             InterruptKind::Suspend(_) => {

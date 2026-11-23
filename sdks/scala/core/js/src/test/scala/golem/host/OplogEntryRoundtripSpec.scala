@@ -58,9 +58,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       "create",
       js.Dynamic.literal(
         timestamp = ts(),
-        agentId = js.Dynamic.literal(
-          uuid = js.Dynamic.literal(highBits = js.BigInt("3"), lowBits = js.BigInt("4"))
-        ),
+        agentId = golem.host.js.JsAgentId(golem.host.js.JsUuid.fromUuid(invocationUuid)),
         agentTypeName = "ConfiguredAgent",
         ownerKind = "component-agent",
         componentRevision = js.BigInt("3"),
@@ -81,7 +79,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       assertTrue(
         marked.asInstanceOf[OplogEntry.Create].params.neverLive,
         !unmarked.asInstanceOf[OplogEntry.Create].params.neverLive,
-        marked.asInstanceOf[OplogEntry.Create].params.agentId == golem.AgentId(new java.util.UUID(3L, 4L)),
+        marked.asInstanceOf[OplogEntry.Create].params.agentId == golem.AgentId(invocationUuid),
         marked.asInstanceOf[OplogEntry.Create].params.agentTypeName.contains("ConfiguredAgent"),
         marked.asInstanceOf[OplogEntry.Create].params.componentRevision == BigInt(3)
       )
