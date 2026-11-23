@@ -15,11 +15,11 @@ use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord, AssistedSelection,
     AuthoritativeSnapshot, AuthoritativeSnapshotKind, AutomaticSnapshot, DurableStreamSessionIndex,
-    ExportForkAdmissions, FailedUpdateRecord, InvocationResultMembership, InvocationResultPosition,
-    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, Timestamp,
-    UsableAutomaticSnapshot,
+    ExportForkAdmissions, FailedUpdateRecord, InvocationEnd, InvocationRequestRef,
+    InvocationResultMembership, InvocationResultPosition, OplogProcessorCheckpointState,
+    OwnedAgentId, PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
+    ReceivedCardTransferIndex, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
+    RunningInvocation, SnapshotFiles, SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
 };
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -33,7 +33,8 @@ pub(crate) mod update_queue;
 pub(crate) use regions::{
     RegionFold, deleted_regions, fold_regions_from, revert_validation_regions, skipped_regions,
 };
-use update_queue::{UpdateStep, manual_update_target_revision_of};
+use update_queue::UpdateStep;
+pub(crate) use update_queue::request_operation;
 
 #[cfg(test)]
 pub(crate) use entity_replay::calculate_entity_replay_progress;
@@ -362,6 +363,13 @@ fn update_status_with_precomputed_regions(
         || new_entries
             .values()
             .any(|entry| matches!(entry, OplogEntry::Restart { .. }));
+    let never_live = new_entries
+        .values()
+        .find_map(|entry| match entry {
+            OplogEntry::Create { parameters, .. } => Some(parameters.never_live),
+            _ => None,
+        })
+        .unwrap_or(last_known.never_live);
     let UpdateFields {
         failed_updates,
         successful_updates,
@@ -441,9 +449,10 @@ fn update_status_with_precomputed_regions(
         export_fork_admissions,
         has_durable_stream_history,
         ephemeral_execution_begun,
+        never_live,
         pending_durable_stream_cancellations,
-        current_idempotency_key: requests.current,
-        current_invocation_started_at: requests.current_started_at,
+        running: requests.current,
+        withdrawn_again: requests.withdrawn_again,
         component_revision,
         component_size,
         owned_resources,

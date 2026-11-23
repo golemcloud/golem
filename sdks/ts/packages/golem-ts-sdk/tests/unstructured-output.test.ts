@@ -37,6 +37,7 @@ import {
   v,
 } from '../src/internal/schema-model';
 import { hostInvocationMetadata } from './invocationMetadataTestSupport';
+import { selectSelfAgent } from './selfAgentTestSupport';
 import { anonymousContext } from './callerTestSupport';
 
 const Pending = z.object({ tag: z.literal('pending'), retryAfter: z.number() });
@@ -101,8 +102,7 @@ const outputType = (name: string) => {
 
 const guestInvoke = async (name: string, id: string) => {
   const idValue = v.record([]);
-  (globalThis as any).currentAgentId =
-    `UnstructuredOutputs(${JSON.stringify(schemaValueToWit(idValue))})`;
+  selectSelfAgent('UnstructuredOutputs');
   const initiated = await AgentInitiatorRegistry.lookup('UnstructuredOutputs')!.initiate(
     schemaValueToWit(idValue),
     anonymousContext,
@@ -158,10 +158,12 @@ describe('unstructured outputs under option and result', () => {
   });
 
   it('round-trips every case through the guest and a remote client', async () => {
-    const client = defineAgentClient({ name: 'UnstructuredOutputs', id: {}, methods }).client.get(
-      {},
-    );
-    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+    const client = defineAgentClient({
+      name: 'UnstructuredOutputs',
+      id: {},
+      methods,
+    }).client.upsert({});
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
     for (const [name, cases] of Object.entries(outputs)) {
       const codec = compileSchema(returns[name as keyof typeof returns]);
       for (const [id, expected] of Object.entries(cases)) {
@@ -175,7 +177,7 @@ describe('unstructured outputs under option and result', () => {
         expect(ref.validateValue(value)).toMatchObject({ success: true });
 
         rpc.asyncInvokeAndAwait.mockReturnValue({
-          metadata: hostInvocationMetadata('unstructured'),
+          metadata: hostInvocationMetadata(),
           future: { get: vi.fn().mockResolvedValue(tree), cancel: vi.fn() },
         });
         const remote = await (client as any)[name]({ id });

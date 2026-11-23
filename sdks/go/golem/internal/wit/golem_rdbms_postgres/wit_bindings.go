@@ -1397,7 +1397,7 @@ func MakeLazyDbValue(value DbValue) *LazyDbValue {
 	defer pinner.Unpin()
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, 56, 8))
-	wasm_lower_1_t900(pinner, value, unsafe.Add(unsafe.Pointer(returnArea), 0))
+	wasm_lower_1_t911(pinner, value, unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result := wasm_import_constructor_lazy_db_value(returnArea)
 	return LazyDbValueFromOwnHandle(int32(uintptr(result)))
 
@@ -1412,7 +1412,7 @@ func (self *LazyDbValue) Get() DbValue {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, 56, 8))
 	wasm_import_method_lazy_db_value_get((self).Handle(), returnArea)
-	result := wasm_lift_1_t900(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result := wasm_lift_1_t911(unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result0 := result
 	return result0
 
@@ -1825,7 +1825,7 @@ func (self *LazyDbColumnType) Get() DbColumnType {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (5 * 4), 4))
 	wasm_import_method_lazy_db_column_type_get((self).Handle(), returnArea)
-	result := wasm_lift_1_t908(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result := wasm_lift_1_t919(unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result0 := result
 	return result0
 
@@ -1846,14 +1846,14 @@ func (self *DbResultStream) GetColumns() witTypes.Result[[]DbColumn, Error] {
 		result0 := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(16+8*4))
-			result := wasm_lift_1_t909(unsafe.Add(unsafe.Pointer(base), 0))
+			result := wasm_lift_1_t920(unsafe.Add(unsafe.Pointer(base), 0))
 
 			result0 = append(result0, result)
 		}
 
 		result2 = witTypes.Ok[[]DbColumn, Error](result0)
 	case 1:
-		result1 := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[[]DbColumn, Error](result1)
 	default:
@@ -1885,7 +1885,7 @@ func (self *DbResultStream) GetNext() witTypes.Result[witTypes.Option[[]DbRow], 
 			result0 := make([]DbRow, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))); index++ {
 				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(2*4))
-				result := wasm_lift_1_t911(unsafe.Add(unsafe.Pointer(base), 0))
+				result := wasm_lift_1_t922(unsafe.Add(unsafe.Pointer(base), 0))
 
 				result0 = append(result0, result)
 			}
@@ -1897,7 +1897,7 @@ func (self *DbResultStream) GetNext() witTypes.Result[witTypes.Option[[]DbRow], 
 
 		result2 = witTypes.Ok[witTypes.Option[[]DbRow], Error](option)
 	case 1:
-		result1 := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[witTypes.Option[[]DbRow], Error](result1)
 	default:
@@ -1925,7 +1925,7 @@ func DbConnectionOpen(address string) witTypes.Result[*DbConnection, Error] {
 
 		result0 = witTypes.Ok[*DbConnection, Error](DbConnectionFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[*DbConnection, Error](result)
 	default:
@@ -1951,7 +1951,7 @@ func (self *DbConnection) Query(statement string, params []DbValue) witTypes.Res
 	result := witRuntime.Allocate(pinner, uintptr(length*56), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*56)
-		wasm_lower_1_t900(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t911(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -1959,11 +1959,11 @@ func (self *DbConnection) Query(statement string, params []DbValue) witTypes.Res
 	var result2 witTypes.Result[DbResult, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result0 := wasm_lift_1_t914(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t925(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Ok[DbResult, Error](result0)
 	case 1:
-		result1 := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[DbResult, Error](result1)
 	default:
@@ -1989,7 +1989,7 @@ func (self *DbConnection) QueryStream(statement string, params []DbValue) witTyp
 	result := witRuntime.Allocate(pinner, uintptr(length*56), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*56)
-		wasm_lower_1_t900(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t911(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -2000,7 +2000,7 @@ func (self *DbConnection) QueryStream(statement string, params []DbValue) witTyp
 
 		result1 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result0 := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[*DbResultStream, Error](result0)
 	default:
@@ -2026,7 +2026,7 @@ func (self *DbConnection) Execute(statement string, params []DbValue) witTypes.R
 	result := witRuntime.Allocate(pinner, uintptr(length*56), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*56)
-		wasm_lower_1_t900(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t911(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -2037,7 +2037,7 @@ func (self *DbConnection) Execute(statement string, params []DbValue) witTypes.R
 
 		result1 = witTypes.Ok[uint64, Error](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))))
 	case 1:
-		result0 := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result0 := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Err[uint64, Error](result0)
 	default:
@@ -2063,7 +2063,7 @@ func (self *DbConnection) BeginTransaction() witTypes.Result[*DbTransaction, Err
 
 		result0 = witTypes.Ok[*DbTransaction, Error](DbTransactionFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[*DbTransaction, Error](result)
 	default:
@@ -2089,7 +2089,7 @@ func (self *DbTransaction) Query(statement string, params []DbValue) witTypes.Re
 	result := witRuntime.Allocate(pinner, uintptr(length*56), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*56)
-		wasm_lower_1_t900(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t911(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -2097,11 +2097,11 @@ func (self *DbTransaction) Query(statement string, params []DbValue) witTypes.Re
 	var result2 witTypes.Result[DbResult, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result0 := wasm_lift_1_t914(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t925(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Ok[DbResult, Error](result0)
 	case 1:
-		result1 := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[DbResult, Error](result1)
 	default:
@@ -2127,7 +2127,7 @@ func (self *DbTransaction) QueryStream(statement string, params []DbValue) witTy
 	result := witRuntime.Allocate(pinner, uintptr(length*56), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*56)
-		wasm_lower_1_t900(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t911(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -2138,7 +2138,7 @@ func (self *DbTransaction) QueryStream(statement string, params []DbValue) witTy
 
 		result1 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result0 := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[*DbResultStream, Error](result0)
 	default:
@@ -2164,7 +2164,7 @@ func (self *DbTransaction) Execute(statement string, params []DbValue) witTypes.
 	result := witRuntime.Allocate(pinner, uintptr(length*56), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*56)
-		wasm_lower_1_t900(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t911(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -2175,7 +2175,7 @@ func (self *DbTransaction) Execute(statement string, params []DbValue) witTypes.
 
 		result1 = witTypes.Ok[uint64, Error](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))))
 	case 1:
-		result0 := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result0 := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Err[uint64, Error](result0)
 	default:
@@ -2201,7 +2201,7 @@ func (self *DbTransaction) Commit() witTypes.Result[witTypes.Unit, Error] {
 
 		result0 = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Unit, Error](result)
 	default:
@@ -2227,7 +2227,7 @@ func (self *DbTransaction) Rollback() witTypes.Result[witTypes.Unit, Error] {
 
 		result0 = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t873(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Unit, Error](result)
 	default:
@@ -2239,7 +2239,7 @@ func (self *DbTransaction) Rollback() witTypes.Result[witTypes.Unit, Error] {
 }
 
 //go:noinline
-func wasm_lower_1_t900(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer) {
+func wasm_lower_1_t911(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case DbValueCharacter:
@@ -2318,32 +2318,32 @@ func wasm_lower_1_t900(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer
 	case DbValueTimestamp:
 		payload := value.Timestamp()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(11))
-		wasm_lower_1_t831(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t842(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueTimestamptz:
 		payload := value.Timestamptz()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(12))
-		wasm_lower_1_t832(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t843(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueDate:
 		payload := value.Date()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(13))
-		wasm_lower_1_t829(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t840(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueTime:
 		payload := value.Time()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(14))
-		wasm_lower_1_t830(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t841(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueTimetz:
 		payload := value.Timetz()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(15))
-		wasm_lower_1_t833(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t844(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueInterval:
 		payload := value.Interval()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(16))
-		wasm_lower_1_t874(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t885(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueBytea:
 		payload := value.Bytea()
@@ -2388,22 +2388,22 @@ func wasm_lower_1_t900(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer
 	case DbValueUuid:
 		payload := value.Uuid()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(22))
-		wasm_lower_1_t823(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t834(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueInet:
 		payload := value.Inet()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(23))
-		wasm_lower_1_t826(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t837(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueCidr:
 		payload := value.Cidr()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(24))
-		wasm_lower_1_t826(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t837(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueMacaddr:
 		payload := value.Macaddr()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(25))
-		wasm_lower_1_t828(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t839(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueBit:
 		payload := value.Bit()
@@ -2450,32 +2450,32 @@ func wasm_lower_1_t900(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer
 	case DbValueInt4range:
 		payload := value.Int4range()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(28))
-		wasm_lower_1_t881(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t892(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueInt8range:
 		payload := value.Int8range()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(29))
-		wasm_lower_1_t882(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t893(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueNumrange:
 		payload := value.Numrange()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(30))
-		wasm_lower_1_t883(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t894(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueTsrange:
 		payload := value.Tsrange()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(31))
-		wasm_lower_1_t884(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t895(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueTstzrange:
 		payload := value.Tstzrange()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(32))
-		wasm_lower_1_t885(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t896(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueDaterange:
 		payload := value.Daterange()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(33))
-		wasm_lower_1_t886(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t897(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueMoney:
 		payload := value.Money()
@@ -2490,17 +2490,17 @@ func wasm_lower_1_t900(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer
 	case DbValueEnumeration:
 		payload := value.Enumeration()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(36))
-		wasm_lower_1_t888(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t899(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueComposite:
 		payload := value.Composite()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(37))
-		wasm_lower_1_t895(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t906(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueDomain:
 		payload := value.Domain()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(38))
-		wasm_lower_1_t896(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t907(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueArray:
 		payload := value.Array()
@@ -2520,7 +2520,7 @@ func wasm_lower_1_t900(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer
 	case DbValueRange:
 		payload := value.Range()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(40))
-		wasm_lower_1_t899(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t910(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case DbValueNull:
 
@@ -2545,7 +2545,7 @@ func wasm_lower_1_t900(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer
 	case DbValueSparsevec:
 		payload := value.Sparsevec()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(44))
-		wasm_lower_1_t891(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t902(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	default:
 		panic("unreachable")
@@ -2554,7 +2554,7 @@ func wasm_lower_1_t900(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer
 }
 
 //go:noinline
-func wasm_lift_1_t900(src unsafe.Pointer) DbValue {
+func wasm_lift_1_t911(src unsafe.Pointer) DbValue {
 	var variant DbValue
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2606,32 +2606,32 @@ func wasm_lift_1_t900(src unsafe.Pointer) DbValue {
 		variant = MakeDbValueBpchar(value3)
 
 	case 11:
-		result := wasm_lift_1_t831(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t842(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueTimestamp(result)
 
 	case 12:
-		result4 := wasm_lift_1_t832(unsafe.Add(unsafe.Pointer(src), 8))
+		result4 := wasm_lift_1_t843(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueTimestamptz(result4)
 
 	case 13:
-		result5 := wasm_lift_1_t829(unsafe.Add(unsafe.Pointer(src), 8))
+		result5 := wasm_lift_1_t840(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueDate(result5)
 
 	case 14:
-		result6 := wasm_lift_1_t830(unsafe.Add(unsafe.Pointer(src), 8))
+		result6 := wasm_lift_1_t841(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueTime(result6)
 
 	case 15:
-		result7 := wasm_lift_1_t833(unsafe.Add(unsafe.Pointer(src), 8))
+		result7 := wasm_lift_1_t844(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueTimetz(result7)
 
 	case 16:
-		result8 := wasm_lift_1_t874(unsafe.Add(unsafe.Pointer(src), 8))
+		result8 := wasm_lift_1_t885(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueInterval(result8)
 
@@ -2661,22 +2661,22 @@ func wasm_lift_1_t900(src unsafe.Pointer) DbValue {
 		variant = MakeDbValueXml(value13)
 
 	case 22:
-		result14 := wasm_lift_1_t823(unsafe.Add(unsafe.Pointer(src), 8))
+		result14 := wasm_lift_1_t834(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueUuid(result14)
 
 	case 23:
-		result15 := wasm_lift_1_t826(unsafe.Add(unsafe.Pointer(src), 8))
+		result15 := wasm_lift_1_t837(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueInet(result15)
 
 	case 24:
-		result16 := wasm_lift_1_t826(unsafe.Add(unsafe.Pointer(src), 8))
+		result16 := wasm_lift_1_t837(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueCidr(result16)
 
 	case 25:
-		result17 := wasm_lift_1_t828(unsafe.Add(unsafe.Pointer(src), 8))
+		result17 := wasm_lift_1_t839(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueMacaddr(result17)
 
@@ -2701,32 +2701,32 @@ func wasm_lift_1_t900(src unsafe.Pointer) DbValue {
 		variant = MakeDbValueVarbit(result19)
 
 	case 28:
-		result20 := wasm_lift_1_t881(unsafe.Add(unsafe.Pointer(src), 8))
+		result20 := wasm_lift_1_t892(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueInt4range(result20)
 
 	case 29:
-		result21 := wasm_lift_1_t882(unsafe.Add(unsafe.Pointer(src), 8))
+		result21 := wasm_lift_1_t893(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueInt8range(result21)
 
 	case 30:
-		result22 := wasm_lift_1_t883(unsafe.Add(unsafe.Pointer(src), 8))
+		result22 := wasm_lift_1_t894(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueNumrange(result22)
 
 	case 31:
-		result23 := wasm_lift_1_t884(unsafe.Add(unsafe.Pointer(src), 8))
+		result23 := wasm_lift_1_t895(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueTsrange(result23)
 
 	case 32:
-		result24 := wasm_lift_1_t885(unsafe.Add(unsafe.Pointer(src), 8))
+		result24 := wasm_lift_1_t896(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueTstzrange(result24)
 
 	case 33:
-		result25 := wasm_lift_1_t886(unsafe.Add(unsafe.Pointer(src), 8))
+		result25 := wasm_lift_1_t897(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueDaterange(result25)
 
@@ -2739,17 +2739,17 @@ func wasm_lift_1_t900(src unsafe.Pointer) DbValue {
 		variant = MakeDbValueOid(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))
 
 	case 36:
-		result26 := wasm_lift_1_t888(unsafe.Add(unsafe.Pointer(src), 8))
+		result26 := wasm_lift_1_t899(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueEnumeration(result26)
 
 	case 37:
-		result27 := wasm_lift_1_t895(unsafe.Add(unsafe.Pointer(src), 8))
+		result27 := wasm_lift_1_t906(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueComposite(result27)
 
 	case 38:
-		result28 := wasm_lift_1_t896(unsafe.Add(unsafe.Pointer(src), 8))
+		result28 := wasm_lift_1_t907(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueDomain(result28)
 
@@ -2764,7 +2764,7 @@ func wasm_lift_1_t900(src unsafe.Pointer) DbValue {
 		variant = MakeDbValueArray(result29)
 
 	case 40:
-		result30 := wasm_lift_1_t899(unsafe.Add(unsafe.Pointer(src), 8))
+		result30 := wasm_lift_1_t910(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueRange(result30)
 
@@ -2783,7 +2783,7 @@ func wasm_lift_1_t900(src unsafe.Pointer) DbValue {
 		variant = MakeDbValueHalfvec(value32)
 
 	case 44:
-		result33 := wasm_lift_1_t891(unsafe.Add(unsafe.Pointer(src), 8))
+		result33 := wasm_lift_1_t902(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeDbValueSparsevec(result33)
 
@@ -2795,7 +2795,7 @@ func wasm_lift_1_t900(src unsafe.Pointer) DbValue {
 }
 
 //go:noinline
-func wasm_lift_1_t908(src unsafe.Pointer) DbColumnType {
+func wasm_lift_1_t919(src unsafe.Pointer) DbColumnType {
 	var variant DbColumnType
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -2943,17 +2943,17 @@ func wasm_lift_1_t908(src unsafe.Pointer) DbColumnType {
 		variant = MakeDbColumnTypeOid()
 
 	case 36:
-		result := wasm_lift_1_t887(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t898(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeDbColumnTypeEnumeration(result)
 
 	case 37:
-		result0 := wasm_lift_1_t905(unsafe.Add(unsafe.Pointer(src), 4))
+		result0 := wasm_lift_1_t916(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeDbColumnTypeComposite(result0)
 
 	case 38:
-		result1 := wasm_lift_1_t906(unsafe.Add(unsafe.Pointer(src), 4))
+		result1 := wasm_lift_1_t917(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeDbColumnTypeDomain(result1)
 
@@ -2962,7 +2962,7 @@ func wasm_lift_1_t908(src unsafe.Pointer) DbColumnType {
 		variant = MakeDbColumnTypeArray(LazyDbColumnTypeFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 4))))))
 
 	case 40:
-		result2 := wasm_lift_1_t907(unsafe.Add(unsafe.Pointer(src), 4))
+		result2 := wasm_lift_1_t918(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeDbColumnTypeRange(result2)
 
@@ -2986,16 +2986,16 @@ func wasm_lift_1_t908(src unsafe.Pointer) DbColumnType {
 }
 
 //go:noinline
-func wasm_lift_1_t909(src unsafe.Pointer) DbColumn {
+func wasm_lift_1_t920(src unsafe.Pointer) DbColumn {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
-	result := wasm_lift_1_t908(unsafe.Add(unsafe.Pointer(src), (8 + 2*4)))
+	result := wasm_lift_1_t919(unsafe.Add(unsafe.Pointer(src), (8 + 2*4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 8*4))))
 
 	return DbColumn{Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), Name: value0, DbType: result, DbTypeName: value1}
 }
 
 //go:noinline
-func wasm_lift_1_t873(src unsafe.Pointer) Error {
+func wasm_lift_1_t884(src unsafe.Pointer) Error {
 	var variant Error
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -3036,11 +3036,11 @@ func wasm_lift_1_t873(src unsafe.Pointer) Error {
 }
 
 //go:noinline
-func wasm_lift_1_t911(src unsafe.Pointer) DbRow {
+func wasm_lift_1_t922(src unsafe.Pointer) DbRow {
 	result0 := make([]DbValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*56)
-		result := wasm_lift_1_t900(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t911(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -3049,11 +3049,11 @@ func wasm_lift_1_t911(src unsafe.Pointer) DbRow {
 }
 
 //go:noinline
-func wasm_lift_1_t914(src unsafe.Pointer) DbResult {
+func wasm_lift_1_t925(src unsafe.Pointer) DbResult {
 	result0 := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(16+8*4))
-		result := wasm_lift_1_t909(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t920(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -3061,7 +3061,7 @@ func wasm_lift_1_t914(src unsafe.Pointer) DbResult {
 	result2 := make([]DbRow, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))), index*(2*4))
-		result1 := wasm_lift_1_t911(unsafe.Add(unsafe.Pointer(base), 0))
+		result1 := wasm_lift_1_t922(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result2 = append(result2, result1)
 	}
@@ -3070,21 +3070,21 @@ func wasm_lift_1_t914(src unsafe.Pointer) DbResult {
 }
 
 //go:noinline
-func wasm_lower_1_t831(pinner *runtime.Pinner, value golem_rdbms_types.Timestamp, dst unsafe.Pointer) {
-	wasm_lower_1_t829(nil, (value).Date, unsafe.Add(unsafe.Pointer(dst), 0))
-	wasm_lower_1_t830(nil, (value).Time, unsafe.Add(unsafe.Pointer(dst), 8))
+func wasm_lower_1_t842(pinner *runtime.Pinner, value golem_rdbms_types.Timestamp, dst unsafe.Pointer) {
+	wasm_lower_1_t840(nil, (value).Date, unsafe.Add(unsafe.Pointer(dst), 0))
+	wasm_lower_1_t841(nil, (value).Time, unsafe.Add(unsafe.Pointer(dst), 8))
 
 }
 
 //go:noinline
-func wasm_lower_1_t832(pinner *runtime.Pinner, value golem_rdbms_types.Timestamptz, dst unsafe.Pointer) {
-	wasm_lower_1_t831(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
+func wasm_lower_1_t843(pinner *runtime.Pinner, value golem_rdbms_types.Timestamptz, dst unsafe.Pointer) {
+	wasm_lower_1_t842(nil, (value).Timestamp, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 16)) = (value).Offset
 
 }
 
 //go:noinline
-func wasm_lower_1_t829(pinner *runtime.Pinner, value golem_rdbms_types.Date, dst unsafe.Pointer) {
+func wasm_lower_1_t840(pinner *runtime.Pinner, value golem_rdbms_types.Date, dst unsafe.Pointer) {
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Year
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 4)) = int8(int32((value).Month))
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 5)) = int8(int32((value).Day))
@@ -3092,7 +3092,7 @@ func wasm_lower_1_t829(pinner *runtime.Pinner, value golem_rdbms_types.Date, dst
 }
 
 //go:noinline
-func wasm_lower_1_t830(pinner *runtime.Pinner, value golem_rdbms_types.Time, dst unsafe.Pointer) {
+func wasm_lower_1_t841(pinner *runtime.Pinner, value golem_rdbms_types.Time, dst unsafe.Pointer) {
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32((value).Hour))
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 1)) = int8(int32((value).Minute))
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 2)) = int8(int32((value).Second))
@@ -3101,14 +3101,14 @@ func wasm_lower_1_t830(pinner *runtime.Pinner, value golem_rdbms_types.Time, dst
 }
 
 //go:noinline
-func wasm_lower_1_t833(pinner *runtime.Pinner, value golem_rdbms_types.Timetz, dst unsafe.Pointer) {
-	wasm_lower_1_t830(nil, (value).Time, unsafe.Add(unsafe.Pointer(dst), 0))
+func wasm_lower_1_t844(pinner *runtime.Pinner, value golem_rdbms_types.Timetz, dst unsafe.Pointer) {
+	wasm_lower_1_t841(nil, (value).Time, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (value).Offset
 
 }
 
 //go:noinline
-func wasm_lower_1_t874(pinner *runtime.Pinner, value Interval, dst unsafe.Pointer) {
+func wasm_lower_1_t885(pinner *runtime.Pinner, value Interval, dst unsafe.Pointer) {
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Months
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 4)) = (value).Days
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = (value).Microseconds
@@ -3116,14 +3116,14 @@ func wasm_lower_1_t874(pinner *runtime.Pinner, value Interval, dst unsafe.Pointe
 }
 
 //go:noinline
-func wasm_lower_1_t823(pinner *runtime.Pinner, value golem_rdbms_types.Uuid, dst unsafe.Pointer) {
+func wasm_lower_1_t834(pinner *runtime.Pinner, value golem_rdbms_types.Uuid, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).HighBits)
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64((value).LowBits)
 
 }
 
 //go:noinline
-func wasm_lower_1_t826(pinner *runtime.Pinner, value golem_rdbms_types.IpAddress, dst unsafe.Pointer) {
+func wasm_lower_1_t837(pinner *runtime.Pinner, value golem_rdbms_types.IpAddress, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case golem_rdbms_types.IpAddressIpv4:
@@ -3153,7 +3153,7 @@ func wasm_lower_1_t826(pinner *runtime.Pinner, value golem_rdbms_types.IpAddress
 }
 
 //go:noinline
-func wasm_lower_1_t828(pinner *runtime.Pinner, value golem_rdbms_types.MacAddress, dst unsafe.Pointer) {
+func wasm_lower_1_t839(pinner *runtime.Pinner, value golem_rdbms_types.MacAddress, dst unsafe.Pointer) {
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(((value).Octets).F0))
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 1)) = int8(int32(((value).Octets).F1))
 	*(*int8)(unsafe.Add(unsafe.Pointer(dst), 2)) = int8(int32(((value).Octets).F2))
@@ -3164,49 +3164,49 @@ func wasm_lower_1_t828(pinner *runtime.Pinner, value golem_rdbms_types.MacAddres
 }
 
 //go:noinline
-func wasm_lower_1_t881(pinner *runtime.Pinner, value Int4range, dst unsafe.Pointer) {
-	wasm_lower_1_t875(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
-	wasm_lower_1_t875(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 8))
+func wasm_lower_1_t892(pinner *runtime.Pinner, value Int4range, dst unsafe.Pointer) {
+	wasm_lower_1_t886(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
+	wasm_lower_1_t886(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 8))
 
 }
 
 //go:noinline
-func wasm_lower_1_t882(pinner *runtime.Pinner, value Int8range, dst unsafe.Pointer) {
-	wasm_lower_1_t876(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
-	wasm_lower_1_t876(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 16))
+func wasm_lower_1_t893(pinner *runtime.Pinner, value Int8range, dst unsafe.Pointer) {
+	wasm_lower_1_t887(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
+	wasm_lower_1_t887(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 16))
 
 }
 
 //go:noinline
-func wasm_lower_1_t883(pinner *runtime.Pinner, value Numrange, dst unsafe.Pointer) {
-	wasm_lower_1_t877(pinner, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
-	wasm_lower_1_t877(pinner, (value).End, unsafe.Add(unsafe.Pointer(dst), (3*4)))
+func wasm_lower_1_t894(pinner *runtime.Pinner, value Numrange, dst unsafe.Pointer) {
+	wasm_lower_1_t888(pinner, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
+	wasm_lower_1_t888(pinner, (value).End, unsafe.Add(unsafe.Pointer(dst), (3*4)))
 
 }
 
 //go:noinline
-func wasm_lower_1_t884(pinner *runtime.Pinner, value Tsrange, dst unsafe.Pointer) {
-	wasm_lower_1_t878(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
-	wasm_lower_1_t878(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 20))
+func wasm_lower_1_t895(pinner *runtime.Pinner, value Tsrange, dst unsafe.Pointer) {
+	wasm_lower_1_t889(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
+	wasm_lower_1_t889(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 20))
 
 }
 
 //go:noinline
-func wasm_lower_1_t885(pinner *runtime.Pinner, value Tstzrange, dst unsafe.Pointer) {
-	wasm_lower_1_t879(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
-	wasm_lower_1_t879(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 24))
+func wasm_lower_1_t896(pinner *runtime.Pinner, value Tstzrange, dst unsafe.Pointer) {
+	wasm_lower_1_t890(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
+	wasm_lower_1_t890(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 24))
 
 }
 
 //go:noinline
-func wasm_lower_1_t886(pinner *runtime.Pinner, value Daterange, dst unsafe.Pointer) {
-	wasm_lower_1_t880(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
-	wasm_lower_1_t880(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 12))
+func wasm_lower_1_t897(pinner *runtime.Pinner, value Daterange, dst unsafe.Pointer) {
+	wasm_lower_1_t891(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
+	wasm_lower_1_t891(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 12))
 
 }
 
 //go:noinline
-func wasm_lower_1_t888(pinner *runtime.Pinner, value Enumeration, dst unsafe.Pointer) {
+func wasm_lower_1_t899(pinner *runtime.Pinner, value Enumeration, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).Name))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Name)))
@@ -3219,7 +3219,7 @@ func wasm_lower_1_t888(pinner *runtime.Pinner, value Enumeration, dst unsafe.Poi
 }
 
 //go:noinline
-func wasm_lower_1_t895(pinner *runtime.Pinner, value Composite, dst unsafe.Pointer) {
+func wasm_lower_1_t906(pinner *runtime.Pinner, value Composite, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).Name))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Name)))
@@ -3239,7 +3239,7 @@ func wasm_lower_1_t895(pinner *runtime.Pinner, value Composite, dst unsafe.Point
 }
 
 //go:noinline
-func wasm_lower_1_t896(pinner *runtime.Pinner, value Domain, dst unsafe.Pointer) {
+func wasm_lower_1_t907(pinner *runtime.Pinner, value Domain, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).Name))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Name)))
@@ -3249,17 +3249,17 @@ func wasm_lower_1_t896(pinner *runtime.Pinner, value Domain, dst unsafe.Pointer)
 }
 
 //go:noinline
-func wasm_lower_1_t899(pinner *runtime.Pinner, value Range, dst unsafe.Pointer) {
+func wasm_lower_1_t910(pinner *runtime.Pinner, value Range, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).Name))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).Name)))
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
-	wasm_lower_1_t898(nil, (value).Value, unsafe.Add(unsafe.Pointer(dst), (2*4)))
+	wasm_lower_1_t909(nil, (value).Value, unsafe.Add(unsafe.Pointer(dst), (2*4)))
 
 }
 
 //go:noinline
-func wasm_lower_1_t891(pinner *runtime.Pinner, value SparseVec, dst unsafe.Pointer) {
+func wasm_lower_1_t902(pinner *runtime.Pinner, value SparseVec, dst unsafe.Pointer) {
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Dim
 	data := unsafe.Pointer(unsafe.SliceData((value).Indices))
 	pinner.Pin(data)
@@ -3273,53 +3273,53 @@ func wasm_lower_1_t891(pinner *runtime.Pinner, value SparseVec, dst unsafe.Point
 }
 
 //go:noinline
-func wasm_lift_1_t831(src unsafe.Pointer) golem_rdbms_types.Timestamp {
-	result := wasm_lift_1_t829(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t830(unsafe.Add(unsafe.Pointer(src), 8))
+func wasm_lift_1_t842(src unsafe.Pointer) golem_rdbms_types.Timestamp {
+	result := wasm_lift_1_t840(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t841(unsafe.Add(unsafe.Pointer(src), 8))
 
 	return golem_rdbms_types.Timestamp{Date: result, Time: result0}
 }
 
 //go:noinline
-func wasm_lift_1_t832(src unsafe.Pointer) golem_rdbms_types.Timestamptz {
-	result := wasm_lift_1_t831(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t843(src unsafe.Pointer) golem_rdbms_types.Timestamptz {
+	result := wasm_lift_1_t842(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return golem_rdbms_types.Timestamptz{Timestamp: result, Offset: *(*int32)(unsafe.Add(unsafe.Pointer(src), 16))}
 }
 
 //go:noinline
-func wasm_lift_1_t829(src unsafe.Pointer) golem_rdbms_types.Date {
+func wasm_lift_1_t840(src unsafe.Pointer) golem_rdbms_types.Date {
 
 	return golem_rdbms_types.Date{Year: *(*int32)(unsafe.Add(unsafe.Pointer(src), 0)), Month: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), Day: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 5))))}
 }
 
 //go:noinline
-func wasm_lift_1_t830(src unsafe.Pointer) golem_rdbms_types.Time {
+func wasm_lift_1_t841(src unsafe.Pointer) golem_rdbms_types.Time {
 
 	return golem_rdbms_types.Time{Hour: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), Minute: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 1)))), Second: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 2)))), Nanosecond: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(src), 4)))}
 }
 
 //go:noinline
-func wasm_lift_1_t833(src unsafe.Pointer) golem_rdbms_types.Timetz {
-	result := wasm_lift_1_t830(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t844(src unsafe.Pointer) golem_rdbms_types.Timetz {
+	result := wasm_lift_1_t841(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return golem_rdbms_types.Timetz{Time: result, Offset: *(*int32)(unsafe.Add(unsafe.Pointer(src), 8))}
 }
 
 //go:noinline
-func wasm_lift_1_t874(src unsafe.Pointer) Interval {
+func wasm_lift_1_t885(src unsafe.Pointer) Interval {
 
 	return Interval{Months: *(*int32)(unsafe.Add(unsafe.Pointer(src), 0)), Days: *(*int32)(unsafe.Add(unsafe.Pointer(src), 4)), Microseconds: *(*int64)(unsafe.Add(unsafe.Pointer(src), 8))}
 }
 
 //go:noinline
-func wasm_lift_1_t823(src unsafe.Pointer) golem_rdbms_types.Uuid {
+func wasm_lift_1_t834(src unsafe.Pointer) golem_rdbms_types.Uuid {
 
 	return golem_rdbms_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8)))}
 }
 
 //go:noinline
-func wasm_lift_1_t826(src unsafe.Pointer) golem_rdbms_types.IpAddress {
+func wasm_lift_1_t837(src unsafe.Pointer) golem_rdbms_types.IpAddress {
 	var variant golem_rdbms_types.IpAddress
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -3338,61 +3338,61 @@ func wasm_lift_1_t826(src unsafe.Pointer) golem_rdbms_types.IpAddress {
 }
 
 //go:noinline
-func wasm_lift_1_t828(src unsafe.Pointer) golem_rdbms_types.MacAddress {
+func wasm_lift_1_t839(src unsafe.Pointer) golem_rdbms_types.MacAddress {
 
 	return golem_rdbms_types.MacAddress{Octets: witTypes.Tuple6[uint8, uint8, uint8, uint8, uint8, uint8]{F0: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), F1: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 1)))), F2: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 2)))), F3: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 3)))), F4: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), F5: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 5))))}}
 }
 
 //go:noinline
-func wasm_lift_1_t881(src unsafe.Pointer) Int4range {
-	result := wasm_lift_1_t875(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t875(unsafe.Add(unsafe.Pointer(src), 8))
+func wasm_lift_1_t892(src unsafe.Pointer) Int4range {
+	result := wasm_lift_1_t886(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t886(unsafe.Add(unsafe.Pointer(src), 8))
 
 	return Int4range{Start: result, End: result0}
 }
 
 //go:noinline
-func wasm_lift_1_t882(src unsafe.Pointer) Int8range {
-	result := wasm_lift_1_t876(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t876(unsafe.Add(unsafe.Pointer(src), 16))
+func wasm_lift_1_t893(src unsafe.Pointer) Int8range {
+	result := wasm_lift_1_t887(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t887(unsafe.Add(unsafe.Pointer(src), 16))
 
 	return Int8range{Start: result, End: result0}
 }
 
 //go:noinline
-func wasm_lift_1_t883(src unsafe.Pointer) Numrange {
-	result := wasm_lift_1_t877(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t877(unsafe.Add(unsafe.Pointer(src), (3 * 4)))
+func wasm_lift_1_t894(src unsafe.Pointer) Numrange {
+	result := wasm_lift_1_t888(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t888(unsafe.Add(unsafe.Pointer(src), (3 * 4)))
 
 	return Numrange{Start: result, End: result0}
 }
 
 //go:noinline
-func wasm_lift_1_t884(src unsafe.Pointer) Tsrange {
-	result := wasm_lift_1_t878(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t878(unsafe.Add(unsafe.Pointer(src), 20))
+func wasm_lift_1_t895(src unsafe.Pointer) Tsrange {
+	result := wasm_lift_1_t889(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t889(unsafe.Add(unsafe.Pointer(src), 20))
 
 	return Tsrange{Start: result, End: result0}
 }
 
 //go:noinline
-func wasm_lift_1_t885(src unsafe.Pointer) Tstzrange {
-	result := wasm_lift_1_t879(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t879(unsafe.Add(unsafe.Pointer(src), 24))
+func wasm_lift_1_t896(src unsafe.Pointer) Tstzrange {
+	result := wasm_lift_1_t890(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t890(unsafe.Add(unsafe.Pointer(src), 24))
 
 	return Tstzrange{Start: result, End: result0}
 }
 
 //go:noinline
-func wasm_lift_1_t886(src unsafe.Pointer) Daterange {
-	result := wasm_lift_1_t880(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t880(unsafe.Add(unsafe.Pointer(src), 12))
+func wasm_lift_1_t897(src unsafe.Pointer) Daterange {
+	result := wasm_lift_1_t891(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t891(unsafe.Add(unsafe.Pointer(src), 12))
 
 	return Daterange{Start: result, End: result0}
 }
 
 //go:noinline
-func wasm_lift_1_t888(src unsafe.Pointer) Enumeration {
+func wasm_lift_1_t899(src unsafe.Pointer) Enumeration {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 
@@ -3400,7 +3400,7 @@ func wasm_lift_1_t888(src unsafe.Pointer) Enumeration {
 }
 
 //go:noinline
-func wasm_lift_1_t895(src unsafe.Pointer) Composite {
+func wasm_lift_1_t906(src unsafe.Pointer) Composite {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	result := make([]*LazyDbValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
@@ -3413,22 +3413,22 @@ func wasm_lift_1_t895(src unsafe.Pointer) Composite {
 }
 
 //go:noinline
-func wasm_lift_1_t896(src unsafe.Pointer) Domain {
+func wasm_lift_1_t907(src unsafe.Pointer) Domain {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 
 	return Domain{Name: value0, Value: LazyDbValueFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))))}
 }
 
 //go:noinline
-func wasm_lift_1_t899(src unsafe.Pointer) Range {
+func wasm_lift_1_t910(src unsafe.Pointer) Range {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	result := wasm_lift_1_t898(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
+	result := wasm_lift_1_t909(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 
 	return Range{Name: value0, Value: result}
 }
 
 //go:noinline
-func wasm_lift_1_t891(src unsafe.Pointer) SparseVec {
+func wasm_lift_1_t902(src unsafe.Pointer) SparseVec {
 	value0 := unsafe.Slice((*int32)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 	value1 := unsafe.Slice((*float32)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))
 
@@ -3436,14 +3436,14 @@ func wasm_lift_1_t891(src unsafe.Pointer) SparseVec {
 }
 
 //go:noinline
-func wasm_lift_1_t887(src unsafe.Pointer) EnumerationType {
+func wasm_lift_1_t898(src unsafe.Pointer) EnumerationType {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 
 	return EnumerationType{Name: value0}
 }
 
 //go:noinline
-func wasm_lift_1_t905(src unsafe.Pointer) CompositeType {
+func wasm_lift_1_t916(src unsafe.Pointer) CompositeType {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	result := make([]witTypes.Tuple2[string, *LazyDbColumnType], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
@@ -3457,21 +3457,21 @@ func wasm_lift_1_t905(src unsafe.Pointer) CompositeType {
 }
 
 //go:noinline
-func wasm_lift_1_t906(src unsafe.Pointer) DomainType {
+func wasm_lift_1_t917(src unsafe.Pointer) DomainType {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 
 	return DomainType{Name: value0, BaseType: LazyDbColumnTypeFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))))}
 }
 
 //go:noinline
-func wasm_lift_1_t907(src unsafe.Pointer) RangeType {
+func wasm_lift_1_t918(src unsafe.Pointer) RangeType {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 
 	return RangeType{Name: value0, BaseType: LazyDbColumnTypeFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))))}
 }
 
 //go:noinline
-func wasm_lower_1_t875(pinner *runtime.Pinner, value Int4bound, dst unsafe.Pointer) {
+func wasm_lower_1_t886(pinner *runtime.Pinner, value Int4bound, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case Int4boundIncluded:
@@ -3495,7 +3495,7 @@ func wasm_lower_1_t875(pinner *runtime.Pinner, value Int4bound, dst unsafe.Point
 }
 
 //go:noinline
-func wasm_lower_1_t876(pinner *runtime.Pinner, value Int8bound, dst unsafe.Pointer) {
+func wasm_lower_1_t887(pinner *runtime.Pinner, value Int8bound, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case Int8boundIncluded:
@@ -3519,7 +3519,7 @@ func wasm_lower_1_t876(pinner *runtime.Pinner, value Int8bound, dst unsafe.Point
 }
 
 //go:noinline
-func wasm_lower_1_t877(pinner *runtime.Pinner, value Numbound, dst unsafe.Pointer) {
+func wasm_lower_1_t888(pinner *runtime.Pinner, value Numbound, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case NumboundIncluded:
@@ -3549,18 +3549,18 @@ func wasm_lower_1_t877(pinner *runtime.Pinner, value Numbound, dst unsafe.Pointe
 }
 
 //go:noinline
-func wasm_lower_1_t878(pinner *runtime.Pinner, value Tsbound, dst unsafe.Pointer) {
+func wasm_lower_1_t889(pinner *runtime.Pinner, value Tsbound, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case TsboundIncluded:
 		payload := value.Included()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
-		wasm_lower_1_t831(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
+		wasm_lower_1_t842(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
 
 	case TsboundExcluded:
 		payload := value.Excluded()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t831(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
+		wasm_lower_1_t842(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
 
 	case TsboundUnbounded:
 
@@ -3573,18 +3573,18 @@ func wasm_lower_1_t878(pinner *runtime.Pinner, value Tsbound, dst unsafe.Pointer
 }
 
 //go:noinline
-func wasm_lower_1_t879(pinner *runtime.Pinner, value Tstzbound, dst unsafe.Pointer) {
+func wasm_lower_1_t890(pinner *runtime.Pinner, value Tstzbound, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case TstzboundIncluded:
 		payload := value.Included()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
-		wasm_lower_1_t832(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
+		wasm_lower_1_t843(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
 
 	case TstzboundExcluded:
 		payload := value.Excluded()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t832(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
+		wasm_lower_1_t843(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
 
 	case TstzboundUnbounded:
 
@@ -3597,18 +3597,18 @@ func wasm_lower_1_t879(pinner *runtime.Pinner, value Tstzbound, dst unsafe.Point
 }
 
 //go:noinline
-func wasm_lower_1_t880(pinner *runtime.Pinner, value Datebound, dst unsafe.Pointer) {
+func wasm_lower_1_t891(pinner *runtime.Pinner, value Datebound, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case DateboundIncluded:
 		payload := value.Included()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
-		wasm_lower_1_t829(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
+		wasm_lower_1_t840(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
 
 	case DateboundExcluded:
 		payload := value.Excluded()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t829(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
+		wasm_lower_1_t840(nil, payload, unsafe.Add(unsafe.Pointer(dst), 4))
 
 	case DateboundUnbounded:
 
@@ -3621,14 +3621,14 @@ func wasm_lower_1_t880(pinner *runtime.Pinner, value Datebound, dst unsafe.Point
 }
 
 //go:noinline
-func wasm_lower_1_t898(pinner *runtime.Pinner, value ValuesRange, dst unsafe.Pointer) {
-	wasm_lower_1_t897(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
-	wasm_lower_1_t897(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 8))
+func wasm_lower_1_t909(pinner *runtime.Pinner, value ValuesRange, dst unsafe.Pointer) {
+	wasm_lower_1_t908(nil, (value).Start, unsafe.Add(unsafe.Pointer(dst), 0))
+	wasm_lower_1_t908(nil, (value).End, unsafe.Add(unsafe.Pointer(dst), 8))
 
 }
 
 //go:noinline
-func wasm_lift_1_t875(src unsafe.Pointer) Int4bound {
+func wasm_lift_1_t886(src unsafe.Pointer) Int4bound {
 	var variant Int4bound
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -3651,7 +3651,7 @@ func wasm_lift_1_t875(src unsafe.Pointer) Int4bound {
 }
 
 //go:noinline
-func wasm_lift_1_t876(src unsafe.Pointer) Int8bound {
+func wasm_lift_1_t887(src unsafe.Pointer) Int8bound {
 	var variant Int8bound
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -3674,7 +3674,7 @@ func wasm_lift_1_t876(src unsafe.Pointer) Int8bound {
 }
 
 //go:noinline
-func wasm_lift_1_t877(src unsafe.Pointer) Numbound {
+func wasm_lift_1_t888(src unsafe.Pointer) Numbound {
 	var variant Numbound
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -3699,16 +3699,16 @@ func wasm_lift_1_t877(src unsafe.Pointer) Numbound {
 }
 
 //go:noinline
-func wasm_lift_1_t878(src unsafe.Pointer) Tsbound {
+func wasm_lift_1_t889(src unsafe.Pointer) Tsbound {
 	var variant Tsbound
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t831(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t842(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeTsboundIncluded(result)
 
 	case 1:
-		result0 := wasm_lift_1_t831(unsafe.Add(unsafe.Pointer(src), 4))
+		result0 := wasm_lift_1_t842(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeTsboundExcluded(result0)
 
@@ -3724,16 +3724,16 @@ func wasm_lift_1_t878(src unsafe.Pointer) Tsbound {
 }
 
 //go:noinline
-func wasm_lift_1_t879(src unsafe.Pointer) Tstzbound {
+func wasm_lift_1_t890(src unsafe.Pointer) Tstzbound {
 	var variant Tstzbound
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t832(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t843(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeTstzboundIncluded(result)
 
 	case 1:
-		result0 := wasm_lift_1_t832(unsafe.Add(unsafe.Pointer(src), 4))
+		result0 := wasm_lift_1_t843(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeTstzboundExcluded(result0)
 
@@ -3749,16 +3749,16 @@ func wasm_lift_1_t879(src unsafe.Pointer) Tstzbound {
 }
 
 //go:noinline
-func wasm_lift_1_t880(src unsafe.Pointer) Datebound {
+func wasm_lift_1_t891(src unsafe.Pointer) Datebound {
 	var variant Datebound
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t829(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t840(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeDateboundIncluded(result)
 
 	case 1:
-		result0 := wasm_lift_1_t829(unsafe.Add(unsafe.Pointer(src), 4))
+		result0 := wasm_lift_1_t840(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = MakeDateboundExcluded(result0)
 
@@ -3774,15 +3774,15 @@ func wasm_lift_1_t880(src unsafe.Pointer) Datebound {
 }
 
 //go:noinline
-func wasm_lift_1_t898(src unsafe.Pointer) ValuesRange {
-	result := wasm_lift_1_t897(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t897(unsafe.Add(unsafe.Pointer(src), 8))
+func wasm_lift_1_t909(src unsafe.Pointer) ValuesRange {
+	result := wasm_lift_1_t908(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t908(unsafe.Add(unsafe.Pointer(src), 8))
 
 	return ValuesRange{Start: result, End: result0}
 }
 
 //go:noinline
-func wasm_lower_1_t897(pinner *runtime.Pinner, value ValueBound, dst unsafe.Pointer) {
+func wasm_lower_1_t908(pinner *runtime.Pinner, value ValueBound, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case ValueBoundIncluded:
@@ -3806,7 +3806,7 @@ func wasm_lower_1_t897(pinner *runtime.Pinner, value ValueBound, dst unsafe.Poin
 }
 
 //go:noinline
-func wasm_lift_1_t897(src unsafe.Pointer) ValueBound {
+func wasm_lift_1_t908(src unsafe.Pointer) ValueBound {
 	var variant ValueBound
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

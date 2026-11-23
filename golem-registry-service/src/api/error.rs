@@ -618,7 +618,9 @@ impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            ComponentError::ComponentProcessingError(_) => Self::BadRequest(Json(ErrorsBody {
+            ComponentError::ComponentProcessingError(_)
+            | ComponentError::PackageLayerDigestMismatch(_)
+            | ComponentError::PackageMetadataWithoutWasm(_) => Self::BadRequest(Json(ErrorsBody {
                 errors: vec![error],
                 code: api::error_code::COMPONENT_PROCESSING_ERROR.to_string(),
                 cause: None,
@@ -734,6 +736,9 @@ impl From<ComponentError> for ApiError {
             }
             ComponentError::DuplicateAgentTypeName(_) => {
                 Self::bad_request(api::error_code::DUPLICATE_AGENT_TYPE_NAME, error)
+            }
+            ComponentError::AgentMethodNameTooLong { .. } => {
+                Self::bad_request(api::error_code::AGENT_METHOD_NAME_TOO_LONG, error)
             }
             ComponentError::DuplicateToolName(_) => {
                 Self::bad_request(api::error_code::DUPLICATE_TOOL_NAME, error)

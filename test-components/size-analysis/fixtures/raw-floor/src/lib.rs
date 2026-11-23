@@ -40,6 +40,18 @@ use save_snapshot::exports::golem::api::save_snapshot as save;
 #[path = "../../../../../sdks/rust/golem-rust/src/agentic/exports/raw.rs"]
 mod raw;
 
+// The raw dispatch lifts an absent snapshot load through this typed entry point.
+struct Component;
+
+impl load::Guest for Component {
+    async fn load(
+        _: load::Snapshot,
+        _: load_snapshot::golem::core::types::SchemaValueTree,
+    ) -> Result<(), String> {
+        Err(String::new())
+    }
+}
+
 #[cfg(feature = "tool")]
 mod active {
     use super::*;

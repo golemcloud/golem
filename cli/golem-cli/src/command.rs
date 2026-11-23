@@ -22,6 +22,7 @@ use crate::command::card::CardSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
+use crate::command::invocation::InvocationSubcommand;
 use crate::command::mcp::McpSubcommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
@@ -699,6 +700,11 @@ pub enum GolemCliSubcommand {
         #[command(subcommand)]
         subcommand: PackageSubcommand,
     },
+    /// Install and pin a local package archive without running its code
+    Install {
+        /// Path to the package archive
+        file: PathBuf,
+    },
     /// Preview a package's OCI manifest digest without contacting a server
     Publish {
         /// Compute the digest locally without saving an archive or publishing it
@@ -952,6 +958,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: AgentSubcommand,
     },
+    /// Inspect and cancel agent invocations
+    Invocation {
+        #[clap(subcommand)]
+        subcommand: InvocationSubcommand,
+    },
     /// Manage deployed agent types
     AgentType {
         #[clap(subcommand)]
@@ -1164,7 +1175,7 @@ pub mod shared_args {
         #[arg(
             long,
             value_name = "N",
-            default_value_t = 16_777_216,
+            default_value_t = crate::oplog_export::export::DEFAULT_MAX_ENTRY_BYTES,
             requires = "obfuscate"
         )]
         pub max_entry_bytes: u64,
@@ -1471,7 +1482,7 @@ pub mod tool {
     #[derive(Debug, Args)]
     #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
     pub struct ToolInvokeArgs {
-        /// Existing agent; for --lookup use the receipt's <component-id>:<agent-id>
+        /// Existing agent; for --lookup use the receipt's agent ID
         #[arg(long)]
         pub agent: Option<RawAgentId>,
         /// Component used to create a fresh ephemeral invocation owner without constructing an agent
@@ -1643,10 +1654,9 @@ pub mod worker {
         AgentFunctionArgument, AgentFunctionName, AgentIdArgs, OplogExportArgs, OplogViewerArgs,
         PostDeployArgs, StreamArgs,
     };
-    use crate::model::agent::{AgentListMode, AgentUpdateMode};
+    use crate::model::agent::{AgentListCursor, AgentListMode, AgentUpdateMode};
     use chrono::{DateTime, Utc};
     use clap::{Subcommand, ValueEnum};
-    use golem_client::model::ScanCursor;
     use golem_common::model::IdempotencyKey;
     use golem_common::model::agent::AgentConfigEntryDto;
     use golem_common::model::agent::AgentTypeName;
@@ -1668,11 +1678,19 @@ pub mod worker {
 
     #[derive(Debug, Subcommand)]
     pub enum AgentSubcommand {
-        /// Create new agent
-        #[command(after_help = crate::command_examples::AGENT_NEW)]
-        New {
+        /// Create an agent. Without `--keyed`, each call creates a new agent without a key.
+        #[command(after_help = crate::command_examples::AGENT_CREATE)]
+        Create {
             #[command(flatten)]
             agent_id: AgentIdArgs,
+            /// Create the keyed agent of the constructor parameters. Fails when the keyed agent
+            /// already exists.
+            #[clap(long)]
+            keyed: bool,
+            /// Idempotency key of the create. A create retried with the same key returns the
+            /// agent of the first create.
+            #[clap(long, short)]
+            idempotency_key: Option<IdempotencyKey>,
             /// Environment variables visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "ENV=VAL")]
             env: Vec<(String, String)>,
@@ -1684,7 +1702,14 @@ pub mod worker {
             #[arg(short, long, value_parser = parse_agent_config, verbatim_doc_comment)]
             config: Vec<AgentConfigEntryDto>,
         },
-        /// Invoke (or enqueue invocation for) agent
+        /// Get the keyed agent of constructor parameters, and create it when it does not exist
+        #[command(after_help = crate::command_examples::AGENT_UPSERT)]
+        Upsert {
+            #[command(flatten)]
+            agent_id: AgentIdArgs,
+        },
+        /// Invoke (or enqueue invocation for) agent. Addressed by its key, the agent is created
+        /// when it does not exist.
         #[command(after_help = crate::command_examples::AGENT_INVOKE)]
         Invoke {
             #[command(flatten)]
@@ -1742,6 +1767,9 @@ pub mod worker {
             /// Schedule the invocation at a specific time (ISO 8601 / RFC 3339 format, e.g. 2026-03-15T10:30:00Z)
             #[clap(long, requires = "trigger")]
             schedule_at: Option<DateTime<Utc>>,
+            /// Fail, and run nothing, unless the agent is the incarnation with this fingerprint
+            #[clap(long)]
+            expected_fingerprint: Option<Uuid>,
         },
         /// Get agent metadata
         #[command(after_help = crate::command_examples::AGENT_GET)]
@@ -1769,18 +1797,21 @@ pub mod worker {
             /// Filter for agent metadata in form of `property op value`, combined with
             /// `and`, `or`, `not` and parentheses.
             ///
-            /// Supported properties: `name`, `revision`, `status`, `mode`, `created_at`,
-            /// `env.<KEY>`, `config.<PATH>`.
+            /// Supported properties: `key`, `id`, `revision`, `status`, `mode`, `created_at`,
+            /// `env.<KEY>`, `config.<PATH>`. `key` compares the canonical key text
+            /// `Type(parameters)` of a keyed agent; an agent without a key never matches it.
+            /// `id` compares the agent ID, a UUID.
             /// Supported operators: `==`/`=`, `!=`, `>=`, `>`, `<=`, `<`
             /// (string properties additionally support `like`, `notlike`, `startswith`).
             /// Spaces around the operator are required. `not` binds tightest, then `and`,
             /// then `or`; keywords are case-insensitive.
             /// Quote a value with `"` when it contains whitespace outside parentheses, starts
             /// with `(` or `"`, or has unbalanced parentheses or quotes; inside quotes use `\"`
-            /// and `\\`. Agent IDs such as `Counter("a b", 2)` need no extra quotes.
+            /// and `\\`. Keys such as `Counter("a b", 2)` need no extra quotes.
             ///
-            /// Filter examples: `name == CounterAgent("c1")`, `revision >= 0`,
-            /// `status == Running`, `env.var1 == value`, `name like worker`,
+            /// Filter examples: `key == CounterAgent("c1")`, `revision >= 0`,
+            /// `status == Running`, `env.var1 == value`, `key like worker`,
+            /// `id == 00000007-0000-8000-8000-000000000001`,
             /// `(status == Failed or status == Retrying) and not env.MODE == test`.
             /// Can be used multiple times (AND condition is applied between them).
             #[arg(long)]
@@ -1795,20 +1826,19 @@ pub mod worker {
             /// in the previous response.
             /// The cursor is an opaque string and must be passed back unchanged.
             ///
-            /// Returned cursors: in `--format json/yaml/toon` the response includes a
-            /// `cursors` map of the form `{ "<component-name>": "<opaque-cursor>", ... }`
-            /// (one entry per component that still has more results). Pass any of
-            /// those values back as `--scan-cursor` to fetch the next page.
-            /// An entry being absent means that component has been fully scanned.
+            /// One cursor covers every listed agent type: pass it back with the same agent
+            /// type or component selection to get the next page of each type that still has
+            /// more results. In `--format json/yaml/toon` the response has a `cursor` field,
+            /// which is null when every listed agent type has been fully listed.
             ///
             /// With `--page`, pass back the `cursor` of the previous page instead, with the
             /// same component selection and filters.
             ///
             /// Mutually exclusive with `--refresh`.
             #[arg(long, short, value_parser = parse_cursor)]
-            scan_cursor: Option<ScanCursor>,
+            scan_cursor: Option<AgentListCursor>,
             /// The maximum number of returned agents; returns all values if not specified.
-            /// When multiple components are selected, the limit is applied separately.
+            /// When multiple agent types are listed, the limit is applied to each separately.
             /// With `--page`, the limit is the size of the page; see `--page` for Redis.
             #[arg(long, short)]
             max_count: Option<u64>,
@@ -1849,19 +1879,12 @@ pub mod worker {
             stream_args: StreamArgs,
         },
         /// Like stream, but for helping Bridge SDK-based REPLs. Shows the output of the
-        /// invocation whose accepted ID arrives as the first line of stdin, then exits.
+        /// invocation whose accepted ID, `<AGENT_ID>.<INVOCATION_ID>`, arrives as the first line
+        /// of stdin, then exits.
         #[clap(hide = true)]
         ReplStream {
             /// Agent type name
             agent_type_name: AgentTypeName,
-            /// Agent parameters in UntypedDataValue JSON format
-            parameters: String,
-            /// Idempotency key of the invocation
-            idempotency_key: IdempotencyKey,
-            /// Method name of the invocation, which selects an ephemeral agent's phantom ID
-            method_name: String,
-            /// Phantom ID
-            phantom_id: Option<Uuid>,
             #[command(flatten)]
             stream_args: StreamArgs,
         },
@@ -1972,14 +1995,6 @@ pub mod worker {
             )]
             number_of_invocations: Option<u64>,
         },
-        /// Cancels an enqueued invocation if it has not started yet
-        #[command(after_help = crate::command_examples::AGENT_CANCEL_INVOCATION)]
-        CancelInvocation {
-            #[command(flatten)]
-            agent_id: AgentIdArgs,
-            /// Idempotency key of the invocation to be cancelled
-            idempotency_key: IdempotencyKey,
-        },
         /// List files in an agent's directory.
         ///
         /// The path is resolved inside the agent's guest filesystem (the
@@ -2066,6 +2081,11 @@ pub mod mcp {
         /// `golem -E app/prod mcp serve` or from the application manifest. No tool takes an
         /// environment, and a tool refuses an agent or component of another environment. Start
         /// one server for each environment.
+        ///
+        /// One tool has no command: `agent_oplog_export` returns one complete obfuscated
+        /// report of the oplog entries from `from` to `to`, inclusive. It reads the range
+        /// within one scan budget of the server, and fails with `scan-budget-exceeded` or
+        /// `output-too-large` instead of returning a part of the report.
         ///
         /// The tool of a destructive command takes `confirm`, which confirms that one call as
         /// `--yes` does on the CLI. Neither `--yes` nor `cli.autoConfirm` confirms a tool call.
@@ -2671,6 +2691,115 @@ pub mod resource_definition {
         /// List quota resource definitions in the environment
         #[command(after_help = crate::command_examples::RESOURCE_LIST)]
         List,
+    }
+}
+
+pub mod invocation {
+    use crate::model::agent::RawAgentId;
+    use chrono::{DateTime, Utc};
+    use clap::{Args, Subcommand, ValueEnum};
+
+    #[derive(Debug, Subcommand)]
+    pub enum InvocationSubcommand {
+        /// Show an invocation, its state and its result
+        ///
+        /// Select the invocation by its ID, or by its agent and idempotency key. Exits with code
+        /// 130 when the invocation was cancelled.
+        #[command(after_help = crate::command_examples::INVOCATION_GET)]
+        Get {
+            #[command(flatten)]
+            selector: InvocationSelector,
+        },
+        /// List the invocations of an agent, newest change first
+        #[command(after_help = crate::command_examples::INVOCATION_LIST)]
+        List {
+            /// The agent whose invocations are listed
+            #[arg(
+                long,
+                help = crate::command_glossary::AGENT_ID_SHORT,
+                long_help = crate::command_glossary::AGENT_ID_LONG,
+                verbatim_doc_comment,
+            )]
+            agent: RawAgentId,
+            /// Only invocations of this method name, or of `tool:<tool>/<command path>`
+            #[arg(long)]
+            operation: Option<String>,
+            /// Only invocations in one of these states; can be repeated
+            #[arg(long, value_enum)]
+            status: Vec<InvocationStateArg>,
+            /// Only invocations of this kind
+            #[arg(long, value_enum)]
+            kind: Option<InvocationKindArg>,
+            /// Only invocations whose last change is at or after this time (RFC 3339)
+            #[arg(long)]
+            since: Option<DateTime<Utc>>,
+            /// Only invocations whose last change is at or before this time (RFC 3339)
+            #[arg(long)]
+            until: Option<DateTime<Utc>>,
+            /// Invocations per page, at most 1000; the server default is 100
+            #[arg(long)]
+            page_size: Option<u32>,
+            /// Continue from the cursor printed by an earlier page
+            #[arg(long)]
+            cursor: Option<String>,
+        },
+        /// Cancel a pending or scheduled invocation
+        ///
+        /// Select the invocation by its ID, or by its agent and idempotency key. A running
+        /// invocation cannot be cancelled. Prints the invocation's state after the cancel.
+        #[command(after_help = crate::command_examples::INVOCATION_CANCEL)]
+        Cancel {
+            #[command(flatten)]
+            selector: InvocationSelector,
+        },
+    }
+
+    #[derive(Debug, Args)]
+    pub struct InvocationSelector {
+        /// Invocation ID, `<agent ID>.<UUID>`, as listed by
+        /// `invocation list`. It is resolved in the current environment; select another one with
+        /// `--environment`. Mutually exclusive with `--agent` and `--idempotency-key`.
+        #[arg(
+            required_unless_present = "agent",
+            conflicts_with_all = ["agent", "idempotency_key", "method"]
+        )]
+        pub invocation_id: Option<String>,
+        /// The agent that received the invocation; requires `--idempotency-key`
+        #[arg(
+            long,
+            requires = "idempotency_key",
+            help = crate::command_glossary::AGENT_ID_SHORT,
+            long_help = crate::command_glossary::AGENT_ID_LONG,
+            verbatim_doc_comment,
+        )]
+        pub agent: Option<RawAgentId>,
+        /// The idempotency key the invocation was made with; requires `--agent`
+        #[arg(long, requires = "agent")]
+        pub idempotency_key: Option<String>,
+        /// The method or `tool:<tool>/<command path>`, when the same key was used for more than
+        /// one operation on the agent
+        #[arg(long, requires = "idempotency_key")]
+        pub method: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+    pub enum InvocationStateArg {
+        Scheduled,
+        Pending,
+        Running,
+        Waiting,
+        Retrying,
+        Interrupted,
+        Completed,
+        Failed,
+        Cancelled,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+    pub enum InvocationKindArg {
+        Method,
+        Constructor,
+        Tool,
     }
 }
 
@@ -3357,6 +3486,7 @@ mod test {
         AccountLimitsSubcommand, AccountSubcommand, AccountUsageSubcommand,
     };
     use crate::command::shared_args::PostDeployArgs;
+    use crate::command::worker::AgentSubcommand;
     use crate::command::{
         GolemCliCommand, GolemCliSubcommand, builtin_exec_subcommands,
         help_target_to_subcommand_names, parse_agent_stream_ping_interval,
@@ -4367,5 +4497,177 @@ mod test {
         assert!(cli_args.redeploy_agents(&env_args));
         assert!(!cli_args.delete_agents(&env_args));
         assert!(!cli_args.allow_incompatible_changes(&env_args));
+    }
+
+    fn agent_subcommand<'a>(args: impl IntoIterator<Item = &'a str>) -> AgentSubcommand {
+        let command = GolemCliCommand::try_parse_from(["golem", "agent"].into_iter().chain(args))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let GolemCliSubcommand::Agent { subcommand } = command.subcommand else {
+            panic!("expected an agent command");
+        };
+        subcommand
+    }
+
+    #[test]
+    fn agent_create_parses_keyed_idempotency_key_env_and_config() {
+        let AgentSubcommand::Create {
+            agent_id,
+            keyed,
+            idempotency_key,
+            env,
+            config,
+        } = agent_subcommand([
+            "create",
+            r#"CounterAgent("c1")"#,
+            "--keyed",
+            "-i",
+            "create-1",
+            "-e",
+            "FOO=bar",
+            "--env",
+            "EQ=a=b",
+            "-c",
+            "limits.max=10",
+            "--config",
+            r#"name="x""#,
+        ])
+        else {
+            panic!("expected agent create");
+        };
+        assert_eq!(agent_id.agent_id.0, r#"CounterAgent("c1")"#);
+        assert!(keyed);
+        assert_eq!(idempotency_key.unwrap().value, "create-1");
+        assert_eq!(
+            env,
+            vec![
+                ("FOO".to_string(), "bar".to_string()),
+                ("EQ".to_string(), "a=b".to_string())
+            ]
+        );
+        assert_eq!(
+            config
+                .iter()
+                .map(|entry| (entry.path.join("."), entry.value.0.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("limits.max".to_string(), serde_json::json!(10)),
+                ("name".to_string(), serde_json::json!("x")),
+            ]
+        );
+
+        let AgentSubcommand::Create {
+            keyed,
+            idempotency_key,
+            env,
+            config,
+            ..
+        } = agent_subcommand(["create", r#"CounterAgent("c1")"#])
+        else {
+            panic!("expected agent create");
+        };
+        assert!(!keyed);
+        assert!(idempotency_key.is_none());
+        assert!(env.is_empty());
+        assert!(config.is_empty());
+
+        let AgentSubcommand::Create {
+            idempotency_key, ..
+        } = agent_subcommand(["create", r#"CounterAgent("c1")"#, "--idempotency-key", "k"])
+        else {
+            panic!("expected agent create");
+        };
+        assert_eq!(idempotency_key.unwrap().value, "k");
+
+        for invalid in [
+            vec!["create"],
+            vec!["create", r#"CounterAgent("c1")"#, "-e", "NO_EQUALS"],
+            vec!["create", r#"CounterAgent("c1")"#, "-c", "path=not json"],
+            vec!["new", r#"CounterAgent("c1")"#],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(
+                    ["golem", "agent"].into_iter().chain(invalid.clone())
+                )
+                .is_err(),
+                "{invalid:?} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_upsert_takes_only_an_address() {
+        let AgentSubcommand::Upsert { agent_id } =
+            agent_subcommand(["upsert", r#"CounterAgent("c1")"#])
+        else {
+            panic!("expected agent upsert");
+        };
+        assert_eq!(agent_id.agent_id.0, r#"CounterAgent("c1")"#);
+
+        for invalid in [
+            vec!["upsert"],
+            vec!["upsert", r#"CounterAgent("c1")"#, "--keyed"],
+            vec!["upsert", r#"CounterAgent("c1")"#, "-e", "FOO=bar"],
+            vec!["upsert", r#"CounterAgent("c1")"#, "-c", "a=1"],
+            vec!["upsert", r#"CounterAgent("c1")"#, "-i", "k"],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(
+                    ["golem", "agent"].into_iter().chain(invalid.clone())
+                )
+                .is_err(),
+                "{invalid:?} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_invoke_parses_the_expected_fingerprint() {
+        let fingerprint = "0f8e2c3a-41d5-4b7e-9c2a-6d1e5f4a3b2c";
+        let AgentSubcommand::Invoke {
+            agent_id,
+            function_name,
+            expected_fingerprint,
+            ..
+        } = agent_subcommand([
+            "invoke",
+            "CounterAgent[00000007-0000-8000-8000-00000000002a]",
+            "increment",
+            "--expected-fingerprint",
+            fingerprint,
+        ])
+        else {
+            panic!("expected agent invoke");
+        };
+        assert_eq!(
+            agent_id.agent_id.0,
+            "CounterAgent[00000007-0000-8000-8000-00000000002a]"
+        );
+        assert_eq!(function_name, "increment");
+        assert_eq!(
+            expected_fingerprint,
+            Some(uuid::Uuid::parse_str(fingerprint).unwrap())
+        );
+
+        let AgentSubcommand::Invoke {
+            expected_fingerprint,
+            ..
+        } = agent_subcommand(["invoke", r#"CounterAgent("c1")"#, "increment"])
+        else {
+            panic!("expected agent invoke");
+        };
+        assert_eq!(expected_fingerprint, None);
+
+        assert!(
+            GolemCliCommand::try_parse_from([
+                "golem",
+                "agent",
+                "invoke",
+                r#"CounterAgent("c1")"#,
+                "increment",
+                "--expected-fingerprint",
+                "not-a-uuid",
+            ])
+            .is_err()
+        );
     }
 }

@@ -64,13 +64,18 @@ object JsComponentId {
 
 @js.native
 sealed trait JsAgentId extends js.Object {
-  def componentId: JsComponentId = js.native
-  def agentId: String            = js.native
+  def uuid: JsUuid = js.native
 }
 
 object JsAgentId {
-  def apply(componentId: JsComponentId, agentId: String): JsAgentId =
-    js.Dynamic.literal("componentId" -> componentId, "agentId" -> agentId).asInstanceOf[JsAgentId]
+  def apply(uuid: JsUuid): JsAgentId =
+    js.Dynamic.literal("uuid" -> uuid).asInstanceOf[JsAgentId]
+
+  def fromAgentId(agentId: golem.AgentId): JsAgentId =
+    apply(JsUuid.fromUuid(agentId.uuid))
+
+  def toAgentId(agentId: JsAgentId): golem.AgentId =
+    golem.AgentId(JsUuid.toUuid(agentId.uuid))
 }
 
 @js.native

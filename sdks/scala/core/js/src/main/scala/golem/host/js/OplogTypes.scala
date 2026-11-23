@@ -58,6 +58,7 @@ sealed trait JsPluginInstallationDescription extends js.Object {
 sealed trait JsCreateParameters extends js.Object {
   def timestamp: JsDatetime                                           = js.native
   def agentId: JsAgentId                                              = js.native
+  def agentTypeName: js.UndefOr[String]                               = js.native
   def ownerKind: String                                               = js.native
   def componentRevision: js.BigInt                                    = js.native
   def env: js.Array[js.Tuple2[String, String]]                        = js.native
@@ -68,6 +69,7 @@ sealed trait JsCreateParameters extends js.Object {
   def initialTotalLinearMemorySize: js.BigInt                         = js.native
   def initialActivePlugins: js.Array[JsPluginInstallationDescription] = js.native
   def localAgentConfig: js.Array[JsLocalAgentConfigEntry]             = js.native
+  def neverLive: Boolean                                              = js.native
 }
 
 // --- HostCallParameters ---

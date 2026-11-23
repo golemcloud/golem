@@ -1,0 +1,4761 @@
+{
+  "tier": "sweep",
+  "description": "Grammar sweep: lists and statuses, if, case, loops with break/continue, subshells and groups,\nerrexit/nounset/pipefail, exit, eval, source, aliases and xtrace (see sweep_grammar_param.py).",
+  "cases": [
+    {
+      "name": "gram control list true && (exit 3) && true",
+      "script": "true && (exit 3) && true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list true && (exit 3) && (exit 3)",
+      "script": "true && (exit 3) && (exit 3); echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list true && (exit 3); echo o",
+      "script": "true && (exit 3); echo o; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list true && ! false | false",
+      "script": "true && ! false | false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list true || false | ! false",
+      "script": "true || false | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list true; true; (exit 3)",
+      "script": "true; true; (exit 3); echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list true; true | false",
+      "script": "true; true | false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list true; false || (exit 3)",
+      "script": "true; false || (exit 3); echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list true; false | echo o",
+      "script": "true; false | echo o; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list true | ! false | echo o",
+      "script": "true | ! false | echo o; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list false && false || echo o",
+      "script": "false && false || echo o; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list false && (exit 3) && true",
+      "script": "false && (exit 3) && true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list false && ! false | false",
+      "script": "false && ! false | false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list false || true && echo o",
+      "script": "false || true && echo o; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list false; (exit 3) || false",
+      "script": "false; (exit 3) || false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list false; echo o; false",
+      "script": "false; echo o; false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list false | false && ! false",
+      "script": "false | false && ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list false | false | ! false",
+      "script": "false | false | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list false | (exit 3) || ! false",
+      "script": "false | (exit 3) || ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list (exit 3) && true | false",
+      "script": "(exit 3) && true | false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list (exit 3) || true && echo o",
+      "script": "(exit 3) || true && echo o; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list (exit 3) || true; ! false",
+      "script": "(exit 3) || true; ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list (exit 3) || (exit 3) | ! false",
+      "script": "(exit 3) || (exit 3) | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list (exit 3) || ! false; (exit 3)",
+      "script": "(exit 3) || ! false; (exit 3); echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list (exit 3); echo o && (exit 3)",
+      "script": "(exit 3); echo o && (exit 3); echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list (exit 3) | false || true",
+      "script": "(exit 3) | false || true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list ! false && echo o && (exit 3)",
+      "script": "! false && echo o && (exit 3); echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list ! false && echo o || false",
+      "script": "! false && echo o || false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list ! false || true | ! false",
+      "script": "! false || true | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list ! false || (exit 3) && false",
+      "script": "! false || (exit 3) && false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list ! false || (exit 3); echo o",
+      "script": "! false || (exit 3); echo o; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list ! false || ! false && true",
+      "script": "! false || ! false && true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list ! false || ! false || true",
+      "script": "! false || ! false || true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list ! false || ! false; true",
+      "script": "! false || ! false; true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list ! false; true || true",
+      "script": "! false; true || true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list ! false; false && ! false",
+      "script": "! false; false && ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list ! false | true || false",
+      "script": "! false | true || false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list echo o && true && true",
+      "script": "echo o && true && true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list echo o && false && ! false",
+      "script": "echo o && false && ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list echo o || false | true",
+      "script": "echo o || false | true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list echo o || (exit 3) | ! false",
+      "script": "echo o || (exit 3) | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list echo o || ! false | false",
+      "script": "echo o || ! false | false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list echo o || echo o; true",
+      "script": "echo o || echo o; true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list echo o; true || (exit 3)",
+      "script": "echo o; true || (exit 3); echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list echo o; false | true",
+      "script": "echo o; false | true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list echo o; false | false",
+      "script": "echo o; false | false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list echo o; ! false || echo o",
+      "script": "echo o; ! false || echo o; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control list echo o; echo o && echo o",
+      "script": "echo o; echo o && echo o; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.list"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status false | true",
+      "script": "false | true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status set -o pipefail; false | true",
+      "script": "set -o pipefail; false | true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status ! false | true",
+      "script": "! false | true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status set -o pipefail; ! false | true",
+      "script": "set -o pipefail; ! false | true; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status true | false",
+      "script": "true | false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status set -o pipefail; true | false",
+      "script": "set -o pipefail; true | false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status ! true | false",
+      "script": "! true | false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status set -o pipefail; ! true | false",
+      "script": "set -o pipefail; ! true | false; echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status (exit 2) | (exit 3)",
+      "script": "(exit 2) | (exit 3); echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status set -o pipefail; (exit 2) | (exit 3)",
+      "script": "set -o pipefail; (exit 2) | (exit 3); echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status ! (exit 2) | (exit 3)",
+      "script": "! (exit 2) | (exit 3); echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control pipeline status set -o pipefail; ! (exit 2) | (exit 3)",
+      "script": "set -o pipefail; ! (exit 2) | (exit 3); echo \"status=$? pipe=${PIPESTATUS[*]}\"",
+      "tags": [
+        "compound.pipeline",
+        "option.pipefail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: true",
+      "script": "cond_fn() { return 1; }; if true; then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: false",
+      "script": "cond_fn() { return 1; }; if false; then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: [[ -n x ]]",
+      "script": "cond_fn() { return 1; }; if [[ -n x ]]; then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: (( 0 ))",
+      "script": "cond_fn() { return 1; }; if (( 0 )); then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: ! true",
+      "script": "cond_fn() { return 1; }; if ! true; then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: false || true",
+      "script": "cond_fn() { return 1; }; if false || true; then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: true && false",
+      "script": "cond_fn() { return 1; }; if true && false; then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: { false; true; }",
+      "script": "cond_fn() { return 1; }; if { false; true; }; then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: (exit 7)",
+      "script": "cond_fn() { return 1; }; if (exit 7); then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: cond_fn",
+      "script": "cond_fn() { return 1; }; if cond_fn; then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: false | true",
+      "script": "cond_fn() { return 1; }; if false | true; then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if: [ ]",
+      "script": "cond_fn() { return 1; }; if [ ]; then echo then; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: true",
+      "script": "cond_fn() { return 1; }; if true; then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: false",
+      "script": "cond_fn() { return 1; }; if false; then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: [[ -n x ]]",
+      "script": "cond_fn() { return 1; }; if [[ -n x ]]; then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: (( 0 ))",
+      "script": "cond_fn() { return 1; }; if (( 0 )); then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: ! true",
+      "script": "cond_fn() { return 1; }; if ! true; then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: false || true",
+      "script": "cond_fn() { return 1; }; if false || true; then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: true && false",
+      "script": "cond_fn() { return 1; }; if true && false; then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: { false; true; }",
+      "script": "cond_fn() { return 1; }; if { false; true; }; then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: (exit 7)",
+      "script": "cond_fn() { return 1; }; if (exit 7); then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: cond_fn",
+      "script": "cond_fn() { return 1; }; if cond_fn; then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: false | true",
+      "script": "cond_fn() { return 1; }; if false | true; then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if else: [ ]",
+      "script": "cond_fn() { return 1; }; if [ ]; then echo then; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: true / cond_fn",
+      "script": "cond_fn() { return 1; }; if true; then echo then; elif cond_fn; then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: false / true",
+      "script": "cond_fn() { return 1; }; if false; then echo then; elif true; then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: [[ -n x ]] / (exit 7)",
+      "script": "cond_fn() { return 1; }; if [[ -n x ]]; then echo then; elif (exit 7); then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: (( 0 )) / cond_fn",
+      "script": "cond_fn() { return 1; }; if (( 0 )); then echo then; elif cond_fn; then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: ! true / true",
+      "script": "cond_fn() { return 1; }; if ! true; then echo then; elif true; then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: false || true / false",
+      "script": "cond_fn() { return 1; }; if false || true; then echo then; elif false; then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: false || true / (exit 7)",
+      "script": "cond_fn() { return 1; }; if false || true; then echo then; elif (exit 7); then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: true && false / true",
+      "script": "cond_fn() { return 1; }; if true && false; then echo then; elif true; then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: { false; true; } / cond_fn",
+      "script": "cond_fn() { return 1; }; if { false; true; }; then echo then; elif cond_fn; then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: { false; true; } / (exit 7)",
+      "script": "cond_fn() { return 1; }; if { false; true; }; then echo then; elif (exit 7); then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: (exit 7) / cond_fn",
+      "script": "cond_fn() { return 1; }; if (exit 7); then echo then; elif cond_fn; then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: cond_fn / false",
+      "script": "cond_fn() { return 1; }; if cond_fn; then echo then; elif false; then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: false | true / cond_fn",
+      "script": "cond_fn() { return 1; }; if false | true; then echo then; elif cond_fn; then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif: [ ] / cond_fn",
+      "script": "cond_fn() { return 1; }; if [ ]; then echo then; elif cond_fn; then echo elif; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: true / true",
+      "script": "cond_fn() { return 1; }; if true; then echo then; elif true; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: true / false",
+      "script": "cond_fn() { return 1; }; if true; then echo then; elif false; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: false / cond_fn",
+      "script": "cond_fn() { return 1; }; if false; then echo then; elif cond_fn; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: false / (exit 7)",
+      "script": "cond_fn() { return 1; }; if false; then echo then; elif (exit 7); then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: [[ -n x ]] / true",
+      "script": "cond_fn() { return 1; }; if [[ -n x ]]; then echo then; elif true; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: [[ -n x ]] / cond_fn",
+      "script": "cond_fn() { return 1; }; if [[ -n x ]]; then echo then; elif cond_fn; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: (( 0 )) / false",
+      "script": "cond_fn() { return 1; }; if (( 0 )); then echo then; elif false; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: ! true / (exit 7)",
+      "script": "cond_fn() { return 1; }; if ! true; then echo then; elif (exit 7); then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: false || true / true",
+      "script": "cond_fn() { return 1; }; if false || true; then echo then; elif true; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: true && false / true",
+      "script": "cond_fn() { return 1; }; if true && false; then echo then; elif true; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: true && false / false",
+      "script": "cond_fn() { return 1; }; if true && false; then echo then; elif false; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: true && false / cond_fn",
+      "script": "cond_fn() { return 1; }; if true && false; then echo then; elif cond_fn; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: true && false / (exit 7)",
+      "script": "cond_fn() { return 1; }; if true && false; then echo then; elif (exit 7); then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: { false; true; } / true",
+      "script": "cond_fn() { return 1; }; if { false; true; }; then echo then; elif true; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: { false; true; } / cond_fn",
+      "script": "cond_fn() { return 1; }; if { false; true; }; then echo then; elif cond_fn; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: (exit 7) / (exit 7)",
+      "script": "cond_fn() { return 1; }; if (exit 7); then echo then; elif (exit 7); then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: cond_fn / (exit 7)",
+      "script": "cond_fn() { return 1; }; if cond_fn; then echo then; elif (exit 7); then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: false | true / true",
+      "script": "cond_fn() { return 1; }; if false | true; then echo then; elif true; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: false | true / false",
+      "script": "cond_fn() { return 1; }; if false | true; then echo then; elif false; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: false | true / cond_fn",
+      "script": "cond_fn() { return 1; }; if false | true; then echo then; elif cond_fn; then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if elif else: [ ] / (exit 7)",
+      "script": "cond_fn() { return 1; }; if [ ]; then echo then; elif (exit 7); then echo elif; else echo else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: true / cond_fn",
+      "script": "cond_fn() { return 1; }; if true; then if cond_fn; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: false / true",
+      "script": "cond_fn() { return 1; }; if false; then if true; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: false / false",
+      "script": "cond_fn() { return 1; }; if false; then if false; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: [[ -n x ]] / false",
+      "script": "cond_fn() { return 1; }; if [[ -n x ]]; then if false; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: (( 0 )) / true",
+      "script": "cond_fn() { return 1; }; if (( 0 )); then if true; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: (( 0 )) / (exit 7)",
+      "script": "cond_fn() { return 1; }; if (( 0 )); then if (exit 7); then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: ! true / (exit 7)",
+      "script": "cond_fn() { return 1; }; if ! true; then if (exit 7); then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: false || true / cond_fn",
+      "script": "cond_fn() { return 1; }; if false || true; then if cond_fn; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: true && false / false",
+      "script": "cond_fn() { return 1; }; if true && false; then if false; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: { false; true; } / true",
+      "script": "cond_fn() { return 1; }; if { false; true; }; then if true; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: { false; true; } / false",
+      "script": "cond_fn() { return 1; }; if { false; true; }; then if false; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: (exit 7) / true",
+      "script": "cond_fn() { return 1; }; if (exit 7); then if true; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: (exit 7) / cond_fn",
+      "script": "cond_fn() { return 1; }; if (exit 7); then if cond_fn; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: cond_fn / true",
+      "script": "cond_fn() { return 1; }; if cond_fn; then if true; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: cond_fn / false",
+      "script": "cond_fn() { return 1; }; if cond_fn; then if false; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: false | true / (exit 7)",
+      "script": "cond_fn() { return 1; }; if false | true; then if (exit 7); then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if nested: [ ] / false",
+      "script": "cond_fn() { return 1; }; if [ ]; then if false; then echo inner; fi; else echo outer-else; fi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: true / false",
+      "script": "cond_fn() { return 1; }; if true\nthen\n  echo then\nelif false\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: true / (exit 7)",
+      "script": "cond_fn() { return 1; }; if true\nthen\n  echo then\nelif (exit 7)\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: false / cond_fn",
+      "script": "cond_fn() { return 1; }; if false\nthen\n  echo then\nelif cond_fn\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: [[ -n x ]] / cond_fn",
+      "script": "cond_fn() { return 1; }; if [[ -n x ]]\nthen\n  echo then\nelif cond_fn\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: (( 0 )) / true",
+      "script": "cond_fn() { return 1; }; if (( 0 ))\nthen\n  echo then\nelif true\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: ! true / false",
+      "script": "cond_fn() { return 1; }; if ! true\nthen\n  echo then\nelif false\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: ! true / cond_fn",
+      "script": "cond_fn() { return 1; }; if ! true\nthen\n  echo then\nelif cond_fn\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: ! true / (exit 7)",
+      "script": "cond_fn() { return 1; }; if ! true\nthen\n  echo then\nelif (exit 7)\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: false || true / cond_fn",
+      "script": "cond_fn() { return 1; }; if false || true\nthen\n  echo then\nelif cond_fn\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: true && false / false",
+      "script": "cond_fn() { return 1; }; if true && false\nthen\n  echo then\nelif false\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: { false; true; } / cond_fn",
+      "script": "cond_fn() { return 1; }; if { false; true; }\nthen\n  echo then\nelif cond_fn\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: (exit 7) / false",
+      "script": "cond_fn() { return 1; }; if (exit 7)\nthen\n  echo then\nelif false\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: cond_fn / cond_fn",
+      "script": "cond_fn() { return 1; }; if cond_fn\nthen\n  echo then\nelif cond_fn\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: false | true / (exit 7)",
+      "script": "cond_fn() { return 1; }; if false | true\nthen\n  echo then\nelif (exit 7)\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: [ ] / true",
+      "script": "cond_fn() { return 1; }; if [ ]\nthen\n  echo then\nelif true\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: [ ] / false",
+      "script": "cond_fn() { return 1; }; if [ ]\nthen\n  echo then\nelif false\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if newlines: [ ] / cond_fn",
+      "script": "cond_fn() { return 1; }; if [ ]\nthen\n  echo then\nelif cond_fn\nthen\n  echo elif\nfi\necho \"status=$?\"",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if status when no branch runs",
+      "script": "if false; then :; fi; echo $?",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if status is the body's",
+      "script": "if true; then (exit 4); fi; echo $?",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if status of a failed elif chain",
+      "script": "if false; then :; elif false; then :; fi; echo $?",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if condition output",
+      "script": "if echo cond; then echo body; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if redirect on if",
+      "script": "if true; then echo in; fi > /tmp/o; cat /tmp/o",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if in a pipeline",
+      "script": "if true; then echo piped; fi | cat",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if as a function body",
+      "script": "f() if [[ $1 ]]; then echo arg; else echo none; fi; f x; f",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if with a background condition",
+      "script": "if true & wait; then echo bg; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if with a list condition",
+      "script": "if false; true; then echo last-counts; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control if if with a negated group",
+      "script": "if ! { true; }; then echo t; else echo e; fi",
+      "tags": [
+        "compound.if"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;; ;&: word 'x'",
+      "script": "pv='a*'; case 'x' in\n  a*) echo one ;;\n  *b|x) echo two ;;\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;; ;&: word '*'",
+      "script": "pv='a*'; case '*' in\n  a*) echo one ;;\n  *b|x) echo two ;;\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;& ;;: word 'cd'",
+      "script": "pv='a*'; case 'cd' in\n  a*) echo one ;;\n  *b|x) echo two ;&\n  '') echo empty ;;\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;& ;&: word 'ab'",
+      "script": "pv='a*'; case 'ab' in\n  a*) echo one ;;\n  *b|x) echo two ;&\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;& ;&: word '*'",
+      "script": "pv='a*'; case '*' in\n  a*) echo one ;;\n  *b|x) echo two ;&\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;& ;;&: word 'x'",
+      "script": "pv='a*'; case 'x' in\n  a*) echo one ;;\n  *b|x) echo two ;&\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;;& ;;: word 'a b'",
+      "script": "pv='a*'; case 'a b' in\n  a*) echo one ;;\n  *b|x) echo two ;;&\n  '') echo empty ;;\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;;& ;;: word '*'",
+      "script": "pv='a*'; case '*' in\n  a*) echo one ;;\n  *b|x) echo two ;;&\n  '') echo empty ;;\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;;& ;&: word 'cd'",
+      "script": "pv='a*'; case 'cd' in\n  a*) echo one ;;\n  *b|x) echo two ;;&\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;;& ;&: word 'a b'",
+      "script": "pv='a*'; case 'a b' in\n  a*) echo one ;;\n  *b|x) echo two ;;&\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;;& ;;&: word 'ab'",
+      "script": "pv='a*'; case 'ab' in\n  a*) echo one ;;\n  *b|x) echo two ;;&\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;; ;;& ;;&: word ''",
+      "script": "pv='a*'; case '' in\n  a*) echo one ;;\n  *b|x) echo two ;;&\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;; ;;: word 'cd'",
+      "script": "pv='a*'; case 'cd' in\n  a*) echo one ;&\n  *b|x) echo two ;;\n  '') echo empty ;;\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;; ;;&: word 'ab'",
+      "script": "pv='a*'; case 'ab' in\n  a*) echo one ;&\n  *b|x) echo two ;;\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;; ;;&: word 'cd'",
+      "script": "pv='a*'; case 'cd' in\n  a*) echo one ;&\n  *b|x) echo two ;;\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;; ;;&: word 'a b'",
+      "script": "pv='a*'; case 'a b' in\n  a*) echo one ;&\n  *b|x) echo two ;;\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;; ;;&: word '*'",
+      "script": "pv='a*'; case '*' in\n  a*) echo one ;&\n  *b|x) echo two ;;\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;& ;&: word 'ab'",
+      "script": "pv='a*'; case 'ab' in\n  a*) echo one ;&\n  *b|x) echo two ;&\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;& ;;&: word ''",
+      "script": "pv='a*'; case '' in\n  a*) echo one ;&\n  *b|x) echo two ;&\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;& ;;&: word 'a b'",
+      "script": "pv='a*'; case 'a b' in\n  a*) echo one ;&\n  *b|x) echo two ;&\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;;& ;;: word 'ab'",
+      "script": "pv='a*'; case 'ab' in\n  a*) echo one ;&\n  *b|x) echo two ;;&\n  '') echo empty ;;\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;;& ;&: word 'x'",
+      "script": "pv='a*'; case 'x' in\n  a*) echo one ;&\n  *b|x) echo two ;;&\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;;& ;&: word '*'",
+      "script": "pv='a*'; case '*' in\n  a*) echo one ;&\n  *b|x) echo two ;;&\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;;& ;;&: word ''",
+      "script": "pv='a*'; case '' in\n  a*) echo one ;&\n  *b|x) echo two ;;&\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;& ;;& ;;&: word 'a b'",
+      "script": "pv='a*'; case 'a b' in\n  a*) echo one ;&\n  *b|x) echo two ;;&\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;; ;;: word 'ab'",
+      "script": "pv='a*'; case 'ab' in\n  a*) echo one ;;&\n  *b|x) echo two ;;\n  '') echo empty ;;\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;; ;;: word ''",
+      "script": "pv='a*'; case '' in\n  a*) echo one ;;&\n  *b|x) echo two ;;\n  '') echo empty ;;\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;; ;;: word '*'",
+      "script": "pv='a*'; case '*' in\n  a*) echo one ;;&\n  *b|x) echo two ;;\n  '') echo empty ;;\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;; ;&: word 'cd'",
+      "script": "pv='a*'; case 'cd' in\n  a*) echo one ;;&\n  *b|x) echo two ;;\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;; ;&: word 'x'",
+      "script": "pv='a*'; case 'x' in\n  a*) echo one ;;&\n  *b|x) echo two ;;\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;; ;&: word ''",
+      "script": "pv='a*'; case '' in\n  a*) echo one ;;&\n  *b|x) echo two ;;\n  '') echo empty ;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;; ;;&: word 'cd'",
+      "script": "pv='a*'; case 'cd' in\n  a*) echo one ;;&\n  *b|x) echo two ;;\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;; ;;&: word 'a b'",
+      "script": "pv='a*'; case 'a b' in\n  a*) echo one ;;&\n  *b|x) echo two ;;\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;& ;;: word ''",
+      "script": "pv='a*'; case '' in\n  a*) echo one ;;&\n  *b|x) echo two ;&\n  '') echo empty ;;\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;& ;;&: word '*'",
+      "script": "pv='a*'; case '*' in\n  a*) echo one ;;&\n  *b|x) echo two ;&\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;;& ;;: word 'x'",
+      "script": "pv='a*'; case 'x' in\n  a*) echo one ;;&\n  *b|x) echo two ;;&\n  '') echo empty ;;\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case terminators ;;& ;;& ;;&: word ''",
+      "script": "pv='a*'; case '' in\n  a*) echo one ;;&\n  *b|x) echo two ;;&\n  '') echo empty ;;&\n  *) echo default ;;\nesac; echo \"status=$?\"",
+      "tags": [
+        "compound.case",
+        "compound.case.fallthrough"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern a*: word 'ab'",
+      "script": "pv='a*'; case 'ab' in a*) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern a*: word 'cd'",
+      "script": "pv='a*'; case 'cd' in a*) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern a*: word ''",
+      "script": "pv='a*'; case '' in a*) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern *b: word 'ab'",
+      "script": "pv='a*'; case 'ab' in *b) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern *b: word 'cd'",
+      "script": "pv='a*'; case 'cd' in *b) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern *b: word ''",
+      "script": "pv='a*'; case '' in *b) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern ab|cd: word 'x'",
+      "script": "pv='a*'; case 'x' in ab|cd) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern ab|cd: word 'a b'",
+      "script": "pv='a*'; case 'a b' in ab|cd) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern ab|cd: word '*'",
+      "script": "pv='a*'; case '*' in ab|cd) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern ?: word 'x'",
+      "script": "pv='a*'; case 'x' in ?) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern ?: word 'a b'",
+      "script": "pv='a*'; case 'a b' in ?) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern ?: word '*'",
+      "script": "pv='a*'; case '*' in ?) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern [ab]*: word 'x'",
+      "script": "pv='a*'; case 'x' in [ab]*) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern [ab]*: word 'a b'",
+      "script": "pv='a*'; case 'a b' in [ab]*) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern [ab]*: word '*'",
+      "script": "pv='a*'; case '*' in [ab]*) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern *: word 'x'",
+      "script": "pv='a*'; case 'x' in *) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern *: word 'a b'",
+      "script": "pv='a*'; case 'a b' in *) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern *: word '*'",
+      "script": "pv='a*'; case '*' in *) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern 'ab': word 'ab'",
+      "script": "pv='a*'; case 'ab' in 'ab') echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern 'ab': word 'cd'",
+      "script": "pv='a*'; case 'cd' in 'ab') echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern 'ab': word ''",
+      "script": "pv='a*'; case '' in 'ab') echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern \"$pv\": word 'x'",
+      "script": "pv='a*'; case 'x' in \"$pv\") echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern \"$pv\": word 'a b'",
+      "script": "pv='a*'; case 'a b' in \"$pv\") echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern \"$pv\": word '*'",
+      "script": "pv='a*'; case '*' in \"$pv\") echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern $pv: word 'x'",
+      "script": "pv='a*'; case 'x' in $pv) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern $pv: word 'a b'",
+      "script": "pv='a*'; case 'a b' in $pv) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern $pv: word '*'",
+      "script": "pv='a*'; case '*' in $pv) echo matched;; *) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case no match status",
+      "script": "case x in y) echo y;; esac; echo $?",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case status is the body's",
+      "script": "case x in x) (exit 3);; esac; echo $?",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case empty body",
+      "script": "case x in x) ;; esac; echo $?",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case leading parenthesis",
+      "script": "case x in (x) echo paren;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case last clause without terminator",
+      "script": "case x in x) echo last\nesac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case newlines everywhere",
+      "script": "case x\nin\nx)\necho nl\n;;\nesac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern from command substitution",
+      "script": "case abc in $(echo 'a*')) echo sub;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern with escaped star",
+      "script": "case '*' in \\*) echo star;; esac; case x in \\*) echo no;; *) echo other;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case word with glob characters is literal",
+      "script": "cd /tmp; : > f1; case f1 in f*) echo g;; esac; case 'f*' in f1) echo no;; *) echo lit;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case word expansion once",
+      "script": "n=0; case $((n+=1)) in 1) echo one;; esac; echo $n",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern expanded lazily",
+      "script": "case a in a) echo a;; $(echo side >&2)) echo no;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case fallthrough to the end",
+      "script": "case a in a) echo a ;& b) echo b ;& esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case test next skips non-matches",
+      "script": "case ab in a*) echo 1 ;;& x*) echo 2 ;;& *b) echo 3 ;;& esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case in a pipeline",
+      "script": "echo k | case $(cat) in k) echo key;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case redirect on case",
+      "script": "case x in x) echo r;; esac > /tmp/c; cat /tmp/c",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case keyword words as patterns",
+      "script": "case if in if) echo kw;; esac; case esac in esac) echo es;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case pattern list with spaces",
+      "script": "case b in a | b ) echo spaced;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case nocasematch",
+      "script": "shopt -s nocasematch; case ABC in abc) echo ci;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case character classes",
+      "script": "case 5 in [[:digit:]]) echo digit;; esac; case ' ' in [[:space:]]) echo space;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case negated bracket",
+      "script": "case z in [!a-y]) echo not;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case bracket with dash first",
+      "script": "case - in [-a]) echo dash;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case empty pattern",
+      "script": "case '' in '') echo empty;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case unset word",
+      "script": "unset u; case $u in '') echo unset-empty;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case dollar at word",
+      "script": "set -- a b; case $@ in 'a b') echo joined;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case array word",
+      "script": "arr=(p q); case ${arr[@]} in 'p q') echo arr;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case esac as a word",
+      "script": "echo esac; case x in x) echo esac;; esac",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case case inside a loop with break",
+      "script": "for i in 1 2 3; do case $i in 2) break;; esac; echo $i; done",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control case case inside a function with return",
+      "script": "f() { case $1 in r) return 5;; esac; echo no-return; }; f r; echo $?; f s",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around for: break at second",
+      "script": "for i in 1 2 3; do for j in a b c; do [[ $j == b || $j == 2 ]] && break; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around for: break 5 at second",
+      "script": "for i in 1 2 3; do for j in a b c; do [[ $j == b || $j == 2 ]] && break 5; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around for: break 0 at second",
+      "script": "for i in 1 2 3; do for j in a b c; do [[ $j == b || $j == 2 ]] && break 0; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around for: continue -1 at first",
+      "script": "for i in 1 2 3; do for j in a b c; do [[ $j == a || $j == 1 ]] && continue -1; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around for: exit 4 at second",
+      "script": "for i in 1 2 3; do for j in a b c; do [[ $j == b || $j == 2 ]] && exit 4; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around while: continue at first",
+      "script": "for i in 1 2 3; do j=0; while (( j++ < 3 )); do [[ $j == a || $j == 1 ]] && continue; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around while: continue 2 at second",
+      "script": "for i in 1 2 3; do j=0; while (( j++ < 3 )); do [[ $j == b || $j == 2 ]] && continue 2; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around while: continue 9 at second",
+      "script": "for i in 1 2 3; do j=0; while (( j++ < 3 )); do [[ $j == b || $j == 2 ]] && continue 9; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around while: break x at first",
+      "script": "for i in 1 2 3; do j=0; while (( j++ < 3 )); do [[ $j == a || $j == 1 ]] && break x; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around while: return at second",
+      "script": "for i in 1 2 3; do j=0; while (( j++ < 3 )); do [[ $j == b || $j == 2 ]] && return; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around while: exit 4 at first",
+      "script": "for i in 1 2 3; do j=0; while (( j++ < 3 )); do [[ $j == a || $j == 1 ]] && exit 4; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around select: break at first",
+      "script": "for i in 1 2 3; do select j in a b c; do [[ $j == a || $j == 1 ]] && break; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around select: break 2 at second",
+      "script": "for i in 1 2 3; do select j in a b c; do [[ $j == b || $j == 2 ]] && break 2; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for around select: break 0 at first",
+      "script": "for i in 1 2 3; do select j in a b c; do [[ $j == a || $j == 1 ]] && break 0; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around for: break 2 at first",
+      "script": "i=0; while (( i++ < 3 )); do for j in a b c; do [[ $j == a || $j == 1 ]] && break 2; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around for: break 2 at second",
+      "script": "i=0; while (( i++ < 3 )); do for j in a b c; do [[ $j == b || $j == 2 ]] && break 2; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around for: continue at second",
+      "script": "i=0; while (( i++ < 3 )); do for j in a b c; do [[ $j == b || $j == 2 ]] && continue; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around for: continue 2 at first",
+      "script": "i=0; while (( i++ < 3 )); do for j in a b c; do [[ $j == a || $j == 1 ]] && continue 2; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around for: break 5 at second",
+      "script": "i=0; while (( i++ < 3 )); do for j in a b c; do [[ $j == b || $j == 2 ]] && break 5; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around for: continue 9 at first",
+      "script": "i=0; while (( i++ < 3 )); do for j in a b c; do [[ $j == a || $j == 1 ]] && continue 9; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around for: break x at first",
+      "script": "i=0; while (( i++ < 3 )); do for j in a b c; do [[ $j == a || $j == 1 ]] && break x; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around while: break 5 at second",
+      "script": "i=0; while (( i++ < 3 )); do j=0; while (( j++ < 3 )); do [[ $j == b || $j == 2 ]] && break 5; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around while: break 0 at second",
+      "script": "i=0; while (( i++ < 3 )); do j=0; while (( j++ < 3 )); do [[ $j == b || $j == 2 ]] && break 0; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around while: continue -1 at first",
+      "script": "i=0; while (( i++ < 3 )); do j=0; while (( j++ < 3 )); do [[ $j == a || $j == 1 ]] && continue -1; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around while: return at second",
+      "script": "i=0; while (( i++ < 3 )); do j=0; while (( j++ < 3 )); do [[ $j == b || $j == 2 ]] && return; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around while: exit 4 at second",
+      "script": "i=0; while (( i++ < 3 )); do j=0; while (( j++ < 3 )); do [[ $j == b || $j == 2 ]] && exit 4; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around select: break at second",
+      "script": "i=0; while (( i++ < 3 )); do select j in a b c; do [[ $j == b || $j == 2 ]] && break; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around select: break 2 at second",
+      "script": "i=0; while (( i++ < 3 )); do select j in a b c; do [[ $j == b || $j == 2 ]] && break 2; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around select: continue at first",
+      "script": "i=0; while (( i++ < 3 )); do select j in a b c; do [[ $j == a || $j == 1 ]] && continue; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around select: continue 2 at first",
+      "script": "i=0; while (( i++ < 3 )); do select j in a b c; do [[ $j == a || $j == 1 ]] && continue 2; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while around select: exit 4 at second",
+      "script": "i=0; while (( i++ < 3 )); do select j in a b c; do [[ $j == b || $j == 2 ]] && exit 4; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until around for: continue 2 at first",
+      "script": "i=0; until (( i++ >= 3 )); do for j in a b c; do [[ $j == a || $j == 1 ]] && continue 2; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until around for: break 5 at second",
+      "script": "i=0; until (( i++ >= 3 )); do for j in a b c; do [[ $j == b || $j == 2 ]] && break 5; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until around for: continue 9 at first",
+      "script": "i=0; until (( i++ >= 3 )); do for j in a b c; do [[ $j == a || $j == 1 ]] && continue 9; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until around for: break x at second",
+      "script": "i=0; until (( i++ >= 3 )); do for j in a b c; do [[ $j == b || $j == 2 ]] && break x; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until around for: return at second",
+      "script": "i=0; until (( i++ >= 3 )); do for j in a b c; do [[ $j == b || $j == 2 ]] && return; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until around while: break at second",
+      "script": "i=0; until (( i++ >= 3 )); do j=0; while (( j++ < 3 )); do [[ $j == b || $j == 2 ]] && break; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until around while: break 2 at first",
+      "script": "i=0; until (( i++ >= 3 )); do j=0; while (( j++ < 3 )); do [[ $j == a || $j == 1 ]] && break 2; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until around while: continue -1 at first",
+      "script": "i=0; until (( i++ >= 3 )); do j=0; while (( j++ < 3 )); do [[ $j == a || $j == 1 ]] && continue -1; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until around while: exit 4 at first",
+      "script": "i=0; until (( i++ >= 3 )); do j=0; while (( j++ < 3 )); do [[ $j == a || $j == 1 ]] && exit 4; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until around select: continue at second",
+      "script": "i=0; until (( i++ >= 3 )); do select j in a b c; do [[ $j == b || $j == 2 ]] && continue; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until around select: break 0 at first",
+      "script": "i=0; until (( i++ >= 3 )); do select j in a b c; do [[ $j == a || $j == 1 ]] && break 0; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around for: exit 4 at second",
+      "script": "for (( i=1; i<=3; i++ )); do for j in a b c; do [[ $j == b || $j == 2 ]] && exit 4; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around while: break at first",
+      "script": "for (( i=1; i<=3; i++ )); do j=0; while (( j++ < 3 )); do [[ $j == a || $j == 1 ]] && break; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around while: break 2 at second",
+      "script": "for (( i=1; i<=3; i++ )); do j=0; while (( j++ < 3 )); do [[ $j == b || $j == 2 ]] && break 2; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around while: continue at first",
+      "script": "for (( i=1; i<=3; i++ )); do j=0; while (( j++ < 3 )); do [[ $j == a || $j == 1 ]] && continue; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around while: continue 9 at first",
+      "script": "for (( i=1; i<=3; i++ )); do j=0; while (( j++ < 3 )); do [[ $j == a || $j == 1 ]] && continue 9; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around while: break 0 at second",
+      "script": "for (( i=1; i<=3; i++ )); do j=0; while (( j++ < 3 )); do [[ $j == b || $j == 2 ]] && break 0; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around while: continue -1 at second",
+      "script": "for (( i=1; i<=3; i++ )); do j=0; while (( j++ < 3 )); do [[ $j == b || $j == 2 ]] && continue -1; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around while: exit 4 at first",
+      "script": "for (( i=1; i<=3; i++ )); do j=0; while (( j++ < 3 )); do [[ $j == a || $j == 1 ]] && exit 4; printf '%s%s ' \"$i\" \"$j\"; done; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around select: continue 2 at first",
+      "script": "for (( i=1; i<=3; i++ )); do select j in a b c; do [[ $j == a || $j == 1 ]] && continue 2; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around select: break 5 at first",
+      "script": "for (( i=1; i<=3; i++ )); do select j in a b c; do [[ $j == a || $j == 1 ]] && break 5; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around select: continue 9 at first",
+      "script": "for (( i=1; i<=3; i++ )); do select j in a b c; do [[ $j == a || $j == 1 ]] && continue 9; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around select: continue -1 at first",
+      "script": "for (( i=1; i<=3; i++ )); do select j in a b c; do [[ $j == a || $j == 1 ]] && continue -1; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around select: continue -1 at second",
+      "script": "for (( i=1; i<=3; i++ )); do select j in a b c; do [[ $j == b || $j == 2 ]] && continue -1; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around select: break x at first",
+      "script": "for (( i=1; i<=3; i++ )); do select j in a b c; do [[ $j == a || $j == 1 ]] && break x; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop arith for around select: return at first",
+      "script": "for (( i=1; i<=3; i++ )); do select j in a b c; do [[ $j == a || $j == 1 ]] && return; printf '%s%s ' \"$i\" \"$j\"; done <<< $'1\\n2\\n3'; echo \"|$i\"; done; echo \"end status=$?\"",
+      "tags": [
+        "compound.for",
+        "compound.while",
+        "builtin.break",
+        "builtin.continue"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop break outside a loop",
+      "script": "break; echo status=$?",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop continue outside a loop",
+      "script": "continue; echo status=$?",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop break in a function called from a loop",
+      "script": "f() { break; }; for i in 1 2; do f; echo $i; done; echo end",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop continue in a function called from a loop",
+      "script": "f() { continue; }; for i in 1 2; do f; echo $i; done; echo end",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop break in a subshell inside a loop",
+      "script": "for i in 1 2; do (break); echo $i; done",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop break in a pipeline inside a loop",
+      "script": "for i in 1 2; do echo x | break; echo $i; done",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop break inside eval",
+      "script": "for i in 1 2; do eval break; echo $i; done; echo end",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop loop status with no iterations",
+      "script": "false; for i in; do :; done; echo $?",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while status with false body",
+      "script": "i=0; while (( i++ < 2 )); do false; done; echo $?",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while condition list",
+      "script": "i=0; while echo c$i; (( i++ < 1 )); do echo b; done",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until status",
+      "script": "until true; do :; done; echo $?",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for without in uses positionals",
+      "script": "set -- p 'q r'; for a; do echo \"[$a]\"; done",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for without in inside a function",
+      "script": "f() { for a; do echo \"$a\"; done; }; f x y",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for with a semicolon before do",
+      "script": "for a in 1 2; do echo $a; done; for b; do echo never; done",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for with newline before in",
+      "script": "for a\nin x y\ndo echo $a\ndone",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for with braces body",
+      "script": "for a in 1 2; { echo b$a; }",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for loop variable after the loop",
+      "script": "for a in 1 2 3; do :; done; echo $a",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for over empty expansion",
+      "script": "e=; for a in $e; do echo never; done; echo after",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for over quoted empty",
+      "script": "for a in \"\"; do echo \"[$a]\"; done",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for variable is not local",
+      "script": "f() { for v in in-f; do :; done; }; v=out; f; echo $v",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for with a readonly variable",
+      "script": "readonly ro=1; for ro in 2; do echo $ro; done; echo status=$?",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop for with an invalid name",
+      "script": "for 1x in a; do echo $1x; done; echo status=$?",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop while read with here-document",
+      "script": "while read -r l; do echo \"<$l>\"; done <<EOF\nl1\n  l2\nEOF",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop loop output redirected",
+      "script": "for i in 1 2; do echo $i; done > /tmp/l; cat /tmp/l",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop loop in a pipeline runs in a subshell",
+      "script": "n=0; echo x | while read; do n=1; done; echo $n",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop loop input redirected keeps variables",
+      "script": "n=0; while read -r; do n=$((n+1)); done < <(printf 'a\\nb\\n'); echo $n",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop nested loop depth counting",
+      "script": "for a in 1 2; do for b in 1 2; do for c in 1 2; do [[ $c == 2 ]] && continue 3; echo $a$b$c; done; done; done",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop select prints a menu",
+      "script": "PS3='pick: '; select c in one two; do echo \"got [$c] reply [$REPLY]\"; break; done <<< 2",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop select with an invalid reply",
+      "script": "select c in one; do echo \"[$c] [$REPLY]\"; break; done <<< 9",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop select at end of input",
+      "script": "select c in one; do echo in; done < /dev/null; echo status=$?",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop select without in",
+      "script": "set -- x y; select c; do echo \"$c\"; break; done <<< 1",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop break with a large count",
+      "script": "for a in 1; do for b in 2; do break 1000; done; echo not; done; echo out",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop infinite loop with break",
+      "script": "n=0; while :; do (( ++n == 5 )) && break; done; echo $n",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control loop until with continue",
+      "script": "n=0; until (( n >= 4 )); do (( n++ )); (( n % 2 )) && continue; echo $n; done",
+      "tags": [
+        "compound.for",
+        "compound.while"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group group shares variables",
+      "script": "x=1; { x=2; }; echo $x",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group subshell isolates variables",
+      "script": "x=1; (x=2); echo $x",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group subshell isolates cd",
+      "script": "cd /tmp; (cd /); pwd",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group subshell isolates functions",
+      "script": "(f() { :; }); declare -F f || echo none",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group subshell isolates options",
+      "script": "(set -u); echo ${undef-ok}; (shopt -s nullglob); shopt -q nullglob || echo off",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group subshell isolates traps",
+      "script": "trap 'echo main' EXIT; (trap - EXIT); echo body",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group exit in a subshell",
+      "script": "(exit 6); echo $?; (exit); echo $?",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group exit in a group ends the shell",
+      "script": "{ echo in; exit 3; }; echo not-reached",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group group status",
+      "script": "{ false; }; echo $?; { true; false; true; }; echo $?",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group group needs a separator",
+      "script": "{ echo a; }; { echo b\n}",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group group as a pipeline stage",
+      "script": "{ echo a; echo b; } | while read l; do echo \"<$l>\"; done",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group group redirect",
+      "script": "{ echo o; echo e >&2; } > /tmp/g 2>&1; cat /tmp/g",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group nested subshells",
+      "script": "( ( ( echo deep; exit 2 ); echo $? ) )",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group subshell pid differs",
+      "script": "[[ $BASHPID == $$ ]] && echo same-main; ( [[ $BASHPID != $$ ]] && echo differs )",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group BASH_SUBSHELL levels",
+      "script": "echo $BASH_SUBSHELL; ( echo $BASH_SUBSHELL; ( echo $BASH_SUBSHELL ) ); { echo $BASH_SUBSHELL; }",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group BASH_SUBSHELL in a pipeline",
+      "script": "echo $BASH_SUBSHELL | cat; true | echo $BASH_SUBSHELL",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group subshell without space",
+      "script": "(echo a);(echo b)",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group double parenthesis subshell",
+      "script": "( (echo spaced) )",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group subshell with function body",
+      "script": "f() ( x=in; echo $x ); x=out; f; echo $x",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group group with a trailing newline",
+      "script": "{\necho nl\n}",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group background group",
+      "script": "{ echo bg; } & wait; echo done",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group subshell exit status in a condition",
+      "script": "if (exit 0); then echo ok; fi",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group variables after a pipeline",
+      "script": "x=0; x=1 | true; echo $x; echo p | x=2; echo $x",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group lastpipe keeps the last stage",
+      "script": "shopt -s lastpipe; x=0; echo 9 | read x; echo $x",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control group lastpipe with a group",
+      "script": "shopt -s lastpipe; echo v | { read y; }; echo ${y-unset}",
+      "tags": [
+        "compound.group",
+        "compound.subshell"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit simple failure exits",
+      "script": "set -e; echo a; false; echo b",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit failure in an and list does not exit",
+      "script": "set -e; false && true; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit failure at the end of an and list exits",
+      "script": "set -e; true && false; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit failure in an or list does not exit",
+      "script": "set -e; false || true; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit negated failure does not exit",
+      "script": "set -e; ! true; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit if condition does not exit",
+      "script": "set -e; if false; then :; fi; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit while condition does not exit",
+      "script": "set -e; while false; do :; done; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit until condition does not exit",
+      "script": "set -e; until true; do :; done; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit function in a condition ignores errexit",
+      "script": "set -e; f() { false; echo inside; }; if f; then echo t; fi; f && echo and",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit function failing exits",
+      "script": "set -e; f() { false; echo inside; }; f; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit subshell failure exits",
+      "script": "set -e; (false); echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit subshell inner failure",
+      "script": "set -e; (false; echo in-sub); echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit command substitution in assignment exits",
+      "script": "set -e; x=$(false); echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit command substitution in an argument does not exit",
+      "script": "set -e; echo \"[$(false)]\"; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit local with failing substitution does not exit",
+      "script": "set -e; f() { local x=$(false); echo in-f; }; f; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit pipeline last stage fails",
+      "script": "set -e; true | false; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit pipeline first stage fails",
+      "script": "set -e; false | true; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit pipeline with pipefail",
+      "script": "set -eo pipefail; false | true; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit arithmetic zero exits",
+      "script": "set -e; (( 0 )); echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit arithmetic in and list",
+      "script": "set -e; (( 0 )) && echo t; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit let zero exits",
+      "script": "set -e; let 0; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit test failure exits",
+      "script": "set -e; [[ -z x ]]; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit group failure exits",
+      "script": "set -e; { false; }; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit group in an or list",
+      "script": "set -e; { false; echo in-group; } || echo or; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit brace group failure mid list",
+      "script": "set -e; { false; true; }; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit in a subshell of an or list",
+      "script": "set -e; (false; echo in-sub) || echo or",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit set +e turns it off",
+      "script": "set -e; set +e; false; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit set inside a function",
+      "script": "f() { set -e; false; echo not; }; f; echo not2",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit with return status",
+      "script": "set -e; f() { return 3; }; f; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit and eval",
+      "script": "set -e; eval false; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit and eval in a condition",
+      "script": "set -e; if eval false; then :; fi; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit exit status",
+      "script": "set -e; (exit 7); echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit with ERR trap",
+      "script": "set -e; trap 'echo err $?' ERR; false; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit in a for loop",
+      "script": "set -e; for i in 1 2; do echo $i; false; done; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit in case body",
+      "script": "set -e; case x in x) false;; esac; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit with a failed redirect",
+      "script": "set -e; echo x > /tmp/no/such; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit with a failed builtin",
+      "script": "set -e; cd /nonexistent; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit with command not found",
+      "script": "set -e; no_such_command_zz; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit in background job",
+      "script": "set -e; { false; echo bg-continues; } & wait; echo waited",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit with a negated pipeline",
+      "script": "set -e; ! false | false; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit and source",
+      "script": "printf 'false\\necho sourced-after\\n' > /tmp/s.sh; set -e; . /tmp/s.sh; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit inherit_errexit in substitution",
+      "script": "set -e; shopt -s inherit_errexit; echo \"[$(false; echo in)]\"; echo survived",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit in a condition's subshell",
+      "script": "set -e; if (false; echo in-cond); then echo t; fi",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit errexit shows in dash flags",
+      "script": "set -e; [[ $- == *e* ]] && echo has-e; set +e; [[ $- == *e* ]] || echo no-e",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control errexit set -o errexit",
+      "script": "set -o errexit; false; echo not",
+      "tags": [
+        "option.errexit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset unset variable",
+      "script": "set -u; echo $undefined; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset unset variable in a subshell",
+      "script": "set -u; ( echo $undefined ); echo status=$?",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset default operator allowed",
+      "script": "set -u; echo ${undefined-d} ${undefined:-e}",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset alternative operator allowed",
+      "script": "set -u; echo \"[${undefined+x}]\"",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset length of unset",
+      "script": "set -u; echo ${#undefined}; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset unset positional",
+      "script": "set -u; set -- a; echo $1; echo $2; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset dollar at with no arguments",
+      "script": "set -u; set --; echo \"[$@]\" \"[$*]\" $#",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset empty array at",
+      "script": "set -u; a=(); echo \"[${a[@]}]\"; echo ok",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset unset array element",
+      "script": "set -u; a=(x); echo ${a[3]}; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset unset assoc element",
+      "script": "set -u; declare -A m; echo ${m[k]}; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset declared without value",
+      "script": "set -u; declare d; echo $d; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset empty variable is fine",
+      "script": "set -u; e=; echo \"[$e]\"",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset arithmetic unset",
+      "script": "set -u; echo $((undefined + 1)); echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset arithmetic bare name",
+      "script": "set -u; (( undefined )); echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset [[ -v is fine",
+      "script": "set -u; [[ -v undefined ]] || echo unset",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset indirect to unset",
+      "script": "set -u; r=undefined; echo ${!r}; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset unset special dollar bang",
+      "script": "set -u; echo $!; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset in a function",
+      "script": "set -u; f() { echo $1; }; f; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset in a here-document",
+      "script": "set -u; cat <<EOF\n$undefined\nEOF\necho not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset set +u",
+      "script": "set -u; set +u; echo \"[$undefined]\"",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset unset array whole",
+      "script": "set -u; unset a; echo ${a[@]}; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset unset in a substring",
+      "script": "set -u; echo ${undefined:1}; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset unset in a trim",
+      "script": "set -u; echo ${undefined#x}; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control nounset unset nameref target",
+      "script": "set -u; declare -n r=undefined; echo $r; echo not",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit no argument keeps last status",
+      "script": "false; exit",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit explicit status",
+      "script": "exit 42",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit status modulo 256",
+      "script": "exit 300",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit negative status",
+      "script": "exit -1",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit non-numeric status",
+      "script": "exit abc; echo after",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit too many arguments",
+      "script": "exit 1 2; echo after",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit status with plus sign",
+      "script": "exit +5",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit status with spaces",
+      "script": "exit ' 7 '",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit huge status",
+      "script": "exit 99999999999999999999",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit exit in a function",
+      "script": "f() { exit 9; }; f; echo not",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit exit in a pipeline stage",
+      "script": "exit 3 | true; echo status=$?",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit exit in a command substitution",
+      "script": "x=$(exit 4); echo status=$?",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit exit after output without newline",
+      "script": "printf partial; exit 2",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit exit inside a loop",
+      "script": "for i in 1 2; do exit $i; done",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit exit in a trap",
+      "script": "trap 'exit 8' EXIT; exit 1",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit exit status of last command",
+      "script": "(exit 5)",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit logout is not allowed",
+      "script": "logout; echo status=$?",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control exit exit with double dash",
+      "script": "exit -- 3",
+      "tags": [
+        "builtin.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval assignments",
+      "script": "eval 'a=1; b=2'; echo $a$b",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval joins its arguments",
+      "script": "eval echo one '\"two  three\"'",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval status",
+      "script": "eval false; echo $?; eval; echo $?; eval ''; echo $?",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval syntax error message",
+      "script": "eval 'echo (' ; echo status=$?",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval defines a function",
+      "script": "eval 'f() { echo from-eval; }'; f",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval nested eval",
+      "script": "eval 'eval \"echo nested\"'",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval indirect assignment",
+      "script": "n=target; eval \"$n=value\"; echo $target",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval with a here-document",
+      "script": "eval 'cat <<EOF\nhd\nEOF'",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval multiple lines",
+      "script": "eval $'echo l1\\necho l2'",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval return in eval inside a function",
+      "script": "f() { eval 'return 3'; echo not; }; f; echo $?",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval exit in eval",
+      "script": "eval 'exit 5'; echo not",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval eval of a double quoted expansion",
+      "script": "v='echo \"a  b\"'; eval \"$v\"; eval $v",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval eval with LINENO",
+      "script": "eval 'echo $LINENO'\necho $LINENO",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval eval of an alias definition",
+      "script": "shopt -s expand_aliases; eval 'alias e1=\"echo aliased\"'\ne1",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval eval and set -e in a condition",
+      "script": "set -e; eval 'false; echo inside' || echo or",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control eval eval with options",
+      "script": "eval -- echo dd; eval -x 2>&1; echo status=$?",
+      "tags": [
+        "builtin.eval"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source sets variables",
+      "script": "printf '%s\\n' 'sv=1' > /tmp/s.sh; . /tmp/s.sh; echo $sv",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source receives arguments",
+      "script": "printf '%s\\n' 'echo \"args: $# $*\"' > /tmp/s.sh; . /tmp/s.sh a 'b c'",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source keeps outer arguments",
+      "script": "printf '%s\\n' 'echo \"args: $*\"' > /tmp/s.sh; set -- outer; . /tmp/s.sh; echo $*",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source return ends the file",
+      "script": "printf '%s\\n' 'echo before; return 4; echo not' > /tmp/s.sh; . /tmp/s.sh; echo status=$?",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source return without value",
+      "script": "printf '%s\\n' 'false; return' > /tmp/s.sh; source /tmp/s.sh; echo status=$?",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source exit ends the shell",
+      "script": "printf '%s\\n' 'exit 6' > /tmp/s.sh; . /tmp/s.sh; echo not",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source syntax error",
+      "script": "printf '%s\\n' 'if then' > /tmp/s.sh; . /tmp/s.sh; echo status=$?",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source defines functions",
+      "script": "printf '%s\\n' 'sf() { echo sf; }' > /tmp/s.sh; . /tmp/s.sh; sf",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source BASH_SOURCE and FUNCNAME",
+      "script": "printf '%s\\n' 'echo \"${BASH_SOURCE[0]} ${FUNCNAME[0]-none}\"' > /tmp/s.sh; . /tmp/s.sh",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source LINENO inside",
+      "script": "printf '%s\\n' 'echo l$LINENO\necho l$LINENO' > /tmp/s.sh; . /tmp/s.sh",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source nested source",
+      "script": "printf '%s\\n' 'echo inner' > /tmp/s.sh; printf '. /tmp/s.sh\\necho outer\\n' > /tmp/o.sh; . /tmp/o.sh",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source in a function sees locals",
+      "script": "printf '%s\\n' 'echo \"$lv\"' > /tmp/s.sh; f() { local lv=local; . /tmp/s.sh; }; f",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source local in a sourced file at top level",
+      "script": "printf '%s\\n' 'local x=1' > /tmp/s.sh; . /tmp/s.sh; echo status=$?",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source empty file",
+      "script": "printf '%s\\n' '' > /tmp/s.sh; . /tmp/s.sh; echo status=$?",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source RETURN trap",
+      "script": "printf '%s\\n' 'echo body' > /tmp/s.sh; trap 'echo ret' RETURN; . /tmp/s.sh",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source relative path",
+      "script": "printf '%s\\n' 'echo rel' > /tmp/s.sh; cd /tmp; . ./s.sh",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source in a pipeline",
+      "script": "printf '%s\\n' 'sv=piped' > /tmp/s.sh; . /tmp/s.sh | cat; echo \"[${sv-}]\"",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source with redirected input",
+      "script": "printf '%s\\n' 'read -r line; echo \"[$line]\"' > /tmp/s.sh; . /tmp/s.sh <<< input",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source missing file",
+      "script": ". /tmp/missing.sh; echo status=$?",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source missing argument",
+      "script": ".; echo status=$?",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control source a directory",
+      "script": ". /tmp; echo status=$?",
+      "tags": [
+        "builtin.source"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias not expanded by default",
+      "script": "alias hi='echo hi'\nhi",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias expanded after expand_aliases on an earlier line",
+      "script": "shopt -s expand_aliases\nalias hi='echo hi'\nhi",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias same line definition is not used",
+      "script": "shopt -s expand_aliases\nalias hi='echo hi'; hi",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias trailing space expands the next word",
+      "script": "shopt -s expand_aliases\nalias run='echo run '\nalias w='word'\nrun w",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias alias listing",
+      "script": "alias a1='echo x' a2=y\nalias; alias a1",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias unalias",
+      "script": "shopt -s expand_aliases\nalias u1='echo u'\nunalias u1\nu1 2>/dev/null; echo status=$?",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias unalias -a",
+      "script": "alias p1=x p2=y; unalias -a; alias; echo status=$?",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias unknown alias",
+      "script": "alias nosuch; echo status=$?; unalias nosuch; echo status=$?",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias alias in a function body defined later",
+      "script": "shopt -s expand_aliases\nf() { al; }\nalias al='echo late'\nf 2>/dev/null; echo status=$?",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias alias used inside a function defined after it",
+      "script": "shopt -s expand_aliases\nalias al='echo early'\nf() { al; }\nf",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias alias with a keyword",
+      "script": "shopt -s expand_aliases\nalias maybe='if true; then echo kw; fi'\nmaybe",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias recursive alias stops",
+      "script": "shopt -s expand_aliases\nalias ls2='ls2x'\nalias ls2x='echo stop'\nls2",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias alias not in quotes",
+      "script": "shopt -s expand_aliases\nalias q='echo q'\n'q' 2>/dev/null; echo status=$?",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias alias -p",
+      "script": "alias z='echo it'\\''s'; alias -p",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control alias invalid alias name",
+      "script": "alias 'a b=c'; echo status=$?",
+      "tags": [
+        "syntax.alias"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace simple command",
+      "script": "set -x; echo a b",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace quoted arguments",
+      "script": "set -x; echo 'a b' \"c\" '' $'t\\tt'",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace assignment",
+      "script": "set -x; v=1; w='x y'",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace assignment and command",
+      "script": "set -x; v=1 true",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace arithmetic command",
+      "script": "set -x; (( 1 + 2 ))",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace conditional command",
+      "script": "set -x; [[ a == b ]]",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace for loop",
+      "script": "set -x; for i in 1 2; do :; done",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace arithmetic for loop",
+      "script": "set -x; for ((i=0; i<1; i++)); do :; done",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace case",
+      "script": "set -x; case x in x) : ;; esac",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace if",
+      "script": "set -x; if true; then :; fi",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace while",
+      "script": "set -x; i=0; while (( i < 1 )); do (( i++ )); done",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace function call",
+      "script": "f() { echo in; }; set -x; f arg",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace subshell depth",
+      "script": "set -x; ( echo sub; ( echo deeper ) )",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace command substitution",
+      "script": "set -x; x=$(echo inner)",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace pipeline",
+      "script": "echo p | (set -x; cat) 2>/tmp/trace; cat /tmp/trace",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace redirection is not shown",
+      "script": "set -x; echo r > /tmp/x; cat < /tmp/x",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace here-document",
+      "script": "set -x; cat <<EOF\nhd\nEOF",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace custom PS4",
+      "script": "PS4='>> '; set -x; echo ps4",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace PS4 with expansion",
+      "script": "PS4='+${LINENO}: '; set -x; echo l\necho m",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace set +x is traced",
+      "script": "set -x; echo on; set +x; echo off",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace special characters",
+      "script": "set -x; echo '*' '$v' 'a\"b' \"it's\"",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace newline argument",
+      "script": "set -x; echo $'a\\nb'",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace array assignment",
+      "script": "set -x; a=(1 'two words')",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace declare",
+      "script": "set -x; declare -i n=5",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace export",
+      "script": "set -x; export E=1",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace local in a function",
+      "script": "f() { local l=1; }; set -x; f",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace eval",
+      "script": "set -x; eval 'echo e'",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace xtrace with BASH_XTRACEFD",
+      "script": "exec 5>/tmp/trace; BASH_XTRACEFD=5; set -x; echo traced; set +x; cat /tmp/trace",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace xtrace via set -o",
+      "script": "set -o xtrace; echo o",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace empty command substitution",
+      "script": "set -x; $(true)",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace unicode argument",
+      "script": "set -x; echo héllo",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace backslash argument",
+      "script": "set -x; echo 'a\\b'",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace assignment with tilde",
+      "script": "set -x; HOME=/h; v=~/x",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace brace group",
+      "script": "set -x; { echo g; }",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace negation",
+      "script": "set -x; ! false",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control xtrace trap handler",
+      "script": "trap 'echo handler' EXIT; set -x; echo body",
+      "tags": [
+        "option.xtrace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram control option noexec skips commands",
+      "script": "echo before; set -n; echo not",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option noexec still checks syntax at parse",
+      "script": "set -n\necho not",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option verbose prints input",
+      "script": "set -v; echo v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option allexport exports",
+      "script": "set -a; av=1; bash -c 'echo ${av-unset}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option dash flags",
+      "script": "echo $-; set -f; echo $-; set +f -u; echo $-",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option set -o listing of one option",
+      "script": "set -o noglob; set -o | while read -r n v; do [[ $n == noglob ]] && echo \"$n $v\"; done; set +o | while read -r l; do [[ $l == *\\ noglob ]] && echo \"$l\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option shopt -p of one option",
+      "script": "shopt -p extglob; shopt -s extglob; shopt -p extglob",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option shopt -q status",
+      "script": "shopt -q nullglob; echo $?; shopt -s nullglob; shopt -q nullglob; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option set unknown option",
+      "script": "set -o nosuchopt; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option set -- clears positionals",
+      "script": "set -- a b; set --; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option set - turns off x and v",
+      "script": "set -x; set -; echo quiet",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option set with only a double dash",
+      "script": "set -- ; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option shopt -o",
+      "script": "shopt -o -s nounset; echo $-; shopt -o -u nounset; echo $-",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option posix mode flag",
+      "script": "set -o posix; [[ :$SHELLOPTS: == *:posix:* ]] && echo posix",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option SHELLOPTS reflects set -o",
+      "script": "set -o noglob; [[ :$SHELLOPTS: == *:noglob:* ]] && echo has",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option BASHOPTS reflects shopt",
+      "script": "shopt -s nullglob; [[ :$BASHOPTS: == *:nullglob:* ]] && echo has",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option time with empty TIMEFORMAT",
+      "script": "TIMEFORMAT=; time true; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "gram control option time of a failing pipeline",
+      "script": "TIMEFORMAT=; time false | true; echo $?; time ! true; echo $?",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

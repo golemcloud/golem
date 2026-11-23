@@ -28,13 +28,13 @@ describe('invocation-equivalent RPC wire codecs', () => {
         echo: method({ input: { value: schema }, returns: schema }),
       },
     });
-    const client = definition.client.get({});
-    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+    const client = definition.client.upsert({});
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
     const arenas = [];
     for (const bytes of [[7, 31, 255], [9]]) {
       const value = { bytes, label: 'ready!', rounded: 1.1, extra: 'ignored' };
       rpc.asyncInvokeAndAwait.mockReturnValue({
-        metadata: hostInvocationMetadata('wire-rpc'),
+        metadata: hostInvocationMetadata(),
         future: {
           get: vi.fn().mockResolvedValue(schemaValueToWit(codec.toValue(value))),
           cancel: vi.fn(),
@@ -61,10 +61,10 @@ describe('invocation-equivalent RPC wire codecs', () => {
         echo: method({ input: { value: z.string() }, returns: z.string() }),
       },
     });
-    const client = definition.client.get({});
-    const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
+    const client = definition.client.upsert({});
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata('wire-rpc'),
+      metadata: hostInvocationMetadata(),
       future: {
         get: vi.fn().mockResolvedValue({
           valueNodes: [{ tag: 'string-value', val: 'valid root' }, null as never],
@@ -76,7 +76,7 @@ describe('invocation-equivalent RPC wire codecs', () => {
     await expect(client.echo({ value: 'x' })).rejects.toThrow(/invalid schema value/);
     const cancel = vi.fn();
     rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata('wire-rpc'),
+      metadata: hostInvocationMetadata(),
       future: { get: vi.fn().mockReturnValue(new Promise(() => {})), cancel },
     });
     const controller = new AbortController();

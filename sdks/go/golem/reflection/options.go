@@ -20,47 +20,61 @@ import (
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	"github.com/golemcloud/golem/sdks/go/golem"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
+	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// ClientOpt configures a reflected client.
-type ClientOpt func(*clientOpts)
+// CreateOpt configures the agent that [AgentType.Create] makes.
+type CreateOpt func(*createOpts)
 
-type clientOpts struct {
-	phantomID witTypes.Option[types.Uuid]
+type createOpts struct {
+	keyed     bool
 	overrides []configOverride
+	env       []witTypes.Tuple2[string, string]
 }
 
-//nolint:unused // called from host_wasm.go
-func applyOpts(opts []ClientOpt) clientOpts {
-	o := clientOpts{phantomID: witTypes.None[types.Uuid]()}
+// Keyed makes Create create the keyed agent of the constructor arguments: the
+// agent that Upsert with the same arguments reaches. The create fails with a
+// [golem.RemoteCallError] of kind [golem.RemoteConflict] when that agent
+// already exists. Without Keyed, Create makes a new agent with a new ID.
+func Keyed() CreateOpt { return func(o *createOpts) { o.keyed = true } }
+
+// WithEnv adds the environment variable name to the new agent's environment,
+// next to the ones its manifest defines.
+func WithEnv(name, value string) CreateOpt {
+	return func(o *createOpts) {
+		o.env = append(o.env, witTypes.Tuple2[string, string]{F0: name, F1: value})
+	}
+}
+
+// createOptions checks the options of a Create against the snapshot and
+// builds the host's create options.
+func (r AgentType) createOptions(opts []CreateOpt) (host.CreateOptions, error) {
+	var o createOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return o
+	agentConfig, err := r.configValues(o.overrides)
+	if err != nil {
+		return host.CreateOptions{}, err
+	}
+	return host.CreateOptions{Keyed: o.keyed, AgentConfig: agentConfig, Env: o.env}, nil
 }
 
-// WithPhantomID addresses a specific phantom instance of the target agent.
-// Use [AgentType.NewPhantom] to allocate a fresh one.
-func WithPhantomID(id golem.UUID) ClientOpt {
-	return func(o *clientOpts) { o.phantomID = witTypes.Some(engine.UUIDToWit(id)) }
-}
-
-// WithConfigJSON supplies one local config value of the target at creation,
-// as canonical JSON for the declared path. It is checked against the
+// WithConfigJSON supplies one local config value of the new agent, as
+// canonical JSON for the declared path. It is checked against the
 // snapshot's declaration before anything is sent.
-func WithConfigJSON(path []string, value any) ClientOpt {
-	return func(o *clientOpts) {
+func WithConfigJSON(path []string, value any) CreateOpt {
+	return func(o *createOpts) {
 		o.overrides = append(o.overrides, configOverride{path: slices.Clone(path), json: value})
 	}
 }
 
 // WithConfigValue is [WithConfigJSON] for a value already in the schema model.
-func WithConfigValue(path []string, value core.SchemaValue) ClientOpt {
-	return func(o *clientOpts) {
+func WithConfigValue(path []string, value core.SchemaValue) CreateOpt {
+	return func(o *createOpts) {
 		o.overrides = append(o.overrides, configOverride{path: slices.Clone(path), value: value, native: true})
 	}
 }

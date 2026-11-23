@@ -94,7 +94,7 @@ unread input directly for zero-copy forwarding; a partially read stream cannot b
 Native and generated guest clients expose awaited methods for recursively stream-bearing schemas:
 
 ```moonbit nocheck
-let target = @streamingClient.StreamingAgent::get("main")
+let target = @streamingClient.StreamingAgent::upsert("main")
 let output = target.doubled(
   @schema.AgentStream::produce(async fn(writer) {
     let _ = writer.write_all([1U, 2U, 3U])

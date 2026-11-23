@@ -4,9 +4,8 @@
 // you may not use this file except in compliance with the License.
 
 use golem_common::model::card::network_target::NetworkTargetError;
-pub use golem_common::model::card::network_target::{
-    http_target, network_target, websocket_target,
-};
+use golem_common::model::card::network_target::lookup_target;
+pub use golem_common::model::card::network_target::{http_target, websocket_target};
 use golem_common::model::card::owner::{
     AgentOwnerLeafPattern, AgentOwnerPattern, EnvironmentOwnerPattern, ToolOwnerPattern,
 };
@@ -34,7 +33,12 @@ pub fn agent_owner<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> AgentOwnerPat
         application: component.application_name.clone(),
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
-        agent: AgentOwnerLeafPattern::Agent(ctx.agent_id().agent_id.clone()),
+        agent: AgentOwnerLeafPattern::agent(
+            *ctx.agent_id(),
+            ctx.owner_context()
+                .agent()
+                .map(|agent| agent.agent_type.clone()),
+        ),
     }
 }
 
@@ -143,7 +147,7 @@ pub fn filesystem_target(
 }
 
 pub fn dns_target(host: &str) -> Result<PermissionTarget, NetworkTargetError> {
-    network_target(host, None)
+    lookup_target(host)
 }
 
 pub fn env_target(owner: AgentOwnerPattern, name: &str) -> Result<PermissionTarget, TargetError> {
@@ -1882,7 +1886,11 @@ mod tests {
     }
 
     fn agent(name: &str) -> AgentOwnerPattern {
-        AgentOwnerPattern::parse(&format!("a@b.com/app/env/component/{name}")).unwrap()
+        AgentOwnerPattern::parse(&format!(
+            "a@b.com/app/env/component/{}",
+            crate::test_agent_id(name)
+        ))
+        .unwrap()
     }
     fn env(name: &str) -> EnvironmentOwnerPattern {
         EnvironmentOwnerPattern::parse(&format!("a@b.com/app/{name}")).unwrap()

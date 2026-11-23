@@ -17,7 +17,6 @@
 package golem.host
 
 import golem.HostApi
-import golem.runtime.rpc.host.AgentHostApi
 import golem.schema.{IntoSchema, TypedSchemaValue}
 import zio.test._
 
@@ -144,9 +143,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.OplogProcessorCheckpoint(p)     => s"checkpoint(${p.confirmedUpTo})"
   }
 
-  private val mockUuid    = AgentHostApi.UuidLiteral(js.BigInt("0"), js.BigInt("0"))
-  private val mockCompId  = AgentHostApi.ComponentIdLiteral(mockUuid)
-  private val mockAgentId = AgentHostApi.AgentIdLiteral(mockCompId, "test-agent")
+  private val mockAgentId = golem.AgentId(java.util.UUID.fromString("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))
 
   private val allEntries: List[OplogEntry] =
     List(
@@ -154,6 +151,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         CreateParameters(
           ts,
           mockAgentId,
+          Some("test-agent"),
           OwnerKind.ComponentAgent,
           BigInt(1),
           Map("env" -> "val"),
@@ -162,7 +160,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           None,
           BigInt(1024),
           BigInt(65536),
-          List(pluginDesc)
+          List(pluginDesc),
+          neverLive = true
         )
       ),
       OplogEntry.Suspend(ts),

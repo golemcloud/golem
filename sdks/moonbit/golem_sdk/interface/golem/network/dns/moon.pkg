@@ -1,0 +1,6 @@
+import {
+  "golemcloud/golem_sdk/async-core" @async-core,
+}
+
+warnings = "-44-unused_value-declaration_unimplemented"
+supported_targets = "wasm"

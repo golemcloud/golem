@@ -142,10 +142,9 @@ struct RateLimitParameters {
 }
 
 fn principal_key(principal: &Principal) -> String {
-    match principal.principal_ref() {
-        Some(principal_ref) => principal_ref.to_string(),
-        None => "anonymous".to_string(),
-    }
+    principal
+        .principal_ref()
+        .map_or_else(|| "anonymous".to_string(), ToString::to_string)
 }
 
 #[universal_tool_middleware(
@@ -176,7 +175,7 @@ async fn persistent_rate_limit(
         ));
     }
 
-    let mut backend = RateLimitBackendClient::get(
+    let mut backend = RateLimitBackendClient::upsert(
         parameters.policy,
         parameters.limit,
         parameters.window_milliseconds,

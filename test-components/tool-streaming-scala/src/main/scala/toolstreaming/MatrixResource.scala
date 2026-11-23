@@ -127,7 +127,7 @@ private def matrixResourceEvidence(context: InvocationContext): (String, String,
   (
     "scala",
     context.caller.immediate.toString,
-    HostApi.getSelfMetadata().agentId.agentId
+    HostApi.getSelfMetadata().agentId.toString
   )
 
 /** The evidence of a user caller whose subject is the acceptance subject. */
@@ -254,7 +254,7 @@ final class ScalaResourceToolStreamingCallerImpl(name: String, config: Config[Ma
             s"matrix permission issuer principal was ${issue.principal}, expected a user caller with subject matrix-resource-acceptance"
           )
         )
-      case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.agentId =>
+      case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.toString =>
         Future.failed(
           new IllegalStateException(
             s"matrix permission issuer owner was ${issue.ownerAgentId}, expected the calling agent"
@@ -308,7 +308,7 @@ final class ScalaResourceToolStreamingCallerImpl(name: String, config: Config[Ma
                         s"matrix permission issuer principal was ${issue.principal}, expected a user caller with subject matrix-resource-acceptance"
                       )
                     )
-                  case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.agentId =>
+                  case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.toString =>
                     Future.failed(
                       new IllegalStateException(
                         s"matrix permission issuer owner was ${issue.ownerAgentId}, expected the calling agent"

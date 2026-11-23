@@ -21,7 +21,7 @@ use super::agent::ExecutorProbe;
 use super::prep::PrepManifest;
 use super::{ScheduleTargetPattern, ScheduleTargetResidency};
 use futures::stream::{StreamExt, TryStreamExt};
-use golem_common::agent_id;
+use golem_common::agent_key;
 use golem_common::data_value;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
@@ -159,14 +159,14 @@ fn target_names(config: &CellConfig, count: u32) -> Vec<String> {
 fn target_ids(names: &[String]) -> Vec<ParsedAgentKey> {
     names
         .iter()
-        .map(|name| agent_id!(SCHEDULE_TARGET_AGENT_TYPE, name.clone()))
+        .map(|name| agent_key!(SCHEDULE_TARGET_AGENT_TYPE, name.clone()))
         .collect()
 }
 
 fn emitter_ids(config: &CellConfig, count: u32) -> Vec<ParsedAgentKey> {
     (0..count)
         .map(|index| {
-            agent_id!(
+            agent_key!(
                 SCHEDULE_EMITTER_AGENT_TYPE,
                 format!("{}-emitter-{index}", config.cell_name())
             )

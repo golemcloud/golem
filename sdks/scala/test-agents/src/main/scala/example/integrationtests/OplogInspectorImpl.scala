@@ -32,7 +32,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
     val meta     = HostApi.getSelfMetadata()
     val startIdx = BigInt(0)
 
-    sb.append(s"=== Oplog Inspector (agent=${meta.agentName}) ===\n")
+    sb.append(s"=== Oplog Inspector (agent=${meta.agentId}) ===\n")
     sb.append(s"Reading from index $startIdx\n\n")
 
     val oplog = OplogApi.GetOplog(meta.agentId, startIdx)

@@ -846,7 +846,7 @@ impl DurableStreamStore {
         }
 
         let environment_id = self.environment_id;
-        let producer = self.producer.clone();
+        let producer = self.producer;
         let producer_fingerprint = self.producer_fingerprint;
         let generation = self.generation();
         let records = requests.clone();
@@ -879,7 +879,7 @@ impl DurableStreamStore {
                     let record = registration_record(
                         oplog_index,
                         environment_id,
-                        producer.clone(),
+                        producer,
                         producer_fingerprint,
                         request,
                         None,
@@ -1023,8 +1023,7 @@ impl DurableStreamStore {
                 &self.producer,
                 self.producer_fingerprint,
                 oplog_index,
-            )
-            .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?;
+            );
             buses.push((
                 stream_id,
                 Arc::new(DurableLiveStreamBus::new(self.live_join_capacity)?),

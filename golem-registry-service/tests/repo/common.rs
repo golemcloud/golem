@@ -497,10 +497,7 @@ fn runtime_card(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
 fn runtime_card_provenance() -> CardManagedByRuntimeDerived {
     CardManagedByRuntimeDerived {
         environment_id: EnvironmentId::new(),
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "runtime-card-source".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 3),
         invocation_key: InvocationId(uuid::Uuid::from_u128(1)),
         oplog_index: OplogIndex::from_u64(42),
     }
@@ -978,6 +975,7 @@ pub async fn test_component_deletion_racing_runtime_derivation(deps: &Deps) {
                 metadata: Blob::new(metadata),
                 object_store_key: "component-delete-runtime-race".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![CardRecord::polymorphic_creation(
                 initial_card.clone(),
@@ -1151,6 +1149,7 @@ pub async fn test_component_deletion_racing_multi_parent_runtime_derivation(deps
                 metadata: Blob::new(metadata),
                 object_store_key: "component-delete-multi-parent-runtime-race".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![
                 card_record(&high_card, high_agent_type),
@@ -1308,6 +1307,7 @@ pub async fn test_component_deletion_racing_runtime_derivation_from_descendant(d
                 metadata: Blob::new(metadata),
                 object_store_key: "component-delete-descendant-parent-race".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![CardRecord::polymorphic_creation(
                 initial_card,
@@ -2821,6 +2821,7 @@ pub async fn test_environment_deletion_revokes_component_card_runtime_descendant
                 metadata: Blob::new(metadata),
                 object_store_key: "component".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![CardRecord::polymorphic_creation(
                 initial_card.clone(),
@@ -3305,6 +3306,7 @@ pub async fn test_component_stage(deps: &Deps) {
 
         object_store_key: "xys".to_string(),
         binary_hash: blake3::hash("test".as_bytes()).into(),
+        package_metadata: None,
     }
     .with_updated_hash()
     .unwrap();
@@ -3369,6 +3371,7 @@ pub async fn test_component_stage(deps: &Deps) {
         revision_id: 1,
         size: 12345.into(),
         binary_hash: SqlBlake3Hash::empty(),
+        package_metadata: None,
         ..revision_0.clone()
     }
     .with_updated_hash()
@@ -3571,6 +3574,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
                 metadata: Blob::new(metadata.clone()),
                 object_store_key: "component".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![CardRecord::polymorphic_creation(
                 initial_card.clone(),
@@ -3602,6 +3606,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
                 metadata: Blob::new(metadata),
                 object_store_key: "component".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             Vec::new(),
         )
@@ -3664,6 +3669,7 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
                 metadata: Blob::new(metadata_with_agent),
                 object_store_key: "component".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![CardRecord::polymorphic_creation(
                 initial_card.clone(),
@@ -3702,6 +3708,7 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
                 metadata: Blob::new(ComponentMetadata::default()),
                 object_store_key: "component".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             Vec::new(),
         )
@@ -3868,6 +3875,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
                 metadata: Blob::new(metadata),
                 object_store_key: "component".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![CardRecord::polymorphic_creation(
                 initial_card.clone(),
@@ -3958,6 +3966,7 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
                 metadata: Blob::new(metadata),
                 object_store_key: "component".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![CardRecord::polymorphic_creation(
                 initial_card.clone(),
@@ -4068,6 +4077,7 @@ pub async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(
                 metadata: Blob::new(metadata),
                 object_store_key: "component-with-reused-card-id".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![CardRecord::polymorphic_creation(
                 initial_card.clone(),
@@ -4181,6 +4191,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
                 metadata: Blob::new(metadata),
                 object_store_key: "component".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![CardRecord::polymorphic_creation(
                 initial_card.clone(),
@@ -4227,6 +4238,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
                 metadata: Blob::new(ComponentMetadata::default()),
                 object_store_key: "component-recreated".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             Vec::new(),
         )
@@ -7462,6 +7474,7 @@ pub async fn test_account_usage(deps: &Deps) {
                     )),
                     object_store_key: "".to_string(),
                     binary_hash: SqlBlake3Hash::empty(),
+                    package_metadata: None,
                 },
                 Vec::new(),
             )
@@ -9968,6 +9981,7 @@ pub async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
                 )),
                 object_store_key: String::new(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             vec![],
         )
@@ -10113,6 +10127,7 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
                 )),
                 object_store_key: String::new(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             Vec::new(),
         )
@@ -10330,6 +10345,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
                 )),
                 object_store_key: String::new(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             Vec::new(),
         )
@@ -10454,6 +10470,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
                 )),
                 object_store_key: String::new(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             Vec::new(),
         )
@@ -11033,6 +11050,7 @@ pub async fn test_tool_middleware_release_and_grant_repository_contracts(deps: &
                 )),
                 object_store_key: String::new(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             Vec::new(),
         )
@@ -11435,6 +11453,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         )),
         object_store_key: String::new(),
         binary_hash: SqlBlake3Hash::empty(),
+        package_metadata: None,
     };
     let component = deps
         .component_repo
@@ -13275,6 +13294,15 @@ pub async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Dep
                     .unwrap()
                     .is_empty()
             );
+            let retained = deps
+                .full_deployment_repo
+                .list_retained_agent_types(env.environment_id, "shared-name")
+                .await
+                .unwrap();
+            assert_eq!(retained.len(), 1);
+            assert_eq!(retained[0].type_id, Some(agent_id));
+            assert_eq!(retained[0].component_id, expected_agent.component_id);
+            assert_eq!(retained[0].deployment_revision_id, 2);
         }
         let retained = deps
             .full_deployment_repo
@@ -13286,6 +13314,55 @@ pub async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Dep
             assert!(retained.contains(row));
         }
     }
+
+    let component = deps
+        .component_repo
+        .create(
+            env.environment_id,
+            "new-implementer",
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: 0,
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(env.owner_account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    vec![],
+                    vec![],
+                    BTreeMap::new(),
+                )),
+                object_store_key: "".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let mut moved = type_id_deployment(deps, &env, 5, "shared-name").await;
+    moved.registered_agent_types[0].component_id = component.revision.component_id;
+    moved.registered_agent_types[0].component_revision_id = component.revision.revision_id;
+    deps.full_deployment_repo
+        .deploy_current(moved, false)
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let retained = deps
+        .full_deployment_repo
+        .list_retained_agent_types(env.environment_id, "shared-name")
+        .await
+        .unwrap();
+    assert_eq!(retained.len(), 2);
+    assert_eq!(retained[0].component_id, component.revision.component_id);
+    assert_eq!(retained[0].deployment_revision_id, 5);
+    assert_eq!(retained[1].component_id, expected_agent.component_id);
+    assert_eq!(retained[1].deployment_revision_id, 4);
+    assert!(
+        retained
+            .iter()
+            .all(|declaration| declaration.type_id == Some(agent_id))
+    );
 }
 
 pub async fn test_environment_type_ids_rollback_and_environment_isolation(deps: &Deps) {
@@ -13537,6 +13614,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
                 )),
                 object_store_key: "".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             Vec::new(),
         )

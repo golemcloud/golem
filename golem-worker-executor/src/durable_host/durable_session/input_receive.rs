@@ -268,6 +268,7 @@ impl PrepareInputObservation {
                 .await?;
             if !record.matches_reobserved(&original) {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    recorded.original_index,
                     "unchanged logical consumer input",
                     format!(
                         "read differs from original observation at {}",
@@ -288,6 +289,7 @@ impl PrepareInputObservation {
                 };
                 if recorded_index.replace(*index).is_some() || expected != observation {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        *index,
                         "one matching consumer observation boundary",
                         format!("conflicting consumer observation at {index}"),
                     )
@@ -359,7 +361,8 @@ impl<Ctx: WorkerCtx> DurableInputLiveAdmission<Ctx> {
                     let ctx = access.get().durable_ctx_mut();
                     (
                         ctx.entity_tool_operation(),
-                        ctx.rejects_live_continuation_at_replay_tail(),
+                        ctx.rejects_live_continuation_at_replay_tail()
+                            .then(|| ctx.state.replay_state.replay_target().next()),
                     )
                 });
                 if let Some(operation) = operation {
@@ -367,10 +370,11 @@ impl<Ctx: WorkerCtx> DurableInputLiveAdmission<Ctx> {
                         .reject_missing_replay_admission(&self.boundary)
                         .await?;
                 }
-                if rejected {
+                if let Some(end_of_history) = rejected {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "durable input observation",
+                        end_of_history,
                         "end of the recorded consumer journal during completed entity replay",
+                        "durable input observation",
                     ));
                 }
                 self.replay_state
@@ -430,9 +434,7 @@ impl DurableInputReceiveAdmission {
                             return Ok(None);
                         }
                         if ctx.rejects_live_continuation_at_replay_tail() {
-                            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                                format!("durable input observation {}", self.ordinal),
-                                "end of the recorded consumer journal during completed entity replay",
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(ctx.state.replay_state.replay_target().next(), "end of the recorded consumer journal during completed entity replay", format!("durable input observation {}", self.ordinal),
                             ));
                         }
                         Ok(Some((ctx.state.replay_state.clone(), ctx.tail_work_tracker().activity())))
@@ -552,13 +554,14 @@ impl DurableInputEndpoint {
             let guest = matches!(observation, StreamConsumerObservation::Guest { .. });
             if !guest
                 && let Some(recorded) = &recorded_observation
-                && recorded
+                && let Some((mismatch_index, _)) = recorded
                     .boundaries
                     .iter()
-                    .any(|(_, recorded)| *recorded != observation)
+                    .find(|(_, recorded)| *recorded != observation)
             {
                 return Err(
                     SessionError::from(WorkerExecutorError::unexpected_oplog_entry(
+                        *mismatch_index,
                         "host projection observation",
                         format!("consumer observation {observation:?}"),
                     ))

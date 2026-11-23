@@ -667,6 +667,8 @@ mod tests {
             None,
             None,
             None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
+            None,
         );
         let status = folded(snapshot_based_update(failed.clone()));
         assert_eq!(

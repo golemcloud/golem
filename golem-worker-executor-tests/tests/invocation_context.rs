@@ -18,13 +18,13 @@
 use crate::Tracing;
 use crate::durability::assert_snapshot_recovery_loaded;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentUpdateMode, ParsedAgentKey};
+use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::caller::{ClaimVisibility, PublicCaller};
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, AgentStatus};
-use golem_common::{agent_id, data_value};
+use golem_common::model::{AgentId, AgentStatus, OwnedAgentId};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::callers;
@@ -110,8 +110,7 @@ fn observation(invocation_id: Option<String>, caller: &str) -> Observation {
 /// oplog, in order.
 async fn method_invocations(
     executor: &impl TestDsl,
-    agent_id: &AgentId,
-    parsed: &ParsedAgentKey,
+    agent_id: &OwnedAgentId,
     method: &str,
 ) -> anyhow::Result<Vec<(OplogIndex, String)>> {
     Ok(executor
@@ -125,7 +124,7 @@ async fn method_invocations(
                 {
                     Some((
                         entry.oplog_index,
-                        format!("{parsed}.{}", call.invocation_id),
+                        format!("{}.{}", agent_id.agent_id, call.invocation_id),
                     ))
                 }
                 _ => None,
@@ -138,10 +137,9 @@ async fn method_invocations(
 /// The text form of every `report` invocation recorded in the probe's oplog, in order.
 async fn report_invocation_ids(
     executor: &impl TestDsl,
-    agent_id: &AgentId,
-    parsed: &ParsedAgentKey,
+    agent_id: &OwnedAgentId,
 ) -> anyhow::Result<Vec<String>> {
-    Ok(method_invocations(executor, agent_id, parsed, "report")
+    Ok(method_invocations(executor, agent_id, "report")
         .await?
         .into_iter()
         .map(|(_, id)| id)
@@ -151,13 +149,12 @@ async fn report_invocation_ids(
 /// Waits until the probe's oplog records `count` started `report` invocations.
 async fn await_report_invocation_ids(
     executor: &impl TestDsl,
-    agent_id: &AgentId,
-    parsed: &ParsedAgentKey,
+    agent_id: &OwnedAgentId,
     count: usize,
 ) -> anyhow::Result<Vec<String>> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let ids = report_invocation_ids(executor, agent_id, parsed).await?;
+        let ids = report_invocation_ids(executor, agent_id).await?;
         if ids.len() >= count {
             return Ok(ids);
         }
@@ -189,24 +186,16 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
 
     let caller_name = format!("caller-{}", context.redis_prefix());
     let callee_name = format!("callee-{}", context.redis_prefix());
-    let caller = agent_id!(PROBE, caller_name.clone());
-    let callee = agent_id!(PROBE, callee_name.clone());
-    let caller_id = AgentId {
-        component_id: component.id,
-        agent_id: caller.to_string(),
-    };
-    let callee_id = AgentId {
-        component_id: component.id,
-        agent_id: callee.to_string(),
-    };
+    let caller = agent_key!(PROBE, caller_name.clone());
+    let callee = agent_key!(PROBE, callee_name.clone());
+    let callee_id = executor.keyed_agent_id(component.environment_id, &callee)?;
 
-    let report: Report = serde_json::from_str(
-        &executor
-            .invoke_and_await_agent_as_caller(&component, &caller, creator, "report", data_value!())
-            .await?
-            .into_typed::<String>()?,
-    )?;
-    let caller_reports = report_invocation_ids(&executor, &caller_id, &caller).await?;
+    let first = executor
+        .invoke_and_await_agent_as_caller(&component, &caller, creator, "report", data_value!())
+        .await?;
+    let caller_id = first.agent_id().clone();
+    let report: Report = serde_json::from_str(&first.into_typed::<String>()?)?;
+    let caller_reports = report_invocation_ids(&executor, &caller_id).await?;
     assert_eq!(caller_reports.len(), 1);
     assert_eq!(
         report.constructor,
@@ -232,7 +221,7 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
             .await?
             .into_typed::<String>()?,
     )?;
-    let caller_reports = report_invocation_ids(&executor, &caller_id, &caller).await?;
+    let caller_reports = report_invocation_ids(&executor, &caller_id).await?;
     assert_eq!(caller_reports.len(), 2);
     assert_ne!(caller_reports[0], caller_reports[1]);
     assert_eq!(
@@ -264,7 +253,7 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
             .into_typed::<String>()?,
     )?;
     let peer_report = peer.report;
-    let callee_reports = await_report_invocation_ids(&executor, &callee_id, &callee, 2).await?;
+    let callee_reports = await_report_invocation_ids(&executor, &callee_id, 2).await?;
     assert_eq!(callee_reports.len(), 2);
     assert_eq!(
         peer.triggered, callee_reports[1],
@@ -272,7 +261,7 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
     );
     // Until the original caller propagates through RPC, `original` falls back to the immediate
     // caller: the calling agent, in both roles.
-    let agent_prefix = agent_text_prefix(&caller_id);
+    let agent_prefix = agent_text_prefix(&caller_id.agent_id);
     for text in [
         &peer_report.constructor.original,
         &peer_report.constructor.immediate,
@@ -320,14 +309,10 @@ async fn snapshot_save_and_load_see_no_invocation_and_the_agent_itself(
         .await?;
     let (creator, creator_text) = golem_user();
     let (user, user_text) = golem_user();
-    let probe = agent_id!(PROBE, format!("snapshot-{}", context.redis_prefix()));
-    let probe_id = AgentId {
-        component_id: component.id,
-        agent_id: probe.to_string(),
-    };
-
+    let probe = agent_key!(PROBE, format!("snapshot-{}", context.redis_prefix()));
+    let mut probe_id = None;
     for round in 0..3 {
-        executor
+        let result = executor
             .invoke_and_await_agent_as_caller(
                 &component,
                 &probe,
@@ -340,7 +325,9 @@ async fn snapshot_save_and_load_see_no_invocation_and_the_agent_itself(
                 data_value!(),
             )
             .await?;
+        probe_id = Some(result.agent_id().clone());
     }
+    let probe_id = probe_id.expect("the probe was invoked");
     let oplog = executor.get_oplog(&probe_id, OplogIndex::INITIAL).await?;
     assert!(
         oplog
@@ -365,7 +352,7 @@ async fn snapshot_save_and_load_see_no_invocation_and_the_agent_itself(
     )?;
     assert_snapshot_recovery_loaded(&mut events).await;
 
-    let itself = agent_text_prefix(&probe_id);
+    let itself = agent_text_prefix(&probe_id.agent_id);
     assert_eq!(report.constructor, observation(None, &creator_text));
     assert_eq!(
         report.constructor_caller,
@@ -388,7 +375,7 @@ async fn snapshot_save_and_load_see_no_invocation_and_the_agent_itself(
             observed.immediate
         );
     }
-    let reports = report_invocation_ids(&executor, &probe_id, &probe).await?;
+    let reports = report_invocation_ids(&executor, &probe_id).await?;
     assert_eq!(
         report.method,
         observation(reports.last().cloned(), &user_text)
@@ -418,15 +405,12 @@ async fn manual_update_snapshots_run_as_the_agent_and_record_the_requester(
         .await?;
     let (user, _) = golem_user();
     let (requester, requester_text) = golem_user();
-    let probe = agent_id!(PROBE, format!("update-{}", context.redis_prefix()));
-    let probe_id = AgentId {
-        component_id: component.id,
-        agent_id: probe.to_string(),
-    };
-
-    executor
+    let probe = agent_key!(PROBE, format!("update-{}", context.redis_prefix()));
+    let probe_id = executor
         .invoke_and_await_agent_as_caller(&component, &probe, user.clone(), "report", data_value!())
-        .await?;
+        .await?
+        .agent_id()
+        .clone();
     // The next revision is the same probe, so its load hook reads what the save hook wrote.
     let target = executor
         .update_component(&component.id, "golem_it_agent_sdk_rust_release")
@@ -450,7 +434,7 @@ async fn manual_update_snapshots_run_as_the_agent_and_record_the_requester(
             .await?
             .into_typed::<String>()?,
     )?;
-    let itself = agent_text_prefix(&probe_id);
+    let itself = agent_text_prefix(&probe_id.agent_id);
     for observed in [&report.saved, &report.loaded] {
         let observed = observed
             .as_ref()
@@ -507,7 +491,7 @@ async fn executor_refuses_an_invocation_with_no_caller(
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .store()
         .await?;
-    let probe = agent_id!(PROBE, format!("no-caller-{}", context.redis_prefix()));
+    let probe = agent_key!(PROBE, format!("no-caller-{}", context.redis_prefix()));
     let probe_id = executor.start_agent(&component.id, probe.clone()).await?;
     let oplog_before = executor.oplog_max_index(&probe_id).await?;
 
@@ -517,7 +501,7 @@ async fn executor_refuses_an_invocation_with_no_caller(
             .map_err(anyhow::Error::msg)?;
     let error = executor
         .invoke_agent_session(InvocationStart {
-            agent_id: Some(probe_id.clone().into()),
+            target: Some(crate::agent::id_target(&probe_id)),
             method_name: Some("report".to_string()),
             input: Some(method_parameters),
             mode: AgentInvocationMode::Await as i32,
@@ -567,19 +551,16 @@ async fn slot_fork_refuses_a_missing_caller(
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .store()
         .await?;
-    let source = agent_id!(PROBE, format!("fork-source-{}", context.redis_prefix()));
+    let source = agent_key!(PROBE, format!("fork-source-{}", context.redis_prefix()));
     let source_id = executor.start_agent(&component.id, source).await?;
-    let target_id = AgentId {
-        component_id: component.id,
-        agent_id: agent_id!(PROBE, format!("fork-target-{}", context.redis_prefix())).to_string(),
-    };
+    let target_id = crate::fork::fresh_fork_target(&source_id);
 
     let response = executor
         .client
         .clone()
         .fork_stream_slot(ForkStreamSlotRequest {
-            source_agent_id: Some(source_id.into()),
-            target_agent_id: Some(target_id.into()),
+            source_agent_id: Some(source_id.agent_id.into()),
+            target_agent_id: Some(target_id.agent_id.into()),
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(golem_service_base::model::auth::AuthCtx::System.into()),
             caller: None,
@@ -649,11 +630,8 @@ async fn check_spawned_futures_read_their_method_invocation(
         .await?;
     let (creator, creator_text) = golem_user();
     let (user, user_text) = golem_user();
-    let probe = agent_id!(PROBE, format!("{method}-{}", context.redis_prefix()));
-    let probe_id = AgentId {
-        component_id: component.id,
-        agent_id: probe.to_string(),
-    };
+    let probe = agent_key!(PROBE, format!("{method}-{}", context.redis_prefix()));
+    let probe_id = executor.start_agent(&component.id, probe.clone()).await?;
 
     let mut returned = Vec::new();
     for caller in [creator, user] {
@@ -678,7 +656,7 @@ async fn check_spawned_futures_read_their_method_invocation(
             "the method returns the observation it keeps"
         );
     }
-    let invocations = method_invocations(&executor, &probe_id, &probe, method).await?;
+    let invocations = method_invocations(&executor, &probe_id, method).await?;
     assert_eq!(invocations.len(), 2);
     assert_eq!(
         live,

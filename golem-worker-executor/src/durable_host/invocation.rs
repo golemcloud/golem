@@ -653,6 +653,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> Result<bool, WorkerExecutorError> {
         let crate::worker::HydratedInvocation {
             invocation,
+            operation,
             payload,
         } = hydrated;
         if !self.state.durability_is_suppressed() {
@@ -706,6 +707,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .worker()
                 .start_pending_invocation(
                     idempotency_key,
+                    operation,
                     payload,
                     stack,
                     InvocationWalletPin {
@@ -847,16 +849,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let decision = terminal_decision;
 
         let entity_parent_start_index = self.entity_parent_start_index();
-        let permission_denial_persisted = if let (
+        // A rejected invocation is recorded as its cancellation followed by the rejection error,
+        // so the status fold keeps the rejection as its result even when it never started.
+        let rejection_persisted = if let (
             Some(idempotency_key),
             TrapType::Error {
-                error: AgentError::PermissionDenied(error),
-                retry_from,
-                ..
+                error, retry_from, ..
             },
         ) = (&current_idempotency_key, trap_type)
+            && trap_type.is_invocation_rejection()
         {
-            let denial_persisted = self
+            let rejection_recorded = self
                 .state
                 .oplog
                 .add_pair(
@@ -871,7 +874,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                                 entity_parent_start_index,
                                 OplogErrorKind::Invocation,
                                 Some(invocation_id),
-                                AgentError::PermissionDenied(error),
+                                error,
                                 retry_from,
                                 retry_policy_state,
                                 None,
@@ -881,7 +884,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     }),
                 )
                 .await;
-            if let Err(error) = denial_persisted {
+            if let Err(error) = rejection_recorded {
                 if let OplogError::Fenced(fence) = error {
                     // The shard moved while this failure was being recorded. The fence retires the
                     // agent exactly as the `ShardLost` arm above does: nothing further may be
@@ -925,10 +928,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             // The oplog is the new owner's; a stale writer must leave no trace in it.
             TrapType::Interrupt(InterruptKind::ShardLost) => None,
             TrapType::Exit => Some(OplogEntry::exited()),
-            TrapType::Error {
-                error: AgentError::PermissionDenied(_),
-                ..
-            } if permission_denial_persisted => None,
+            TrapType::Error { .. } if rejection_persisted => None,
             TrapType::Error { .. } if trap_type.is_invocation_rejection() => {
                 current_idempotency_key.map(OplogEntry::cancel_pending_invocation)
             }
@@ -1004,6 +1004,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         if self.state.durability_is_suppressed() {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::NONE,
                 "recorded agent method failure",
                 "method failure while durability is suppressed",
             ));
@@ -1156,6 +1157,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             if let Some((finished_index, recorded_result)) = response {
                 if !recorded_result.replay_equivalent(&output.result) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        finished_index,
                         format!(
                             "{full_function_name} => {:?}",
                             recorded_result.redacted_debug()
@@ -1380,6 +1382,7 @@ pub(in crate::durable_host) fn ephemeral_terminal_trap(
             )),
             retry_from,
             semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Lifecycle,
         }),
         _ => None,
     }
@@ -1398,6 +1401,7 @@ pub(crate) fn ephemeral_suspend_trap(
                 }),
                 retry_from,
                 semantic_trap_retry_override: None,
+                provenance: crate::model::FailureProvenance::Lifecycle,
             })
         }
         _ => None,

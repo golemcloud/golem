@@ -18,6 +18,8 @@ use std::collections::BTreeMap;
 use golem_common::base_model::oplog::{
     QueuedCardEvent, QueuedCardEventTransfer, QueuedCardEventTransferReceived,
 };
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::caller::{Caller, ClaimVisibility, PublicCaller};
 use golem_common::model::card::{
     AccountCardHolder, ApplicationCardHolder, Card, CardHolder, CardId, InvocationWalletPin,
@@ -37,7 +39,7 @@ use golem_common::model::oplog::{
     SpanStarted, UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentInvocationPayload, OplogIndex, Timestamp};
+use golem_common::model::{OplogIndex, Timestamp};
 use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use test_r::test;
 use uuid::Uuid;
@@ -64,9 +66,10 @@ fn pending_invocation_deadline_survives_raw_and_public_wit_conversion() {
             timestamp: Timestamp::from(1_000),
             not_before,
             invocation_id: uuid::Uuid::from_u128(1).into(),
+            operation: Box::new(InvocationRequestOperation::SaveSnapshot),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(
-                    &AgentInvocationPayload::SaveSnapshot {
+                    &StoredAgentInvocationPayload::SaveSnapshot {
                         caller: golem_common::model::caller::Caller::anonymous(),
                     },
                 )
@@ -506,8 +509,10 @@ fn wit_projection_preserves_invocation_wallet_pins() {
     let raw_entry = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc().rounded(),
         invocation_id: uuid::Uuid::from_u128(2).into(),
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+        operation: Box::new(InvocationRequestOperation::AgentMethod {
             method_name: "test".to_string(),
+        }),
+        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
             input: SchemaValue::Record { fields: Vec::new() },
             caller: crate::test_callers::sample_caller(),
             scope_card: None,
@@ -540,14 +545,14 @@ fn wit_projection_preserves_invocation_wallet_pins() {
                 })
             );
             // The raw payload keeps the whole recorded caller.
-            let payload: AgentInvocationPayload = match payload {
+            let payload: StoredAgentInvocationPayload = match payload {
                 OplogPayload::Inline(payload) => *payload,
                 OplogPayload::SerializedInline { bytes, .. } => {
                     golem_common::serialization::deserialize(&bytes).unwrap()
                 }
                 other => panic!("expected an inline payload, got {other:?}"),
             };
-            let AgentInvocationPayload::AgentMethod { caller, .. } = payload else {
+            let StoredAgentInvocationPayload::AgentMethod { caller, .. } = payload else {
                 panic!("expected a method invocation payload");
             };
             assert_eq!(caller, crate::test_callers::sample_caller());
@@ -601,7 +606,10 @@ fn wit_projection_preserves_invocation_wallet_pins() {
                 panic!("expected an agent as the immediate caller");
             };
             assert_eq!(agent.agent_type, "TestAgent");
-            assert_eq!(agent.agent_id.agent_id, "Relay(\"r\")");
+            assert_eq!(
+                golem_common::model::AgentId::from(agent.agent_id),
+                golem_common::model::AgentId::from_parts(7, 0xc0)
+            );
             assert_eq!(agent.pair.issuer, crate::test_callers::TEST_ISSUER);
             assert_eq!(
                 invocation
@@ -862,18 +870,11 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::CreateParameters;
 
-    let agent_id = AgentId {
-        component_id: ComponentId(Uuid::from_u128(0x11112222333344445555666677778888)),
-        agent_id: "created-agent".to_string(),
-    };
-    let parent = AgentId {
-        component_id: ComponentId(Uuid::from_u128(0x9999aaaabbbbccccddddeeeeffff1234)),
-        agent_id: "parent-agent".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 1);
+    let parent = AgentId::from_parts(7, 2);
     let environment_id = EnvironmentId(Uuid::from_u128(0x123456789abcdef0fedcba9876543210));
     let created_by = AccountId(Uuid::from_u128(0x23456789abcdef01edcba9876543210f));
     let instance_id = Uuid::from_u128(0x3456789abcdef012dcba9876543210fe);
-    let phantom_id = Uuid::from_u128(0x456789abcdef0123cba9876543210fed);
     let env = vec![
         ("second".to_string(), "2".to_string()),
         ("first".to_string(), "1".to_string()),
@@ -883,25 +884,26 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         OwnerKind::EphemeralExternalTool,
         OwnerKind::OplogProcessor,
     ] {
+        let never_live = owner_kind == OwnerKind::ComponentAgent;
         let entry = OplogEntry::Create {
             timestamp: Timestamp::from(1_700_000_123_456),
             parameters: Box::new(CreateParameters {
                 component_id: ComponentId::new(),
                 agent_type_name: None,
                 canonical_key: None,
-                agent_id: agent_id.clone(),
+                agent_id,
                 owner_kind,
                 agent_mode: AgentMode::Ephemeral,
                 component_revision: ComponentRevision::new(23).unwrap(),
                 env: env.clone(),
                 environment_id,
                 created_by,
-                parent: Some(parent.clone()),
+                parent: Some(parent),
                 component_size: 317,
                 initial_total_linear_memory_size: 941,
                 initial_active_plugins: Default::default(),
                 local_agent_config: Vec::new(),
-                original_phantom_id: Some(phantom_id),
+                constructor_parameters: None,
                 instance_id,
                 create_request: golem_common::model::oplog::CreateRequest::new(
                     golem_common::model::oplog::CreateRequestKind::GetOrCreate,
@@ -910,6 +912,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
                     &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
                     ),
                 ),
+                never_live,
             }),
         };
         let oplog::OplogEntry::Create(mut encoded) = oplog::OplogEntry::try_from(entry).unwrap()
@@ -919,11 +922,11 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         assert_eq!(encoded.timestamp.seconds, 1_700_000_123);
         assert_eq!(encoded.timestamp.nanoseconds, 456_000_000);
         assert_eq!(
-            golem_common::model::AgentId::from(encoded.agent_id.clone()),
+            golem_common::model::AgentId::from(encoded.agent_id),
             agent_id
         );
         assert_eq!(
-            golem_common::model::AgentId::from(encoded.parent.clone().unwrap()),
+            golem_common::model::AgentId::from(encoded.parent.unwrap()),
             parent
         );
         assert!(matches!(
@@ -954,14 +957,10 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         );
         assert_eq!(encoded.component_size, 317);
         assert_eq!(encoded.initial_total_linear_memory_size, 941);
+        assert_eq!(encoded.never_live, never_live);
         assert_eq!(
             Uuid::from_u64_pair(encoded.instance_id.high_bits, encoded.instance_id.low_bits),
             instance_id
-        );
-        let encoded_phantom = encoded.original_phantom_id.as_ref().unwrap();
-        assert_eq!(
-            Uuid::from_u64_pair(encoded_phantom.high_bits, encoded_phantom.low_bits),
-            phantom_id
         );
 
         encoded.component_revision = 29;
@@ -980,7 +979,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         assert_eq!(timestamp, Timestamp::from(1_700_000_123_456));
         assert_eq!(parameters.agent_id, agent_id);
         assert_eq!(parameters.owner_kind, owner_kind);
-        assert_eq!(parameters.parent, Some(parent.clone()));
+        assert_eq!(parameters.parent, Some(parent));
         assert_eq!(
             parameters.component_revision,
             ComponentRevision::new(29).unwrap()
@@ -990,7 +989,173 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         assert_eq!(parameters.env, env);
         assert_eq!(parameters.environment_id, environment_id);
         assert_eq!(parameters.created_by, created_by);
-        assert_eq!(parameters.original_phantom_id, Some(phantom_id));
         assert_eq!(parameters.instance_id, instance_id);
+        assert_eq!(parameters.never_live, never_live);
+    }
+}
+
+struct TableCapabilityDropper {
+    table: wasmtime::component::ResourceTable,
+}
+
+impl golem_schema::schema::wit::QuotaTokenHandleDropper for TableCapabilityDropper {
+    fn drop_quota_token_handle(
+        &mut self,
+        handle: wasmtime::component::Resource<golem_schema::schema::wit::QuotaTokenHandleRep>,
+    ) {
+        let _ = self.table.delete(handle);
+    }
+}
+
+impl golem_schema::schema::wit::SecretHandleDropper for TableCapabilityDropper {
+    fn drop_secret_handle(
+        &mut self,
+        handle: wasmtime::component::Resource<golem_schema::schema::wit::SecretHandleRep>,
+    ) {
+        let _ = self.table.delete(handle);
+    }
+}
+
+impl golem_schema::schema::wit::PermissionCardHandleDropper for TableCapabilityDropper {
+    fn drop_permission_card_handle(
+        &mut self,
+        handle: wasmtime::component::Resource<golem_schema::schema::wit::PermissionCardHandleRep>,
+    ) {
+        let _ = self.table.delete(handle);
+    }
+}
+
+impl golem_schema::schema::wit::SchemaValueStreamResolver for TableCapabilityDropper {
+    type Error = String;
+
+    fn handle_from_stream(
+        &mut self,
+        _stream: golem_schema::schema::SchemaValueStream,
+    ) -> Result<
+        wasmtime::component::Resource<golem_schema::schema::SchemaValueStreamHandleRep>,
+        Self::Error,
+    > {
+        Err("the dropper does not create streams".to_string())
+    }
+
+    fn stream_from_handle(
+        &mut self,
+        _handle: wasmtime::component::Resource<golem_schema::schema::SchemaValueStreamHandleRep>,
+    ) -> Result<golem_schema::schema::SchemaValueStream, Self::Error> {
+        Err("the dropper does not read streams".to_string())
+    }
+
+    fn drop_stream_handle(
+        &mut self,
+        handle: wasmtime::component::Resource<golem_schema::schema::SchemaValueStreamHandleRep>,
+    ) {
+        let _ = self.table.delete(handle);
+    }
+}
+
+/// A guest supplies raw entries to `enrich-oplog-entries`, so the requests of the divergence of a
+/// raw `failed-update` can hold owned capability handles and owned streams. They are deleted from
+/// the resource table, in the expected and in the actual step and also when no node reaches them,
+/// and the batch is rejected. A stream alone rejects the batch too.
+#[test]
+fn failed_update_divergence_requests_drop_their_owned_handles() {
+    use golem_schema::schema::wit::{QuotaTokenHandleRep, SecretHandleRep, wire};
+    use golem_schema::schema::{SchemaValueStream, SchemaValueStreamHandleRep};
+    use wasmtime::component::Resource;
+
+    let mut dropper = TableCapabilityDropper {
+        table: wasmtime::component::ResourceTable::new(),
+    };
+    let quota = dropper.table.push(QuotaTokenHandleRep::new(())).unwrap();
+    let secret = dropper.table.push(SecretHandleRep::new(())).unwrap();
+    let stream = |dropper: &mut TableCapabilityDropper| {
+        dropper
+            .table
+            .push(SchemaValueStreamHandleRep::new(
+                SchemaValueStream::from_host_endpoint(()),
+            ))
+            .unwrap()
+    };
+    let unreachable_stream = stream(&mut dropper);
+    let only_stream = stream(&mut dropper);
+    let quota_rep = quota.rep();
+    let secret_rep = secret.rep();
+    let unreachable_stream_rep = unreachable_stream.rep();
+    let only_stream_rep = only_stream.rep();
+    let host_call = |value_nodes: Vec<wire::SchemaValueNode>| {
+        oplog::ReplayStep::HostCall(oplog::ReplayHostCall {
+            function_name: "golem::api::oplog::get-oplog".to_string(),
+            durable_function_type: oplog::WrappedFunctionType::ReadRemote,
+            parent_start_index: None,
+            invocation_id: None,
+            observational_owner: None,
+            carries_request: true,
+            request: Some(wire::TypedSchemaValue {
+                graph: wire::SchemaGraph {
+                    type_nodes: vec![],
+                    defs: vec![],
+                    root: 0,
+                },
+                value: wire::SchemaValueTree {
+                    value_nodes,
+                    root: 0,
+                },
+            }),
+        })
+    };
+    let failed_update = |expected, actual| {
+        oplog::OplogEntry::FailedUpdate(oplog::FailedUpdateParameters {
+            timestamp: Timestamp::from(1_000).into(),
+            target_revision: 2,
+            details: None,
+            snapshot_assisted_details: None,
+            update_attempt_index: None,
+            failure_class: oplog::UpdateFailureClass::Divergence,
+            divergence: Some(oplog::ReplayDivergence {
+                oplog_index: 1,
+                expected,
+                actual,
+                mismatched: vec![],
+            }),
+        })
+    };
+    let entry = failed_update(
+        host_call(vec![
+            wire::SchemaValueNode::QuotaTokenHandle(quota),
+            wire::SchemaValueNode::StreamValue(unreachable_stream),
+        ]),
+        host_call(vec![wire::SchemaValueNode::SecretValue(secret)]),
+    );
+    let only_stream_entry = failed_update(
+        oplog::ReplayStep::EndOfHistory,
+        host_call(vec![wire::SchemaValueNode::StreamValue(only_stream)]),
+    );
+
+    assert!(super::reject_quota_handles_in_oplog_entries(vec![(9, entry)], &mut dropper).is_err());
+    assert!(
+        super::reject_quota_handles_in_oplog_entries(vec![(10, only_stream_entry)], &mut dropper)
+            .is_err()
+    );
+    assert!(
+        dropper
+            .table
+            .get(&Resource::<QuotaTokenHandleRep>::new_borrow(quota_rep))
+            .is_err()
+    );
+    assert!(
+        dropper
+            .table
+            .get(&Resource::<SecretHandleRep>::new_borrow(secret_rep))
+            .is_err()
+    );
+    for stream_rep in [unreachable_stream_rep, only_stream_rep] {
+        assert!(
+            dropper
+                .table
+                .get(&Resource::<SchemaValueStreamHandleRep>::new_borrow(
+                    stream_rep
+                ))
+                .is_err()
+        );
     }
 }

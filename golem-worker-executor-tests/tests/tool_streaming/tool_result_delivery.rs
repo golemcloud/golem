@@ -201,20 +201,20 @@ async fn raw_tool_return_boundary(
         &["valid", "malformed", "unpadded"]
     };
     for &command in commands {
-        let agent = agent_id!("ToolStreamingCaller", format!("raw-return-{command}"));
+        let agent = agent_key!("ToolStreamingCaller", format!("raw-return-{command}"));
         let worker = executor
             .start_agent(&caller_component.id, agent.clone())
             .await?;
         let fingerprint = executor.get_worker_metadata(&worker).await?.fingerprint;
-        let mut disposals = executor.probe_entity_store_disposal(&worker);
+        let mut disposals = executor.probe_entity_store_disposal(&worker.agent_id);
         let path = vec![command.to_string()];
         let index = definition
             .command_index_by_path(&path)
             .expect("probe command");
         let schema = definition.canonical_input_record_schema(index)?;
-        let mut body_gate = http.then(|| executor.gate_next_entity_body_start(&worker));
+        let mut body_gate = http.then(|| executor.gate_next_entity_body_start(&worker.agent_id));
         let mut start_gate = if matches!(boundary, RawReturnBoundary::HeldStart { .. }) {
-            Some(executor.gate_after_next_append(&worker, |entry| {
+            Some(executor.gate_after_next_append(&worker.agent_id, |entry| {
                 matches!(entry, golem_common::model::oplog::OplogEntry::Start { function_name, .. }
                     if function_name.to_string().ends_with("monotonic-clock::wait-for"))
             }).await)
@@ -222,14 +222,14 @@ async fn raw_tool_return_boundary(
             None
         };
         let owner = executor
-            .active_agent(&OwnedAgentId::new(context.default_environment_id, &worker))
+            .active_agent(&worker)
             .await
             .expect("the probe owner is resident");
         let held_authority = async {
             if let Some(gate) = &mut body_gate {
                 gate.entered().await;
                 let mut append = executor
-                    .gate_after_next_append(&worker, |entry| {
+                    .gate_after_next_append(&worker.agent_id, |entry| {
                         matches!(
                             entry,
                             golem_common::model::oplog::OplogEntry::CardEventQueued { .. }
@@ -282,7 +282,7 @@ async fn raw_tool_return_boundary(
         let invocation = tokio::time::timeout(
             Duration::from_secs(20),
             executor.invoke_external_tool(
-                &worker,
+                &worker.agent_id,
                 fingerprint,
                 IdempotencyKey::fresh(),
                 ToolName::try_from("return-boundary-probe").unwrap(),
@@ -533,7 +533,7 @@ async fn tool_return_stops_guest_tails_and_reconstructs_incomplete_imports(
             metadata.tools,
         )),
     );
-    let agent = agent_id!("ToolStreamingCaller", "return-cutoff");
+    let agent = agent_key!("ToolStreamingCaller", "return-cutoff");
     let worker = executor
         .start_agent(&caller_component.id, agent.clone())
         .await?;
@@ -712,11 +712,11 @@ async fn output_producer_can_await_tools_live_and_after_reconstruction(
             metadata.tools,
         )),
     );
-    let collector = agent_id!("ToolStreamingCaller", "output-tool-collector");
+    let collector = agent_key!("ToolStreamingCaller", "output-tool-collector");
     let mut targets = Vec::new();
     for capable in [false, true] {
         let name = format!("output-tool-{capable}");
-        let agent = agent_id!("ToolStreamingCaller", name.clone());
+        let agent = agent_key!("ToolStreamingCaller", name.clone());
         let worker = executor
             .start_agent(&caller_component.id, agent.clone())
             .await?;
@@ -759,7 +759,9 @@ async fn output_producer_can_await_tools_live_and_after_reconstruction(
                 .await
                 .map_err(|_| anyhow::anyhow!("producer did not publish its first tool result"))??;
                 executor.simulated_crash(&worker).await?;
-                executor.complete_promise(&gate, Vec::new()).await?;
+                executor
+                    .complete_promise(&executor.context.default_environment_id, &gate, Vec::new())
+                    .await?;
             }
             Ok::<_, anyhow::Error>(())
         };
@@ -846,7 +848,7 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
         .store()
         .await?;
     for mode in ["trap", "deadline", "complete"] {
-        let agent = agent_id!("ToolStreamingCaller", format!("producer-{mode}"));
+        let agent = agent_key!("ToolStreamingCaller", format!("producer-{mode}"));
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
         let gate = executor
             .invoke_and_await_agent(&component, &agent, "native_veto_gate", data_value!())
@@ -858,7 +860,7 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
         let key = IdempotencyKey::fresh();
         let request = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(worker.clone().into()),
+                target: Some(crate::agent::id_target(&worker)),
                 method_name: Some("produce_terminal".to_string()),
                 input: Some(input.try_into().map_err(anyhow::Error::msg)?),
                 idempotency_key: Some(key.clone().into()),
@@ -914,7 +916,13 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
                     items.push(value);
                     if items.len() == 1 {
                         assert_eq!(items[0], "before-terminal");
-                        executor.complete_promise(&gate, Vec::new()).await?;
+                        executor
+                            .complete_promise(
+                                &executor.context.default_environment_id,
+                                &gate,
+                                Vec::new(),
+                            )
+                            .await?;
                     }
                 }
                 Some(invocation_response::Response::StreamEnd(end)) => {
@@ -1040,7 +1048,7 @@ async fn yielding_guest_receives_tool_result_only_at_a_blocked_wait(
             metadata.tools,
         )),
     );
-    let agent = agent_id!("ToolStreamingCaller", "yielding-tool-result");
+    let agent = agent_key!("ToolStreamingCaller", "yielding-tool-result");
     let worker_id = executor
         .start_agent(&caller_component.id, agent.clone())
         .await?;
@@ -1058,7 +1066,7 @@ async fn yielding_guest_receives_tool_result_only_at_a_blocked_wait(
         !observed_while_yielding,
         "the tool result reached a guest that only yielded"
     );
-    let recorded = executor.stored_oplog(&worker_id).await;
+    let recorded = executor.stored_oplog(&worker_id.agent_id).await;
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
@@ -1070,7 +1078,7 @@ async fn yielding_guest_receives_tool_result_only_at_a_blocked_wait(
     .map_err(|_| anyhow::anyhow!("the rebuild did not replay the tool result"))??
     .into_typed()?;
     assert_eq!(replayed, "replayed");
-    let rebuilt = executor.stored_oplog(&worker_id).await;
+    let rebuilt = executor.stored_oplog(&worker_id.agent_id).await;
     assert_eq!(
         &rebuilt[..recorded.len()],
         &recorded[..],

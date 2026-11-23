@@ -12,7 +12,7 @@ final class ExportsRouterImpl extends ExportsRouter:
     (request.method, request.path) match //@
       case ("GET", Csv(chat, id)) =>
         // that user's agent builds the CSV now and streams it:
-        AnalystAgentClient.get(chat).exportCsv(id).map: csv => //@
+        AnalystAgentClient.upsert(chat).exportCsv(id).map: csv => //@
           HttpResponse(UShort(200), List(
             HttpHeader.ascii("content-type", "text/csv"), //@
             // the browser saves it as a download:

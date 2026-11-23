@@ -20,8 +20,8 @@ use crate::Tracing;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, InvocationId, OwnedAgentId};
-use golem_common::{agent_id, data_value};
+use golem_common::model::{AgentStatus, IdempotencyKey, InvocationId, OwnedAgentId};
+use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::DurableWorkerCtxView;
@@ -280,7 +280,7 @@ fn assert_settled_history(entries: &[PublicOplogEntryWithIndex], expected: &[Inv
 /// bytes, and returns their total.
 async fn wait_for_memory_growth(
     executor: &TestWorkerExecutor,
-    agent_id: &AgentId,
+    agent_id: &OwnedAgentId,
     at_least: u64,
 ) -> anyhow::Result<u64> {
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -298,7 +298,7 @@ async fn wait_for_memory_growth(
 
 async fn settled_memory_history(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     worker: &Arc<Worker<TestWorkerCtx>>,
     expected_bytes: u64,
     expected_growth: Option<u64>,
@@ -342,7 +342,7 @@ async fn gc_heap_growth_is_counted_and_hinted(
         .component_dep(&context.default_environment_id, gc_heap)
         .store()
         .await?;
-    let agent = agent_id!("GcHeapAgent", "counted");
+    let agent = agent_key!("GcHeapAgent", "counted");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
 
     let retained = executor
@@ -379,7 +379,7 @@ async fn gc_allocation_past_the_memory_limit_fails_like_linear_memory(
         .component_dep(&context.default_environment_id, gc_heap)
         .store()
         .await?;
-    let agent = agent_id!("GcHeapAgent", "over-limit");
+    let agent = agent_key!("GcHeapAgent", "over-limit");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
 
     let retained = executor
@@ -419,7 +419,7 @@ async fn gc_collection_reuses_released_memory_at_the_agent_limit(
         .component_dep(&context.default_environment_id, gc_heap)
         .store()
         .await?;
-    let agent = agent_id!("GcHeapAgent", "released-memory");
+    let agent = agent_key!("GcHeapAgent", "released-memory");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     for _ in 0..200 {
         let retained = executor
@@ -456,8 +456,8 @@ async fn reload_after_restart_reserves_gc_heap_growth_without_double_counting(
         .component_dep(&context.default_environment_id, gc_heap)
         .store()
         .await?;
-    let control = agent_id!("GcHeapAgent", "reload-control");
-    let grown = agent_id!("GcHeapAgent", "reload-grown");
+    let control = agent_key!("GcHeapAgent", "reload-control");
+    let grown = agent_key!("GcHeapAgent", "reload-grown");
     let control_id = executor.start_agent(&component.id, control.clone()).await?;
     let grown_id = executor.start_agent(&component.id, grown.clone()).await?;
 
@@ -486,16 +486,16 @@ async fn reload_after_restart_reserves_gc_heap_growth_without_double_counting(
     let mut control_keys = vec![
         constructor_key(&control_entries),
         executor
-            .external_invocation_key(&control_id, &control_read, "retained_kib")
+            .external_invocation_key(&control_id.agent_id, &control_read, "retained_kib")
             .await?,
     ];
     let mut grown_keys = vec![
         constructor_key(&grown_entries),
         executor
-            .external_invocation_key(&grown_id, &grown_read, "retained_kib")
+            .external_invocation_key(&grown_id.agent_id, &grown_read, "retained_kib")
             .await?,
         executor
-            .external_invocation_key(&grown_id, &retain_key, "retain")
+            .external_invocation_key(&grown_id.agent_id, &retain_key, "retain")
             .await?,
     ];
     assert_settled_history(&control_entries, &control_keys);
@@ -516,7 +516,7 @@ async fn reload_after_restart_reserves_gc_heap_growth_without_double_counting(
         assert_eq!(retained.into_typed::<u32>()?, expected);
         keys.push(
             executor
-                .external_invocation_key(worker_id, &key, "retained_kib")
+                .external_invocation_key(&worker_id.agent_id, &key, "retained_kib")
                 .await?,
         );
         let entries = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
@@ -556,7 +556,7 @@ async fn reload_after_restart_reserves_gc_heap_growth_without_double_counting(
     assert_eq!(retained.into_typed::<u32>()?, 36 * 1024);
     grown_keys.push(
         executor
-            .external_invocation_key(&grown_id, &fresh_key, "retain")
+            .external_invocation_key(&grown_id.agent_id, &fresh_key, "retain")
             .await?,
     );
     let entries = executor.get_oplog(&grown_id, OplogIndex::INITIAL).await?;
@@ -580,7 +580,7 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
         .component_dep(&context.default_environment_id, gc_heap)
         .store()
         .await?;
-    let agent = agent_id!("GcHeapAgent", "reconciled");
+    let agent = agent_key!("GcHeapAgent", "reconciled");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
     let retain_key = IdempotencyKey::fresh();
     executor
@@ -597,7 +597,7 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
     let mut expected_keys = vec![
         constructor_key(&entries),
         executor
-            .external_invocation_key(&worker_id, &retain_key, "retain")
+            .external_invocation_key(&worker_id.agent_id, &retain_key, "retain")
             .await?,
     ];
     assert_settled_history(&entries, &expected_keys);
@@ -605,9 +605,8 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
     // Commit explicit saved requirements through the production status owner. This varies
     // only the prepaid baseline, not the actual collector allocation.
     for saved in [8 * MIB, 256 * MIB] {
-        let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
         executor
-            .production_active_agent(&owner_id)
+            .production_active_agent(&worker_id)
             .await
             .unwrap()
             .primary()
@@ -628,7 +627,7 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
         assert_eq!(retained.into_typed::<u32>()?, 32 * 1024);
         expected_keys.push(
             executor
-                .external_invocation_key(&worker_id, &read_key, "retained_kib")
+                .external_invocation_key(&worker_id.agent_id, &read_key, "retained_kib")
                 .await?,
         );
         let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -662,7 +661,7 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
     assert_eq!(retained.into_typed::<u32>()?, 96 * 1024);
     expected_keys.push(
         executor
-            .external_invocation_key(&worker_id, &fresh_key, "retain")
+            .external_invocation_key(&worker_id.agent_id, &fresh_key, "retain")
             .await?,
     );
     let growth_after =
@@ -691,7 +690,7 @@ async fn restart_reconciles_both_sides_of_a_saved_memory_baseline(
     assert_eq!(retained.into_typed::<u32>()?, 96 * 1024);
     expected_keys.push(
         executor
-            .external_invocation_key(&worker_id, &read_key, "retained_kib")
+            .external_invocation_key(&worker_id.agent_id, &read_key, "retained_kib")
             .await?,
     );
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -714,7 +713,7 @@ async fn exceptions_are_caught_in_the_guest_and_escaping_exceptions_fail_the_inv
         .component_dep(&context.default_environment_id, gc_heap)
         .store()
         .await?;
-    let agent = agent_id!("GcHeapAgent", "exceptions");
+    let agent = agent_key!("GcHeapAgent", "exceptions");
     let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
 
     let caught = executor
@@ -751,11 +750,11 @@ async fn reconstruction_reconciles_real_gc_capacity_in_both_directions(
         .component_dep(&context.default_environment_id, gc_heap)
         .store()
         .await?;
-    let agent = agent_id!("GcHeapAgent", "real-capacity-reconstruction");
-    let worker_id = AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?;
+    let agent = agent_key!("GcHeapAgent", "real-capacity-reconstruction");
+    let worker_id = crate::agent::keyed_agent_id(component.environment_id, &agent);
     let (initial_tx, initial_rx) = tokio::sync::oneshot::channel();
     executor.probe_next_instance_preparation(
-        &worker_id,
+        &worker_id.agent_id,
         |_| Box::pin(async { Ok(()) }),
         move |store| {
             Box::pin(async move {
@@ -796,9 +795,9 @@ async fn reconstruction_reconciles_real_gc_capacity_in_both_directions(
         let (preallocated_tx, preallocated_rx) = tokio::sync::oneshot::channel();
         let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
         let observer = executor.clone();
-        let observed_id = worker_id.clone();
+        let observed_id = worker_id.agent_id;
         executor.probe_next_instance_preparation(
-            &worker_id,
+            &worker_id.agent_id,
             move |store| {
                 Box::pin(async move {
                     let before = store.gc_heap_capacity() as u64;
@@ -923,9 +922,9 @@ async fn initializer_replay_cutover_counts_each_allocation_once(
         .component_dep(&context.default_environment_id, gc_initializer)
         .store()
         .await?;
-    let agent = agent_id!("GcHeapAgent", "initializer-cutover");
-    let worker_id = AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?;
-    let mut gate = executor.gate_next_call_end(&worker_id, true).await;
+    let agent = agent_key!("GcHeapAgent", "initializer-cutover");
+    let worker_id = crate::agent::keyed_agent_id(component.environment_id, &agent);
+    let mut gate = executor.gate_next_call_end(&worker_id.agent_id, true).await;
     let starter = executor.clone();
     let component_id = component.id;
     let starting_agent = agent.clone();
@@ -940,7 +939,7 @@ async fn initializer_replay_cutover_counts_each_allocation_once(
         {
             break (entries, index);
         }
-        let next = executor.gate_next_call_end(&worker_id, true).await;
+        let next = executor.gate_next_call_end(&worker_id.agent_id, true).await;
         drop(gate);
         gate = next;
     };
@@ -967,7 +966,7 @@ async fn initializer_replay_cutover_counts_each_allocation_once(
     let executor = start_executor(deps, &context).await?;
     let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
     executor.probe_next_instance_preparation(
-        &worker_id,
+        &worker_id.agent_id,
         |_| Box::pin(async { Ok(()) }),
         move |store| {
             Box::pin(async move {
@@ -1051,7 +1050,7 @@ async fn initializer_replay_cutover_counts_each_allocation_once(
     let mut expected = vec![
         constructor_key(&entries),
         executor
-            .external_invocation_key(&worker_id, &read_key, "retained_kib")
+            .external_invocation_key(&worker_id.agent_id, &read_key, "retained_kib")
             .await?,
     ];
     assert_settled_history(&entries, &expected);
@@ -1068,7 +1067,7 @@ async fn initializer_replay_cutover_counts_each_allocation_once(
     assert_eq!(retained.into_typed::<u32>()?, 41 * 1024);
     expected.push(
         executor
-            .external_invocation_key(&worker_id, &key, "retained_kib")
+            .external_invocation_key(&worker_id.agent_id, &key, "retained_kib")
             .await?,
     );
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -1091,11 +1090,11 @@ async fn real_host_gc_growth_uses_the_durable_limiter_hint_path(
         .component_dep(&context.default_environment_id, gc_heap)
         .store()
         .await?;
-    let agent = agent_id!("GcHeapAgent", "real-host-gc-hint");
-    let worker_id = AgentId::from_agent_id(component.id, &agent).map_err(anyhow::Error::msg)?;
+    let agent = agent_key!("GcHeapAgent", "real-host-gc-hint");
+    let worker_id = crate::agent::keyed_agent_id(component.environment_id, &agent);
     let (initial_tx, initial_rx) = tokio::sync::oneshot::channel();
     executor.probe_next_instance_preparation(
-        &worker_id,
+        &worker_id.agent_id,
         |_| Box::pin(async { Ok(()) }),
         move |store| {
             Box::pin(async move {
@@ -1125,10 +1124,10 @@ async fn real_host_gc_growth_uses_the_durable_limiter_hint_path(
 
     let executor = start_executor(deps, &context).await?;
     let observer = executor.clone();
-    let observed_id = worker_id.clone();
+    let observed_id = worker_id.agent_id;
     let (observed_tx, observed_rx) = tokio::sync::oneshot::channel();
     executor.probe_next_instance_preparation(
-        &worker_id,
+        &worker_id.agent_id,
         |_| Box::pin(async { Ok(()) }),
         move |store| {
             Box::pin(async move {

@@ -1,17 +1,77 @@
-# Read-only Effect methods
+# Marking Agent Methods as Read-Only (Effect)
 
-Set `readOnly` on a `method`; handlers must remain ordinary Effects and must not mutate state or perform writes.
+## Overview
 
-```ts
-value: method({ input: {}, success: Schema.Number, readOnly: true })
-cached: method({
-  input: {},
-  success: Schema.String,
-  readOnly: { cache: { ttlNanos: 5_000_000_000n } },
-})
+A **read-only** agent method is one you promise is a **pure read** of the agent's already-loaded state: it must not mutate anything and its result must depend only on its inputs and the current state. Golem enforces the most important part of this contract — **writes through durable host APIs (key-value/blob storage, databases, promises, agent management), outgoing HTTP, and RPC calls to other agents trap** at runtime with a typed `ReadOnlyViolation` agent error before they run — but it does **not** detect every source of impurity (in-memory mutation, clocks, randomness, env reads, remote/blob reads, file writes), so keeping the method pure is the author's responsibility (see [What Works in a Read-Only Method](#what-works-in-a-read-only-method)).
+
+Marking a method read-only lets the host bypass the invocation queue and agent loading on a cache hit, and emit HTTP cache headers (`Cache-Control`, `ETag`, `Vary`) for `GET`/`HEAD` routes.
+
+Mark a method read-only by setting `readOnly: true` (or a cache policy object) on the `method(...)` spec.
+
+## Usage
+
+```typescript
+import { Effect, Ref, Schema } from "effect";
+import { defineAgent, method, Principal } from "@golemcloud/effect-golem";
+
+export const CounterAgent = defineAgent({
+  name: "CounterAgent",
+  mode: "durable",
+  id: { name: Schema.String },
+  methods: {
+    // Non-read-only: mutates state held in Ref
+    increment: method({ input: {}, success: Schema.Number }),
+    // Read-only: pure read over already-loaded state (until-write cache default)
+    getCount: method({ input: {}, success: Schema.Number, readOnly: true }),
+    // Cache options: TTL expiration or never cached ({ cache: "no-cache" })
+    recent: method({
+      input: {},
+      success: Schema.Number,
+      readOnly: { cache: { ttlNanos: 30_000_000_000n } },
+    }),
+    // Principal-aware: cached per caller (derived from PrincipalSchema input)
+    myCount: method({
+      input: { caller: Principal.PrincipalSchema },
+      success: Schema.Number,
+      readOnly: true,
+    }),
+  },
+}).implement({
+  init: () => Ref.make(0),
+  methods: (count) => ({
+    increment: () => Ref.updateAndGet(count, (value) => value + 1),
+    getCount: () => Ref.get(count),
+    recent: () => Ref.get(count),
+    myCount: () => Ref.get(count),
+  }),
+});
 ```
 
-Whether a read-only result is cached per principal is derived from its input: declare a
-`PrincipalSchema` parameter when the response depends on the caller. A read-only handler without
-that declared parameter cannot access the ambient `Principal` service. Do not mark a method
-read-only merely because its return type is immutable.
+> **Cache policy & per-principal caching.** `readOnly: true` uses the `until-write` policy (cached until the next mutating invocation on the agent). For finer control, pass an object: `readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> } }` (`no-cache` never caches but enforces side-effect-free rules; `{ ttlNanos }` caches for that duration). Declaring a `Principal.PrincipalSchema` input automatically keys the cache per caller principal (`Cache-Control: private`). A read-only handler without that declared input **cannot access the ambient `Principal` service** (see [`golem-add-http-auth-effect`](/next/how-to-guides/effect/golem-add-http-auth-effect)). Reach for a regular (non-read-only) method whenever you need a side effect.
+
+## What Works in a Read-Only Method
+
+A read-only method must be a **pure function of the agent's already-loaded state and the method inputs**. Operations in the middle column go through Golem's durability layer and **trap** with a typed `ReadOnlyViolation` *before* they run and before anything is persisted. Operations in the right column are **not** detected — they do not trap, so keeping them out is your responsibility.
+
+| Allowed | Not allowed — traps with `ReadOnlyViolation` | Not allowed — not checked, your responsibility |
+|---|---|---|
+| Reading agent state (`Ref.get(ref)`) | Writing persistent state (storage, databases, promises, agent management) | Mutating in-memory state (`Ref.set`, `Ref.update`, property assignment) |
+| Computation over inputs | Outgoing HTTP (`fetch`, `HttpClient`) | Reading the clock / current time (`Date.now()`, `Clock.currentTimeMillis`) |
+| Returning derived / aggregated values | RPC calls to other agents | Randomness (`Math.random()`, `Random`) |
+| | | Reading environment variables (`process.env`, `ConfigProvider`) |
+| | | Remote / blob reads or file writes |
+
+## Common Pitfalls
+
+- **Mutating state in a `Ref` does NOT trap.** Calling `Ref.set` or `Ref.update` inside a read-only handler is a plain in-memory write, not a host call. It does **not** trap, but it silently corrupts agent state and invalidates caching assumptions. Handlers for read-only methods must only call `Ref.get`.
+- **Clocks, randomness, and env reads do NOT trap.** Using `Date.now()`, `Clock.currentTimeMillis`, `Math.random()`, or `process.env` does not trap, but introduces non-determinism that poisons cached results. If you need them, use a regular (non-read-only) method instead.
+- **Writes to persistent state, outgoing HTTP, and RPC do trap.** Those go through the durability layer and raise `ReadOnlyViolation` before running.
+- **Read-only and ephemeral agents are mutually exclusive.** Ephemeral agents (`mode: "ephemeral"`) get a fresh instance per invocation and have no shared state to read from; the host rejects `readOnly` methods on ephemeral agents at registration (see [`golem-stateless-agent-effect`](/next/how-to-guides/effect/golem-stateless-agent-effect)).
+- **Cannot access ambient `Principal` without `PrincipalSchema` input.** If a read-only handler needs caller identity, it must declare `Principal.PrincipalSchema` in its `input`.
+- **`cache: "no-cache"` does not relax the contract.** It only disables caching of the result; host writes, HTTP, and RPC still trap, and the same purity rules apply.
+
+## Key Points
+
+- `readOnly` is per-method; an agent can mix read-only query methods and mutating methods freely.
+- Read-only methods are the natural fit for HTTP `GET`/`HEAD` endpoints (load [`golem-add-http-endpoint-effect`](/next/how-to-guides/effect/golem-add-http-endpoint-effect)).
+- A read-only method cannot call another agent via RPC; do read-only RPC fan-out from a regular method instead (see [`golem-call-another-agent-effect`](/next/how-to-guides/effect/golem-call-another-agent-effect)).

@@ -16,7 +16,8 @@ use crate::base_model::caller::test_support::{
     every_principal, original_claims_json, sample_caller, user_principal,
 };
 use crate::base_model::caller::{
-    Caller, ClaimVisibility, Claims, Pair, Principal, PublicCaller, UserPrincipal,
+    Caller, ClaimVisibility, Claims, Pair, Principal, PublicCaller, PublicClaims, PublicPrincipal,
+    PublicUserPrincipal, UserPrincipal,
 };
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::card::{
@@ -58,11 +59,12 @@ use crate::model::oplog::{
     PublicSpanLink, PublicSpanOutcome, PublicSpanStarted, PublicToolInvocationOperation,
     PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent, RawSnapshotData,
     SaveSnapshotParameters, SnapshotBasedUpdateParameters, StringAttributeValue, UpdateDescription,
+    UpdateFailureClass,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, AgentId, AgentInvocationPayload, ComponentId, IdempotencyKey, OplogIndex, Timestamp,
-    TransactionId,
+    AccountId, AgentId, AgentInvocationPayload, ComponentId, IdempotencyKey, OplogIndex,
+    StoredAgentInvocationPayload, Timestamp, TransactionId,
 };
 use crate::schema::IntoTypedSchemaValue;
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
@@ -842,12 +844,8 @@ fn create_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::Create(CreateParams {
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         timestamp: Timestamp::now_utc().rounded(),
-        agent_id: AgentId {
-            component_id: ComponentId(
-                Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
-            ),
-            agent_id: "test1".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 1),
+        agent_type_name: Some(crate::model::agent::AgentTypeName("Counter".to_string())),
         agent_mode: crate::base_model::agent::AgentMode::Durable,
         component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![("x".to_string(), "y".to_string())]
@@ -859,12 +857,7 @@ fn create_serialization_poem_serde_equivalence() {
             value: 1i32.into_typed_schema_value().unwrap(),
         }],
         environment_id: EnvironmentId::new(),
-        parent: Some(AgentId {
-            component_id: ComponentId(
-                Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
-            ),
-            agent_id: "test2".to_string(),
-        }),
+        parent: Some(AgentId::from_parts(7, 2)),
         component_size: 100_000_000,
         initial_total_linear_memory_size: 200_000_000,
         initial_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
@@ -874,8 +867,8 @@ fn create_serialization_poem_serde_equivalence() {
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),
         }]),
-        original_phantom_id: None,
         instance_id: Uuid::new_v4(),
+        never_live: true,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -911,6 +904,7 @@ fn create_serialization_poem_serde_equivalence() {
         assert!(super::OplogEnrichmentEntry::try_from(proto).is_err());
     }
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto.clone()).unwrap(), entry);
     let projected = super::OplogEnrichmentEntry::try_from(proto).unwrap();
     assert_eq!(
         projected,
@@ -929,6 +923,7 @@ fn create_serialization_poem_serde_equivalence() {
     assert_eq!(timestamp, supplied.timestamp);
     assert_eq!(parameters.agent_id, supplied.agent_id);
     assert_eq!(parameters.instance_id, supplied.instance_id);
+    assert!(parameters.never_live);
     assert_eq!(parameters.component_revision, supplied.component_revision);
     assert_eq!(
         parameters.local_agent_config[0].path,
@@ -960,11 +955,11 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
             )]))
             .build(),
     );
-    let creator = sample_caller();
+    let creator = crate::base_model::caller::test_support::sample_caller();
     let mut requests = [
         CreateRequestKind::GetOrCreate,
         CreateRequestKind::Exclusive,
-        CreateRequestKind::Phantom,
+        CreateRequestKind::Unkeyed,
         CreateRequestKind::Fork,
     ]
     .into_iter()
@@ -990,7 +985,14 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
     );
 
     for agent_type_name in [None, Some(AgentTypeName("StoredType".to_string()))] {
-        for canonical_key in [None, Some("StructuralType(\"parameter\")".to_string())] {
+        for (canonical_key, constructor_parameters) in [
+            (None, None),
+            (None, Some("\"parameter\"".to_string())),
+            (
+                Some("StructuralType(\"parameter\")".to_string()),
+                Some("\"parameter\"".to_string()),
+            ),
+        ] {
             let component_id = ComponentId::new();
             let entry = OplogEntry::Create {
                 timestamp: Timestamp::now_utc().rounded(),
@@ -998,10 +1000,8 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                     component_id,
                     agent_type_name: agent_type_name.clone(),
                     canonical_key,
-                    agent_id: AgentId {
-                        component_id: ComponentId::new(),
-                        agent_id: "DifferentType(42)".to_string(),
-                    },
+                    constructor_parameters,
+                    agent_id: AgentId::from_parts(7, 4),
                     owner_kind: OwnerKind::ComponentAgent,
                     agent_mode: AgentMode::Durable,
                     component_revision: ComponentRevision::new(7).unwrap(),
@@ -1013,9 +1013,9 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                     initial_total_linear_memory_size: 29,
                     initial_active_plugins: Default::default(),
                     local_agent_config: vec![],
-                    original_phantom_id: None,
                     instance_id: Uuid::new_v4(),
                     create_request: requests.next().unwrap(),
+                    never_live: agent_type_name.is_some(),
                 }),
             };
             let bytes = crate::serialization::serialize(&entry).unwrap();
@@ -1026,6 +1026,12 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
             let mut proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
                 entry.clone().try_into().unwrap();
             assert_eq!(OplogEntry::try_from(proto.clone()).unwrap(), entry);
+            let OplogEnrichmentEntry::CreateProjection { parameters, .. } =
+                OplogEnrichmentEntry::from(entry.clone())
+            else {
+                unreachable!()
+            };
+            assert_eq!(parameters.never_live, agent_type_name.is_some());
             for owner_kind in [
                 OwnerKind::ComponentAgent,
                 OwnerKind::EphemeralExternalTool,
@@ -1469,10 +1475,7 @@ fn matcher_matches_secret_revealed_response_payload() {
         },
         result: Ok(()),
         audit: SecretRevealAudit {
-            calling_agent: AgentId {
-                component_id: ComponentId(Uuid::nil()),
-                agent_id: "agent-1".to_string(),
-            },
+            calling_agent: AgentId::from_parts(7, 5),
             config_key: Some(vec!["db".to_string(), "password".to_string()]),
             timestamp: SerializableDateTime {
                 seconds: 1_700_000_001,
@@ -1578,16 +1581,19 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
         };
         invocation.caller = caller;
 
+        // The poem form goes through `serde_json::Value`, which writes the claims again. The
+        // forms are equal as JSON values, but not as text.
+        let as_value = |entry: &PublicOplogEntry| serde_json::to_value(entry).unwrap();
         let poem_json = entry.to_json_string();
         let from_poem: PublicOplogEntry = serde_json::from_str(&poem_json).unwrap();
-        assert_eq!(entry, from_poem);
+        assert_eq!(as_value(&entry), as_value(&from_poem));
 
         let serde_json = serde_json::to_string(&entry).unwrap();
         let from_serde = <PublicOplogEntry as poem_openapi::types::ParseFromJSON>::parse_from_json(
             Some(serde_json::from_str(&serde_json).unwrap()),
         )
         .unwrap();
-        assert_eq!(entry, from_serde);
+        assert_eq!(as_value(&entry), as_value(&from_serde));
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&poem_json).unwrap(),
             serde_json::from_str::<serde_json::Value>(&serde_json).unwrap()
@@ -1899,7 +1905,7 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
             mime_type: "application/octet-stream".to_string(),
             filesystem_snapshot: None,
         }),
-        requester: PublicCaller::new(&sample_caller(), ClaimVisibility::Shown),
+        requester: public_sample_caller(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1984,6 +1990,11 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
             source_revision_start_index: OplogIndex::INITIAL,
             snapshot_index: OplogIndex::from_u64(3),
         }),
+        failure_class: UpdateFailureClass::Divergence,
+        divergence: crate::model::oplog::protobuf::tests::replay_divergence_tests::divergences()
+            .into_iter()
+            .next()
+            .map(Box::new),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -2000,10 +2011,36 @@ fn failed_update_serialization_poem_serde_equivalence_2() {
         details: None,
         update_attempt_index: None,
         snapshot_assisted_details: None,
+        failure_class: UpdateFailureClass::Other,
+        divergence: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn failed_update_redacts_the_capabilities_in_the_divergence_requests() {
+    use crate::base_model::oplog::replay_divergence_test_values::{
+        assert_requests_redacted, divergence_with_nested_capabilities,
+    };
+
+    let mut entry = PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        target_revision: ComponentRevision::new(1).unwrap(),
+        details: None,
+        update_attempt_index: Some(OplogIndex::from_u64(7)),
+        snapshot_assisted_details: None,
+        failure_class: UpdateFailureClass::Divergence,
+        divergence: Some(Box::new(divergence_with_nested_capabilities())),
+    });
+
+    entry.redact_host_managed_values_for_external();
+
+    let PublicOplogEntry::FailedUpdate(params) = entry else {
+        unreachable!()
+    };
+    assert_requests_redacted(params.divergence.as_ref().unwrap());
 }
 
 #[test]
@@ -2086,9 +2123,10 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
             timestamp: Timestamp::from(1_000),
             not_before,
             invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543213).into(),
+            operation: Box::new(crate::model::InvocationRequestOperation::SaveSnapshot),
             payload: OplogPayload::SerializedInline {
                 bytes: crate::serialization::serialize(
-                    &crate::model::AgentInvocationPayload::SaveSnapshot {
+                    &crate::model::StoredAgentInvocationPayload::SaveSnapshot {
                         caller: Caller::anonymous(),
                     },
                 )
@@ -2130,6 +2168,97 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
         let decoded: PublicOplogEntry = serde_json::from_str(&public.to_json_string()).unwrap();
         assert_eq!(public, decoded);
     }
+}
+
+#[test]
+fn request_entries_keep_their_operation_outside_the_payload() {
+    use crate::model::InvocationRequestOperation as Op;
+    use crate::model::oplog::RawSnapshotData;
+
+    let caller = Caller::anonymous();
+    let payloads = vec![
+        AgentInvocationPayload::ManualUpdate {
+            target_revision: ComponentRevision::new(7).unwrap(),
+            requester: caller.clone(),
+        },
+        AgentInvocationPayload::AgentInitialization {
+            input: SchemaValue::Record { fields: vec![] },
+            caller: caller.clone(),
+        },
+        AgentInvocationPayload::AgentMethod {
+            method_name: "a-removed-method".to_string(),
+            input: SchemaValue::Record { fields: vec![] },
+            caller: caller.clone(),
+            scope_card: None,
+        },
+        AgentInvocationPayload::LoadSnapshot {
+            snapshot: RawSnapshotData {
+                data: vec![1, 2, 3],
+                mime_type: "application/octet-stream".to_string(),
+            },
+            caller: caller.clone(),
+        },
+        AgentInvocationPayload::SaveSnapshot {
+            caller: caller.clone(),
+        },
+    ];
+    let operations = payloads
+        .iter()
+        .map(AgentInvocationPayload::request_operation)
+        .collect::<Vec<_>>();
+    for (payload, operation) in payloads.into_iter().zip(&operations) {
+        let (split, stored) = payload.clone().into_stored();
+        assert_eq!(&split, operation);
+        let other = operations.iter().find(|other| *other != operation).unwrap();
+        assert!(stored.clone().with_operation(other.clone()).is_err());
+
+        let bytes = crate::serialization::serialize(&stored).unwrap();
+        let pending = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            not_before: None,
+            invocation_id: Uuid::from_u128(0x11).into(),
+            operation: Box::new(split.clone()),
+            payload: OplogPayload::SerializedInline {
+                bytes: bytes.clone(),
+                cached: None,
+            },
+            trace_id: TraceId::generate(),
+            trace_states: vec![],
+            invocation_context: vec![],
+        };
+        let decoded: OplogEntry =
+            crate::serialization::deserialize(&crate::serialization::serialize(&pending).unwrap())
+                .unwrap();
+        assert_eq!(decoded, pending);
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            pending.clone().try_into().unwrap();
+        let decoded = OplogEntry::try_from(proto).unwrap();
+        assert_eq!(decoded, pending);
+        let OplogEntry::PendingAgentInvocation {
+            operation,
+            payload: OplogPayload::SerializedInline { bytes, .. },
+            ..
+        } = decoded
+        else {
+            panic!("expected an inline pending invocation");
+        };
+        let stored: StoredAgentInvocationPayload =
+            crate::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(stored.with_operation(*operation).unwrap(), payload);
+    }
+
+    let tool = Op::ExternalTool {
+        tool_name: crate::model::tool::ToolName::try_from("weather").unwrap(),
+        command_path: vec!["forecast".to_string(), "daily".to_string()],
+    };
+    let proto =
+        golem_api_grpc::proto::golem::worker::RawInvocationRequestOperation::from(tool.clone());
+    assert_eq!(Op::try_from(proto).unwrap(), tool);
+    assert_eq!(
+        crate::serialization::deserialize::<Op>(&crate::serialization::serialize(&tool).unwrap())
+            .unwrap(),
+        tool
+    );
 }
 
 #[test]
@@ -2886,8 +3015,10 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
     let raw_entry = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc().rounded(),
         invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543216).into(),
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+        operation: Box::new(crate::model::InvocationRequestOperation::AgentMethod {
             method_name: "test".to_string(),
+        }),
+        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
             input: SchemaValue::Record { fields: Vec::new() },
             caller: caller.clone(),
             scope_card: None,
@@ -2907,23 +3038,28 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
     match OplogEntry::try_from(raw_proto.clone()).unwrap() {
         OplogEntry::AgentInvocationStarted {
             wallet_pin,
+            operation,
             payload,
             ..
         } => {
             let payload = match payload {
                 OplogPayload::Inline(payload) => *payload,
                 OplogPayload::SerializedInline { bytes, .. } => {
-                    crate::serialization::deserialize::<AgentInvocationPayload>(&bytes).unwrap()
+                    crate::serialization::deserialize::<StoredAgentInvocationPayload>(&bytes)
+                        .unwrap()
                 }
                 other => panic!("expected an inline payload, got {other:?}"),
             };
             let AgentInvocationPayload::AgentMethod {
-                caller: decoded, ..
-            } = payload
+                method_name,
+                caller: decoded,
+                ..
+            } = payload.with_operation(*operation).unwrap()
             else {
                 panic!("expected a method payload");
             };
             assert_eq!(decoded, caller);
+            assert_eq!(method_name, "test");
             assert_eq!(
                 original_claims_json(&decoded),
                 original_claims_json(&caller)
@@ -3050,10 +3186,8 @@ fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
         account_id: Uuid::new_v4(),
     });
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "phase-five-target".to_string(),
-        },
+        environment_id: crate::model::environment::EnvironmentId(Uuid::from_u128(1)),
+        agent_id: AgentId::from_parts(7, 6),
     });
     let application_holder = CardHolder::Application(ApplicationCardHolder {
         application_id: Uuid::new_v4(),
@@ -3160,10 +3294,8 @@ fn phase_five_public_card_oplog_entries_protobuf_roundtrip() {
     let installed_card_id = CardId::new();
     let transfer_id = Uuid::new_v4();
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "phase-five-public-target".to_string(),
-        },
+        environment_id: crate::model::environment::EnvironmentId(Uuid::from_u128(1)),
+        agent_id: AgentId::from_parts(7, 7),
     });
     let timestamp = Timestamp::now_utc().rounded();
     let entries = vec![
@@ -3896,17 +4028,25 @@ fn public_invocation_caller_round_trips_protobuf() {
     assert!(PublicAgentInvocation::try_from(without_caller).is_err());
 }
 
-/// A claim set may hold a number that no `f64` holds. The executor sends the shown claims of such
-/// a user to the worker service, and the entry must decode there.
-#[test]
-fn public_entry_with_claims_beyond_f64_decodes_from_protobuf() {
-    let user = Principal::User(UserPrincipal {
-        pair: Pair::new("https://idp.example/", "user-1"),
-        claims: Claims::from_json(r#"{"sub":"user-1","n":1e400}"#.to_string()).unwrap(),
-        authenticated_at: Timestamp::from(1_000),
-    });
-    let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
-    let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+/// The claim sets that a `serde_json::Value` cannot keep: a number beyond `f64`, a nesting depth
+/// beyond the limit of 128, and an integer that an `f64` rounds.
+fn claim_sets_beyond_serde_json_value() -> Vec<String> {
+    vec![
+        r#"{"sub":"bob","n":1e400}"#.to_string(),
+        format!(
+            r#"{{"sub":"bob","deep":{}1{}}}"#,
+            "[".repeat(130),
+            "]".repeat(130)
+        ),
+        r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
+        r#"{"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123}"#
+            .to_string(),
+        r#"{"zeta":1,"alpha":2,"sub":"bob"}"#.to_string(),
+    ]
+}
+
+fn started_entry_with_caller(caller: PublicCaller) -> PublicOplogEntry {
+    PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::from(2_000),
         invocation: public_invocations_with_caller(caller)
             .into_iter()
@@ -3919,13 +4059,110 @@ fn public_entry_with_claims_beyond_f64_decodes_from_protobuf() {
             },
             scope_card_id: None,
         },
-    });
+    })
+}
 
-    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
-    let bytes = prost::Message::encode_to_vec(&proto);
-    let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
-        prost::Message::decode(bytes.as_slice()).unwrap();
-    assert_eq!(PublicOplogEntry::try_from(proto), Ok(entry));
+/// The public form shows the claims exactly as Golem received them, as a JSON object. It does so
+/// in the public model, in the JSON text of the REST response, and across protobuf.
+#[test]
+fn public_entry_shows_the_original_claims_text_everywhere() {
+    for claims_text in claim_sets_beyond_serde_json_value() {
+        let user = Principal::User(UserPrincipal {
+            pair: Pair::new("https://idp.example/", "user-1"),
+            claims: Claims::from_json(claims_text.clone()).unwrap(),
+            authenticated_at: Timestamp::from(1_000),
+        });
+        let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
+
+        // The public model.
+        let PublicPrincipal::User(public_user) = &caller.original else {
+            panic!("expected a user");
+        };
+        assert_eq!(
+            public_user.claims.as_ref().map(PublicClaims::as_json),
+            Some(claims_text.as_str())
+        );
+
+        // The JSON text of the REST response.
+        let entry = started_entry_with_caller(caller);
+        let json = serde_json::to_string(&entry).unwrap();
+        let expected = format!(r#""claims":{claims_text}"#);
+        assert!(
+            json.contains(&expected),
+            "the JSON must hold {expected}, but it is {json}"
+        );
+        let decoded: PublicClaims = serde_json::from_str(&claims_text).unwrap();
+        assert_eq!(decoded.as_json(), claims_text);
+
+        // Protobuf, with a real encode and decode in between.
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            entry.clone().try_into().unwrap();
+        let bytes = prost::Message::encode_to_vec(&proto);
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            prost::Message::decode(bytes.as_slice()).unwrap();
+        let back = PublicOplogEntry::try_from(proto).unwrap();
+        assert_eq!(back, entry);
+        assert!(
+            serde_json::to_string(&back).unwrap().contains(&expected),
+            "the claims text changed in protobuf"
+        );
+    }
+}
+
+/// A reader decodes an entry from its JSON text, through the internally tagged enums that hold
+/// the claims.
+#[test]
+fn public_entry_with_claims_decodes_from_json_text() {
+    let user = Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", "user-1"),
+        claims: Claims::from_json(r#"{"groups":["a"],"sub":"bob"}"#.to_string()).unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
+    let entry = started_entry_with_caller(caller);
+    let json = serde_json::to_string(&entry).unwrap();
+    let decoded: PublicOplogEntry = serde_json::from_str(&json).unwrap();
+    assert_eq!(decoded, entry);
+}
+
+/// The protobuf decoder refuses claims text that is not one valid JSON object.
+#[test]
+fn protobuf_refuses_claims_text_that_is_not_a_json_object() {
+    let user = Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", "user-1"),
+        claims: Claims::from_json(r#"{"sub":"bob"}"#.to_string()).unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
+    let PublicPrincipal::User(public_user) = caller.original else {
+        panic!("expected a user");
+    };
+    let valid = golem_api_grpc::proto::golem::component::PublicUserPrincipal::from(public_user);
+    assert!(PublicUserPrincipal::try_from(valid.clone()).is_ok());
+    for text in [
+        "\"{}\"",
+        "\"x\"",
+        "[1]",
+        "1",
+        "null",
+        "{",
+        "",
+        r#"{"a":1,"a":2}"#,
+    ] {
+        let mut bad = valid.clone();
+        bad.claims = Some(text.to_string());
+        assert!(PublicUserPrincipal::try_from(bad).is_err(), "{text}");
+    }
+}
+
+/// Claims on the wire must be one JSON object.
+#[test]
+fn public_claims_refuse_anything_but_a_json_object() {
+    for text in ["[1]", "\"x\"", "1", "null", "{", ""] {
+        assert!(PublicClaims::from_json(text.to_string()).is_err(), "{text}");
+    }
+    assert!(serde_json::from_str::<PublicClaims>("[1]").is_err());
+    assert!(serde_json::from_str::<PublicClaims>("\"{}\"").is_err());
 }
 
 #[test]
@@ -4075,11 +4312,15 @@ fn pending_update_round_trips_the_requester() {
             requester: public_requester.clone(),
         });
 
-        let json = public.to_json_string();
-        assert_eq!(
-            serde_json::from_str::<PublicOplogEntry>(&json).unwrap(),
-            public
-        );
+        // The poem JSON form writes the claims through a `serde_json::Value`, which does not keep
+        // their text. The oplog endpoints write with serde, so the poem form reads back only
+        // without claims.
+        if !claims.is_shown() {
+            assert_eq!(
+                serde_json::from_str::<PublicOplogEntry>(&public.to_json_string()).unwrap(),
+                public
+            );
+        }
         assert_eq!(
             serde_json::from_str::<PublicOplogEntry>(&serde_json::to_string(&public).unwrap())
                 .unwrap(),
@@ -4118,7 +4359,8 @@ fn public_manual_update_round_trips_the_requester() {
             invocation: invocation.clone(),
         });
         assert_eq!(
-            serde_json::from_str::<PublicOplogEntry>(&entry.to_json_string()).unwrap(),
+            serde_json::from_str::<PublicOplogEntry>(&serde_json::to_string(&entry).unwrap())
+                .unwrap(),
             entry
         );
 

@@ -16,10 +16,9 @@
 
 package golem.host
 
-import golem.HostApi
+import golem.{AgentId, HostApi}
 import golem.host.js._
 import golem.host.js.schema.JsTypedSchemaValue
-import golem.runtime.rpc.host.AgentHostApi
 import golem.schema.TypedSchemaValue
 import golem.schema.wire.SchemaWire
 
@@ -63,16 +62,18 @@ object OplogApi {
 
   final case class CreateParameters(
     timestamp: ContextApi.DateTime,
-    agentId: AgentHostApi.AgentIdLiteral,
+    agentId: AgentId,
+    agentTypeName: Option[String],
     ownerKind: OwnerKind,
     componentRevision: BigInt,
     env: Map[String, String],
     createdBy: String,
     environmentId: String,
-    parent: Option[AgentHostApi.AgentIdLiteral],
+    parent: Option[AgentId],
     componentSize: BigInt,
     initialTotalLinearMemorySize: BigInt,
-    initialActivePlugins: List[PluginInstallationDescription]
+    initialActivePlugins: List[PluginInstallationDescription],
+    neverLive: Boolean
   )
 
   final case class HostCallParameters(
@@ -428,7 +429,7 @@ object OplogApi {
     timestamp: ContextApi.DateTime,
     plugin: PluginInstallationDescription,
     sourceComponentRevision: BigInt,
-    targetAgentId: AgentHostApi.AgentIdLiteral,
+    targetAgentId: AgentId,
     confirmedUpTo: OplogIndex,
     sendingUpTo: OplogIndex,
     lastBatchStart: OplogIndex
@@ -778,13 +779,14 @@ object OplogApi {
       parameters = raw.parameters.toSeq.map(t => t._1 -> t._2).toMap
     )
 
-  private def parseAgentId(raw: JsAgentId): AgentHostApi.AgentIdLiteral =
-    raw.asInstanceOf[AgentHostApi.AgentIdLiteral]
+  private def parseAgentId(raw: JsAgentId): AgentId =
+    JsAgentId.toAgentId(raw)
 
   private def parseCreateParameters(raw: JsCreateParameters): CreateParameters =
     CreateParameters(
       timestamp = parseDateTime(raw.timestamp),
       agentId = parseAgentId(raw.agentId),
+      agentTypeName = raw.agentTypeName.toOption,
       ownerKind = OwnerKind.fromJs(raw.ownerKind),
       componentRevision = BigInt(raw.componentRevision.toString),
       env = raw.env.toSeq.map(t => t._1 -> t._2).toMap,
@@ -793,7 +795,8 @@ object OplogApi {
       parent = raw.parent.toOption.map(parseAgentId),
       componentSize = BigInt(raw.componentSize.toString),
       initialTotalLinearMemorySize = BigInt(raw.initialTotalLinearMemorySize.toString),
-      initialActivePlugins = raw.initialActivePlugins.toList.map(parsePluginInstallationDescription)
+      initialActivePlugins = raw.initialActivePlugins.toList.map(parsePluginInstallationDescription),
+      neverLive = raw.neverLive
     )
 
   private def parseHostCallParameters(raw: JsHostCallParameters): HostCallParameters =
@@ -1266,9 +1269,9 @@ object OplogApi {
   }
 
   object GetOplog {
-    def apply(agentId: AgentHostApi.AgentIdLiteral, start: OplogIndex): GetOplog = {
+    def apply(agentId: AgentId, start: OplogIndex): GetOplog = {
       val ctor   = OplogModule.asInstanceOf[js.Dynamic].selectDynamic("GetOplog")
-      val handle = js.Dynamic.newInstance(ctor)(agentId, js.BigInt(start.toString))
+      val handle = js.Dynamic.newInstance(ctor)(JsAgentId.fromAgentId(agentId), js.BigInt(start.toString))
       new GetOplog(handle.asInstanceOf[JsGetOplog])
     }
   }
@@ -1294,9 +1297,9 @@ object OplogApi {
   }
 
   object SearchOplog {
-    def apply(agentId: AgentHostApi.AgentIdLiteral, text: String): SearchOplog = {
+    def apply(agentId: AgentId, text: String): SearchOplog = {
       val ctor   = OplogModule.asInstanceOf[js.Dynamic].selectDynamic("SearchOplog")
-      val handle = js.Dynamic.newInstance(ctor)(agentId, text)
+      val handle = js.Dynamic.newInstance(ctor)(JsAgentId.fromAgentId(agentId), text)
       new SearchOplog(handle.asInstanceOf[JsSearchOplog])
     }
   }

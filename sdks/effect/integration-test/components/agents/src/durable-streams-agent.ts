@@ -62,7 +62,7 @@ defineAgent({
         const writer = yield* DurableStreams.makeByteWriter({ url, auth })
         yield* writer.append(new Uint8Array([3, 249, 17]))
         yield* writer.close
-        const sink = yield* Sink.client.get({ name })
+        const sink = yield* Sink.client.upsert({ name })
         const source = DurableStreams.readBytes({ url, auth })
         const context = yield* Effect.context<Stream.Services<typeof source>>()
         return yield* sink.collect({ bytes: source.pipe(Stream.provideContext(context)) })

@@ -82,13 +82,12 @@ declare module 'golem:core/types@2.0.0' {
     uuid: Uuid;
   };
   /**
-   * Represents a Golem agent
+   * Represents a Golem agent: an RFC 9562 version 8 UUID that Golem issues. Its first
+   * 32 bits are the agent type's type ID. It holds no component and no environment;
+   * an agent ID names an agent within one environment.
    */
   export type AgentId = {
-    /** Identifies the component the agent belongs to */
-    componentId: ComponentId;
-    /** String representation of the agent ID (agent type and constructor parameters) */
-    agentId: string;
+    uuid: Uuid;
   };
   /**
    * The owner whose oplog records an invocation
@@ -105,7 +104,7 @@ declare module 'golem:core/types@2.0.0' {
     val: string
   };
   /**
-   * Identifies one invocation. With an agent owner, its text form is `<agent>.<uuid>`, where `<agent>` is the owner's `agent-id` string without the component.
+   * Identifies one invocation. With an agent owner, its text form is `<agent>.<uuid>`, where `<agent>` is the owner's agent ID as a UUID.
    */
   export type InvocationId = {
     owner: InvocationOwner;

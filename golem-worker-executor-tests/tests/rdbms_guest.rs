@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::base_model::AgentId;
+use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::PublicOplogEntry;
@@ -23,7 +23,7 @@ use golem_common::model::{
 };
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::dsl::{AgentResult, TestDsl};
@@ -99,7 +99,7 @@ async fn rdbms_postgres_snapshot_changes_transaction_drop_schedule(
             .await?;
         let table = format!("drop_timing_{}", Uuid::new_v4().simple());
         let address = postgres.public_connection_string();
-        let id = agent_id!(
+        let id = agent_key!(
             "TransactionDropTiming",
             address.clone(),
             table.clone(),
@@ -143,7 +143,9 @@ async fn rdbms_postgres_snapshot_changes_transaction_drop_schedule(
         assert_eq!(count.0, 0, "an abandoned transaction must not commit");
         drop(executor);
         let executor = start_with_overrides(deps, &context, overrides()).await?;
-        executor.complete_promise(&promise, vec![]).await?;
+        executor
+            .complete_promise(&context.default_environment_id, &promise, vec![])
+            .await?;
         if mode == 2 {
             let error = tokio::time::timeout(
                 Duration::from_secs(30),
@@ -515,8 +517,8 @@ async fn rdbms_postgres_crud(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids_1: Vec<AgentId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
-    let worker_ids_3: Vec<AgentId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_1: Vec<OwnedAgentId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_3: Vec<OwnedAgentId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
 
     workers_interrupt_test(&executor, worker_ids_1.clone()).await?;
     workers_interrupt_test(&executor, worker_ids_3.clone()).await?;
@@ -801,7 +803,7 @@ async fn postgres_transaction_recovery_test(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids: Vec<AgentId> = workers.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids: Vec<OwnedAgentId> = workers.iter().map(|(w, _)| w.clone()).collect();
     workers_interrupt_test(&executor, worker_ids).await?;
 
     drop(executor);
@@ -1054,7 +1056,8 @@ async fn rdbms_postgres_incomplete_statement_and_stream_report_typed_loss(
         let workers =
             start_workers::<PostgresType>(&executor, &component, &address, suffix, 1).await?;
         let (worker, agent) = &workers[0];
-        let (entered, release) = executor.gate_next_oplog_function_end(worker, function, true);
+        let (entered, release) =
+            executor.gate_next_oplog_function_end(&worker.agent_id, function, true);
         let statement = format!("SELECT nextval('{sequence}')");
         let test = RdbmsTest::new(
             vec![
@@ -1395,8 +1398,8 @@ async fn rdbms_mysql_crud(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids_1: Vec<AgentId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
-    let worker_ids_3: Vec<AgentId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_1: Vec<OwnedAgentId> = workers_1.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids_3: Vec<OwnedAgentId> = workers_3.iter().map(|(w, _)| w.clone()).collect();
 
     workers_interrupt_test(&executor, worker_ids_1).await?;
     workers_interrupt_test(&executor, worker_ids_3).await?;
@@ -1673,7 +1676,7 @@ async fn mysql_transaction_recovery_test(
     let oplog_json = serde_json::to_string(&oplog);
     assert!(oplog_json.is_ok());
 
-    let worker_ids: Vec<AgentId> = workers.iter().map(|(w, _)| w.clone()).collect();
+    let worker_ids: Vec<OwnedAgentId> = workers.iter().map(|(w, _)| w.clone()).collect();
     workers_interrupt_test(&executor, worker_ids).await?;
 
     drop(executor);
@@ -2046,12 +2049,12 @@ async fn rdbms_component_test<T: RdbmsType>(
 async fn rdbms_workers_test<T: RdbmsType>(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-    workers: Vec<(AgentId, ParsedAgentKey)>,
+    workers: Vec<(OwnedAgentId, ParsedAgentKey)>,
     test: RdbmsTest,
 ) -> anyhow::Result<()> {
-    let mut workers_results: HashMap<AgentId, AgentResult> = HashMap::new();
+    let mut workers_results: HashMap<OwnedAgentId, AgentResult> = HashMap::new();
 
-    let mut fibers = JoinSet::<anyhow::Result<(AgentId, AgentResult)>>::new();
+    let mut fibers = JoinSet::<anyhow::Result<(OwnedAgentId, AgentResult)>>::new();
 
     for (worker_id, agent_id) in workers {
         let worker_id_clone = worker_id.clone();
@@ -2138,7 +2141,7 @@ async fn execute_worker_test<T: RdbmsType>(
         .await
 }
 
-fn check_test_result(worker_id: &AgentId, result: AgentResult, test: RdbmsTest) {
+fn check_test_result(worker_id: &OwnedAgentId, result: AgentResult, test: RdbmsTest) {
     let fn_name = test.fn_name();
 
     let return_value = result
@@ -2198,8 +2201,8 @@ async fn start_workers<T: RdbmsType>(
     db_address: &str,
     name_suffix: &str,
     n_workers: u8,
-) -> anyhow::Result<Vec<(AgentId, ParsedAgentKey)>> {
-    let mut workers: Vec<(AgentId, ParsedAgentKey)> = Vec::new();
+) -> anyhow::Result<Vec<(OwnedAgentId, ParsedAgentKey)>> {
+    let mut workers: Vec<(OwnedAgentId, ParsedAgentKey)> = Vec::new();
     let db_type = T::default().to_string();
 
     let mut env = HashMap::new();
@@ -2213,7 +2216,7 @@ async fn start_workers<T: RdbmsType>(
             Uuid::new_v4(),
             name_suffix
         );
-        let agent_id = agent_id!("RelationalDatabases", worker_name);
+        let agent_id = agent_key!("RelationalDatabases", worker_name);
         let worker_id = executor
             .start_agent_with(&component.id, agent_id.clone(), env.clone(), Vec::new())
             .await?;
@@ -2227,11 +2230,11 @@ async fn start_workers<T: RdbmsType>(
 
 async fn workers_interrupt_test(
     executor: &TestWorkerExecutor,
-    worker_ids: Vec<AgentId>,
+    worker_ids: Vec<OwnedAgentId>,
 ) -> anyhow::Result<()> {
-    let mut workers_results: HashMap<AgentId, AgentStatus> = HashMap::new();
+    let mut workers_results: HashMap<OwnedAgentId, AgentStatus> = HashMap::new();
 
-    let mut fibers = JoinSet::<anyhow::Result<(AgentId, AgentStatus)>>::new();
+    let mut fibers = JoinSet::<anyhow::Result<(OwnedAgentId, AgentStatus)>>::new();
 
     for worker_id in worker_ids {
         let worker_id_clone = worker_id.clone();

@@ -88,13 +88,8 @@ fn capable_context() -> OwnerToolOperationContext {
 }
 
 fn context_with_filesystem(filesystem: FilesystemCapability) -> OwnerToolOperationContext {
-    let owner = golem_common::model::OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
-    );
+    let owner =
+        golem_common::model::OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
     context_for(&owner, filesystem, EntityCallMode::Asynchronous)
 }
 
@@ -107,7 +102,7 @@ fn context_for(
         parent: parent(),
         call_mode,
         activation: activation(filesystem),
-        caller: crate::test_callers::agent_caller(owner.agent_id.clone()),
+        caller: crate::test_callers::agent_caller(owner.agent_id),
         descriptor: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 0,
             command_path: Vec::new(),
@@ -135,13 +130,8 @@ pub(crate) fn accept_provisional(
     provisional: ProvisionalOwnerToolOperation,
     start: u64,
 ) -> OwnerToolOperation {
-    let owner = golem_common::model::OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
-    );
+    let owner =
+        golem_common::model::OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 2));
     let invocation_id = EntityInvocationId::new(
         golem_common::model::entity::OwnedAgentEntityId {
             owner,
@@ -570,6 +560,7 @@ async fn historical_admission_refusal_does_not_block_child_validation() {
             let selected = tokio::time::timeout(
                 std::time::Duration::from_secs(1),
                 child.select_infrastructure(WorkerExecutorError::unexpected_oplog_entry(
+                    OplogIndex::from_u64(3),
                     "recorded child result",
                     "different child result",
                 )),
@@ -1846,13 +1837,8 @@ async fn guest_trap_atomically_fences_siblings_and_preserves_exact_owner_winner(
 
 #[test]
 async fn guest_trap_drains_a_sibling_blocked_on_lane_acquisition() {
-    let owner_id = golem_common::model::OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
-    );
+    let owner_id =
+        golem_common::model::OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 3));
     let lane = OwnerLane::new(owner_id.clone());
     let primary = lane
         .enter_primary(OplogIndex::from_u64(1))
@@ -1946,10 +1932,7 @@ async fn later_trap_preserves_committed_sibling_terminals() {
 async fn cancellation_before_registration_owns_no_lane_value() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 4),
     ));
     let (_operations, operation, _) = accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
     assert!(operation.mark_body_ready());
@@ -1971,10 +1954,7 @@ async fn cancellation_before_registration_owns_no_lane_value() {
 async fn cancellation_drops_a_queued_lane_ticket_without_starting_the_body() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 5),
     ));
     let primary = lane
         .enter_primary(OplogIndex::from_u64(1))
@@ -2007,10 +1987,7 @@ async fn cancellation_drops_a_queued_lane_ticket_without_starting_the_body() {
 async fn cancellation_after_grant_releases_permit_before_the_first_guest_poll() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 6),
     ));
     let primary = lane
         .enter_primary(OplogIndex::from_u64(1))
@@ -2051,10 +2028,7 @@ async fn cancellation_after_grant_releases_permit_before_the_first_guest_poll() 
 async fn capable_terminal_commit_returns_lane_before_completion_publication() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 7),
     ));
     let primary = lane
         .enter_primary(OplogIndex::from_u64(1))
@@ -2147,10 +2121,7 @@ async fn committed_terminal_cleanup_failure_retains_lane_until_owner_drain() {
     for cancelled in [false, true] {
         let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "Agent(owner)".to_string(),
-            },
+            &AgentId::from_parts(7, 8),
         ));
         let primary = lane
             .enter_primary(OplogIndex::from_u64(1))
@@ -2220,10 +2191,7 @@ async fn committed_terminal_cleanup_failure_retains_lane_until_owner_drain() {
 async fn owner_fence_keeps_granted_lane_until_sidecar_drain() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 9),
     ));
     let primary = lane
         .enter_primary(OplogIndex::from_u64(1))
@@ -2269,10 +2237,7 @@ async fn owner_fence_keeps_granted_lane_until_sidecar_drain() {
 async fn cancellation_drains_a_blocked_in_flight_lane_acquisition() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 10),
     ));
     let primary = lane
         .enter_primary(OplogIndex::from_u64(1))
@@ -2312,10 +2277,7 @@ async fn cancellation_drains_a_blocked_in_flight_lane_acquisition() {
 async fn rolled_back_cancellation_preserves_a_permit_granted_during_selection() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 11),
     ));
     let primary = lane
         .enter_primary(OplogIndex::from_u64(1))
@@ -2373,10 +2335,7 @@ async fn rolled_back_cancellation_preserves_a_permit_granted_during_selection() 
 async fn cancellation_selection_is_idempotent_until_its_terminal_commits() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 12),
     ));
     let (_operations, operation, _invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
@@ -2668,11 +2627,12 @@ async fn owner_failure_supersedes_its_own_uncommitted_cancellation() {
                 retry_policy_state: golem_common::model::RetryPolicyState::Counter(3),
             },
         ),
+        provenance: crate::model::FailureProvenance::Host,
     };
     assert!(operation.select_trap(trap).await);
     assert!(
         matches!(owner.selected_owner_failure(), Some(OwnerFailureWinner::Trap(
-        TrapType::Error { error: golem_common::model::oplog::AgentError::OutOfMemory, retry_from, semantic_trap_retry_override: Some(semantic) }
+        TrapType::Error { error: golem_common::model::oplog::AgentError::OutOfMemory, retry_from, semantic_trap_retry_override: Some(semantic), .. }
     )) if retry_from == OplogIndex::from_u64(19)
         && semantic.retry_from == OplogIndex::from_u64(17)
         && semantic.policy_name == "selected-host-policy"
@@ -2705,10 +2665,7 @@ async fn owner_failure_supersedes_its_own_uncommitted_cancellation() {
 async fn local_cancellation_interruption_does_not_enter_trap_election() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 13),
     ));
     let (operations, operation, _invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
@@ -2859,10 +2816,7 @@ async fn nonterminal_settlement_preserves_registration_and_allows_later_resoluti
 async fn retained_clone_has_only_optional_state_after_settlement() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 14),
     ));
     let (_operations, operation, _invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
@@ -2906,10 +2860,7 @@ async fn retained_clone_has_only_optional_state_after_settlement() {
 fn completed_future_observation_is_repeatable_without_an_active_cohort() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 15),
     ));
     let (_operations, operation, _invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
@@ -2937,10 +2888,7 @@ fn completed_future_observation_is_repeatable_without_an_active_cohort() {
 fn mixed_completed_and_current_futures_only_cohort_the_active_parent() {
     let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
+        &AgentId::from_parts(7, 16),
     ));
     let (_old_operations, old_operation, _old_invocation_id) =
         accepted_operation(&lane, EntityCallMode::Asynchronous, 2);
@@ -2963,13 +2911,8 @@ fn mixed_completed_and_current_futures_only_cohort_the_active_parent() {
 #[test]
 #[timeout("30s")]
 async fn result_await_batch_promotes_before_parent_end_in_start_order() {
-    let owner_id = golem_common::model::OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
-    );
+    let owner_id =
+        golem_common::model::OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 17));
     let lane = OwnerLane::new(owner_id.clone());
     let primary = lane
         .enter_primary(OplogIndex::from_u64(1))
@@ -3211,13 +3154,8 @@ async fn result_await_skips_a_member_released_after_planning_without_losing_surv
 
 #[test]
 fn cohort_claim_holds_parent_close_lock_through_lane_registration() {
-    let owner_id = golem_common::model::OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
-    );
+    let owner_id =
+        golem_common::model::OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 18));
     let lane = OwnerLane::new(owner_id);
     let _primary = lane.enter_primary(OplogIndex::from_u64(1)).unwrap();
     let (operations, operation, invocation_id) =
@@ -3272,13 +3210,8 @@ fn cohort_claim_holds_parent_close_lock_through_lane_registration() {
 
 #[test]
 fn ready_cancellation_and_lane_registration_have_one_winner() {
-    let owner_id = golem_common::model::OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Agent(owner)".to_string(),
-        },
-    );
+    let owner_id =
+        golem_common::model::OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 19));
     let lane = OwnerLane::new(owner_id);
     let _primary = lane.enter_primary(OplogIndex::from_u64(1)).unwrap();
     let parent = parent();
@@ -3500,13 +3433,8 @@ fn probed_entity_invocation(
     use golem_common::model::entity::{
         EntityInvocationScope, InvocationExecutionMode, OwnedAgentEntityId,
     };
-    let owner = golem_common::model::OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "owner".into(),
-        },
-    );
+    let owner =
+        golem_common::model::OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 20));
     let context = context_for(
         &owner,
         FilesystemCapability::Incapable,
@@ -3589,13 +3517,8 @@ async fn retained_registration_keeps_fenced_slot_alive_until_last_lease_is_relea
     use golem_common::model::entity::{
         EntityInvocationScope, InvocationExecutionMode, OwnedAgentEntityId,
     };
-    let owner = golem_common::model::OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "owner".into(),
-        },
-    );
+    let owner =
+        golem_common::model::OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 21));
     let operation = context_for(
         &owner,
         FilesystemCapability::Incapable,

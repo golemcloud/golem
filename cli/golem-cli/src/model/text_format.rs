@@ -837,13 +837,15 @@ impl Drop for DecoratedIndent {
 }
 
 pub fn to_colored_json<T: Serialize>(value: &T) -> anyhow::Result<String> {
+    colorize_json(&serde_json::to_string_pretty(value)?)
+}
+
+/// Colors a JSON text in the layout of `serde_json::to_string_pretty`.
+pub fn colorize_json(pretty_json: &str) -> anyhow::Result<String> {
     let mut highlighter =
         synoptic::from_extension("js", 2).ok_or_else(|| anyhow!("Failed to get JS highlighter"))?;
 
-    let serialized_lines: Vec<String> = serde_json::to_string_pretty(value)?
-        .lines()
-        .map(|line| line.to_string())
-        .collect();
+    let serialized_lines: Vec<String> = pretty_json.lines().map(|line| line.to_string()).collect();
 
     highlighter.run(serialized_lines.as_slice());
 
@@ -885,13 +887,15 @@ pub fn to_colored_json<T: Serialize>(value: &T) -> anyhow::Result<String> {
 }
 
 pub fn to_colored_yaml<T: Serialize>(value: &T) -> anyhow::Result<String> {
+    colorize_yaml(&serde_yaml::to_string(value)?)
+}
+
+/// Colors a YAML text.
+pub fn colorize_yaml(yaml: &str) -> anyhow::Result<String> {
     let mut highlighter = synoptic::from_extension("yaml", 2)
         .ok_or_else(|| anyhow!("Failed to get YAML highlighter"))?;
 
-    let serialized_lines: Vec<String> = serde_yaml::to_string(value)?
-        .lines()
-        .map(|line| line.to_string())
-        .collect();
+    let serialized_lines: Vec<String> = yaml.lines().map(|line| line.to_string()).collect();
 
     highlighter.run(serialized_lines.as_slice());
 

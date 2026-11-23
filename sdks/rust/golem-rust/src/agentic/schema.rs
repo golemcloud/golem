@@ -135,7 +135,7 @@ impl<T: IntoSchema + FromSchema> Schema for T {
 mod host_api_schema {
     use super::*;
     use crate::bindings::golem::api::host;
-    use crate::golem_schema::{AgentId, ComponentId, EnvironmentId, Uuid};
+    use crate::golem_schema::{AgentId, EnvironmentId, Uuid};
     use crate::schema::wit::wire;
     use crate::schema::{FromSchemaError, SchemaBuilder, SchemaType, TypeId};
 
@@ -151,29 +151,15 @@ mod host_api_schema {
         }
     }
 
-    fn component_id_to_model(value: wire::ComponentId) -> ComponentId {
-        ComponentId {
-            uuid: uuid_to_model(value.uuid),
-        }
-    }
-
-    fn component_id_from_model(value: ComponentId) -> wire::ComponentId {
-        wire::ComponentId {
-            uuid: uuid_from_model(value.uuid),
-        }
-    }
-
     fn agent_id_to_model(value: wire::AgentId) -> AgentId {
         AgentId {
-            component_id: component_id_to_model(value.component_id),
-            agent_id: value.agent_id,
+            uuid: uuid_to_model(value.uuid),
         }
     }
 
     fn agent_id_from_model(value: AgentId) -> wire::AgentId {
         wire::AgentId {
-            component_id: component_id_from_model(value.component_id),
-            agent_id: value.agent_id,
+            uuid: uuid_from_model(value.uuid),
         }
     }
 
@@ -323,6 +309,7 @@ mod host_api_schema {
         Retrying,
         Failed,
         Exited,
+        Sandboxed,
     }
 
     impl From<host::AgentStatus> for AgentStatusModel {
@@ -335,6 +322,7 @@ mod host_api_schema {
                 host::AgentStatus::Retrying => Self::Retrying,
                 host::AgentStatus::Failed => Self::Failed,
                 host::AgentStatus::Exited => Self::Exited,
+                host::AgentStatus::Sandboxed => Self::Sandboxed,
             }
         }
     }
@@ -349,6 +337,7 @@ mod host_api_schema {
                 AgentStatusModel::Retrying => Self::Retrying,
                 AgentStatusModel::Failed => Self::Failed,
                 AgentStatusModel::Exited => Self::Exited,
+                AgentStatusModel::Sandboxed => Self::Sandboxed,
             }
         }
     }
@@ -381,13 +370,13 @@ mod host_api_schema {
     );
 
     #[derive(Clone, Debug, crate::Schema)]
-    struct AgentNameFilterModel {
+    struct AgentKeyFilterModel {
         comparator: StringFilterComparatorModel,
         value: String,
     }
 
-    impl From<host::AgentNameFilter> for AgentNameFilterModel {
-        fn from(value: host::AgentNameFilter) -> Self {
+    impl From<host::AgentKeyFilter> for AgentKeyFilterModel {
+        fn from(value: host::AgentKeyFilter) -> Self {
             Self {
                 comparator: value.comparator.into(),
                 value: value.value,
@@ -395,8 +384,8 @@ mod host_api_schema {
         }
     }
 
-    impl From<AgentNameFilterModel> for host::AgentNameFilter {
-        fn from(value: AgentNameFilterModel) -> Self {
+    impl From<AgentKeyFilterModel> for host::AgentKeyFilter {
+        fn from(value: AgentKeyFilterModel) -> Self {
             Self {
                 comparator: value.comparator.into(),
                 value: value.value,
@@ -532,7 +521,7 @@ mod host_api_schema {
 
     #[derive(Clone, Debug, crate::Schema)]
     enum AgentPropertyFilterModel {
-        Name(AgentNameFilterModel),
+        Key(AgentKeyFilterModel),
         Status(AgentStatusFilterModel),
         Version(AgentVersionFilterModel),
         CreatedAt(AgentCreatedAtFilterModel),
@@ -543,7 +532,7 @@ mod host_api_schema {
     impl From<host::AgentPropertyFilter> for AgentPropertyFilterModel {
         fn from(value: host::AgentPropertyFilter) -> Self {
             match value {
-                host::AgentPropertyFilter::Name(value) => Self::Name(value.into()),
+                host::AgentPropertyFilter::Key(value) => Self::Key(value.into()),
                 host::AgentPropertyFilter::Status(value) => Self::Status(value.into()),
                 host::AgentPropertyFilter::Version(value) => Self::Version(value.into()),
                 host::AgentPropertyFilter::CreatedAt(value) => Self::CreatedAt(value.into()),
@@ -556,7 +545,7 @@ mod host_api_schema {
     impl From<AgentPropertyFilterModel> for host::AgentPropertyFilter {
         fn from(value: AgentPropertyFilterModel) -> Self {
             match value {
-                AgentPropertyFilterModel::Name(value) => Self::Name(value.into()),
+                AgentPropertyFilterModel::Key(value) => Self::Key(value.into()),
                 AgentPropertyFilterModel::Status(value) => Self::Status(value.into()),
                 AgentPropertyFilterModel::Version(value) => Self::Version(value.into()),
                 AgentPropertyFilterModel::CreatedAt(value) => Self::CreatedAt(value.into()),
@@ -614,6 +603,8 @@ mod host_api_schema {
     #[derive(Clone, Debug, crate::Schema)]
     struct AgentMetadataModel {
         agent_id: AgentId,
+        agent_type_name: Option<String>,
+        fingerprint: Uuid,
         args: Vec<String>,
         env: Vec<(String, String)>,
         config: Vec<(String, String)>,
@@ -626,6 +617,8 @@ mod host_api_schema {
     fn agent_metadata_to_model(value: host::AgentMetadata) -> AgentMetadataModel {
         AgentMetadataModel {
             agent_id: agent_id_to_model(value.agent_id),
+            agent_type_name: value.agent_type_name,
+            fingerprint: uuid_to_model(value.fingerprint),
             args: value.args,
             env: value.env,
             config: value.config,
@@ -639,6 +632,8 @@ mod host_api_schema {
     fn agent_metadata_from_model(value: AgentMetadataModel) -> host::AgentMetadata {
         host::AgentMetadata {
             agent_id: agent_id_from_model(value.agent_id),
+            agent_type_name: value.agent_type_name,
+            fingerprint: uuid_from_model(value.fingerprint),
             args: value.args,
             env: value.env,
             config: value.config,
@@ -683,7 +678,7 @@ mod host_api_schema {
         check(host::AgentAnyFilter {
             filters: vec![host::AgentAllFilter {
                 filters: vec![
-                    host::AgentPropertyFilter::Name(host::AgentNameFilter {
+                    host::AgentPropertyFilter::Key(host::AgentKeyFilter {
                         comparator: host::StringFilterComparator::StartsWith,
                         value: "Counter".into(),
                     }),
@@ -696,13 +691,15 @@ mod host_api_schema {
         });
         check(host::AgentMetadata {
             agent_id: wire::AgentId {
-                component_id: wire::ComponentId {
-                    uuid: wire::Uuid {
-                        high_bits: 7,
-                        low_bits: 19,
-                    },
+                uuid: wire::Uuid {
+                    high_bits: 7,
+                    low_bits: 19,
                 },
-                agent_id: "Counter(alpha)".into(),
+            },
+            agent_type_name: Some("Counter".into()),
+            fingerprint: wire::Uuid {
+                high_bits: 3,
+                low_bits: 5,
             },
             args: vec!["arg".into()],
             env: vec![("key".into(), "value".into())],

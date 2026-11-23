@@ -79,6 +79,20 @@ fn error(error: impl std::fmt::Debug) -> String {
     format!("{error:?}")
 }
 
+/// Describes a P2 stream error with the first line of the host's description of a failed
+/// operation. The description continues with a host stack trace when the host has backtraces
+/// enabled.
+fn stream_error(error: p2::StreamError) -> String {
+    match error {
+        p2::StreamError::LastOperationFailed(error) => {
+            let description = error.to_debug_string();
+            let first_line = description.lines().next().unwrap_or_default();
+            format!("last-operation-failed: {first_line}")
+        }
+        p2::StreamError::Closed => "closed".to_string(),
+    }
+}
+
 /// Reads from a P3 receive stream until `len` bytes arrived or the stream ended. Returns the bytes
 /// and whether the stream ended.
 async fn p3_read(stream: &mut p3::StreamReader<u8>, len: usize) -> Result<(Vec<u8>, bool), String> {
@@ -124,14 +138,14 @@ fn p2_write(output: &p2::OutputStream, data: &[u8]) -> Result<(), String> {
     let mut rest = data;
     while !rest.is_empty() {
         output.subscribe().block();
-        let budget = output.check_write().map_err(error)? as usize;
+        let budget = output.check_write().map_err(stream_error)? as usize;
         let n = budget.min(rest.len());
         if n > 0 {
-            output.write(&rest[..n]).map_err(error)?;
+            output.write(&rest[..n]).map_err(stream_error)?;
             rest = &rest[n..];
         }
     }
-    output.blocking_flush().map_err(error)
+    output.blocking_flush().map_err(stream_error)
 }
 
 /// Reads from a P2 input stream until `len` bytes arrived or the peer closed the stream.
@@ -141,7 +155,7 @@ fn p2_read(input: &p2::InputStream, len: usize) -> Result<Vec<u8>, String> {
         match input.blocking_read((len - collected.len()) as u64) {
             Ok(bytes) => collected.extend_from_slice(&bytes),
             Err(p2::StreamError::Closed) => break,
-            Err(other) => return Err(error(other)),
+            Err(other) => return Err(stream_error(other)),
         }
     }
     Ok(collected)
@@ -173,6 +187,9 @@ enum Slot {
     P2Tcp {
         input: p2::InputStream,
         output: p2::OutputStream,
+        socket: p2::TcpSocket,
+    },
+    P2TcpSocket {
         socket: p2::TcpSocket,
     },
     P2Udp {
@@ -288,12 +305,39 @@ pub trait SocketSession {
 
     /// Connects a P2 TCP socket and keeps it with its streams in `slot`.
     fn p2_tcp_connect(&self, slot: String, port: u16) -> Result<(), String>;
+    /// Connects a P2 TCP socket like `p2_tcp_connect`, but calls `finish-connect` again at once
+    /// after its first two `would-block` results. Returns the number of `would-block` results.
+    fn p2_tcp_connect_counting(&self, slot: String, port: u16) -> Result<u32, String>;
+    /// Starts the connect of a P2 TCP socket, waits on its pollable until the native connect
+    /// completes, and keeps the socket in `slot` without calling `finish-connect`.
+    fn p2_tcp_start_connect(&self, slot: String, port: u16) -> Result<(), String>;
+    /// Calls `finish-connect` on the socket that `p2_tcp_start_connect` kept in `slot`, and keeps
+    /// the socket with its streams there.
+    fn p2_tcp_finish_connect(&self, slot: String) -> Result<(), String>;
     fn p2_tcp_local_address(&self, slot: String) -> Result<String, String>;
+    /// Binds a P2 TCP socket to `127.0.0.1:0` and keeps it in `slot`, finishing the bind when
+    /// `finish`. Returns the local address.
+    fn p2_tcp_bind(&self, slot: String, finish: bool) -> Result<String, String>;
+    /// Calls `finish-bind` on the socket that `p2_tcp_bind` kept in `slot`.
+    fn p2_tcp_finish_bind(&self, slot: String) -> Result<(), String>;
+    /// The local address of the socket that `p2_tcp_bind` kept in `slot`.
+    fn p2_tcp_bound_local_address(&self, slot: String) -> Result<String, String>;
+    /// Connects the socket that `p2_tcp_bind` kept in `slot` and drops the streams.
+    fn p2_tcp_connect_bound(&self, slot: String, port: u16) -> Result<(), String>;
     fn p2_tcp_send(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
+    /// Sends `data` with `blocking-write-and-flush`, at most 4096 bytes per call, and keeps the
+    /// result in the send log.
+    fn p2_tcp_send_blocking(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
     fn p2_tcp_receive(&self, slot: String, len: u32) -> Result<Vec<u8>, String>;
+    /// Writes `data` with `write` and no `check-write` first, beyond the stream's write permit.
+    fn p2_tcp_write_unpermitted(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
     /// Connects a P2 TCP socket and drops it, in a read-only method.
     #[read_only]
     fn p2_tcp_connect_read_only(&self, port: u16) -> Result<(), String>;
+    /// Writes `len` bytes to a file, connects a P2 TCP socket with a send buffer of 8 KiB, splices
+    /// the file into it with `blocking-splice` until all bytes are spliced, and drops the socket at
+    /// once. Returns the number of spliced bytes.
+    fn p2_tcp_blocking_splice_file(&self, port: u16, len: u32) -> Result<u64, String>;
     /// Connects, sends `request` and reads `len` bytes of the answer, in one invocation.
     fn p2_tcp_conversation(&self, port: u16, request: Vec<u8>, len: u32)
     -> Result<Vec<u8>, String>;
@@ -335,6 +379,8 @@ pub trait SocketSession {
 
     /// The bytes and datagrams the agent received so far, per slot, in the order they arrived.
     fn received(&self) -> Vec<(String, Vec<u8>)>;
+    /// The results of the `p2_tcp_send_blocking` calls so far, in order.
+    fn sends(&self) -> Vec<Result<(), String>>;
     /// Drops the socket in `slot` and its streams.
     fn close(&self, slot: String) -> bool;
 }
@@ -342,6 +388,7 @@ pub trait SocketSession {
 pub struct SocketSessionImpl {
     slots: RefCell<HashMap<String, Slot>>,
     received: RefCell<Vec<(String, Vec<u8>)>>,
+    sends: RefCell<Vec<Result<(), String>>>,
 }
 
 impl SocketSessionImpl {
@@ -403,6 +450,7 @@ impl SocketSession for SocketSessionImpl {
         Self {
             slots: RefCell::new(HashMap::new()),
             received: RefCell::new(Vec::new()),
+            sends: RefCell::new(Vec::new()),
         }
     }
 
@@ -948,6 +996,112 @@ impl SocketSession for SocketSessionImpl {
         Ok(())
     }
 
+    fn p2_tcp_connect_counting(&self, slot: String, port: u16) -> Result<u32, String> {
+        let socket = wasi::sockets::tcp_create_socket::create_tcp_socket(p2::IpAddressFamily::Ipv4)
+            .map_err(error)?;
+        socket
+            .start_connect(&p2::instance_network(), p2_loopback(port))
+            .map_err(error)?;
+        let mut would_block = 0;
+        let (input, output) = loop {
+            match socket.finish_connect() {
+                Ok(streams) => break streams,
+                Err(wasi::sockets::network::ErrorCode::WouldBlock) => {
+                    would_block += 1;
+                    if would_block > 2 {
+                        socket.subscribe().block();
+                    }
+                }
+                Err(other) => return Err(error(other)),
+            }
+        };
+        self.insert(
+            slot,
+            Slot::P2Tcp {
+                input,
+                output,
+                socket,
+            },
+        );
+        Ok(would_block)
+    }
+
+    fn p2_tcp_start_connect(&self, slot: String, port: u16) -> Result<(), String> {
+        let socket = wasi::sockets::tcp_create_socket::create_tcp_socket(p2::IpAddressFamily::Ipv4)
+            .map_err(error)?;
+        socket
+            .start_connect(&p2::instance_network(), p2_loopback(port))
+            .map_err(error)?;
+        socket.subscribe().block();
+        self.insert(slot, Slot::P2TcpSocket { socket });
+        Ok(())
+    }
+
+    fn p2_tcp_finish_connect(&self, slot: String) -> Result<(), String> {
+        let socket = match self.slots.borrow_mut().remove(&slot) {
+            Some(Slot::P2TcpSocket { socket }) => socket,
+            _ => return Err(format!("slot {slot} holds no connecting P2 TCP socket")),
+        };
+        let (input, output) = socket.finish_connect().map_err(error)?;
+        self.insert(
+            slot,
+            Slot::P2Tcp {
+                input,
+                output,
+                socket,
+            },
+        );
+        Ok(())
+    }
+
+    fn p2_tcp_bind(&self, slot: String, finish: bool) -> Result<String, String> {
+        let socket = wasi::sockets::tcp_create_socket::create_tcp_socket(p2::IpAddressFamily::Ipv4)
+            .map_err(error)?;
+        socket
+            .start_bind(&p2::instance_network(), p2_loopback(0))
+            .map_err(error)?;
+        if finish {
+            socket.finish_bind().map_err(error)?;
+        }
+        let address = socket.local_address().map(p2_address).map_err(error)?;
+        self.insert(slot, Slot::P2TcpSocket { socket });
+        Ok(address)
+    }
+
+    fn p2_tcp_finish_bind(&self, slot: String) -> Result<(), String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2TcpSocket { socket } => socket.finish_bind().map_err(error),
+            _ => Err(format!("slot {slot} holds no bound P2 TCP socket")),
+        })
+    }
+
+    fn p2_tcp_bound_local_address(&self, slot: String) -> Result<String, String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2TcpSocket { socket } => socket.local_address().map(p2_address).map_err(error),
+            _ => Err(format!("slot {slot} holds no bound P2 TCP socket")),
+        })
+    }
+
+    fn p2_tcp_connect_bound(&self, slot: String, port: u16) -> Result<(), String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2TcpSocket { socket } => {
+                socket
+                    .start_connect(&p2::instance_network(), p2_loopback(port))
+                    .map_err(error)?;
+                loop {
+                    match socket.finish_connect() {
+                        Ok(_streams) => return Ok(()),
+                        Err(wasi::sockets::network::ErrorCode::WouldBlock) => {
+                            socket.subscribe().block()
+                        }
+                        Err(other) => return Err(error(other)),
+                    }
+                }
+            }
+            _ => Err(format!("slot {slot} holds no bound P2 TCP socket")),
+        })
+    }
+
     fn p2_tcp_local_address(&self, slot: String) -> Result<String, String> {
         self.with_slot(&slot, |value| match value {
             Slot::P2Tcp { socket, .. } => socket.local_address().map(p2_address).map_err(error),
@@ -962,6 +1116,17 @@ impl SocketSession for SocketSessionImpl {
         })
     }
 
+    fn p2_tcp_send_blocking(&self, slot: String, data: Vec<u8>) -> Result<(), String> {
+        let result = self.with_slot(&slot, |value| match value {
+            Slot::P2Tcp { output, .. } => data
+                .chunks(4096)
+                .try_for_each(|chunk| output.blocking_write_and_flush(chunk).map_err(stream_error)),
+            _ => Err(format!("slot {slot} holds no P2 TCP socket")),
+        });
+        self.sends.borrow_mut().push(result.clone());
+        result
+    }
+
     fn p2_tcp_receive(&self, slot: String, len: u32) -> Result<Vec<u8>, String> {
         let data = self.with_slot(&slot, |value| match value {
             Slot::P2Tcp { input, .. } => p2_read(input, len as usize),
@@ -971,9 +1136,59 @@ impl SocketSession for SocketSessionImpl {
         Ok(data)
     }
 
+    fn p2_tcp_write_unpermitted(&self, slot: String, data: Vec<u8>) -> Result<(), String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2Tcp { output, .. } => output.write(&data).map_err(stream_error),
+            _ => Err(format!("slot {slot} holds no P2 TCP socket")),
+        })
+    }
+
     fn p2_tcp_connect_read_only(&self, port: u16) -> Result<(), String> {
         let (_socket, _input, _output) = p2_tcp_connect(port)?;
         Ok(())
+    }
+
+    fn p2_tcp_blocking_splice_file(&self, port: u16, len: u32) -> Result<u64, String> {
+        use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+        let (root, _) = wasi::filesystem::preopens::get_directories()
+            .into_iter()
+            .next()
+            .ok_or("no preopened directory")?;
+        let file = root
+            .open_at(
+                PathFlags::empty(),
+                "splice-source",
+                OpenFlags::CREATE | OpenFlags::TRUNCATE,
+                DescriptorFlags::READ | DescriptorFlags::WRITE,
+            )
+            .map_err(error)?;
+        let contents: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let file_output = file.write_via_stream(0).map_err(error)?;
+        for chunk in contents.chunks(4096) {
+            file_output
+                .blocking_write_and_flush(chunk)
+                .map_err(stream_error)?;
+        }
+        drop(file_output);
+        let file_input = file.read_via_stream(0).map_err(error)?;
+
+        let (socket, input, output) = p2_tcp_connect(port)?;
+        socket.set_send_buffer_size(8192).map_err(error)?;
+        let mut spliced = 0u64;
+        while spliced < len as u64 {
+            let n = output
+                .blocking_splice(&file_input, 65536)
+                .map_err(stream_error)?;
+            if n == 0 {
+                break;
+            }
+            spliced += n;
+        }
+        drop(input);
+        drop(output);
+        drop(socket);
+        Ok(spliced)
     }
 
     fn p2_tcp_conversation(
@@ -1221,6 +1436,10 @@ impl SocketSession for SocketSessionImpl {
 
     fn received(&self) -> Vec<(String, Vec<u8>)> {
         self.received.borrow().clone()
+    }
+
+    fn sends(&self) -> Vec<Result<(), String>> {
+        self.sends.borrow().clone()
     }
 
     fn close(&self, slot: String) -> bool {

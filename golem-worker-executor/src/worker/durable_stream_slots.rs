@@ -732,7 +732,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             };
             prepared
                 .finalize(
-                    self.agent_id().clone(),
+                    self.agent_id(),
                     self.initial_worker_metadata.fingerprint,
                     operation,
                 )
@@ -2043,16 +2043,13 @@ mod tests {
     #[test]
     fn canonical_slot_reference_is_not_a_transport_id_or_field_index() {
         use golem_common::model::durable_stream::{StreamId, StreamInvocationId};
-        let id = AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::from_u128(2)),
-            agent_id: "source".into(),
-        };
+        let id = AgentId::from_parts(7, 1);
         let environment =
             golem_common::base_model::environment::EnvironmentId(uuid::Uuid::from_u128(3));
         let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(4));
         let source = StreamInvocationId {
             callee_environment_id: environment,
-            callee: id.clone(),
+            callee: id,
             callee_fingerprint: fingerprint,
             idempotency_key: InvocationId(Uuid::from_u128(2)),
         };

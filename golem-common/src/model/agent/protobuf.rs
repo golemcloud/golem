@@ -16,12 +16,12 @@ use crate::base_model::agent::AgentTypeName;
 use crate::base_model::caller::{
     AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, ClaimVisibility, Claims, Pair,
     Principal, PrincipalRef, PublicAccountPrincipal, PublicAgentPrincipal, PublicCaller,
-    PublicPrincipal, PublicTokenProvenance, PublicToolPrincipal, PublicUserPrincipal,
+    PublicClaims, PublicPrincipal, PublicTokenProvenance, PublicToolPrincipal, PublicUserPrincipal,
     TokenProvenance, ToolPrincipal, UserPrincipal,
 };
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::tool::ToolName;
-use crate::model::oplog::{AgentResourceId, OplogErrorKind};
+use crate::model::oplog::{AgentResourceId, OplogErrorKind, ReplayDivergence};
 use crate::model::regions::OplogRegion;
 use crate::model::{AgentResourceDescription, OplogIndex};
 use golem_schema::Empty;
@@ -937,21 +937,15 @@ impl TryFrom<golem_api_grpc::proto::golem::component::PublicUserPrincipal> for P
     fn try_from(
         value: golem_api_grpc::proto::golem::component::PublicUserPrincipal,
     ) -> Result<Self, Self::Error> {
-        let claims = match value.claims {
-            Some(claims) => {
-                let claims: serde_json::Value = serde_json::from_str(&claims)
-                    .map_err(|error| format!("Invalid field: claims: {error}"))?;
-                // A claim set with a number that no `f64` holds shows as its JSON text, a string.
-                if !claims.is_object() && !claims.is_string() {
-                    return Err(
-                        "Invalid field: claims: the claim set must be a JSON object or its text"
-                            .into(),
-                    );
-                }
-                Some(claims)
-            }
-            None => None,
-        };
+        let claims = value
+            .claims
+            .map(|text| {
+                // The text must be one valid claim set. The check does not parse numbers.
+                Claims::from_json(text)
+                    .map(|claims| PublicClaims::from(&claims))
+                    .map_err(|error| format!("Invalid field: claims: {error}"))
+            })
+            .transpose()?;
         Ok(Self {
             pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
             authenticated_at: authenticated_at_from_protobuf(
@@ -969,7 +963,7 @@ impl From<PublicUserPrincipal> for golem_api_grpc::proto::golem::component::Publ
         Self {
             pair: Some(value.pair.into()),
             authenticated_at: Some(value.authenticated_at.into()),
-            claims: value.claims.map(|claims| claims.to_string()),
+            claims: value.claims.map(|claims| claims.as_json().to_string()),
         }
     }
 }
@@ -1222,6 +1216,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetad
         Ok(Self {
             agent_id: value.agent_id.ok_or("Missing agent_id")?.try_into()?,
             owner_kind: crate::model::agent::OwnerKind::try_from(value.owner_kind)?,
+            agent_type_name: value
+                .agent_type_name
+                .map(crate::model::agent::AgentTypeName),
+            canonical_key: value.canonical_key,
+            constructor_parameters: value.constructor_parameters,
             environment_id: value
                 .environment_id
                 .ok_or("Missing environment_id")?
@@ -1234,6 +1233,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetad
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, _>>()?,
             status: value.status.try_into()?,
+            underlying_status: value
+                .underlying_status
+                .map(crate::model::AgentStatus::try_from)
+                .transpose()?,
             component_revision: value.component_revision.try_into()?,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
@@ -1303,6 +1306,10 @@ impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMe
         Ok(Self {
             agent_id: Some(value.agent_id.into()),
             owner_kind: value.owner_kind.into(),
+            agent_type_name: value.agent_type_name.map(|name| name.0),
+            canonical_key: value.canonical_key,
+            constructor_parameters: value.constructor_parameters,
+            component_id: None,
             environment_id: Some(value.environment_id.into()),
             created_by: Some(value.created_by.into()),
             env: value.env,
@@ -1312,6 +1319,7 @@ impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMe
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
             status: value.status.into(),
+            underlying_status: value.underlying_status.map(Into::into),
             component_revision: value.component_revision.into(),
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
@@ -1369,10 +1377,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateRecord> for UpdateRecor
                 Ok(Self::FailedUpdate(FailedUpdate {
                     timestamp,
                     target_revision,
-                    details: { failed.details },
+                    details: failed.details,
                     pending_update_index,
                     mode,
                     snapshot_assisted_details,
+                    failure_class: crate::model::oplog::UpdateFailureClass::from_proto_number(
+                        failed.failure_class,
+                    )?,
+                    divergence: failed
+                        .divergence
+                        .map(|divergence| ReplayDivergence::try_from(divergence).map(Box::new))
+                        .transpose()?,
                 }))
             }
             golem_api_grpc::proto::golem::worker::update_record::Update::Pending(_) => {
@@ -1407,12 +1422,19 @@ impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
                 pending_update_index,
                 mode,
                 snapshot_assisted_details,
+                failure_class,
+                divergence,
             }) => Self {
                 timestamp: Some(timestamp.into()),
                 target_revision: target_revision.into(),
                 update: Some(
                     golem_api_grpc::proto::golem::worker::update_record::Update::Failed(
-                        golem_api_grpc::proto::golem::worker::FailedUpdate { details },
+                        golem_api_grpc::proto::golem::worker::FailedUpdate {
+                            details,
+                            failure_class: failure_class.proto_number(),
+                            divergence: divergence
+                                .map(|divergence| (*divergence).into_proto_keeping_structure()),
+                        },
                     ),
                 ),
                 pending_update_index: pending_update_index.map(Into::into),
@@ -1625,6 +1647,88 @@ impl TryFrom<TypedAgentConfigEntry>
         Ok(Self {
             path: value.path,
             value: Some(value.value.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentKey> for super::ParsedAgentKey {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentKey,
+    ) -> Result<Self, Self::Error> {
+        let parameters = value
+            .parameters
+            .ok_or_else(|| "Missing field: AgentKey.parameters".to_string())?
+            .try_into()?;
+        Self::try_new(super::AgentTypeName(value.agent_type_name), parameters)
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentKey> for super::AgentKey {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentKey,
+    ) -> Result<Self, Self::Error> {
+        let constructor = super::ParsedAgentKey::try_from(value)?;
+        Self::new(constructor.agent_type, constructor.parameters).map_err(|err| err.to_string())
+    }
+}
+
+impl TryFrom<super::ParsedAgentKey> for golem_api_grpc::proto::golem::worker::AgentKey {
+    type Error = String;
+
+    fn try_from(value: super::ParsedAgentKey) -> Result<Self, Self::Error> {
+        Ok(Self {
+            agent_type_name: value.agent_type.0,
+            parameters: Some(value.parameters.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<super::AgentKey> for golem_api_grpc::proto::golem::worker::AgentKey {
+    type Error = String;
+
+    fn try_from(value: super::AgentKey) -> Result<Self, Self::Error> {
+        let (agent_type, parameters) = value.into_parts();
+        Ok(Self {
+            agent_type_name: agent_type.0,
+            parameters: Some(parameters.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentTarget> for super::AgentTarget {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentTarget,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::agent_target::Target;
+
+        match value
+            .target
+            .ok_or_else(|| "Missing field: AgentTarget.target".to_string())?
+        {
+            Target::Key(key) => Ok(Self::Key(key.try_into()?)),
+            Target::Id(id) => Ok(Self::Id(id.try_into()?)),
+        }
+    }
+}
+
+impl TryFrom<super::AgentTarget> for golem_api_grpc::proto::golem::worker::AgentTarget {
+    type Error = String;
+
+    fn try_from(value: super::AgentTarget) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::worker::agent_target::Target;
+
+        let target = match value {
+            super::AgentTarget::Key(key) => Target::Key(key.try_into()?),
+            super::AgentTarget::Id(id) => Target::Id(id.into()),
+        };
+        Ok(Self {
+            target: Some(target),
         })
     }
 }

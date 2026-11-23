@@ -110,18 +110,14 @@ impl From<golem_schema::schema::wit::wire::AccountId> for AccountId {
 impl From<AgentId> for golem_schema::schema::wit::wire::AgentId {
     fn from(value: AgentId) -> Self {
         Self {
-            component_id: value.component_id.into(),
-            agent_id: value.agent_id,
+            uuid: uuid_to_core2(value.0),
         }
     }
 }
 
 impl From<golem_schema::schema::wit::wire::AgentId> for AgentId {
     fn from(value: golem_schema::schema::wit::wire::AgentId) -> Self {
-        AgentId {
-            component_id: value.component_id.into(),
-            agent_id: value.agent_id,
-        }
+        AgentId(uuid_from_core2(value.uuid))
     }
 }
 
@@ -264,15 +260,13 @@ pub fn decode_agent_type(w: &wire::AgentType) -> Result<AgentTypeSchema, AgentWi
     })
 }
 
-/// Encode a [`RegisteredAgentTypeSchema`] into the wire form. The wire type
-/// carries only the implementer's `component-id`; the component revision is
+/// Encode a [`RegisteredAgentTypeSchema`] into the wire form. The implementer is
 /// host-side metadata that does not cross this interface.
 pub fn encode_registered_agent_type(
     rt: &RegisteredAgentTypeSchema,
 ) -> Result<wire::RegisteredAgentType, AgentWitError> {
     Ok(wire::RegisteredAgentType {
         agent_type: encode_agent_type(&rt.agent_type)?,
-        implemented_by: rt.implemented_by.component_id.into(),
     })
 }
 
@@ -1498,7 +1492,7 @@ mod tests {
         let wire::Principal::Agent(details) = &mut agent else {
             unreachable!()
         };
-        details.agent_id.agent_id = "Other(\"x\")".to_string();
+        details.agent_id = AgentId::from_parts(7, 0xbad).into();
         assert!(Principal::try_from(agent).is_err());
 
         // A subject of another kind is refused.

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::TypedAgentConfigEntry;
+use crate::model::agent::{AgentTypeName, TypedAgentConfigEntry};
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::durable_stream::{
     AttachmentId, AttemptId, SessionStreamRole, StreamExportForkInitializedRecord,
@@ -47,10 +47,7 @@ fn invocation_id(value: u128) -> InvocationId {
 fn durable_stream_test_session_key(key: u128) -> StreamInvocationId {
     StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
-        callee: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "agent".to_string(),
-        },
+        callee: AgentId::from_parts(7, 1),
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
         idempotency_key: invocation_id(key),
     }
@@ -411,7 +408,7 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
             format_version: 1,
             stream_id: StreamId(Uuid::new_v4()),
             producer_environment_id: invocation.callee_environment_id,
-            producer: invocation.callee.clone(),
+            producer: invocation.callee,
             expected_producer_fingerprint: invocation.callee_fingerprint,
             producer_generation: OplogIndex::from_u64(4),
             source_invocation: invocation.clone(),
@@ -691,10 +688,7 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
     let key = invocation_id(14);
     let session_key = StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
-        callee: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "agent".to_string(),
-        },
+        callee: AgentId::from_parts(7, 1),
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
         idempotency_key: key,
     };
@@ -734,10 +728,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
     let key = invocation_id(15);
     let session_key = StreamInvocationId {
         callee_environment_id: EnvironmentId::new(),
-        callee: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "agent".to_string(),
-        },
+        callee: AgentId::from_parts(7, 1),
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
         idempotency_key: key,
     };
@@ -828,7 +819,34 @@ fn result_at(terminal: u64) -> InvocationResultPosition {
     InvocationResultPosition {
         terminal: OplogIndex::from_u64(terminal),
         request: Some(OplogIndex::from_u64(terminal - 1)),
+        end: golem_common::model::InvocationEnd::Completed,
+        operation: None,
+        accepted_at: None,
+        changed_at: golem_common::model::Timestamp::from(0),
     }
+}
+
+#[test]
+fn long_operations_switch_the_membership_to_its_bounded_form_sooner() {
+    let fill = |operation: &str| {
+        let mut membership = InvocationResultMembership::new(1, 8 * 1024, 3);
+        for terminal in 1..=5 {
+            membership.insert(
+                InvocationId::new(),
+                InvocationResultPosition {
+                    operation: Some(crate::model::InvocationOperation::Method(
+                        operation.to_string(),
+                    )),
+                    ..result_at(terminal + 1)
+                },
+            );
+        }
+        membership
+    };
+
+    // With a 1 KiB Bloom filter, five entries stay exact only while their operations are small.
+    assert!(fill("m").is_exact_complete());
+    assert!(!fill(&"m".repeat(400)).is_exact_complete());
 }
 
 #[test]
@@ -997,8 +1015,8 @@ fn account_id_json_serialization() {
 #[test]
 fn worker_filter_parse() {
     assert_eq!(
-        AgentFilter::from_str(" name =  worker-1").unwrap(),
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::from_str(" key =  worker-1").unwrap(),
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
     );
 
     assert_eq!(
@@ -1027,16 +1045,16 @@ fn worker_filter_parse() {
 #[test]
 fn worker_filter_parse_agent_ids_without_quotes() {
     assert_eq!(
-        AgentFilter::from_str(r#"name == CounterAgent("a b", 2)"#).unwrap(),
-        AgentFilter::new_name(
+        AgentFilter::from_str(r#"key == CounterAgent("a b", 2)"#).unwrap(),
+        AgentFilter::new_key(
             StringFilterComparator::Equal,
             r#"CounterAgent("a b", 2)"#.to_string()
         )
     );
     assert_eq!(
-        AgentFilter::from_str(r#"(name == Chat("x") or status == Failed)"#).unwrap(),
+        AgentFilter::from_str(r#"(key == Chat("x") or status == Failed)"#).unwrap(),
         AgentFilter::new_or(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, r#"Chat("x")"#.to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, r#"Chat("x")"#.to_string()),
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Failed),
         ])
     );
@@ -1044,22 +1062,22 @@ fn worker_filter_parse_agent_ids_without_quotes() {
 
 #[test]
 fn worker_filter_parse_precedence_and_keywords() {
-    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+    let name = |v: &str| AgentFilter::new_key(StringFilterComparator::Equal, v.to_string());
     assert_eq!(
-        AgentFilter::from_str("name == a or name == b AND not name == c").unwrap(),
+        AgentFilter::from_str("key == a or key == b AND not key == c").unwrap(),
         AgentFilter::new_or(vec![
             name("a"),
             AgentFilter::new_and(vec![name("b"), name("c").not()]),
         ])
     );
     assert_eq!(
-        AgentFilter::from_str("(name == a or name == b) and name == c").unwrap(),
+        AgentFilter::from_str("(key == a or key == b) and key == c").unwrap(),
         AgentFilter::new_and(vec![
             AgentFilter::new_or(vec![name("a"), name("b")]),
             name("c"),
         ])
     );
-    assert_eq!(AgentFilter::from_str("name == and").unwrap(), name("and"));
+    assert_eq!(AgentFilter::from_str("key == and").unwrap(), name("and"));
     assert_eq!(
         AgentFilter::from_str("TRUE or false").unwrap(),
         AgentFilter::new_or(vec![
@@ -1072,8 +1090,8 @@ fn worker_filter_parse_precedence_and_keywords() {
 #[test]
 fn worker_filter_parse_quoted_values_and_keys() {
     assert_eq!(
-        AgentFilter::from_str(r#"name startswith "Type(""#).unwrap(),
-        AgentFilter::new_name(StringFilterComparator::StartsWith, "Type(".to_string())
+        AgentFilter::from_str(r#"key startswith "Type(""#).unwrap(),
+        AgentFilter::new_key(StringFilterComparator::StartsWith, "Type(".to_string())
     );
     assert_eq!(
         AgentFilter::from_str(r#"env."my key" == "a \"b\" \\ c""#).unwrap(),
@@ -1095,13 +1113,13 @@ fn worker_filter_parse_quoted_values_and_keys() {
 
 #[test]
 fn worker_filter_parse_brackets_in_values() {
-    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+    let name = |v: &str| AgentFilter::new_key(StringFilterComparator::Equal, v.to_string());
     for (input, value) in [
-        ("name == a(())()", "a(())()"),
-        (r#"name == a(")")"#, r#"a(")")"#),
-        (r#"name == ")()(""#, ")()("),
-        (r#"name == "(())()""#, "(())()"),
-        ("((name == a))", "a"),
+        ("key == a(())()", "a(())()"),
+        (r#"key == a(")")"#, r#"a(")")"#),
+        (r#"key == ")()(""#, ")()("),
+        (r#"key == "(())()""#, "(())()"),
+        ("((key == a))", "a"),
     ] {
         assert_eq!(
             AgentFilter::from_str(input).unwrap(),
@@ -1181,9 +1199,9 @@ fn worker_filter_parse_brackets_in_env_and_config_keys() {
 fn worker_filter_parse_limits_nesting() {
     use crate::model::MAX_AGENT_FILTER_DEPTH as MAX;
 
-    let name = AgentFilter::new_name(StringFilterComparator::Equal, "a".to_string());
-    let nots = |n: usize| format!("{}name == a", "not ".repeat(n));
-    let parens = |n: usize| format!("{}name == a{}", "(".repeat(n), ")".repeat(n));
+    let name = AgentFilter::new_key(StringFilterComparator::Equal, "a".to_string());
+    let nots = |n: usize| format!("{}key == a", "not ".repeat(n));
+    let parens = |n: usize| format!("{}key == a{}", "(".repeat(n), ")".repeat(n));
     let and_chain = |depth: usize| {
         (1..depth).fold(name.clone(), |filter, _| {
             AgentFilter::new_and(vec![filter, name.clone()])
@@ -1218,7 +1236,7 @@ fn worker_filter_parse_limits_nesting() {
     }
     // Several `--filter` values join under one `And`, which is a level too.
     assert!(
-        AgentFilter::from(vec![nots(MAX - 1), "name == b".to_string()])
+        AgentFilter::from(vec![nots(MAX - 1), "key == b".to_string()])
             .unwrap_err()
             .contains(&depth_error)
     );
@@ -1226,7 +1244,7 @@ fn worker_filter_parse_limits_nesting() {
 
 #[test]
 fn worker_filter_canonical_form() {
-    let name = |v: &str| AgentFilter::new_name(StringFilterComparator::Equal, v.to_string());
+    let name = |v: &str| AgentFilter::new_key(StringFilterComparator::Equal, v.to_string());
 
     assert_eq!(
         AgentFilter::new_or(vec![AgentFilter::new_and(vec![AgentFilter::new_not(
@@ -1265,7 +1283,7 @@ fn worker_filter_canonical_form() {
 
     // One `--filter` is its filter, not an `And` around it; none is the empty `And`.
     assert_eq!(
-        AgentFilter::from(vec!["name == a".to_string()]).unwrap(),
+        AgentFilter::from(vec!["key == a".to_string()]).unwrap(),
         name("a")
     );
     assert_eq!(
@@ -1277,24 +1295,24 @@ fn worker_filter_canonical_form() {
 #[test]
 fn worker_filter_parse_rejects_malformed_filters() {
     for invalid in [
-        "name startswith Type(",
-        r#"name == "abc"#,
-        "(name == a",
-        "name == a)",
+        "key startswith Type(",
+        r#"key == "abc"#,
+        "(key == a",
+        "key == a)",
         ")()(",
         "(())()",
         "()",
-        "((name == a)",
-        "(name == a))",
+        "((key == a)",
+        "(key == a))",
         ")name == a(",
-        "name == )()(",
-        "name == (())()",
-        "name == a)(",
-        "name == a(()",
-        "name == a())",
-        r#"name == a(")"#,
-        "name ==",
-        "name == a name == b",
+        "key == )()(",
+        "key == (())()",
+        "key == a)(",
+        "key == a(()",
+        "key == a())",
+        r#"key == a(")"#,
+        "key ==",
+        "key == a key == b",
         "env. == a",
         "unknown == a",
         "not",
@@ -1342,11 +1360,14 @@ fn agent_filter_strategy() -> impl proptest::strategy::Strategy<Value = AgentFil
         Just(AgentStatus::Retrying),
         Just(AgentStatus::Failed),
         Just(AgentStatus::Exited),
+        Just(AgentStatus::Sandboxed),
     ];
     let mode = prop_oneof![Just(AgentMode::Durable), Just(AgentMode::Ephemeral)];
 
     let leaf = prop_oneof![
-        (string_comparator.clone(), text.clone()).prop_map(|(c, v)| AgentFilter::new_name(c, v)),
+        (string_comparator.clone(), text.clone()).prop_map(|(c, v)| AgentFilter::new_key(c, v)),
+        (comparator.clone(), any::<u128>())
+            .prop_map(|(c, v)| AgentFilter::new_id(c, AgentId(Uuid::from_u128(v)))),
         (comparator.clone(), status).prop_map(|(c, v)| AgentFilter::new_status(c, v)),
         (comparator.clone(), 0u64..1_000_000).prop_map(|(c, v)| {
             AgentFilter::new_revision(c, ComponentRevision::new(v).unwrap())
@@ -1388,25 +1409,25 @@ mod worker_filter_syntax {
 #[test]
 fn worker_filter_combination() {
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).not(),
-        AgentFilter::new_not(AgentFilter::new_name(
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()).not(),
+        AgentFilter::new_not(AgentFilter::new_key(
             StringFilterComparator::Equal,
             "worker-1".to_string(),
         ))
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).and(
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()).and(
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running)
         ),
         AgentFilter::new_and(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running),
         ])
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .and(AgentFilter::new_status(
                 FilterComparator::Equal,
                 AgentStatus::Running,
@@ -1416,24 +1437,24 @@ fn worker_filter_combination() {
                 ComponentRevision::new(1).unwrap()
             )),
         AgentFilter::new_and(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running),
             AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()).or(
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()).or(
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running)
         ),
         AgentFilter::new_or(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
             AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running),
         ])
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .or(AgentFilter::new_status(
                 FilterComparator::NotEqual,
                 AgentStatus::Running,
@@ -1443,14 +1464,14 @@ fn worker_filter_combination() {
                 ComponentRevision::new(1).unwrap()
             )),
         AgentFilter::new_or(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
             AgentFilter::new_status(FilterComparator::NotEqual, AgentStatus::Running),
             AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
         ])
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .and(AgentFilter::new_status(
                 FilterComparator::NotEqual,
                 AgentStatus::Running,
@@ -1461,7 +1482,7 @@ fn worker_filter_combination() {
             )),
         AgentFilter::new_or(vec![
             AgentFilter::new_and(vec![
-                AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
                 AgentFilter::new_status(FilterComparator::NotEqual, AgentStatus::Running),
             ]),
             AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
@@ -1469,7 +1490,7 @@ fn worker_filter_combination() {
     );
 
     assert_eq!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .or(AgentFilter::new_status(
                 FilterComparator::NotEqual,
                 AgentStatus::Running,
@@ -1480,7 +1501,7 @@ fn worker_filter_combination() {
             )),
         AgentFilter::new_and(vec![
             AgentFilter::new_or(vec![
-                AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string()),
+                AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string()),
                 AgentFilter::new_status(FilterComparator::NotEqual, AgentStatus::Running),
             ]),
             AgentFilter::new_revision(FilterComparator::Equal, ComponentRevision::new(1).unwrap()),
@@ -1494,12 +1515,10 @@ fn worker_filter_matches() {
     let worker_metadata = AgentMetadata {
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         component_id,
-        agent_type_name: None,
-        canonical_key: None,
-        agent_id: AgentId {
-            agent_id: "worker-1".to_string(),
-            component_id,
-        },
+        agent_type_name: Some(AgentTypeName("Worker".to_string())),
+        canonical_key: Some("worker-1".to_string()),
+        constructor_parameters: Some("".to_string()),
+        agent_id: AgentId::from_parts(7, 1),
         env: vec![
             ("env1".to_string(), "value1".to_string()),
             ("env2".to_string(), "value2".to_string()),
@@ -1520,7 +1539,6 @@ fn worker_filter_matches() {
             component_revision: ComponentRevision::new(1).unwrap(),
             ..AgentStatusRecord::default()
         },
-        original_phantom_id: None,
         fingerprint: AgentFingerprint(Uuid::now_v7()),
         agent_mode: AgentMode::Durable,
         create_request: crate::model::oplog::CreateRequest::new(
@@ -1532,13 +1550,37 @@ fn worker_filter_matches() {
     };
 
     assert!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .and(AgentFilter::new_status(
                 FilterComparator::Equal,
                 AgentStatus::Idle,
             ))
             .matches(&worker_metadata)
     );
+
+    assert!(
+        AgentFilter::new_id(FilterComparator::Equal, AgentId::from_parts(7, 1))
+            .matches(&worker_metadata)
+    );
+    assert!(
+        !AgentFilter::new_id(FilterComparator::Equal, AgentId::from_parts(8, 1))
+            .matches(&worker_metadata)
+    );
+
+    let unkeyed = AgentMetadata {
+        canonical_key: None,
+        ..worker_metadata.clone()
+    };
+    for comparator in [
+        StringFilterComparator::Equal,
+        StringFilterComparator::NotEqual,
+        StringFilterComparator::NotLike,
+    ] {
+        assert!(
+            !AgentFilter::new_key(comparator, "other".to_string()).matches(&unkeyed),
+            "a key filter never matches an agent without a key"
+        );
+    }
 
     assert!(
         AgentFilter::new_env(
@@ -1569,7 +1611,7 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-1".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-1".to_string())
             .and(AgentFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
@@ -1578,7 +1620,7 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        AgentFilter::new_name(StringFilterComparator::Equal, "worker-2".to_string())
+        AgentFilter::new_key(StringFilterComparator::Equal, "worker-2".to_string())
             .or(AgentFilter::new_revision(
                 FilterComparator::Equal,
                 ComponentRevision::new(1).unwrap()
@@ -1595,7 +1637,7 @@ fn worker_filter_matches() {
             FilterComparator::Less,
             ComponentRevision::new(2).unwrap()
         ))
-        .or(AgentFilter::new_name(
+        .or(AgentFilter::new_key(
             StringFilterComparator::Equal,
             "worker-2".to_string(),
         ))
@@ -1662,11 +1704,11 @@ fn worker_filter_matches() {
         ("false", false),
         ("not true", false),
         ("not false", true),
-        ("name == worker-1 and true", true),
-        ("name == worker-1 and false", false),
-        ("name == worker-2 or true", true),
-        ("name == worker-2 or false", false),
-        ("name == worker-1 or false", true),
+        ("key == worker-1 and true", true),
+        ("key == worker-1 and false", false),
+        ("key == worker-2 or true", true),
+        ("key == worker-2 or false", false),
+        ("key == worker-1 or false", true),
         ("status == Idle and not false", true),
     ] {
         assert_eq!(
@@ -1680,6 +1722,155 @@ fn worker_filter_matches() {
     assert!(!AgentFilter::new_or(vec![]).matches(&worker_metadata));
 }
 
+fn sandbox_metadata(never_live: bool, status: AgentStatus) -> AgentMetadata {
+    let component_id = ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3"));
+    AgentMetadata {
+        component_id,
+        agent_type_name: None,
+        canonical_key: None,
+        constructor_parameters: None,
+        owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
+        agent_id: AgentId::from_parts(1, 1),
+        env: vec![],
+        environment_id: EnvironmentId::new(),
+        created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
+        created_by_email: AccountEmail::new("test@golem"),
+        config: vec![],
+        created_at: Timestamp::now_utc(),
+        parent: None,
+        last_known_status: AgentStatusRecord {
+            status,
+            never_live,
+            ..AgentStatusRecord::default()
+        },
+        fingerprint: AgentFingerprint(Uuid::now_v7()),
+        agent_mode: AgentMode::Durable,
+        create_request: crate::model::oplog::CreateRequest::new(
+            crate::model::oplog::CreateRequestKind::Fork,
+            None,
+            crate::base_model::caller::Caller::anonymous(),
+            &crate::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
+    }
+}
+
+#[test]
+fn sandboxed_status_parses_displays_converts_and_sorts_last() {
+    assert_eq!(
+        AgentFilter::from_str("status = sandboxed").unwrap(),
+        AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Sandboxed)
+    );
+    assert_eq!(
+        AgentStatus::from_str("Sandboxed"),
+        Ok(AgentStatus::Sandboxed)
+    );
+    assert_eq!(AgentStatus::Sandboxed.to_string(), "Sandboxed");
+    assert_eq!(i32::from(AgentStatus::Sandboxed), 7);
+    assert_eq!(AgentStatus::try_from(7), Ok(AgentStatus::Sandboxed));
+    assert_eq!(
+        golem_api_grpc::proto::golem::worker::AgentStatus::from(AgentStatus::Sandboxed) as i32,
+        golem_api_grpc::proto::golem::worker::AgentStatus::Sandboxed as i32
+    );
+    assert!(AgentStatus::Sandboxed > AgentStatus::Exited);
+    assert_eq!(
+        serde_json::to_string(&AgentStatus::Sandboxed).unwrap(),
+        "\"Sandboxed\""
+    );
+    let bytes = crate::serialization::serialize(&AgentStatus::Sandboxed).unwrap();
+    assert_eq!(
+        crate::serialization::deserialize::<AgentStatus>(&bytes).unwrap(),
+        AgentStatus::Sandboxed
+    );
+}
+
+/// The filter's status leaf matches the reported status. A marked agent whose folded status is
+/// `Running` is `Sandboxed`, not `Running`, and an unmarked agent is matched by its folded status.
+#[test]
+fn status_filter_matches_the_reported_status_of_a_sandbox() {
+    let sandbox = sandbox_metadata(true, AgentStatus::Running);
+    let sandboxed = AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Sandboxed);
+    let running = AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running);
+    assert!(sandboxed.matches(&sandbox));
+    assert!(!running.matches(&sandbox));
+    assert!(
+        AgentFilter::new_status(FilterComparator::Greater, AgentStatus::Exited).matches(&sandbox)
+    );
+    assert!(
+        !AgentFilter::new_status(FilterComparator::LessEqual, AgentStatus::Exited)
+            .matches(&sandbox)
+    );
+
+    let live = sandbox_metadata(false, AgentStatus::Running);
+    assert!(running.matches(&live));
+    assert!(!sandboxed.matches(&live));
+}
+
+/// Guest metadata and guest enumeration both go through this projection: a guest sees
+/// `Sandboxed` for a marked agent, while the internal folded status stays `Running`.
+#[test]
+fn guest_metadata_reports_sandboxed_for_a_marked_agent() {
+    use crate::model::oplog::types::AgentMetadataForGuests;
+
+    let sandbox = sandbox_metadata(true, AgentStatus::Running);
+    let guest = AgentMetadataForGuests::from(sandbox.clone());
+    assert_eq!(guest.status, AgentStatus::Sandboxed);
+    assert_eq!(sandbox.last_known_status.status, AgentStatus::Running);
+
+    let live = AgentMetadataForGuests::from(sandbox_metadata(false, AgentStatus::Suspended));
+    assert_eq!(live.status, AgentStatus::Suspended);
+}
+
+#[test]
+fn agent_metadata_dto_keeps_the_underlying_status_through_the_proto() {
+    use crate::model::agent::AgentMetadataDto;
+    use golem_api_grpc::proto::golem::worker::AgentMetadata as ProtoAgentMetadata;
+
+    let dto = |status: AgentStatus, underlying_status: Option<AgentStatus>| AgentMetadataDto {
+        agent_id: AgentId::from_parts(1, 1),
+        agent_type_name: None,
+        canonical_key: None,
+        constructor_parameters: None,
+        owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
+        environment_id: EnvironmentId::new(),
+        created_by: AccountId::new(),
+        env: HashMap::new(),
+        config: vec![],
+        status,
+        underlying_status,
+        component_revision: ComponentRevision::new(1).unwrap(),
+        retry_count: 0,
+        pending_invocation_count: 0,
+        updates: vec![],
+        created_at: Timestamp::now_utc().rounded(),
+        last_error: None,
+        last_error_kind: None,
+        component_size: 0,
+        total_linear_memory_size: 0,
+        exported_resource_instances: vec![],
+        active_plugins: Default::default(),
+        skipped_regions: vec![],
+        deleted_regions: vec![],
+        last_oplog_index: OplogIndex::from_u64(4),
+        fingerprint: AgentFingerprint(Uuid::new_v4()),
+    };
+
+    let sandbox = dto(AgentStatus::Sandboxed, Some(AgentStatus::Interrupted));
+    let proto = ProtoAgentMetadata::try_from(sandbox.clone()).unwrap();
+    assert_eq!(
+        proto.underlying_status,
+        Some(golem_api_grpc::proto::golem::worker::AgentStatus::Interrupted as i32)
+    );
+    assert_eq!(AgentMetadataDto::try_from(proto).unwrap(), sandbox);
+    let json = serde_json::to_value(&sandbox).unwrap();
+    assert_eq!(json["status"], "Sandboxed");
+    assert_eq!(json["underlyingStatus"], "Interrupted");
+
+    let live = dto(AgentStatus::Idle, None);
+    let proto = ProtoAgentMetadata::try_from(live.clone()).unwrap();
+    assert_eq!(proto.underlying_status, None);
+    assert_eq!(AgentMetadataDto::try_from(proto).unwrap(), live);
+}
+
 #[test]
 fn agent_status_record_has_pending_work_for_pending_invocations() {
     let mut status = AgentStatusRecord::default();
@@ -1689,6 +1880,7 @@ fn agent_status_record_has_pending_work_for_pending_invocations() {
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(ComponentRevision::INITIAL),
+        operation: None,
     });
 
     assert!(status.has_pending_work(Timestamp::now_utc()));
@@ -1704,6 +1896,7 @@ fn scheduled_invocations_become_pending_work_only_when_due() {
             oplog_index: OplogIndex::INITIAL,
             idempotency_key: Some(InvocationId::new()),
             manual_update_target_revision: None,
+            operation: None,
         }],
         ..Default::default()
     };
@@ -1804,7 +1997,7 @@ fn agent_filter_mode_protobuf_round_trip() {
     let recovered: AgentFilter = proto.try_into().unwrap();
     assert_eq!(original_ephemeral, recovered);
 
-    let composite = AgentFilter::new_name(StringFilterComparator::Equal, "w1".to_string()).and(
+    let composite = AgentFilter::new_key(StringFilterComparator::Equal, "w1".to_string()).and(
         AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
     );
     let proto: ProtoAgentFilter = composite.clone().into();

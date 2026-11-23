@@ -1021,6 +1021,7 @@ async fn test_tool_depublication_waits_for_grant_eligibility_lock(db: &PostgresD
                 )),
                 object_store_key: String::new(),
                 binary_hash: SqlBlake3Hash::empty(),
+                package_metadata: None,
             },
             Vec::new(),
         )

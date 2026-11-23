@@ -333,8 +333,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "FAILED UPDATE");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}target revision:   {}", params.target_revision,);
+            let _ = writeln!(result, "{pad}failure class:     {}", params.failure_class);
             if let Some(details) = &params.details {
                 let _ = writeln!(result, "{pad}error:             {details}");
+            }
+            if let Some(divergence) = &params.divergence {
+                let _ = writeln!(result, "{pad}divergence:        {divergence}");
             }
         }
         PublicOplogEntry::GrowMemory(params) => {

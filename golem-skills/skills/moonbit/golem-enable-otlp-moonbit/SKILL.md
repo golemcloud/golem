@@ -113,13 +113,13 @@ When `metrics` is included in `signals`, exported metrics include the following 
 
 These are emitted OTLP names. A backend such as Prometheus may normalize dots to underscores and add suffixes; use that backend's mapping when writing queries.
 
-Each metric includes `service.name`, `golem.agent.id`, `golem.component.id`, and `golem.component.version` attributes.
+Each metric includes `service.name`, `golem.agent.id`, `golem.agent.type` (when the agent has a type), and `golem.component.version` attributes.
 
 ## Export Semantics
 
 - Long-lived spans retain their origin trace across invocations. Failed or retrying attempts do not close the logical span. Logs use their recorded trace context.
 - Streams export aggregate item counts, not a span per item. Query active-resource counts and initial/total memory as gauges.
-- Use `agent-type` service-name mode to exclude constructor parameters and phantom IDs from `service.name`. `golem.agent.id` still contains the full identity.
+- Use `agent-type` service-name mode to set `service.name` to the agent type name, without constructor parameters. `golem.agent.id` is always the agent ID.
 - Treat collector export as best effort, not exactly-once delivery. A failed send can lose telemetry; traces, logs, and metrics are attempted independently.
 - Fork/revert cannot retract exported telemetry. Agent deletion does not close open spans, and switching plugin instances can lose open-span state.
 

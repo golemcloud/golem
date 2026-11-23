@@ -72,8 +72,7 @@ impl HttpClient2 for HttpClient2Impl {
 
     async fn start_polling(&self, until: String) {
         let port = std::env::var("PORT").unwrap_or("9999".to_string());
-        let component_id = std::env::var("GOLEM_COMPONENT_ID").unwrap_or("unknown".to_string());
-        let worker_name = std::env::var("GOLEM_WORKER_NAME").unwrap_or("unknown".to_string());
+        let agent_id = std::env::var("GOLEM_AGENT_ID").unwrap_or("unknown".to_string());
         let poll_delay_nanos = std::env::var("POLL_DELAY_NANOS")
             .map(|value| {
                 value
@@ -87,9 +86,7 @@ impl HttpClient2 for HttpClient2Impl {
         loop {
             println!("Calling the poll endpoint");
             let response = wasi_fetch::Client::new()
-                .get(&format!(
-                    "http://localhost:{port}/poll?component_id={component_id}&worker_name={worker_name}"
-                ))
+                .get(&format!("http://localhost:{port}/poll?agent_id={agent_id}"))
                 .send()
                 .await
                 .unwrap();

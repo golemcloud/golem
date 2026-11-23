@@ -187,8 +187,8 @@ async fn rust_generated_native_stream_bridge_e2e() {
         impl StreamConsumer for Consumer {
             fn new(_name: String) -> Self { Self }
             async fn run(&self, scenario: String) -> String {
-                let provider = StreamProvider::get(format!("target-{scenario}")).unwrap();
-                let forwarder = StreamProvider::get(format!("forwarder-{scenario}")).unwrap();
+                let provider = StreamProvider::upsert(format!("target-{scenario}")).unwrap();
+                let forwarder = StreamProvider::upsert(format!("forwarder-{scenario}")).unwrap();
                 if scenario == "basics" {
                 let (mut writer, input) = new_u32_stream();
                 spawn_local(async move { writer.write_all([4, 5]).await.unwrap(); writer.close().await.unwrap(); });

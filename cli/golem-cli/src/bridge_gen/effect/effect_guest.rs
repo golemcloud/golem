@@ -8,8 +8,8 @@ use crate::bridge_gen::typescript::ts_writer::TsWriter;
 use crate::bridge_gen::typescript::*;
 use crate::sdk_overrides::sdk_overrides;
 use camino::Utf8Path;
-use golem_common::model::agent::{AgentConfigSource, AgentMode};
-use golem_common::schema::agent::{AgentConfigDeclarationSchema, AgentTypeSchema};
+use golem_common::model::agent::AgentMode;
+use golem_common::schema::agent::AgentTypeSchema;
 use serde_json::json;
 
 pub struct EffectGuestBridgeGenerator {
@@ -85,7 +85,9 @@ impl EffectGuestBridgeGenerator {
         );
         let durable = inner.agent_type.mode == AgentMode::Durable;
         if durable {
-            writer.write_line("get agentId(): string { return this.resolved.agentId; }");
+            writer.write_line(
+                "/** The ID of the agent, read from the host. On a client of `upsert` it creates the agent when it is missing. */\nget agentId(): base.RemoteAgentHandle['agentId'] { return this.resolved.agentId; }",
+            );
         }
         writer.write_line(format!(
             r#"
@@ -93,33 +95,13 @@ impl EffectGuestBridgeGenerator {
 withScopeCard(scopeCard: base.ScopeCard | undefined): {class} {{ return new {class}(this.resolved, scopeCard); }}
 "#
         ));
-        let configs: Vec<_> = inner
-            .agent_type
-            .config
-            .iter()
-            .filter(|c| c.source == AgentConfigSource::Local)
-            .collect();
-        for with_config in [false, true] {
-            if with_config && configs.is_empty() {
-                continue;
-            }
-            for (name, explicit, fresh) in [
-                ("get", false, false),
-                ("getPhantom", true, false),
-                ("newPhantom", false, true),
-            ] {
-                if !durable && name != "newPhantom" {
-                    continue;
-                }
-                let name = format!("{name}{}", if with_config { "WithConfig" } else { "" });
-                self.constructor(
-                    writer,
-                    &name,
-                    explicit,
-                    fresh && durable,
-                    if with_config { &configs } else { &[] },
-                )?;
-            }
+        self.upsert(writer)?;
+        if durable {
+            self.create(writer)?;
+            writer.write_line(format!(
+                "/** Connects to the existing agent with the ID. It never creates the agent: an unknown ID, or the ID of an agent of another type, fails with a `not-found` cause. */\nstatic getById(agentId: Parameters<typeof base.getRemoteAgentById>[1]): Effect.Effect<{class}, base.RemoteCallError, base.ConnectionRequirements> {{ return Effect.map(base.getRemoteAgentById({}, agentId), (resolved) => new {class}(resolved)); }}",
+                serde_json::to_string(class)?
+            ));
         }
         let mut naming = ParameterNaming::new();
         naming.reserve_many([
@@ -184,41 +166,64 @@ readonly {member} = (() => {{
         Ok(())
     }
 
-    fn constructor(
-        &self,
-        writer: &mut TsWriter,
-        name: &str,
-        explicit: bool,
-        fresh: bool,
-        configs: &[&AgentConfigDeclarationSchema],
-    ) -> anyhow::Result<()> {
+    fn upsert(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
         let inner = &self.inner;
         let class = &inner.agent_type.type_name.0;
-        let mut naming = ParameterNaming::new();
-        match inner.ts_input(&inner.agent_type.constructor.input_schema)? {
-            TsInput::Params(params) => naming.reserve_many(params.into_iter().map(|(n, _)| n)),
-            TsInput::Multimodal(_) => naming.reserve(MULTIMODAL_INPUT_NAME),
-        }
+        let mut naming = inner.constructor_parameter_naming()?;
+        let payload = naming.fresh("constructorPayload");
+        writer.write_doc(match inner.agent_type.mode {
+            AgentMode::Durable => {
+                "Connects to the keyed agent of the constructor parameters, and creates it when it is missing."
+            }
+            AgentMode::Ephemeral => {
+                "Connects to the agent type; each invocation runs on a new one-shot instance."
+            }
+        });
+        let mut method = writer.begin_static_method("upsert");
+        inner.write_parameter_list(&mut method, &inner.agent_type.constructor.input_schema)?;
+        method.result(&format!(
+            "Effect.Effect<{class}, base.RemoteCallError, base.ConnectionRequirements>"
+        ));
+        method.write_line("return Effect.gen(function* () {");
+        method.write_line(format!("const {payload} = yield* base.attempt(() => {{"));
+        method.write_line(format!("const {payload}: base.SchemaValue = "));
+        inner.write_encode_input_record(
+            &mut method,
+            &inner.agent_type.constructor.input_schema,
+            MULTIMODAL_INPUT_NAME,
+        )?;
+        method.write_line(format!("return {payload}; }});"));
+        method.write_line(format!(
+            "return new {class}(yield* base.upsertRemoteAgent({}, {payload}));",
+            serde_json::to_string(class)?
+        ));
+        method.write_line("});");
+        Ok(())
+    }
+
+    fn create(&self, writer: &mut TsWriter) -> anyhow::Result<()> {
+        let inner = &self.inner;
+        let class = &inner.agent_type.type_name.0;
+        let configs = inner.local_configs();
+        let mut naming = inner.constructor_parameter_naming()?;
+        let options = naming.fresh("options");
         let config_names: Vec<_> = configs
             .iter()
             .map(|c| naming.fresh(TypeScriptBridgeGenerator::guest_config_parameter_name(c)))
             .collect();
-        let phantom = naming.fresh("phantomId");
         let payload = naming.fresh("constructorPayload");
         let config = naming.fresh("agentConfig");
-        let mut method = writer.begin_static_method(name);
-        if explicit {
-            method.param(&phantom, "string");
-        }
+        writer.write_doc(
+            "Creates a durable agent, and connects to it after its initialization. With `keyed`, it creates the keyed agent of the constructor parameters, and fails with a `conflict` cause when that agent exists; otherwise the new agent has no key and a new ID. `config` overrides local configuration values, and `env` adds environment variables to the ones the manifest defines.",
+        );
+        let mut method = writer.begin_static_method("create");
         inner.write_parameter_list(&mut method, &inner.agent_type.constructor.input_schema)?;
-        inner.write_guest_config_parameter_list(&mut method, configs, &config_names)?;
+        method.param(
+            &format!("{options}?"),
+            &inner.create_options_type(&configs, false)?,
+        );
         method.result(&format!(
-            "Effect.Effect<{class}, base.RemoteCallError, base.ConnectionRequirements{}>",
-            if fresh {
-                " | base.PhantomRequirements"
-            } else {
-                ""
-            }
+            "Effect.Effect<{class}, base.RemoteCallError, base.ConnectionRequirements>"
         ));
         method.write_line("return Effect.gen(function* () {");
         method.write_line(format!(
@@ -230,19 +235,13 @@ readonly {member} = (() => {{
             &inner.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        inner.write_guest_config_encoding(&mut method, configs, &config_names, &config)?;
+        inner.write_config_option_locals(&mut method, &options, &configs, &config_names);
+        inner.write_guest_config_encoding(&mut method, &configs, &config_names, &config)?;
         method.write_line(format!("return [{payload}, {config}] as const; }});"));
-        if fresh {
-            method.write_line(format!("const {phantom} = yield* base.generatePhantomId;"));
-        } else if !explicit {
-            method.write_line(format!("const {phantom} = undefined;"));
-        }
-        let mode = if inner.agent_type.mode == AgentMode::Durable {
-            "durable"
-        } else {
-            "ephemeral"
-        };
-        method.write_line(format!("return new {class}(yield* base.resolveRemoteAgent({}, {payload}, {phantom}, {config}, {mode:?}));", serde_json::to_string(class)?));
+        method.write_line(format!(
+            "return new {class}(yield* base.createRemoteAgent({}, {payload}, {{ keyed: {options}?.keyed ?? false, configs: {config}, env: {options}?.env ?? {{}} }}));",
+            serde_json::to_string(class)?
+        ));
         method.write_line("});");
         Ok(())
     }

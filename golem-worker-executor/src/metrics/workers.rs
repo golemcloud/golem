@@ -180,6 +180,16 @@ lazy_static! {
         "Oplog entries processed while catching up the physical invocation-result index"
     )
     .unwrap();
+    static ref INVOCATION_LISTINGS_TOTAL: Counter = register_counter!(
+        "invocation_listings_total",
+        "Listings of the invocations of one agent"
+    )
+    .unwrap();
+    static ref INVOCATION_LISTING_RESULTS_TOTAL: Counter = register_counter!(
+        "invocation_listing_results_total",
+        "Invocation results read to list the invocations of one agent"
+    )
+    .unwrap();
     static ref AGENT_IDENTITY_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
         "agent_identity_resolution_total",
         "Mode-hint events observed during authoritative agent identity resolution; multiple events may occur per resolution",
@@ -284,6 +294,11 @@ pub fn record_invocation_result_resolution(outcome: &'static str) {
         .inc();
 }
 
+pub fn record_invocation_listing(results: usize) {
+    INVOCATION_LISTINGS_TOTAL.inc();
+    INVOCATION_LISTING_RESULTS_TOTAL.inc_by(results as f64);
+}
+
 pub fn record_invocation_result_index_catch_up(entries: usize) {
     INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL.inc();
     INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL.inc_by(entries as f64);
@@ -332,6 +347,7 @@ pub fn initialize_worker_count_by_status() {
         AgentStatus::Retrying,
         AgentStatus::Failed,
         AgentStatus::Exited,
+        AgentStatus::Sandboxed,
     ] {
         set_worker_count_by_status(worker_status_label(status), 0.0);
     }
@@ -524,6 +540,7 @@ fn worker_status_label(status: AgentStatus) -> &'static str {
         AgentStatus::Retrying => "Retrying",
         AgentStatus::Failed => "Failed",
         AgentStatus::Exited => "Exited",
+        AgentStatus::Sandboxed => "Sandboxed",
     }
 }
 

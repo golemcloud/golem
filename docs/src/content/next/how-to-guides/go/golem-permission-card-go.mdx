@@ -12,7 +12,7 @@ type ForwardIn struct{ Card golem.PermissionCard }
 var Forward = Agent.Method[ForwardIn, golem.PermissionCard]("forward")
 
 var _ = agent.Handle(Forward, func(_ *golem.Context[state], in ForwardIn) golem.PermissionCard {
-	return receiver.Accept.MustCall(receiver.Agent.Get(receiver.ID{Name: "target"}), receiver.AcceptIn{Card: in.Card})
+	return receiver.Accept.MustCall(receiver.Agent.Upsert(receiver.ID{Name: "target"}), receiver.AcceptIn{Card: in.Card})
 })
 ```
 
@@ -37,7 +37,7 @@ view := card.MustInspect() // view.LowerPositive, LowerNegative, UpperPositive, 
 child := card.MustDerive(golem.Bounds{LowerPositive: view.LowerPositive}, golem.Some(golem.LifespanOf(time.Hour)))
 
 // Install the child on another agent, then revoke the card and everything derived from it.
-err = child.Install(golem.AgentHolder(golem.AgentID{ComponentID: componentID, AgentID: client.AgentID()}))
+err = child.Install(golem.AgentHolder(client.MustAgentID()))
 n, err := card.Revoke() // n counts the revoked cards
 ```
 

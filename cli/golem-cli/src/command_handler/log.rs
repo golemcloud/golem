@@ -14,12 +14,15 @@
 
 use crate::context::Context;
 use crate::log::print_line;
-use crate::model::cli_output::{StructuredOutput, to_structured_output_value_masked};
+use crate::model::cli_output::raw_json_text::{compact, pretty, yaml_flow};
+use crate::model::cli_output::{
+    StructuredOutput, marked_value_to_toon, take_raw_json, to_marked_structured_output_value_masked,
+};
 use crate::model::format::Format;
 use crate::model::masking::MaskingConfig;
 use crate::model::text_format::{
-    DecoratedIndent, TextOutput, TruncatableTextOutput, to_colored_json, to_colored_yaml,
-    truncate_rendered,
+    DecoratedIndent, TextOutput, TruncatableTextOutput, colorize_json, colorize_yaml,
+    to_colored_json, to_colored_yaml, truncate_rendered,
 };
 use crate::toon;
 use serde::Serialize;
@@ -143,8 +146,88 @@ pub fn render_command_output_document_masked<Output: StructuredOutput>(
     config: MaskingConfig,
     output: Output,
 ) -> anyhow::Result<String> {
-    let value = to_structured_output_value_masked(output, config)?;
-    render_structured_document(format, colorize, &value)
+    let value = to_marked_structured_output_value_masked(output, config)?;
+    render_marked_value(format, colorize, value)
+}
+
+/// Renders a structured output value that can hold marked raw JSON values, such as the claims of
+/// a user. Each raw JSON value is printed as the JSON value that its text holds, with every
+/// number as it is in the text: the recorded text goes into the JSON formats, YAML gets a flow
+/// node on one line, and TOON gets a value that keeps the member order and the number texts.
+/// Everything else is printed as [`render_structured_document`] prints it.
+fn render_marked_value(
+    format: Format,
+    colorize: bool,
+    mut value: serde_json::Value,
+) -> anyhow::Result<String> {
+    if format == Format::Toon {
+        return Ok(format!(
+            "{TOON_FRAME_START}\n{}\n{TOON_FRAME_END}",
+            toon::encode_toon_value(&marked_value_to_toon(&value)?)?
+        ));
+    }
+    let raw_json = take_raw_json(&mut value);
+    if raw_json.is_empty() {
+        return render_structured_document(format, colorize, &value);
+    }
+    match format {
+        Format::Json => {
+            let mut text = serde_json::to_string(&value)?;
+            for (token, raw) in &raw_json {
+                text = put_in_place(&text, &format!("\"{token}\""), |_| Ok(compact(raw)))?;
+            }
+            Ok(text)
+        }
+        Format::PrettyJson => {
+            let mut text = serde_json::to_string_pretty(&value)?;
+            for (token, raw) in &raw_json {
+                // The value starts on the line of its member name, which has two spaces for
+                // each level.
+                text = put_in_place(&text, &format!("\"{token}\""), |line_start| {
+                    let spaces = line_start.len() - line_start.trim_start_matches(' ').len();
+                    Ok(pretty(raw, spaces / 2))
+                })?;
+            }
+            if colorize {
+                colorize_json(&text)
+            } else {
+                Ok(text)
+            }
+        }
+        Format::Yaml | Format::PrettyYaml => {
+            let mut text = serde_yaml::to_string(&value)?;
+            for (token, raw) in &raw_json {
+                // The token has only letters, digits and hyphens, so YAML prints it as it is.
+                text = put_in_place(&text, token, |_| yaml_flow(raw))?;
+            }
+            if colorize && format == Format::PrettyYaml {
+                text = colorize_yaml(&text)?;
+            }
+            Ok(format!("---\n{text}"))
+        }
+        Format::Toon | Format::Text => {
+            unreachable!("TOON is rendered above, and text is not a structured output format")
+        }
+    }
+}
+
+/// Replaces the one occurrence of `token` in `text`. `replacement` gets the part of the token's
+/// line that comes before the token.
+fn put_in_place(
+    text: &str,
+    token: &str,
+    replacement: impl FnOnce(&str) -> anyhow::Result<String>,
+) -> anyhow::Result<String> {
+    let at = text
+        .find(token)
+        .ok_or_else(|| anyhow::anyhow!("a raw JSON value is missing from the rendered output"))?;
+    let line_start = text[..at].rfind('\n').map_or(0, |end| end + 1);
+    Ok(format!(
+        "{}{}{}",
+        &text[..at],
+        replacement(&text[line_start..at])?,
+        &text[at + token.len()..]
+    ))
 }
 
 pub fn print_command_output_document<Output: StructuredOutput>(

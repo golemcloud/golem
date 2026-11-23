@@ -208,8 +208,8 @@ message PublicPrincipal {
 message PublicUserPrincipal {
   Pair pair = 1;
   google.protobuf.Timestamp authenticated_at = 2;
-  // The claim set as a JSON object, or as a JSON string of its text when it holds a number that
-  // no f64 holds. Absent unless the reader asked for the claims.
+  // The claim set as the text of one JSON object, exactly as Golem received it. Absent unless
+  // the reader asked for the claims.
   optional string claims = 3;
 }
 

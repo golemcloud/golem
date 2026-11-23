@@ -329,7 +329,7 @@ golem agent oplog 'CounterAgent("my-counter")'
 
 | Property | What it shows |
 | -------- | ------------- |
-| Identity | `CounterAgent("my-counter")` reached the same agent on every call. Its type and constructor parameters are its address. |
+| Identity | `CounterAgent("my-counter")` reached the same agent on every call. Its type and constructor parameters are its key, which addresses the keyed agent. |
 | Ordinary state | The count is an ordinary field. The code has no save call or database write. |
 | Recovery | After the crash, Golem rebuilt the state from the oplog, with no redeploy or manual restore. |
 | Persistent local server data | The local server keeps components, agents, and oplogs in a `golem` directory under the platform's local data directory, so state survives a restart without `--clean`. |
@@ -351,7 +351,7 @@ empty, repeat the list command. Restart only after the list contains the workflo
 async start({ approver }) {
   const approvalPromiseId = createPromise();
 
-  await HumanAgent.client.get({ username: approver }).requestApproval({
+  await HumanAgent.client.upsert({ username: approver }).requestApproval({
     workflowId: this.workflowId,
     promiseId: encodePromiseId(approvalPromiseId),
   });
@@ -401,7 +401,7 @@ Invocation result in TypeScript syntax:
 start: ({ approver }) =>
   Effect.gen(function* () {
     const promiseId = yield* Agents.Promises.create;
-    const human = yield* HumanAgent.client.get({ username: approver });
+    const human = yield* HumanAgent.client.upsert({ username: approver });
     const requestId = yield* Schema.decodeEffect(Ids.PromiseId)(promiseId);
     yield* human.requestApproval({ workflowId, promiseId: requestId });
     const bytes = yield* Agents.Promises.await(promiseId);
@@ -440,7 +440,7 @@ The original invocation returns `"Workflow report-q3 was approved"`.
 async fn start(&mut self, approver: String) -> String {
     let approval_promise_id = create_promise();
 
-    let mut approver = HumanAgentClient::get(approver);
+    let mut approver = HumanAgentClient::upsert(approver);
     approver
         .request_approval(self.id.clone(), approval_promise_id.clone())
         .await;
@@ -490,7 +490,7 @@ Invocation result in Rust syntax:
   </Tabs.Tab>
   <Tabs.Tab>
 The Scala template's `start(approver)` creates a host promise, calls
-`HumanAgentClient.get(approver).requestApproval(...)`, then waits with
+`HumanAgentClient.upsert(approver).requestApproval(...)`, then waits with
 `HostApi.awaitPromise(promiseId)` inside the same method.
 
 ```shell copy
@@ -548,7 +548,7 @@ The original invocation returns `"Workflow report-q3 was approved ✅"`.
 agent.Handle(workflow.Start, func(ctx *golem.Context[state], in workflow.StartIn) string {
 	approval := golem.NewPromise[string]()
 
-	approver := human.Agent.Get(human.ID{Username: in.Approver})
+	approver := human.Agent.Upsert(human.ID{Username: in.Approver})
 	human.RequestApproval.MustCall(approver, human.RequestApprovalIn{
 		WorkflowID: ctx.State.workflowID,
 		PromiseID:  approval.ID(),

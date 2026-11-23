@@ -240,6 +240,11 @@ impl PublicOplogEntry {
             Self::StreamItems(params) => redact_typed_value(&mut params.record),
             Self::StreamTerminal(params) => redact_typed_value(&mut params.record),
             Self::StreamSession(params) => redact_typed_value(&mut params.record),
+            Self::FailedUpdate(params) => {
+                if let Some(divergence) = &mut params.divergence {
+                    divergence.redact_host_managed_values_for_external();
+                }
+            }
             _ => {}
         }
     }
@@ -390,6 +395,50 @@ impl Display for OplogCursor {
     }
 }
 
+/// The scan allowance of an oplog range read: the number of oplog entries that it may read, and
+/// how long it may read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct OplogScanAllowance {
+    pub entries: u64,
+    pub millis: u64,
+}
+
+impl OplogScanAllowance {
+    /// The allowance that is left of `self` after `scan` charged it.
+    pub fn after(self, scan: &OplogScan) -> Self {
+        Self {
+            entries: self.entries.saturating_sub(scan.charged_entries),
+            millis: self.millis.saturating_sub(scan.charged_millis),
+        }
+    }
+
+    pub fn is_spent(&self) -> bool {
+        self.entries == 0 || self.millis == 0
+    }
+}
+
+/// The scan accounting of an oplog range read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct OplogScan {
+    // The allowance that the read applied: the requested allowance, or the configured allowance
+    // of the server without one, clamped to the configured allowance.
+    pub limit: OplogScanAllowance,
+    /// The oplog entries that the read charged: the entries that it read to find the component
+    /// revision at the start of the range, and the entries that it read for the page, also those
+    /// that the byte limit of the page left out.
+    pub charged_entries: u64,
+    /// The time that the read charged, rounded up to a millisecond.
+    pub charged_millis: u64,
+    /// The read stopped before the end of the range because it spent the allowance.
+    pub exhausted: bool,
+}
+
 /// Parses the string form `<index>-<revision>-<query hash>` of `Display`.
 impl std::str::FromStr for OplogCursor {
     type Err = String;
@@ -478,15 +527,25 @@ declare_structs! {
     }
 }
 
-declare_unions! {
-    /// An item of an oplog page: a full oplog entry, or an entry that the page leaves out
-    /// because it is too large.
-    #[allow(clippy::large_enum_variant)]
-    pub enum PublicOplogPageEntry {
-        Included(PublicOplogEntryWithIndex),
-        Omitted(OmittedOplogEntry),
-    }
+/// An item of an oplog page: a full oplog entry, or an entry that the page leaves out
+/// because it is too large.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
+pub enum PublicOplogPageEntry {
+    Included(PublicOplogEntryWithIndex),
+    Omitted(OmittedOplogEntry),
+}
 
+// Read without a buffer, so the claims of the callers keep their exact JSON text. See `raw_json`.
+crate::deserialize_internally_tagged!(PublicOplogPageEntry, "type", {
+    "Included" => Included,
+    "Omitted" => Omitted,
+});
+
+declare_unions! {
     pub enum PublicOplogEntryAttribution {
         Agent(Empty),
         Entity(PublicEntityInvocationContext),
@@ -547,9 +606,13 @@ pub struct PluginInstallationDescription {
     pub parameters: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Union)
+)]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "type")]
 pub enum PublicDurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
@@ -866,7 +929,7 @@ pub enum OplogInclude {
     Claims,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
@@ -879,6 +942,17 @@ pub enum PublicAgentInvocation {
     ProcessOplogEntries(ProcessOplogEntriesParameters),
     ManualUpdate(ManualUpdateParameters),
 }
+
+// Read without a buffer, so the claims of the callers keep their exact JSON text. See `raw_json`.
+crate::deserialize_internally_tagged!(PublicAgentInvocation, "type", {
+    "AgentInitialization" => AgentInitialization,
+    "AgentMethodInvocation" => AgentMethodInvocation,
+    "ExternalTool" => ExternalTool,
+    "SaveSnapshot" => SaveSnapshot,
+    "LoadSnapshot" => LoadSnapshot,
+    "ProcessOplogEntries" => ProcessOplogEntries,
+    "ManualUpdate" => ManualUpdate,
+});
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]

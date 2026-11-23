@@ -1,0 +1,40 @@
+{
+  "tier": "pr",
+  "description": "Extended globs built at run time and nested deeply, and `globstar` over a deep tree. A pattern\nnested past the limit fails wherever it is matched, rather than matching wrongly.\n\nEach case name starts with `pattern depth: `.",
+  "cases": [
+    {
+      "name": "pattern depth: extended globs nested 24 deep",
+      "script": "shopt -s extglob; cd /tmp; touch a\nfor kind in @ + '?' '*'; do p=$(printf \"$kind(%.0s\" {1..24})a$(printf ')%.0s' {1..24}); [[ a == $p ]]; echo \"$kind [[ $?\"; case a in $p) echo \"$kind case\";; esac; x=aa; echo \"$kind ${x#$p} ${x%%$p} ${x/$p/b}\"; echo \"$kind\" $p; done\np=$(printf '@(%.0s' {1..12})a$(printf '|b)%.0s' {1..12}); [[ b == $p ]]; echo \"alt $?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "pattern depth: nested negations",
+      "script": "shopt -s extglob; for n in 1 2 3 8 13; do p=$(printf '!(%.0s' $(seq $n))a$(printf ')%.0s' $(seq $n)); for s in a b ab ''; do [[ $s == $p ]]; printf %s $?; done; echo \" $n\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "pattern depth: extended globs nested deeper are refused",
+      "script": "shopt -s extglob; cd /tmp; touch a\np=$(printf '@(%.0s' {1..25})a$(printf ')%.0s' {1..25})\n[[ a == $p ]]; echo \"[[ $?\"\ncase a in $p) echo case;; esac\nx=aa; echo \"${x#$p}\"\necho $p\np=$(printf '@(%.0s' {1..1500})a$(printf ')%.0s' {1..1500})\n[[ a == $p ]]; echo \"[[ $?\"\np=$(printf '!(%.0s' {1..20})abcdefgh$(printf ')%.0s' {1..20})\n[[ b == $p ]]; echo \"[[ $?\"\necho after",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "after\n"
+        },
+        "stderr": {
+          "text": "bash: line 3: maximum nesting level exceeded: deeper nesting is unsupported in bash-tool\nbash: line 4: maximum nesting level exceeded: deeper nesting is unsupported in bash-tool\nbash: line 5: maximum nesting level exceeded: deeper nesting is unsupported in bash-tool\nbash: line 6: maximum nesting level exceeded: deeper nesting is unsupported in bash-tool\nbash: line 8: maximum nesting level exceeded: deeper nesting is unsupported in bash-tool\nbash: line 10: maximum nesting level exceeded: deeper nesting is unsupported in bash-tool\n"
+        },
+        "reason": "bash-tool's limit: an extended glob is translated to a regular expression recursively, one or two groups per level, so one nested more than 24 deep, or a negation whose translation grows past 512 KiB, fails where it is matched and ends that command line (README, Limits); bash matches it"
+      }
+    },
+    {
+      "name": "pattern depth: globstar walks a deep tree",
+      "script": "cd /tmp && d=$(printf 'd/%.0s' {1..40}) && mkdir -p \"$d\" d/e d/.h && touch d/f \"${d}g\" d/e/x d/.h/y\nshopt -s globstar\nn=0; for f in d/**; do n=$((n+1)); done; echo \"all $n\"\nn=0; for f in d/**/; do n=$((n+1)); done; echo \"dirs $n\"\nset -- d/**/g; echo \"g $# ${#1}\"\necho d/**/x d/**/y d/**/f\nmkdir -p t/a/b t/c && touch t/a/f t/c/g t/.z t/a/b/h; echo t/**; echo t/**/; echo t/**/h\nshopt -s dotglob; echo d/**/y; echo t/**",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

@@ -124,7 +124,7 @@ where
         term_start_char(),
         many(term_char).map(|chars: Vec<String>| chars.concat()),
     )
-        .map(|(start, rest)| start + &rest)
+        .map(|(start, rest)| start + rest.as_str())
         .and_then(|s: String| {
             if KEYWORDS.contains(&s.as_str()) {
                 Err(LuceneParseError {

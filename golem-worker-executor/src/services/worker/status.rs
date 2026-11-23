@@ -93,8 +93,9 @@ pub(super) fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         pending_durable_stream_cancellations: status.pending_durable_stream_cancellations.clone(),
         has_durable_stream_history: status.has_durable_stream_history,
         ephemeral_execution_begun: status.ephemeral_execution_begun,
-        current_idempotency_key: status.current_idempotency_key,
-        current_invocation_started_at: status.current_invocation_started_at,
+        never_live: status.never_live,
+        running: status.running.clone(),
+        withdrawn_again: status.withdrawn_again,
         component_revision: status.component_revision,
         component_size: status.component_size,
         total_linear_memory_size: status.total_linear_memory_size,
@@ -463,11 +464,11 @@ impl DefaultWorkerService {
     /// `core`, `membership`, `regions`, `updates`, per-transfer `tr:`/`ts:` fields, and the
     /// `entity-replay` marker with per-entry `er:`/`eo:`/`ep:`/`em:`/`ec:` replay indexes).
     pub(super) fn status_namespace(
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
     ) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentStatus {
-            agent_id: Arc::new(agent_id.clone()),
+            owned_agent_id: owned_agent_id.clone(),
             fingerprint,
         }
     }
@@ -477,11 +478,11 @@ impl DefaultWorkerService {
     /// save / throttled idle) and never advanced by the background flusher, so it can serve as a
     /// fold baseline that always predates any later jump region.
     pub(super) fn checkpoint_namespace(
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
     ) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentStatusCheckpoint {
-            agent_id: Arc::new(agent_id.clone()),
+            owned_agent_id: owned_agent_id.clone(),
             fingerprint,
         }
     }
@@ -500,7 +501,7 @@ impl DefaultWorkerService {
     ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
         self.read_split_status(
             owned_agent_id,
-            Self::status_namespace(&owned_agent_id.agent_id, fingerprint),
+            Self::status_namespace(owned_agent_id, fingerprint),
         )
         .await
     }

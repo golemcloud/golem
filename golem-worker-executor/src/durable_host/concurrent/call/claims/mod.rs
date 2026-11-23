@@ -16,13 +16,54 @@ use super::*;
 use crate::durable_host::call_coordinator::process_pending_replay_events_initiation;
 use crate::durable_host::concurrent::initiation::{InitiationAccess, InlineInitiationAccess};
 
+/// Claims `claim` for a Store whose replay may have continued live locally. A `required` claim
+/// must find its recorded `Start`. It runs with strict historical admission even in a Store that
+/// continued live, so a missing `Start` is a divergence at the entry the cursor names. At the end
+/// of the history, the recorded history ends where the replay makes the call. A matching `Start`
+/// in a deleted region keeps its own index.
+pub(super) async fn claim_for_store(
+    replay_state: ReplayState,
+    claim: StartClaim,
+    store_continued_live: bool,
+    required: bool,
+    on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
+    admission: Option<(
+        crate::durable_host::tool::operation::OwnerToolOperation,
+        String,
+    )>,
+) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+    let outcome = replay_state
+        .claim_start_for_store_with_admission(
+            claim.clone(),
+            store_continued_live && !required,
+            on_claim,
+            admission,
+        )
+        .await?;
+    if !required {
+        return Ok(outcome);
+    }
+    match outcome {
+        outcome @ ReplayStartClaimOutcome::Claimed { .. } => Ok(outcome),
+        ReplayStartClaimOutcome::DeletedRegion { start_index } => Err(
+            WorkerExecutorError::replay_divergence(claim.divergence_in_deleted_region(start_index)),
+        ),
+        ReplayStartClaimOutcome::ReplayEnded => Err(WorkerExecutorError::replay_divergence(
+            claim.divergence_at(replay_state.last_replayed_index().next(), None),
+        )),
+        ReplayStartClaimOutcome::StoreAlreadyLive => Err(WorkerExecutorError::runtime(format!(
+            "invariant: the required claim of {} ran with live admission",
+            claim.expected_description()
+        ))),
+    }
+}
+
 /// Retains an accepted replay claim independently of the Store task that requested it.
 ///
 /// The claim reads only the shared replay state, never the Store, so a Store-holding caller can
 /// await it as well as an accessor call can.
 pub(super) async fn owned_access_claim<Ctx: WorkerCtx>(
     access: &mut impl InitiationAccess<Ctx>,
-    recorded_start_required: bool,
     claim: impl Future<Output = Result<ReplayStartClaimOutcome, WorkerExecutorError>> + Send + 'static,
 ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
     let (tasks, sink, context) = access
@@ -39,18 +80,7 @@ pub(super) async fn owned_access_claim<Ctx: WorkerCtx>(
     drop(
         tasks
             .spawn_metadata(async move {
-                let result = claim.await.and_then(|outcome| {
-                    if recorded_start_required
-                        && !matches!(outcome, ReplayStartClaimOutcome::Claimed { .. })
-                    {
-                        Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "recorded accessor Start",
-                            "replay ended before the required claim",
-                        ))
-                    } else {
-                        Ok(outcome)
-                    }
-                });
+                let result = claim.await;
                 let completion = result.as_ref().map(|_| ()).map_err(Clone::clone);
                 let _ = send.send(result);
                 let _ = settled.send(completion);
@@ -215,29 +245,31 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
             let recorded_start_required = self.claim_options.require_recorded_start
                 || (!self.store_replay_state.is_incomplete_entity()
                     && self.replay_to_live_role() != ReplayToLiveRole::PrimaryAgent);
-            let outcome = owned_access_claim(access, recorded_start_required, async move {
-                claiming
-                    .claim_start_for_store_with_admission(
-                        owned_claim,
-                        store_continued_live,
-                        move |index, entry| {
-                            if let Some((observer, _activity)) = &observer {
-                                observer.clone().started(index, entry, true);
-                            }
-                        },
-                        admission,
-                    )
-                    .await
-            })
+            let outcome = owned_access_claim(
+                access,
+                claim_for_store(
+                    claiming,
+                    owned_claim,
+                    store_continued_live,
+                    recorded_start_required,
+                    move |index, entry| {
+                        if let Some((observer, _activity)) = &observer {
+                            observer.clone().started(index, entry, true);
+                        }
+                    },
+                    admission,
+                ),
+            )
             .await?;
             let replay_ended = match outcome {
                 ReplayStartClaimOutcome::Claimed { handle, .. } => return Ok(Some(handle)),
                 ReplayStartClaimOutcome::ReplayEnded => true,
-                ReplayStartClaimOutcome::DeletedRegion
+                ReplayStartClaimOutcome::DeletedRegion { .. }
                 | ReplayStartClaimOutcome::StoreAlreadyLive => false,
             };
             if self.claim_options.require_recorded_start {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    self.replay_state.last_replayed_index().next(),
                     format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
                     "completed parent has no recorded host-internal child",
                 ));
@@ -246,6 +278,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                 self.replay_to_live_role() == ReplayToLiveRole::PrimaryAgent && replay_ended;
             if !self.store_replay_state.is_incomplete_entity() && !primary_replay_tail {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    self.replay_state.last_replayed_index().next(),
                     format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
                     format!(
                         "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",
@@ -588,6 +621,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 Ok(ReplayAccessStartOutcome::ReplayEnded)
             } else {
                 Err(WorkerExecutorError::unexpected_oplog_entry(
+                    prepared.replay_state.last_replayed_index().next(),
                     format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
                     "replay ended before a completed-entity reconstruction claim",
                 ))
@@ -806,6 +840,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         ) {
             self.state = pending_call.accept_terminal().into_session();
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                self.start_idx,
                 "an incomplete parent for a live demand-stream child",
                 format!("completed scope at {}", self.start_idx),
             ));
@@ -856,6 +891,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         if !self.retry.can_reexecute_on_incomplete_replay() {
             self.state = pending_call.accept_terminal().into_session();
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                self.start_idx,
                 "End or Cancelled",
                 format!(
                     "invariant: {} child at Start {} has no owner authorization for incomplete repair",

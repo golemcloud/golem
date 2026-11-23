@@ -718,7 +718,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         if completed_parent
             && store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live())
         {
+            let index = store.with(|mut access| {
+                get_ctx(access.data_mut())
+                    .state
+                    .replay_state
+                    .last_replayed_index()
+                    .next()
+            });
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                index,
                 format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
                 "completed parent has no recorded host-internal child",
             )

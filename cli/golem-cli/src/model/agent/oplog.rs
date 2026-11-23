@@ -19,6 +19,7 @@ use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
 use golem_common::model::caller::{PublicCaller, PublicPrincipal};
+use golem_common::model::oplog::public_oplog_entry::FailedUpdateParams;
 use golem_common::model::oplog::public_oplog_entry::PendingUpdateParams;
 use golem_common::model::oplog::{
     MultipartPartData, OmittedOplogEntry, PluginInstallationDescription, PublicAgentInvocation,
@@ -33,9 +34,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use crate::agent_id_display::SourceLanguage;
 #[cfg(test)]
-use crate::model::agent::{
-    AgentGetView, AgentMetadataView, AgentsMetadataResponseView, RawAgentId,
-};
+use crate::model::agent::{AgentGetView, AgentMetadataView, AgentsMetadataResponseView};
 #[cfg(test)]
 use golem_common::model::AgentStatus;
 #[cfg(test)]
@@ -56,12 +55,27 @@ pub struct AgentOplogEntryView {
 /// The entry of an `agent.oplog` document: the full oplog entry, or the description of an entry
 /// that the oplog page omitted because it is too large, when `--omit-payloads` is set or the
 /// full entry could not be read.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 #[allow(clippy::large_enum_variant)]
 pub enum AgentOplogEntryContent {
     Full(PublicOplogEntry),
     Omitted(OmittedOplogEntryContent),
+}
+
+// Read without a buffer, so the claims of the callers keep their exact JSON text. The `type`
+// member tells the two forms apart: an omitted entry has the type `Omitted`, and no oplog entry
+// has that type.
+impl<'de> Deserialize<'de> for AgentOplogEntryContent {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use golem_common::base_model::raw_json::{parse, raw_value, tag_of};
+        let raw = raw_value(deserializer)?;
+        if tag_of::<D::Error>(&raw, "type")? == "Omitted" {
+            parse::<_, D::Error>(&raw).map(Self::Omitted)
+        } else {
+            parse::<_, D::Error>(&raw).map(Self::Full)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,9 +141,11 @@ fn serialize_oplog_documents<S: serde::Serializer>(
     use serde::ser::{Error, SerializeSeq};
     let mut documents = serializer.serialize_seq(Some(entries.len()))?;
     for entry in entries {
-        let document = crate::model::cli_output::to_structured_output_value(entry.clone())
+        // The document keeps each raw JSON value of the entry, such as the claims of a caller,
+        // whatever serializer writes the page.
+        let document = crate::model::cli_output::to_marked_structured_output_value(entry.clone())
             .map_err(S::Error::custom)?;
-        documents.serialize_element(&document)?;
+        documents.serialize_element(&crate::model::cli_output::WithRawJson(&document))?;
     }
     documents.end()
 }
@@ -177,6 +193,84 @@ impl TextOutput for AgentOplogEntryView {
             }
         }
     }
+}
+
+/// The lines of a failed update entry, each starting with `pad`.
+fn render_failed_update_lines(params: &FailedUpdateParams, pad: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(format_message_highlight("FAILED UPDATE"));
+    lines.push(format!(
+        "{pad}at:                {}",
+        format_id(&params.timestamp)
+    ));
+    lines.push(format!(
+        "{pad}target revision:   {}",
+        format_id(&params.target_revision),
+    ));
+    if let Some(update_attempt_index) = params.update_attempt_index {
+        lines.push(format!(
+            "{pad}update attempt:    {}",
+            format_id(&update_attempt_index),
+        ));
+    }
+    lines.push(format!(
+        "{pad}failure class:     {}",
+        format_id(&params.failure_class),
+    ));
+    if let Some(details) = &params.details {
+        lines.push(format!("{pad}error:             {}", format_error(details)));
+    }
+    if let Some(divergence) = &params.divergence {
+        lines.push(format!(
+            "{pad}divergence at:     {}",
+            format_id(&divergence.oplog_index)
+        ));
+        lines.push(format!("{pad}  expected:        {}", divergence.expected));
+        lines.push(format!("{pad}  actual:          {}", divergence.actual));
+        if !divergence.mismatched.is_empty() {
+            lines.push(format!(
+                "{pad}  mismatched:      {}",
+                divergence
+                    .mismatched
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        for (label, step) in [
+            ("expected", &divergence.expected),
+            ("actual", &divergence.actual),
+        ] {
+            if let golem_common::model::oplog::ReplayStep::HostCall(call) = step
+                && let Some(request) = &call.request
+            {
+                lines.push(format!(
+                    "{pad}  {label} input: {}",
+                    typed_schema_value_to_string(request)
+                ));
+            }
+        }
+    }
+    if let Some(details) = &params.snapshot_assisted_details {
+        lines.push(format!(
+            "{pad}pending update:    {}",
+            format_id(&details.pending_update_index)
+        ));
+        lines.push(format!(
+            "{pad}source revision:   {}",
+            format_id(&details.source_component_revision)
+        ));
+        lines.push(format!(
+            "{pad}revision start:    {}",
+            format_id(&details.source_revision_start_index)
+        ));
+        lines.push(format!(
+            "{pad}snapshot index:   {}",
+            format_id(&details.snapshot_index)
+        ));
+    }
+    lines
 }
 
 fn render_oplog_attribution_lines(attribution: &PublicOplogEntryAttribution) -> Vec<String> {
@@ -256,6 +350,9 @@ impl TextOutput for PublicOplogEntry {
                 }
                 if let Some(parent) = params.parent.as_ref() {
                     logln(format!("{pad}parent:            {}", format_id(parent)));
+                }
+                if params.never_live {
+                    logln(format!("{pad}never live:         {}", format_id(&true)));
                 }
                 logln(format!("{pad}initial active plugins:"));
                 for plugin in &params.initial_active_plugins {
@@ -572,41 +669,8 @@ impl TextOutput for PublicOplogEntry {
                 }
             }
             PublicOplogEntry::FailedUpdate(params) => {
-                logln(format_message_highlight("FAILED UPDATE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}target revision:   {}",
-                    format_id(&params.target_revision),
-                ));
-                if let Some(update_attempt_index) = params.update_attempt_index {
-                    logln(format!(
-                        "{pad}update attempt:    {}",
-                        format_id(&update_attempt_index),
-                    ));
-                }
-                if let Some(details) = &params.details {
-                    logln(format!("{pad}error:             {}", format_error(details)));
-                }
-                if let Some(details) = &params.snapshot_assisted_details {
-                    logln(format!(
-                        "{pad}pending update:    {}",
-                        format_id(&details.pending_update_index)
-                    ));
-                    logln(format!(
-                        "{pad}source revision:   {}",
-                        format_id(&details.source_component_revision)
-                    ));
-                    logln(format!(
-                        "{pad}revision start:    {}",
-                        format_id(&details.source_revision_start_index)
-                    ));
-                    logln(format!(
-                        "{pad}snapshot index:   {}",
-                        format_id(&details.snapshot_index)
-                    ));
+                for line in render_failed_update_lines(params, pad) {
+                    logln(line);
                 }
             }
             PublicOplogEntry::GrowMemory(params) => {
@@ -1541,13 +1605,14 @@ mod tests {
         QuotaTokenSpec, QuotaTokenValuePayload, SchemaGraph, SchemaType, SchemaValue, SecretSpec,
         SecretValuePayload,
     };
+    use golem_schema::Empty;
     use test_r::test;
 
     fn timestamp() -> Timestamp {
         Timestamp::from(0)
     }
 
-    fn bob(claims: Option<serde_json::Value>) -> PublicPrincipal {
+    fn bob(claims: Option<golem_common::model::caller::PublicClaims>) -> PublicPrincipal {
         PublicPrincipal::User(PublicUserPrincipal {
             pair: Pair::new("http://test-idp.com", "bob"),
             authenticated_at: Timestamp::from(0),
@@ -1561,12 +1626,7 @@ mod tests {
             original: bob(None),
             immediate: PublicPrincipal::Agent(PublicAgentPrincipal {
                 pair: Pair::new("https://golem.example", "agent:relay"),
-                agent_id: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(
-                        uuid::Uuid::from_u128(0xc0),
-                    ),
-                    agent_id: "Relay(\"r\")".to_string(),
-                },
+                agent_id: golem_common::model::AgentId::from_parts(7, 0xc0),
                 agent_type: "Relay".to_string(),
                 environment_id: golem_common::model::environment::EnvironmentId(
                     uuid::Uuid::from_u128(0xe0),
@@ -1594,10 +1654,84 @@ mod tests {
         "- 00000000-0000-0000-0000-0000000070c2 (no maker)",
     ];
 
-    fn agent_metadata(agent_id: &str) -> AgentMetadataView {
+    /// A failed update shows its class, and a divergence shows its index, both steps, the
+    /// mismatched fields and the known requests; the JSON form keeps the same fields.
+    #[test]
+    fn a_failed_update_renders_its_class_and_divergence() {
+        use golem_common::model::oplog::{
+            PublicDurableFunctionType, ReplayDivergence, ReplayHostCall, ReplayStep,
+            StartIdentityField, UpdateFailureClass,
+        };
+        let call = |function_name: &str, request: Option<&str>| ReplayHostCall {
+            function_name: function_name.to_string(),
+            durable_function_type: PublicDurableFunctionType::ReadLocal(Empty {}),
+            parent_start_index: None,
+            invocation_id: None,
+            observational_owner: None,
+            carries_request: true,
+            request: request
+                .map(|request| Box::new(request.to_string().into_typed_schema_value().unwrap())),
+        };
+        let params = FailedUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            details: Some("UPDATE_REPLAY_FAILED: diverged".to_string()),
+            snapshot_assisted_details: None,
+            update_attempt_index: Some(golem_common::model::OplogIndex::from_u64(9)),
+            failure_class: UpdateFailureClass::Divergence,
+            divergence: Some(Box::new(ReplayDivergence {
+                oplog_index: golem_common::model::OplogIndex::from_u64(7),
+                expected: ReplayStep::HostCall(call("random::get_random_bytes", Some("recorded"))),
+                actual: ReplayStep::HostCall(call("random::get_random_u64", None)),
+                mismatched: vec![StartIdentityField::FunctionName],
+            })),
+        };
+
+        colored::control::set_override(false);
+        let rendered = render_failed_update_lines(&params, "  ").join("\n");
+        assert_contains_all(
+            &rendered,
+            &[
+                "failure class:     divergence",
+                "divergence at:     7",
+                "expected:        Start { random::get_random_bytes, ReadLocal",
+                "actual:          Start { random::get_random_u64, ReadLocal",
+                "mismatched:      function-name",
+                "expected input: \"recorded\"",
+            ],
+        );
+        assert!(!rendered.contains("actual input"), "{rendered}");
+        let other = FailedUpdateParams {
+            failure_class: UpdateFailureClass::TargetRejected,
+            divergence: None,
+            ..params.clone()
+        };
+        let rendered = render_failed_update_lines(&other, "  ").join("\n");
+        assert!(
+            rendered.contains("failure class:     target-rejected"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("divergence at"), "{rendered}");
+
+        let json = serde_json::to_value(PublicOplogEntry::FailedUpdate(params)).unwrap();
+        assert_eq!(json["failureClass"], "divergence");
+        assert_eq!(json["divergence"]["oplogIndex"], 7);
+        assert_eq!(
+            json["divergence"]["expected"]["functionName"],
+            "random::get_random_bytes"
+        );
+        assert_eq!(json["divergence"]["mismatched"][0], "function-name");
+    }
+
+    fn agent_metadata(agent_key: &str) -> AgentMetadataView {
         AgentMetadataView {
             component_name: ComponentName("shop:cart".to_string()),
-            agent_id: RawAgentId(agent_id.to_string()),
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
+            agent_type: agent_key.split_once('(').map(|(agent_type, _)| {
+                golem_common::model::agent::AgentTypeName(agent_type.to_string())
+            }),
+            agent_key: Some(agent_key.to_string()),
+            fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
             created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
             env: HashMap::new(),
@@ -1605,6 +1739,7 @@ mod tests {
             config: Vec::new(),
             default_config: Vec::new(),
             status: AgentStatus::Running,
+            underlying_status: None,
             component_revision: ComponentRevision::new(1).expect("valid revision"),
             retry_count: 0,
             pending_invocation_count: 0,
@@ -1663,6 +1798,37 @@ mod tests {
         assert!(fields.iter().any(|(name, value)| {
             name == "Last error" && value.contains("snapshot payload is unavailable")
         }));
+    }
+
+    #[test]
+    fn sandboxed_agent_shows_its_replayed_state_in_agent_get_and_list() {
+        let mut agent = agent_metadata(r#"Counter("sandbox")"#);
+        agent.status = AgentStatus::Sandboxed;
+        agent.underlying_status = Some(AgentStatus::Running);
+
+        let table = AgentsMetadataResponseView::format_table_wide(
+            std::slice::from_ref(&agent),
+            120,
+            false,
+            false,
+        );
+        assert!(table.contains("Sandboxed"), "{table}");
+        assert!(!table.contains("Running"), "{table}");
+
+        let fields = AgentGetView::from_metadata(agent, true).fields();
+        assert!(
+            fields.iter().any(|(name, value)| name == "Status"
+                && strip_ansi_escapes::strip_str(value) == "Sandboxed (replayed state: Running)"),
+            "{fields:?}"
+        );
+
+        let fields =
+            AgentGetView::from_metadata(agent_metadata(r#"Counter("live")"#), true).fields();
+        assert!(
+            fields.iter().any(|(name, value)| name == "Status"
+                && strip_ansi_escapes::strip_str(value) == "Running"),
+            "{fields:?}"
+        );
     }
 
     /// Agent id cells carry their own coloring, which only lines up if
@@ -1962,10 +2128,7 @@ mod tests {
             },
             result: Ok(()),
             audit: SecretRevealAudit {
-                calling_agent: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
-                    agent_id: "secret-reveal-auditor".to_string(),
-                },
+                calling_agent: golem_common::model::AgentId::from_parts(7, 1),
                 config_key: Some(vec!["database".to_string(), "password".to_string()]),
                 timestamp: SerializableDateTime {
                     seconds: 1_700_000_005,
@@ -1985,7 +2148,7 @@ mod tests {
             &rendered,
             &[
                 &secret_id.to_string(),
-                "secret-reveal-auditor",
+                &golem_common::model::AgentId::from_parts(7, 1).to_string(),
                 "database",
                 "password",
                 "1700000004",
@@ -2136,7 +2299,10 @@ mod tests {
         );
 
         // The claims of a requester show only when the entry holds them.
-        let claims = serde_json::json!({"email": "bob@mail.example"});
+        let claims = golem_common::model::caller::PublicClaims::from_json(
+            r#"{"email":"bob@mail.example"}"#.to_string(),
+        )
+        .unwrap();
         let mut with_claims = params;
         with_claims.requester.original = bob(Some(claims));
         let rendered = strip_ansi_escapes::strip_str(
@@ -2150,7 +2316,10 @@ mod tests {
 
     #[test]
     fn caller_claims_render_only_when_the_entry_holds_them() {
-        let claims = serde_json::json!({"email": "bob@mail.example", "sub": "bob"});
+        let claims = golem_common::model::caller::PublicClaims::from_json(
+            r#"{"email":"bob@mail.example","sub":"bob"}"#.to_string(),
+        )
+        .unwrap();
 
         // An entry caller: both roles are the same user, so the claims show once.
         let entry_caller = PublicCaller {

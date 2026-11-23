@@ -233,6 +233,7 @@ where
         } else {
             child.abandon_for_trap();
             Err(WorkerExecutorError::unexpected_oplog_entry(
+                child.start_index(),
                 "completed demand-stream child",
                 format!(
                     "invariant: {} child at Start {} has no owner authorization for incomplete repair",

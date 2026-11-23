@@ -12,7 +12,7 @@ description: "Fire-and-forget agent invocations in Go with Trigger. Use when the
 ## Steps
 
 1. **Import the target agent's definition package.**
-2. **Get a client** with `Agent.Get(id)`.
+2. **Get a client** with `Agent.Upsert(id)`.
 3. **Trigger the method**: `Target.Method.MustTrigger(client, in)` — returns immediately.
 
 ## Example
@@ -35,7 +35,7 @@ func init() {
 	agent.Handle(coordinator.Start, func(_ *golem.Context[state], in coordinator.StartIn) golem.Unit {
 		// Hand each unit of work to a worker without awaiting the outcome.
 		for _, w := range in.Jobs {
-			c := worker.Agent.Get(worker.ID{Name: w.Worker})
+			c := worker.Agent.Upsert(worker.ID{Name: w.Worker})
 			worker.Dispatch.MustTrigger(c, worker.DispatchIn{Job: w.Job})
 		}
 		return golem.Unit{}
@@ -56,7 +56,7 @@ The returned `InvocationID` is an opaque handle to the enqueued invocation; you 
 ## Key Constraints
 
 - `Trigger` delivers a value-less enqueue: there is no way to read a return value from it. If you need the result, use `Call`/`CallAsync`.
-- As with all RPC, `Trigger` is called on the **method descriptor** (`worker.Dispatch.Trigger(client, in)`), and the client comes from the callee's **definition** (`worker.Agent.Get(id)`).
+- As with all RPC, `Trigger` is called on the **method descriptor** (`worker.Dispatch.Trigger(client, in)`), and the client comes from the callee's **definition** (`worker.Agent.Upsert(id)`).
 
 ### Related Skills
 

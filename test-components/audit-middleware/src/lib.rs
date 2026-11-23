@@ -225,8 +225,7 @@ fn outcome_summary(
 fn owner_summary() -> OwnerSummary {
     let owner = get_agent_id();
     OwnerSummary {
-        component_id: owner.component_id.uuid.to_string(),
-        agent_id: owner.agent_id,
+        agent_id: owner.uuid.to_string(),
     }
 }
 

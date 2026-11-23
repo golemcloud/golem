@@ -14,6 +14,7 @@
 
 use crate::durable_host::replay_state::ReplayState;
 use crate::worker::filesystem_snapshots::InitializerReplay;
+use crate::worker::instance::{InstanceCreationFailure, InstanceCreationStage};
 use crate::worker::*;
 
 impl<Runtime, Adapter: SandboxFilesystemAdapter> PreparedAgent<Runtime, Adapter> {
@@ -251,7 +252,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.http_connection_pool(),
             self.websocket_connection_pool(),
             None,
-            worker_metadata.original_phantom_id,
             runtime,
             Some(execution_mode),
             self.owner_execution(),
@@ -1025,7 +1025,6 @@ impl RunningWorker {
             parent.http_connection_pool(),
             parent.websocket_connection_pool(),
             pending_update,
-            worker_metadata.original_phantom_id,
             OwnerRuntime::Agent,
             None,
             parent.owner_execution(),
@@ -1095,8 +1094,13 @@ impl RunningWorker {
             .await;
         let runtime = async {
             let mut hosted = instance_host.instantiate(context, &component).await?;
-            instance_host.reconcile_linear_memories(&mut hosted).await?;
-            Ok::<_, WorkerExecutorError>(hosted.into_parts())
+            instance_host
+                .reconcile_linear_memories(&mut hosted)
+                .await
+                .map_err(|error| {
+                    InstanceCreationFailure::host(InstanceCreationStage::Storage, error)
+                })?;
+            Ok::<_, InstanceCreationFailure>(hosted.into_parts())
         }
         .await;
         // A divergence of the core initializer from its recorded durable calls, inside
@@ -1110,32 +1114,33 @@ impl RunningWorker {
                     .await
                 {
                     Ok(()) => Ok((instance, store)),
-                    Err(error) => {
-                        let diverged =
-                            matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. });
-                        Err((error, diverged))
-                    }
+                    Err(error) => Err(InstanceCreationFailure::host(
+                        InstanceCreationStage::Initializer,
+                        error,
+                    )),
                 }
             }
-            Err(error) => {
-                let diverged = matches!(error, WorkerExecutorError::UnexpectedOplogEntry { .. });
-                Err((error, diverged))
-            }
+            Err(failure) => Err(failure),
         };
         let (instance, mut store) = match runtime {
             Ok(runtime) => runtime,
-            Err((error, diverged)) => {
+            Err(failure) => {
+                let diverged = matches!(
+                    failure.error,
+                    WorkerExecutorError::UnexpectedOplogEntry { .. }
+                );
                 return Err(Self::end_failed_start(
                     &parent,
                     &role,
                     pending_update_ref.as_ref(),
                     if diverged {
                         start_outcome::RawStartError::Replay {
-                            error: &error,
+                            error: &failure.error,
                             diverged: true,
+                            provenance: None,
                         }
                     } else {
-                        start_outcome::RawStartError::Instantiation(&error)
+                        start_outcome::RawStartError::Instantiation(&failure)
                     },
                     async move |error| {
                         cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await

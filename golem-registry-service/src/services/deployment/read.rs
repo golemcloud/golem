@@ -127,6 +127,41 @@ impl DeploymentService {
             .collect()
     }
 
+    pub async fn list_retained_agent_types(
+        &self,
+        environment_id: EnvironmentId,
+        name: &AgentTypeName,
+    ) -> Result<Vec<DeployedRegisteredAgentType>, DeploymentError> {
+        self.deployment_repo
+            .list_retained_agent_types(environment_id.0, &name.0)
+            .await?
+            .into_iter()
+            .map(|record| record.try_into().map_err(Into::into))
+            .collect()
+    }
+
+    /// Authorizes viewing the environment. A deleted environment is still authorized for the
+    /// callers that could view it, so its agents are not found for them, while an environment
+    /// that never existed is not found for every caller.
+    pub async fn authorize_environment(
+        &self,
+        environment_id: EnvironmentId,
+        auth: &AuthCtx,
+    ) -> Result<(), DeploymentError> {
+        let environment = self
+            .environment_service
+            .get(environment_id, true, &AuthCtx::system())
+            .await
+            .map_err(|error| match error {
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    DeploymentError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::View)?;
+        Ok(())
+    }
+
     pub async fn resolve_type_id(
         &self,
         environment_id: EnvironmentId,

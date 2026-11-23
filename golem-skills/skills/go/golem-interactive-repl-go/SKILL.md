@@ -22,7 +22,7 @@ Starts a TypeScript REPL with all agent client classes preconfigured in the glob
 A Go `CounterAgent` whose `ID` is `struct{ Name string }` is addressed by that name, and its `increment` / `add` / `value` methods are exposed as camelCase client methods:
 
 ```typescript
-const c1 = await CounterAgent.get("c1")
+const c1 = CounterAgent.upsert("c1")
 await c1.increment()
 await c1.add(5)
 const value = await c1.value()
@@ -53,7 +53,7 @@ Run the script after creating it, unless the user explicitly asked not to.
 ### Example script (`test.ts`)
 
 ```typescript
-const c2 = await CounterAgent.get("c2")
+const c2 = CounterAgent.upsert("c2")
 await c2.increment()
 await c2.increment()
 ```

@@ -23,7 +23,6 @@
 //!     -- --nocapture
 
 use golem_common::model::AgentId;
-use golem_common::model::component::ComponentId;
 use golem_test_framework::components::rdb::docker_ignite::DockerIgniteRdb;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use golem_worker_executor::services::rdbms::ignite::{IgniteType, types as ignite_types};
@@ -54,10 +53,7 @@ fn make_rdbms_service() -> RdbmsServiceDefault {
 }
 
 fn new_worker_id() -> AgentId {
-    AgentId {
-        component_id: ComponentId::new(),
-        agent_id: format!("ignite-test-{}", Uuid::new_v4()),
-    }
+    crate::fresh_owned_agent_id().agent_id
 }
 
 fn ignite() -> Arc<dyn Rdbms<IgniteType> + Send + Sync> {

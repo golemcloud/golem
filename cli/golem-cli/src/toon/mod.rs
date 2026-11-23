@@ -25,8 +25,8 @@
 mod encode;
 
 #[cfg(test)]
-mod decode;
+pub(crate) mod decode;
 #[cfg(test)]
 mod tests;
 
-pub use encode::{ToonEncodeError, encode, encode_value};
+pub use encode::{ToonEncodeError, ToonValue, encode, encode_toon_value, encode_value};

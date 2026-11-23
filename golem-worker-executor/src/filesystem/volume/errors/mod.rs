@@ -15,7 +15,7 @@
 use crate::filesystem::errors::CleanupFailure;
 use crate::filesystem::errors::OperationContext;
 use std::fmt::{Display, Formatter};
-#[cfg(any(test, target_os = "linux", target_os = "macos"))]
+#[cfg(any(test, target_os = "linux"))]
 use std::path::Path;
 
 #[derive(Debug)]
@@ -32,7 +32,7 @@ impl From<OperationContext> for StorageVolumeError {
 }
 
 impl StorageVolumeError {
-    #[cfg(any(test, target_os = "linux", target_os = "macos"))]
+    #[cfg(any(test, target_os = "linux"))]
     pub(crate) fn cleanup_io(
         operation: &'static str,
         path: Option<&Path>,

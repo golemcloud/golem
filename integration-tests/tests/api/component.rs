@@ -100,6 +100,95 @@ async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Re
 }
 
 #[test]
+async fn component_upload_checks_package_layer_digest(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, env) = user.app_and_env().await?;
+    let wasm = vec![0, b'a', b's', b'm', 0x0d, 0, 1, 0]; // Empty Wasm component.
+    let package_metadata = json!({
+        "source": "./fixture.tar",
+        "packageDigest": format!("sha256:{}", "12".repeat(32)),
+        "layerDigest": "sha256:24eaf3439a60c96764c4f2c92a0a81b52bd4fe5d5b91f090184a0f6486b1bf29",
+    });
+    let mut invalid = package_metadata.clone();
+    invalid["layerDigest"] = json!(format!("sha256:{}", "34".repeat(32)));
+    let bad = serde_json::from_value(json!({
+        "componentName": "probe:bad-layer",
+        "packageMetadata": invalid,
+    }))?;
+    let result = client
+        .create_component(&env.id.0, &bad, wasm.clone(), None::<Vec<u8>>)
+        .await;
+    assert_matches!(result, Err(golem_client::Error::Item(
+        RegistryServiceCreateComponentError::Error400(body)
+    )) if body.errors.iter().any(|error| error.contains("bad-layer") && error.contains("digest")));
+    assert!(
+        client
+            .list_environment_components(&env.id.0)
+            .await?
+            .values
+            .is_empty()
+    );
+
+    for (name, metadata) in [
+        ("probe:packaged", package_metadata),
+        ("probe:local", json!(null)),
+    ] {
+        let mut request = json!({ "componentName": name });
+        if !metadata.is_null() {
+            request["packageMetadata"] = metadata.clone();
+        }
+        let request = serde_json::from_value(request)?;
+        let created = client
+            .create_component(&env.id.0, &request, wasm.clone(), None::<Vec<u8>>)
+            .await?;
+        assert_eq!(serde_json::to_value(&created)?["packageMetadata"], metadata);
+        let fetched = client.get_component(&created.id.0).await?;
+        assert_eq!(serde_json::to_value(&fetched)?["packageMetadata"], metadata);
+
+        if name == "probe:packaged" {
+            let revision = json!({ "currentRevision": created.revision });
+            let mut invalid_update = revision.clone();
+            invalid_update["packageMetadata"] = invalid.clone();
+            let result = client
+                .update_component(
+                    &created.id.0,
+                    &serde_json::from_value(invalid_update)?,
+                    Some(wasm.clone()),
+                    None::<Vec<u8>>,
+                )
+                .await;
+            assert_matches!(result, Err(golem_client::Error::Item(
+                RegistryServiceUpdateComponentError::Error400(body)
+            )) if body.errors.iter().any(|error| error.contains("packaged") && error.contains("digest")));
+            assert_eq!(client.get_component(&created.id.0).await?, fetched);
+
+            let config_only = client
+                .update_component(
+                    &created.id.0,
+                    &serde_json::from_value(revision)?,
+                    None::<Vec<u8>>,
+                    None::<Vec<u8>>,
+                )
+                .await?;
+            assert_eq!(config_only.package_metadata, fetched.package_metadata);
+            let ordinary_upload = client
+                .update_component(
+                    &created.id.0,
+                    &serde_json::from_value(json!({ "currentRevision": config_only.revision }))?,
+                    Some(wasm.clone()),
+                    None::<Vec<u8>>,
+                )
+                .await?;
+            assert!(ordinary_upload.package_metadata.is_none());
+        }
+    }
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -264,6 +353,7 @@ async fn component_update_removes_provision_configs_for_removed_agent_types(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -339,6 +429,7 @@ async fn component_update_rejects_new_agent_type_without_initial_permissions(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -396,6 +487,7 @@ async fn component_update_preserves_existing_provision_config_when_omitted(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -467,6 +559,7 @@ async fn component_update_with_wrong_revision_is_rejected(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision.next()?,
                 config_schema: None,
                 component_provision_config: None,
@@ -525,6 +618,7 @@ async fn component_update_rejects_reset_override_when_compatibility_check_enable
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -583,6 +677,7 @@ async fn component_update_allows_reset_override_when_compatibility_check_disable
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -719,6 +814,7 @@ async fn create_component_with_plugins_and_update_installations(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -765,6 +861,7 @@ async fn create_component_with_plugins_and_update_installations(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component_v2.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -852,6 +949,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -1011,6 +1109,7 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         .create_component(
             &env.id.0,
             &ComponentCreation {
+                package_metadata: None,
                 component_name: ComponentName("it:agent-counters".to_string()),
                 config_schema: Default::default(),
                 component_provision_config: Default::default(),
@@ -1138,6 +1237,7 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
         .create_component(
             &env.id.0,
             &ComponentCreation {
+                package_metadata: None,
                 component_name: ComponentName("duplicate-priority".to_string()),
                 config_schema: Default::default(),
                 component_provision_config: Default::default(),
@@ -1236,6 +1336,7 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
         .create_component(
             &env.id.0,
             &ComponentCreation {
+                package_metadata: None,
                 component_name: ComponentName("duplicate-grant".to_string()),
                 config_schema: Default::default(),
                 component_provision_config: Default::default(),
@@ -1365,6 +1466,7 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,
@@ -1457,6 +1559,7 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
         .update_component(
             &component.id.0,
             &ComponentUpdate {
+                package_metadata: None,
                 current_revision: component.revision,
                 config_schema: None,
                 component_provision_config: None,

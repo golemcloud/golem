@@ -20,7 +20,7 @@ use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::card::EffectiveSurface;
 use golem_common::model::card::StoredCard;
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
@@ -145,9 +145,12 @@ impl AgentConfig {
         }
     }
 
+    /// Strips the variables that Golem sets, so neither a create override nor an environment
+    /// that a fork copies can set them. The removed names are stripped as well.
     pub(crate) fn remove_dynamic_vars(worker_env: &mut Vec<(String, String)>) {
         worker_env.retain(|(key, _)| {
             key != "GOLEM_AGENT_ID"
+                && key != "GOLEM_AGENT_KEY"
                 && key != "GOLEM_AGENT_TYPE"
                 && key != "GOLEM_WORKER_NAME"
                 && key != "GOLEM_COMPONENT_ID"
@@ -155,20 +158,24 @@ impl AgentConfig {
         });
     }
 
+    /// `agent_key` is the canonical key of a keyed agent. Other agents have no
+    /// `GOLEM_AGENT_KEY`.
     pub(crate) fn enrich_env(
         worker_env: &mut Vec<(String, String)>,
-        component_id: ComponentId,
-        agent_name: String,
+        agent_id: &AgentId,
+        agent_key: Option<&str>,
         agent_type: &Option<AgentTypeName>,
         target_component_revision: ComponentRevision,
     ) {
-        let component_revision = target_component_revision.to_string();
-
         Self::remove_dynamic_vars(worker_env);
-        worker_env.push((String::from("GOLEM_AGENT_ID"), agent_name.clone()));
-        worker_env.push((String::from("GOLEM_WORKER_NAME"), agent_name)); // kept for backward compatibility temporarily
-        worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
-        worker_env.push((String::from("GOLEM_COMPONENT_REVISION"), component_revision));
+        worker_env.push((String::from("GOLEM_AGENT_ID"), agent_id.to_string()));
+        if let Some(agent_key) = agent_key {
+            worker_env.push((String::from("GOLEM_AGENT_KEY"), agent_key.to_string()));
+        }
+        worker_env.push((
+            String::from("GOLEM_COMPONENT_REVISION"),
+            target_component_revision.to_string(),
+        ));
         if let Some(agent_type) = agent_type {
             worker_env.push((String::from("GOLEM_AGENT_TYPE"), agent_type.to_string()));
         }
@@ -329,6 +336,20 @@ impl ExecutionStatus {
     }
 }
 
+/// Where a failure of guest code came from, decided while the Wasmtime error chain still
+/// exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureProvenance {
+    /// A Wasm instruction trap of the guest, such as a panic.
+    TargetInstruction,
+    /// The guest returned an agent error.
+    TargetReturned,
+    /// The host failed: a host error, an executor error, a resource limit or a deadline.
+    Host,
+    /// The execution was interrupted or exited.
+    Lifecycle,
+}
+
 /// Describes the various reasons a worker can run into a trap
 #[derive(Clone, Debug)]
 pub enum TrapType {
@@ -350,6 +371,8 @@ pub enum TrapType {
         /// Always `None` for guest-originated traps and for non-host failures.
         semantic_trap_retry_override:
             Option<crate::durable_host::durability::SemanticTrapRetryOverride>,
+        /// Where the failure came from.
+        provenance: FailureProvenance,
     },
 }
 
@@ -388,6 +411,7 @@ impl TrapType {
                 error: AgentError::PermissionDenied(details),
                 retry_from: fallback_retry_from,
                 semantic_trap_retry_override: None,
+                provenance: FailureProvenance::Host,
             },
             error => {
                 Self::from_error::<Ctx>(&anyhow::Error::new(error), fallback_retry_from, agent_mode)
@@ -425,10 +449,12 @@ impl TrapType {
             .unwrap_or(fallback_retry_from);
         // Single constructor for every `TrapType::Error` arm below, so the call-owned/fallback
         // classification is applied uniformly and adding fields stays a one-line change.
+        let provenance = crate::worker::invocation::failure_provenance(error);
         let make_error = |error: AgentError| TrapType::Error {
             error,
             retry_from,
             semantic_trap_retry_override: semantic_trap_retry_override.clone(),
+            provenance,
         };
 
         match error.root_cause().downcast_ref::<InterruptKind>() {
@@ -584,10 +610,8 @@ impl TrapType {
                             // mapped here: it is also used as a generic transient
                             // error wrapper and must remain retriable via the
                             // default policy path (`AgentError::Unknown`).
-                            Some(WorkerExecutorError::UnexpectedOplogEntry { expected, got }) => {
-                                make_error(AgentError::InternalError(format!(
-                                    "Unexpected oplog entry during replay: expected {expected}, got {got}"
-                                )))
+                            Some(WorkerExecutorError::UnexpectedOplogEntry { divergence }) => {
+                                make_error(AgentError::InternalError(divergence.to_string()))
                             }
                             _ => {
                                 // A bare `?` on an oplog write inside an anyhow host function
@@ -1024,7 +1048,6 @@ impl Debug for InvocationContext {
 mod tests {
     use super::*;
     use crate::worker::RetryDecision;
-    use golem_common::model::component::ComponentId;
     use test_r::test;
 
     #[test]
@@ -1063,7 +1086,6 @@ mod tests {
         );
     }
     use tracing::info;
-    use uuid::Uuid;
 
     #[test]
     fn wrapped_replay_jump_remains_an_interrupt() {
@@ -1101,10 +1123,7 @@ mod tests {
     #[test]
     fn a_fenced_oplog_write_escaping_a_host_call_classifies_as_shard_lost() {
         let fence = crate::services::oplog::OplogFence {
-            agent_id: golem_common::model::AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "fenced-host-call".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
             expected_epoch: golem_common::model::ShardEpoch(7),
             actual_epoch: Some(golem_common::model::ShardEpoch(8)),
         };
@@ -1144,10 +1163,7 @@ mod tests {
 
     fn fence_for(agent_id: &str) -> crate::services::oplog::OplogFence {
         crate::services::oplog::OplogFence {
-            agent_id: golem_common::model::AgentId {
-                component_id: ComponentId::new(),
-                agent_id: agent_id.to_string(),
-            },
+            agent_id: crate::test_agent_id(agent_id),
             expected_epoch: golem_common::model::ShardEpoch(7),
             actual_epoch: Some(golem_common::model::ShardEpoch(8)),
         }
@@ -1323,7 +1339,7 @@ mod tests {
     fn unexpected_oplog_entry_is_non_retriable_internal_error() {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::Error::from(
-                golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(OplogIndex::from_u64(3),
                     "OplogEntry::Start",
                     "End { .. }",
                 ),
@@ -1338,7 +1354,7 @@ mod tests {
                 ..
             } => {
                 assert!(
-                    msg.contains("Unexpected oplog entry during replay"),
+                    msg.contains("Unexpected oplog entry at 3"),
                     "unexpected message: {msg}"
                 );
                 assert!(msg.contains("OplogEntry::Start"));
@@ -1355,10 +1371,7 @@ mod tests {
 
     #[test]
     fn a_fenced_oplog_write_is_a_lost_shard_and_is_never_retried() {
-        let agent_id = AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "fenced".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 2);
         let trap = TrapType::from_worker_executor_error::<crate::workerctx::default::Context>(
             golem_service_base::error::worker_executor::WorkerExecutorError::oplog_fenced(
                 agent_id,
@@ -1426,6 +1439,7 @@ mod tests {
             error,
             retry_from: OplogIndex::INITIAL,
             semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
         };
         let retry = |trap: &TrapType| {
             crate::durable_host::DurableWorkerCtx::<crate::workerctx::default::Context>::speculative_retry(trap)
@@ -1496,6 +1510,7 @@ mod tests {
         // classification.
         let wasmtime_error = wasmtime::Error::from(
             golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
+                OplogIndex::from_u64(3),
                 "OplogEntry::Start",
                 "Cancelled { .. }",
             ),
@@ -1645,16 +1660,10 @@ mod tests {
 
     #[test]
     fn test_hash() {
-        let uuid = Uuid::parse_str("96c12379-4fff-4fa2-aa09-a4d96c029ac2").unwrap();
-
-        let component_id = ComponentId(uuid);
-        let agent_id = AgentId {
-            component_id,
-            agent_id: "instanceName".to_string(),
-        };
+        let agent_id = AgentId::from_parts(7, 0x2C1_2379_4FFF_4FA2_AA09_A4D9);
         let hash = ShardId::hash_agent_id(&agent_id);
         info!("hash: {:?}", hash);
-        assert_eq!(hash, -6692039695739768661);
+        assert_eq!(hash, 6351323600677106773);
     }
 
     #[test]

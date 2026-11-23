@@ -17,7 +17,7 @@
 //! oplog. Mirrors `keyvalue::readwrite_get_returns_the_value_that_was_set`.
 
 use crate::Tracing;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -51,7 +51,7 @@ async fn go_keyvalue_round_trip(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("KvAgent", "go-kv-1");
+    let agent_id = agent_key!("KvAgent", "go-kv-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -156,7 +156,7 @@ async fn go_keyvalue_survives_crash(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("KvAgent", "go-kv-2");
+    let agent_id = agent_key!("KvAgent", "go-kv-2");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

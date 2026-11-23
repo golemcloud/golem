@@ -1,9 +1,9 @@
 ///|
-/// Identifies one invocation: the agent ID in its text form and the UUID of
-/// the invocation. `Show` and `InvocationId::to_string` print
-/// `<agent-id>.<uuid>`.
+/// Identifies one invocation: the ID of the agent and the UUID of the
+/// invocation. `Show` and `InvocationId::to_string` print
+/// `<agent-id>.<uuid>`, where both parts are UUIDs.
 pub struct InvocationId {
-  agent_id : String
+  agent_id : @schema.AgentId
   uuid : @schema.Uuid
 } derive(Debug, Eq, Hash)
 
@@ -32,14 +32,14 @@ pub extend InvocationIdParseError with Eq::{equal, not_equal}
 
 ///|
 pub fn InvocationId::new(
-  agent_id : String,
+  agent_id : @schema.AgentId,
   uuid : @schema.Uuid,
 ) -> InvocationId {
   { agent_id, uuid, }
 }
 
 ///|
-pub fn InvocationId::agent_id(self : InvocationId) -> String {
+pub fn InvocationId::agent_id(self : InvocationId) -> @schema.AgentId {
   self.agent_id
 }
 
@@ -59,26 +59,29 @@ pub impl Show for InvocationId with fn output(self, logger) {
 }
 
 ///|
-/// The length of the `.<uuid>` suffix of the text form.
-let invocation_id_suffix_length : Int32 = 37
+/// The length of the hyphenated UUID text form.
+let uuid_text_length : Int32 = 36
 
 ///|
-/// Parses the text form `<agent-id>.<uuid>`. The last 37 characters are the
-/// `.` and the UUID, so an agent ID that contains `.` parses unchanged.
+/// Parses the text form `<agent-id>.<uuid>`, where both parts are hyphenated
+/// UUIDs.
 pub fn InvocationId::parse(
   value : String,
 ) -> InvocationId raise InvocationIdParseError {
   let invalid = InvocationIdParseError(
     "invalid invocation id: expected <agent-id>.<uuid>, got '\{value}'",
   )
-  let suffix_start = value.length() - invocation_id_suffix_length
-  if suffix_start <= 0 || value.code_unit_at(suffix_start).to_int() != '.' {
+  if value.length() != 2 * uuid_text_length + 1 ||
+    value.code_unit_at(uuid_text_length).to_int() != '.' {
     raise invalid
   }
-  let uuid = @schema.Uuid::parse(value[suffix_start + 1:].to_owned()) catch {
+  let agent_id = @schema.AgentId::parse(value[:uuid_text_length].to_owned()) catch {
     _ => raise invalid
   }
-  { agent_id: value[:suffix_start].to_owned(), uuid, }
+  let uuid = @schema.Uuid::parse(value[uuid_text_length + 1:].to_owned()) catch {
+    _ => raise invalid
+  }
+  { agent_id, uuid, }
 }
 
 ///|
@@ -88,7 +91,7 @@ pub fn InvocationId::from_host(
   metadata : @agentHost.InvocationMetadata,
 ) -> InvocationId {
   {
-    agent_id: metadata.agent_id,
+    agent_id: @schema.AgentId::from_wit(metadata.agent_id),
     uuid: @schema.Uuid::from_wit(metadata.invocation_id.id),
   }
 }

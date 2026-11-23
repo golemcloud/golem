@@ -25,8 +25,8 @@ export const Counter = counter.implement({
 ```
 
 The state returned by `init()` or a snapshot `load()` must not contain top-level fields named
-`config`, `getId`, or `getPhantomId`. These names are reserved for the SDK's
-configuration accessor and identity helpers. The SDK rejects these fields during
+`config`, `getId`, or `getPrincipal`. These names are reserved for the SDK's
+configuration accessor and identity/principal helpers. The SDK rejects these fields during
 initialization or restoration, even if their value is `undefined`. Rename them or nest them
 inside another state field; nested fields may use these names.
 
@@ -435,9 +435,9 @@ in the item type, for example `stream<result<T, E>>`, when needed.
 Choose the narrowest caller surface that owns the information you have:
 
 1. Normal RPC uses a shared source definition through the SDK's ordinary typed client and owns all lifecycle factories allowed by its mode.
-2. Caller-defined static clients use local schemas without discovery. `defineAgentClient({ methods })` binds an existing durable canonical or phantom `ParsedAgentId`; `defineAgentClient({ name, id, methods, mode?, config? })` adds identity construction, lifecycle factories, and declaration-aware config validation.
+2. Caller-defined static clients use local schemas without discovery. `defineAgentClient({ methods })` connects to an existing durable agent with `getById(agentId)`, which takes the agent type from the type tag of the `AgentId`; `defineAgentClient({ name, id, methods, mode?, config? })` adds the lifecycle factories `upsert`, `create`, and `getById`, and declaration-aware config validation.
 3. Discovered clients use `reflection.getReflectedAgentType` and retain an immutable deployed metadata snapshot for runtime-selected types and methods.
-4. Fully dynamic clients use `ParsedAgentId.dynamicClient()` to transport schema-native values on an existing durable identity. They do not retain schemas or create a target.
+4. Fully dynamic clients use `await DynamicAgentClient.getById(agentId)` to transport schema-native values to an existing durable agent. They do not retain schemas or create a target.
 
 Normal RPC and caller-defined static clients encode through their local schemas before opening RPC. Full-client binding also checks the declared type name and constructor shape. Discovered clients apply the complete snapshot input restrictions and validate output cardinality and shape. The host remains authoritative for visibility, authorization, effective configuration, identity resolution, and deployed-schema validation.
 
@@ -448,7 +448,7 @@ import { getReflectedAgentType, isRemoteCallError } from '@golemcloud/golem-ts-s
 
 const type = getReflectedAgentType('Counter');
 if (!type || type.mode !== 'durable') throw new Error('Counter is unavailable');
-const client = type.client.get({ name: 'main' });
+const client = type.client.upsert({ name: 'main' });
 const add = client.method('add');
 
 try {

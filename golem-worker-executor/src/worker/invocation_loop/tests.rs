@@ -322,19 +322,13 @@ async fn a_measured_capture_gives_the_outcome_of_a_capture_and_the_error_of_a_fa
 #[test]
 fn a_periodic_record_that_did_not_reach_the_oplog_skips_stops_or_retries() {
     let fence = crate::services::oplog::OplogFence {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "fenced".to_string(),
-        },
+        agent_id: golem_common::model::AgentId::from_parts(7, 1),
         expected_epoch: golem_common::model::ShardEpoch(2),
         actual_epoch: Some(golem_common::model::ShardEpoch(3)),
     };
     let archive_write = crate::services::oplog::OplogError::ArchiveWrite(
         crate::services::oplog::ArchiveWriteFailure {
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "archive-write".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 2),
             level: 0,
             details: "failed".to_string(),
         },
@@ -375,6 +369,7 @@ fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
             oplog_index: OplogIndex::from_u64(4),
             idempotency_key: Some(InvocationId(Uuid::from_u128(1))),
             manual_update_target_revision: None,
+            operation: None,
         };
         let mut status = AgentStatusRecord {
             pending_invocations: vec![pending],
@@ -439,6 +434,7 @@ fn filesystem_turns_preserve_initialization_and_control_priority() {
             oplog_index: OplogIndex::from_u64(2),
             idempotency_key: Some(constructor),
             manual_update_target_revision: None,
+            operation: None,
         }],
         ..Default::default()
     });
@@ -506,6 +502,7 @@ fn future_invocations_do_not_block_ready_work_or_idle() {
         oplog_index: OplogIndex::from_u64(3),
         idempotency_key: Some(InvocationId(Uuid::from_u128(3))),
         manual_update_target_revision: None,
+        operation: None,
     };
     let ready = PendingInvocationRef {
         not_before: None,
@@ -1047,11 +1044,8 @@ async fn pending_filesystem_deletion_does_not_hold_scheduler_capacity() {
     scheduler
         .register_account(account, Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1)))
         .await;
-    let agent_id = AgentId {
-        component_id: golem_common::model::component::ComponentId::new(),
-        agent_id: "unload-capacity".to_string(),
-    };
-    let permit = scheduler.acquire(account, agent_id.clone()).await;
+    let agent_id = AgentId::from_parts(7, 3);
+    let permit = scheduler.acquire(account, agent_id).await;
     let mut waiting = Box::pin(scheduler.acquire(account, agent_id));
     assert!(futures::poll!(waiting.as_mut()).is_pending());
     let window = crate::services::agent_filesystem::open_resource_usage_window(&filesystem, permit)
@@ -2239,10 +2233,7 @@ fn permit_state_stays_conservative_through_release_and_reacquisition() {
 #[test]
 fn a_periodic_record_over_an_unavailable_oplog_retries() {
     use crate::services::oplog::{OplogError, OplogReadError, OplogReadSource, UnreadableOplog};
-    let agent_id = golem_common::model::AgentId {
-        component_id: golem_common::model::component::ComponentId::new(),
-        agent_id: "periodic".to_string(),
-    };
+    let agent_id = golem_common::model::AgentId::from_parts(7, 4);
     let unreadable = |error| {
         PeriodicFailure::Write(OplogError::Unreadable(UnreadableOplog::new(
             &agent_id, error,
@@ -2273,10 +2264,7 @@ fn a_periodic_record_over_an_unavailable_oplog_retries() {
 #[test]
 fn an_unreadable_oplog_stops_the_agent_on_a_shard_it_still_owns() {
     let unreadable = WorkerExecutorError::oplog_failed(
-        golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "unreadable".to_string(),
-        },
+        golem_common::model::AgentId::from_parts(7, 5),
         "corrupt oplog data from archive layer 1",
     );
     let recovery = WorkerExecutorError::recovery_required("payload backend unavailable");
@@ -2457,6 +2445,7 @@ fn periodic_snapshot_failed_invocation_triggers_immediate_recovery() {
         error: AgentError::InternalError("boom".to_string()),
         retry_from: OplogIndex::INITIAL,
         semantic_trap_retry_override: None,
+        provenance: crate::model::FailureProvenance::Host,
     });
 
     assert_eq!(
@@ -2525,10 +2514,7 @@ fn terminal_ephemeral_failure_requests_archive_drain() {
 #[test]
 fn a_terminal_ephemeral_oplog_failure_reaches_the_waiters() {
     let oplog_failure = WorkerExecutorError::oplog_failed(
-        golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "ephemeral".to_string(),
-        },
+        golem_common::model::AgentId::from_parts(7, 6),
         "failed to write oplog data to archive layer 0: injected",
     );
     assert_eq!(

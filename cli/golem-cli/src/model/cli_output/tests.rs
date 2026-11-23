@@ -110,9 +110,24 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_agent_type_list_result
     ),
     registry_entry!(
-        "AgentCancelInvocationResult",
-        "agent.cancel-invocation",
-        arb_agent_cancel_invocation_result
+        "InvocationCancelView",
+        "invocation.cancel",
+        arb_invocation_cancel_result
+    ),
+    registry_entry!(
+        "InvocationGetView",
+        "invocation.get",
+        arb_invocation_get_result
+    ),
+    registry_entry!(
+        "InvocationGetMatchesView",
+        "invocation.get-matches",
+        arb_invocation_get_matches_result
+    ),
+    registry_entry!(
+        "InvocationListView",
+        "invocation.list",
+        arb_invocation_list_result
     ),
     registry_entry!("AgentDeleteView", "agent.delete", arb_agent_delete_result),
     registry_entry!(
@@ -154,8 +169,13 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         "agent.list",
         arb_agent_list_result
     ),
-    registry_entry!("AgentCreateView", "agent.new", arb_agent_new_result),
+    registry_entry!("AgentCreateView", "agent.create", arb_agent_create_result),
     registry_entry!("AgentOplogEntryView", "agent.oplog", arb_agent_oplog_result),
+    registry_entry!(
+        "AgentOplogExportReportView",
+        "agent.oplog-export",
+        arb_agent_oplog_export_report
+    ),
     registry_entry!(
         "AgentOplogExportHeaderView",
         "agent.oplog-export-header",
@@ -199,6 +219,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         "agent.update",
         arb_agent_update_result
     ),
+    registry_entry!("AgentUpsertView", "agent.upsert", arb_agent_upsert_result),
     registry_entry!(
         "TokenDeleteView",
         "api-token.delete",
@@ -675,7 +696,7 @@ fn cli_output_schema_output_definitions_have_agent_metadata() {
         let definition = definitions
             .get(output_type)
             .unwrap_or_else(|| panic!("missing definition for {output_type}"));
-        for field in ["description", "x-golem-output-mode", "x-golem-command"] {
+        for field in ["description", "x-golem-output-mode"] {
             assert!(
                 definition.get(field).is_some(),
                 "{output_type} must define top-level {field} metadata"
@@ -691,6 +712,31 @@ fn cli_output_schema_output_definitions_have_agent_metadata() {
             "{output_type} has invalid x-golem-output-mode {output_mode:?}"
         );
 
+        // Each output type has one owner: the command that emits it, or the typed MCP tool that
+        // returns it. The MCP tests check that a tool owner is a typed tool of the server.
+        match (
+            definition.get("x-golem-command"),
+            definition.get("x-golem-mcp-tool"),
+        ) {
+            (Some(_), None) => {}
+            (None, Some(tool)) => {
+                let tool = tool
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{output_type} must define string x-golem-mcp-tool"));
+                assert!(
+                    !tool.trim().is_empty(),
+                    "{output_type} must define non-empty x-golem-mcp-tool"
+                );
+                assert!(
+                    definition.get("x-golem-commands").is_none(),
+                    "{output_type} is owned by a tool and must not list commands"
+                );
+                continue;
+            }
+            _ => panic!(
+                "{output_type} must define exactly one of x-golem-command and x-golem-mcp-tool"
+            ),
+        }
         let primary_command = definition
             .get("x-golem-command")
             .and_then(Value::as_str)
@@ -879,7 +925,6 @@ fn cli_output_schema_focus_rejects_unknown_type() {
 fn agent_list_structured_output_masks_secret_config_paths() {
     let output = crate::model::agent::AgentsMetadataResponseView {
         agents: vec![sample_agent_metadata_view()],
-        cursors: BTreeMap::new(),
         cursor: None,
     };
 
@@ -904,6 +949,81 @@ fn agent_get_structured_output_masks_secret_config_paths() {
     assert_eq!(value["metadata"]["config"][0]["value"], json!("***"));
     assert_eq!(value["metadata"]["defaultConfig"][0]["value"], json!("***"));
     assert_no_plaintext(&value, &["runtime-secret", "default-secret"]);
+}
+
+/// `agent get` shows the class and the divergence of a failed update in its update history,
+/// and its JSON keeps both fields.
+#[test]
+fn agent_get_renders_the_failure_class_and_divergence_of_a_failed_update() {
+    use crate::model::text_format::MessageWithFields;
+    use golem_common::model::OplogIndex;
+    use golem_common::model::oplog::{
+        PublicDurableFunctionType, ReplayDivergence, ReplayHostCall, ReplayStep,
+        StartIdentityField, UpdateFailureClass,
+    };
+
+    colored::control::set_override(false);
+    let mut metadata = sample_agent_metadata_view();
+    metadata.updates = vec![golem_common::model::agent::UpdateRecord::FailedUpdate(
+        golem_common::model::agent::FailedUpdate {
+            timestamp: "2024-01-01T00:00:00Z".parse().unwrap(),
+            target_revision: golem_common::model::component::ComponentRevision::new(2).unwrap(),
+            details: Some("UPDATE_REPLAY_FAILED: diverged".to_string()),
+            pending_update_index: Some(OplogIndex::from_u64(9)),
+            mode: golem_common::model::agent::AgentUpdateMode::Automatic,
+            snapshot_assisted_details: None,
+            failure_class: UpdateFailureClass::Divergence,
+            divergence: Some(Box::new(ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(7),
+                expected: ReplayStep::HostCall(ReplayHostCall {
+                    function_name: "random::get_random_bytes".to_string(),
+                    durable_function_type: PublicDurableFunctionType::ReadLocal(
+                        golem_schema::Empty {},
+                    ),
+                    parent_start_index: None,
+                    invocation_id: None,
+                    observational_owner: None,
+                    carries_request: true,
+                    request: None,
+                }),
+                actual: ReplayStep::end_of_history(),
+                mismatched: vec![StartIdentityField::FunctionName],
+            })),
+        },
+    )];
+    let view = crate::model::agent::AgentGetView {
+        metadata,
+        precise: true,
+    };
+
+    let history = view
+        .fields()
+        .into_iter()
+        .find_map(|(name, value)| (name == "Update history").then_some(value))
+        .expect("the update history is shown");
+    assert!(
+        history.contains("Failed update to 2 (divergence)"),
+        "{history}"
+    );
+    assert!(
+        history.contains(
+            "Unexpected oplog entry at 7: expected Start { random::get_random_bytes, ReadLocal"
+        ),
+        "{history}"
+    );
+    assert!(
+        history.contains("got the end of the recorded history (mismatched: function-name)"),
+        "{history}"
+    );
+
+    let value = hidden_structured_output(view);
+    let failed = &value["metadata"]["updates"][0];
+    assert_eq!(failed["failureClass"], json!("divergence"));
+    assert_eq!(failed["divergence"]["oplogIndex"], json!(7));
+    assert_eq!(
+        failed["divergence"]["actual"]["type"],
+        json!("EndOfHistory")
+    );
 }
 
 #[test]
@@ -949,6 +1069,7 @@ fn component_metadata_displays_tools_middlewares_and_files() {
         component_name: sample.component_name.clone(),
         hash: Default::default(),
         wasm_hash: Default::default(),
+        package_metadata: None,
         application_id: golem_common::model::application::ApplicationId(uuid::Uuid::nil()),
         account_id: golem_common::model::account::AccountId(uuid::Uuid::nil()),
         component_size: sample.component_size,
@@ -1130,7 +1251,12 @@ fn assert_no_plaintext(value: &Value, plaintexts: &[&str]) {
 fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
     crate::model::agent::AgentMetadataView {
         component_name: golem_common::model::component::ComponentName("component".to_string()),
-        agent_id: crate::model::agent::RawAgentId("agent()".to_string()),
+        agent_id: golem_common::model::AgentId::from_parts(7, 1),
+        agent_type: Some(golem_common::model::agent::AgentTypeName(
+            "Agent".to_string(),
+        )),
+        agent_key: Some("Agent()".to_string()),
+        fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
         created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
         environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
         env: BTreeMap::new().into_iter().collect(),
@@ -1144,6 +1270,7 @@ fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
             value: golem_common::base_model::json::NormalizedJsonValue(json!("default-secret")),
         }],
         status: golem_common::model::AgentStatus::Idle,
+        underlying_status: None,
         component_revision: golem_common::model::component::ComponentRevision::new(1).unwrap(),
         retry_count: 0,
         pending_invocation_count: 0,
@@ -1455,6 +1582,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            package_metadata: None,
             agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
@@ -1472,6 +1600,7 @@ fn sample_deployment_diff_with_secret_updates() -> golem_common::model::diff::De
         HashOf::form_value(golem_common::model::diff::Component {
             component_config: golem_common::model::diff::ComponentConfig::default().into(),
             wasm_hash,
+            package_metadata: None,
             agent_types: BTreeMap::new(),
             agent_type_provision_configs: BTreeMap::from_iter([(
                 "agent".to_string(),
@@ -1746,6 +1875,450 @@ fn cli_output_schema_accepts_every_sample_oplog_entry() {
                 .collect::<Vec<_>>()
         );
     }
+}
+
+#[test]
+fn rest_json_of_oplog_entries_equals_their_serde_json() {
+    use golem_common::model::oplog::{
+        OmittedOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
+        PublicOplogPageEntry,
+    };
+    use poem_openapi::types::ToJSON;
+
+    let entries = sample_public_oplog_entries();
+    assert!(!entries.is_empty());
+    for (index, entry) in entries.into_iter().enumerate() {
+        let entry_type = entry.entry_type();
+        let bare = serde_json::to_value(&entry).unwrap();
+        assert_eq!(
+            Some(bare),
+            entry.to_json(),
+            "bare {entry_type} entry differs"
+        );
+
+        let with_index = PublicOplogEntryWithIndex {
+            oplog_index: golem_common::model::oplog::OplogIndex::from_u64(index as u64 + 1),
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry,
+        };
+        let serde_form = serde_json::to_value(&with_index).unwrap();
+        assert_eq!(
+            Some(serde_form),
+            with_index.to_json(),
+            "indexed {entry_type} entry differs"
+        );
+
+        let page_entry = PublicOplogPageEntry::Included(with_index);
+        let serde_form = serde_json::to_value(&page_entry).unwrap();
+        assert_eq!(
+            Some(serde_form),
+            page_entry.to_json(),
+            "page {entry_type} entry differs"
+        );
+    }
+
+    let omitted = PublicOplogPageEntry::Omitted(OmittedOplogEntry {
+        oplog_index: golem_common::model::oplog::OplogIndex::from_u64(9),
+        attribution: PublicOplogEntryAttribution::agent(),
+        timestamp: golem_common::model::Timestamp::from(1_700_000_000_123u64),
+        entry_type: "Start".to_string(),
+        size: 123,
+        component_revision: golem_common::model::component::ComponentRevision::new(3).unwrap(),
+    });
+    assert_eq!(
+        Some(serde_json::to_value(&omitted).unwrap()),
+        omitted.to_json()
+    );
+}
+
+/// Every sample oplog entry reads back from its JSON text as the same entry, bare, in a page
+/// entry, and in a line of an `agent.oplog` document. The tagged enums of the public oplog read
+/// their values without a buffer, so this checks that they accept the JSON of every variant.
+#[test]
+fn oplog_entries_read_back_from_their_json_text() {
+    use crate::model::agent::oplog::{AgentOplogEntryContent, AgentOplogEntryView};
+    use golem_common::model::oplog::{
+        OmittedOplogEntry, PublicOplogEntry, PublicOplogEntryAttribution,
+        PublicOplogEntryWithIndex, PublicOplogPageEntry,
+    };
+
+    for (index, entry) in sample_public_oplog_entries().into_iter().enumerate() {
+        let entry_type = entry.entry_type();
+        let text = serde_json::to_string(&entry).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PublicOplogEntry>(&text).unwrap(),
+            entry,
+            "{entry_type} entry"
+        );
+
+        // A `serde_json::Value` gives the JSON text of its own numbers, so the entry that it
+        // gives writes the same `Value` again.
+        let value = serde_json::to_value(&entry).unwrap();
+        let from_value = serde_json::from_value::<PublicOplogEntry>(value.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&from_value).unwrap(),
+            value,
+            "{entry_type} entry from a value"
+        );
+
+        let page_entry = PublicOplogPageEntry::Included(PublicOplogEntryWithIndex {
+            oplog_index: golem_common::model::oplog::OplogIndex::from_u64(index as u64 + 1),
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: entry.clone(),
+        });
+        let text = serde_json::to_string(&page_entry).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PublicOplogPageEntry>(&text).unwrap(),
+            page_entry,
+            "{entry_type} page entry"
+        );
+
+        let line = serde_json::to_string(&AgentOplogEntryView {
+            index: index as u64 + 1,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        })
+        .unwrap();
+        let view = serde_json::from_str::<AgentOplogEntryView>(&line).unwrap();
+        assert_eq!(
+            serde_json::to_string(&view).unwrap(),
+            line,
+            "{entry_type} document line"
+        );
+    }
+
+    let omitted = PublicOplogPageEntry::Omitted(OmittedOplogEntry {
+        oplog_index: golem_common::model::oplog::OplogIndex::from_u64(9),
+        attribution: PublicOplogEntryAttribution::agent(),
+        timestamp: golem_common::model::Timestamp::from(1_700_000_000_123u64),
+        entry_type: "Start".to_string(),
+        size: 123,
+        component_revision: golem_common::model::component::ComponentRevision::new(3).unwrap(),
+    });
+    let text = serde_json::to_string(&omitted).unwrap();
+    assert_eq!(
+        serde_json::from_str::<PublicOplogPageEntry>(&text).unwrap(),
+        omitted
+    );
+}
+
+/// The claims of a caller keep their exact JSON text when the CLI reads a REST oplog page: a
+/// number that no `f64` holds, a number that an `f64` rounds, the order of the members, and a
+/// nesting depth that a `serde_json::Value` refuses.
+#[test]
+fn oplog_page_entry_keeps_the_exact_claims_text_of_its_callers() {
+    use crate::model::agent::oplog::{AgentOplogEntryContent, AgentOplogEntryView};
+    use golem_common::model::caller::{PublicClaims, PublicPrincipal};
+    use golem_common::model::oplog::{
+        PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryAttribution,
+        PublicOplogEntryWithIndex, PublicOplogPageEntry,
+    };
+
+    fn claims_of_original(entry: &PublicOplogEntry) -> Option<&str> {
+        if let PublicOplogEntry::AgentInvocationStarted(params) = entry
+            && let PublicAgentInvocation::AgentMethodInvocation(invocation) = &params.invocation
+            && let PublicPrincipal::User(user) = &invocation.caller.original
+        {
+            user.claims.as_ref().map(PublicClaims::as_json)
+        } else {
+            None
+        }
+    }
+
+    let sample = sample_public_oplog_entries()
+        .into_iter()
+        .find(|entry| claims_of_original(entry).is_some())
+        .expect("a sample entry whose caller is a user with claims");
+
+    let claim_sets = [
+        r#"{"sub":"bob","n":1e400}"#.to_string(),
+        r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
+        r#"{"zeta":1,"alpha":2,"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123}"#.to_string(),
+        format!(
+            r#"{{"sub":"bob","deep":{}1{}}}"#,
+            "[".repeat(130),
+            "]".repeat(130)
+        ),
+    ];
+    for claims in &claim_sets {
+        let claims = claims.as_str();
+        let mut entry = sample.clone();
+        if let PublicOplogEntry::AgentInvocationStarted(params) = &mut entry
+            && let PublicAgentInvocation::AgentMethodInvocation(invocation) = &mut params.invocation
+            && let PublicPrincipal::User(user) = &mut invocation.caller.original
+        {
+            user.claims = Some(PublicClaims::from_json(claims.to_string()).unwrap());
+        }
+
+        let page_entry = PublicOplogPageEntry::Included(PublicOplogEntryWithIndex {
+            oplog_index: golem_common::model::oplog::OplogIndex::from_u64(7),
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: entry.clone(),
+        });
+        let text = serde_json::to_string(&page_entry).unwrap();
+        assert!(text.contains(claims), "{text}");
+        let PublicOplogPageEntry::Included(read) =
+            serde_json::from_str::<PublicOplogPageEntry>(&text).unwrap()
+        else {
+            panic!("the page entry is not included");
+        };
+        assert_eq!(claims_of_original(&read.entry), Some(claims));
+
+        let line = serde_json::to_string(&AgentOplogEntryView {
+            index: 7,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        })
+        .unwrap();
+        let view = serde_json::from_str::<AgentOplogEntryView>(&line).unwrap();
+        let AgentOplogEntryContent::Full(read) = &view.entry else {
+            panic!("the document line holds no full entry");
+        };
+        assert_eq!(claims_of_original(read), Some(claims));
+        assert_eq!(serde_json::to_string(&view).unwrap(), line);
+    }
+}
+
+/// Every structured format prints the claims of a caller as an object, with each number as it is
+/// in the recorded text and the members in their order: a number that no `f64` holds, a number
+/// beyond the `f64` range, and a nesting depth that a `serde_json::Value` refuses. The test
+/// renders the documents that `agent oplog --show-claims` and `agent oplog --show-claims --page`
+/// print, and compares each format with text that is written here by hand.
+#[test]
+fn every_structured_format_prints_the_claims_as_a_lossless_object() {
+    use crate::command_handler::log::render_command_output_document;
+    use crate::model::agent::oplog::{
+        AgentOplogEntryContent, AgentOplogEntryView, AgentOplogPageView,
+    };
+    use crate::model::format::Format;
+    use golem_common::model::caller::{PublicClaims, PublicPrincipal};
+    use golem_common::model::oplog::{
+        PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryAttribution,
+    };
+
+    fn set_claims_of_original(entry: &mut PublicOplogEntry, claims: &str) -> bool {
+        if let PublicOplogEntry::AgentInvocationStarted(params) = entry
+            && let PublicAgentInvocation::AgentMethodInvocation(invocation) = &mut params.invocation
+            && let PublicPrincipal::User(user) = &mut invocation.caller.original
+        {
+            user.claims = Some(PublicClaims::from_json(claims.to_string()).unwrap());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The lines of the block under the first line that is `name` alone, without the indentation
+    /// of the block.
+    fn block_under(rendered: &str, name: &str) -> Vec<String> {
+        let mut lines = rendered.lines();
+        let indent_of = |line: &str| line.len() - line.trim_start_matches(' ').len();
+        let indent = lines
+            .by_ref()
+            .find(|line| line.trim_start_matches(' ') == name)
+            .map(indent_of)
+            .unwrap_or_else(|| panic!("no `{name}` line in:\n{rendered}"));
+        lines
+            .take_while(|line| indent_of(line) > indent)
+            .map(|line| line[indent + 2..].to_string())
+            .collect()
+    }
+
+    let sample = sample_public_oplog_entries()
+        .into_iter()
+        .find(|entry| set_claims_of_original(&mut entry.clone(), "{}"))
+        .expect("a sample entry whose caller is a user");
+
+    let deep = format!(
+        r#"{{"sub":"bob","deep":{}1{}}}"#,
+        "[".repeat(130),
+        "]".repeat(130)
+    );
+    // The claims as recorded, and the TOON lines of the same object.
+    let claim_sets: Vec<(String, Vec<String>)> = vec![
+        (
+            r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
+            vec![
+                "sub: bob".to_string(),
+                "n: 18446744073709551617".to_string(),
+            ],
+        ),
+        (
+            r#"{"sub":"bob","n":1e400}"#.to_string(),
+            vec!["sub: bob".to_string(), "n: 1e400".to_string()],
+        ),
+        (
+            r#"{"zeta":1,"alpha":2,"sub":"bob","score":0.12345678901234567890123}"#.to_string(),
+            vec![
+                "zeta: 1".to_string(),
+                "alpha: 2".to_string(),
+                "sub: bob".to_string(),
+                "score: 0.12345678901234567890123".to_string(),
+            ],
+        ),
+        (deep, {
+            // The outermost array is the member. Each array inside it is a list item, one level
+            // deeper, and the innermost array holds only a number, so it is on one line.
+            let mut lines = vec!["sub: bob".to_string(), "deep[1]:".to_string()];
+            for level in 1..=128 {
+                lines.push(format!("{}- [1]:", "  ".repeat(level)));
+            }
+            lines.push(format!("{}- [1]: 1", "  ".repeat(129)));
+            lines
+        }),
+    ];
+
+    for (claims, toon_lines) in &claim_sets {
+        let mut entry = sample.clone();
+        assert!(set_claims_of_original(&mut entry, claims));
+        let view = AgentOplogEntryView {
+            index: 7,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        };
+        let page = AgentOplogPageView {
+            entries: vec![view.clone()],
+            cursor: None,
+        };
+        for format in [
+            Format::Json,
+            Format::PrettyJson,
+            Format::Yaml,
+            Format::PrettyYaml,
+            Format::Toon,
+        ] {
+            for (command, rendered) in [
+                (
+                    "agent oplog",
+                    render_command_output_document(format, false, view.clone()),
+                ),
+                (
+                    "agent oplog --page",
+                    render_command_output_document(format, false, page.clone()),
+                ),
+            ] {
+                let rendered = rendered
+                    .unwrap_or_else(|error| panic!("{command}, {format:?}, {claims}: {error}"));
+                let context = format!("{command}, {format:?}:\n{rendered}");
+                match format {
+                    Format::Json | Format::PrettyJson => {
+                        // The document is valid JSON, and the `claims` member is the recorded
+                        // object. No string of these claim sets has white space in it.
+                        serde_json::from_str::<Box<serde_json::value::RawValue>>(&rendered)
+                            .unwrap_or_else(|error| panic!("{error}: {context}"));
+                        let tokens: String =
+                            rendered.chars().filter(|c| !c.is_whitespace()).collect();
+                        assert!(
+                            tokens.contains(&format!("\"claims\":{claims}")),
+                            "{context}"
+                        );
+                    }
+                    Format::Yaml | Format::PrettyYaml => {
+                        // A flow mapping on the line of the member, with a space after each
+                        // colon and comma. No string of these claim sets holds a colon or a comma.
+                        let flow = claims.replace(':', ": ").replace(',', ", ");
+                        assert!(rendered.contains(&format!("claims: {flow}\n")), "{context}");
+                    }
+                    Format::Toon => {
+                        assert_eq!(&block_under(&rendered, "claims:"), toon_lines, "{context}");
+                    }
+                    Format::Text => unreachable!("text is not a structured format"),
+                }
+            }
+        }
+    }
+
+    let view_of = |claims: &str| {
+        let mut entry = sample.clone();
+        assert!(set_claims_of_original(&mut entry, claims));
+        AgentOplogEntryView {
+            index: 7,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        }
+    };
+
+    // The layout of the pretty JSON, for the first claim set.
+    let view = view_of(&claim_sets[0].0);
+    let pretty = render_command_output_document(Format::PrettyJson, false, view.clone()).unwrap();
+    assert_eq!(
+        block_under(&pretty, "\"claims\": {"),
+        ["\"sub\": \"bob\",", "\"n\": 18446744073709551617"],
+        "{pretty}"
+    );
+    // What a YAML parser reads, for the claim set whose numbers the `Value` of `serde_yaml` can
+    // hold.
+    let yaml =
+        render_command_output_document(Format::Yaml, false, view_of(&claim_sets[2].0)).unwrap();
+    let read: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+    let read_claims = &read["entry"]["invocation"]["caller"]["original"]["claims"];
+    let names: Vec<&str> = read_claims
+        .as_mapping()
+        .unwrap_or_else(|| panic!("the claims are not a mapping in:\n{yaml}"))
+        .keys()
+        .map(|name| name.as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["zeta", "alpha", "sub", "score"]);
+    assert_eq!(read_claims["sub"], "bob");
+
+    // The colors do not change the text.
+    for format in [Format::PrettyJson, Format::PrettyYaml] {
+        let plain = render_command_output_document(format, false, view.clone()).unwrap();
+        let colored = render_command_output_document(format, true, view.clone()).unwrap();
+        assert_eq!(
+            strip_ansi_escapes::strip_str(colored).trim_end(),
+            plain.trim_end(),
+            "{format:?}"
+        );
+    }
+}
+
+/// The `serde_json::Value` form of a structured output document holds the claims as an object. It
+/// is not what the CLI prints: a `Value` rounds a number that no `f64` holds exactly, and it
+/// cannot hold a number beyond the `f64` range.
+#[test]
+fn the_value_form_of_a_document_holds_the_claims_as_a_rounded_object() {
+    use crate::model::agent::oplog::{AgentOplogEntryContent, AgentOplogEntryView};
+    use golem_common::model::caller::{PublicClaims, PublicPrincipal};
+    use golem_common::model::oplog::{
+        PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryAttribution,
+    };
+
+    let view_with = |claims: &str| {
+        let mut entry = sample_public_oplog_entries()
+            .into_iter()
+            .find(|entry| {
+                matches!(
+                    entry,
+                    PublicOplogEntry::AgentInvocationStarted(params)
+                        if matches!(
+                            &params.invocation,
+                            PublicAgentInvocation::AgentMethodInvocation(invocation)
+                                if matches!(invocation.caller.original, PublicPrincipal::User(_))
+                        )
+                )
+            })
+            .expect("a sample entry whose caller is a user");
+        if let PublicOplogEntry::AgentInvocationStarted(params) = &mut entry
+            && let PublicAgentInvocation::AgentMethodInvocation(invocation) = &mut params.invocation
+            && let PublicPrincipal::User(user) = &mut invocation.caller.original
+        {
+            user.claims = Some(PublicClaims::from_json(claims.to_string()).unwrap());
+        }
+        AgentOplogEntryView {
+            index: 7,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        }
+    };
+
+    let value =
+        to_structured_output_value(view_with(r#"{"sub":"bob","n":18446744073709551617}"#)).unwrap();
+    let claims = &value["entry"]["invocation"]["caller"]["original"]["claims"];
+    assert_eq!(claims["sub"], "bob");
+    assert_eq!(claims["n"], json!(18446744073709551617f64));
+
+    assert!(to_structured_output_value(view_with(r#"{"sub":"bob","n":1e400}"#)).is_err());
 }
 
 #[test]
@@ -2345,6 +2918,17 @@ fn arb_uuid() -> BoxedStrategy<uuid::Uuid> {
     any::<u128>().prop_map(uuid::Uuid::from_u128).boxed()
 }
 
+fn arb_agent_id() -> BoxedStrategy<golem_common::model::AgentId> {
+    (any::<u32>(), any::<u128>())
+        .prop_map(|(type_tag, h)| golem_common::model::AgentId::from_parts(type_tag, h >> 38))
+        .boxed()
+}
+
+/// The agent ID with the generated UUID text.
+fn generated_agent_id(uuid: &str) -> golem_common::model::AgentId {
+    golem_common::model::AgentId(uuid::Uuid::parse_str(uuid).expect("generated UUID should parse"))
+}
+
 fn arb_small_u64() -> BoxedStrategy<u64> {
     (0u64..1000).boxed()
 }
@@ -2395,6 +2979,7 @@ fn arb_agent_status() -> BoxedStrategy<golem_common::model::AgentStatus> {
         Just(golem_common::model::AgentStatus::Retrying),
         Just(golem_common::model::AgentStatus::Failed),
         Just(golem_common::model::AgentStatus::Exited),
+        Just(golem_common::model::AgentStatus::Sandboxed),
     ]
     .boxed()
 }
@@ -2408,7 +2993,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
     use golem_common::base_model::retry_policy::{
         ApiImmediatePolicy, ApiPredicate, ApiPredicateTrue, ApiRetryPolicy,
     };
-    use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
+    use golem_common::model::component::{ComponentRevision, PluginPriority};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::invocation_context::{SpanId, TraceId};
@@ -2444,15 +3029,8 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }
     }
 
-    fn component_id() -> ComponentId {
-        ComponentId(Uuid::parse_str("13a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap())
-    }
-
-    fn agent_id(name: &str) -> AgentId {
-        AgentId {
-            component_id: component_id(),
-            agent_id: name.to_string(),
-        }
+    fn agent_id(h: u128) -> AgentId {
+        AgentId::from_parts(7, h)
     }
 
     fn plugin(priority: i32) -> PluginInstallationDescription {
@@ -2519,16 +3097,16 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             original: PublicPrincipal::User(PublicUserPrincipal {
                 pair: Pair::new("http://test-idp.com", "bob"),
                 authenticated_at: timestamp(),
-                claims: Some(serde_json::json!({"sub": "bob", "groups": ["auditors"]})),
+                claims: Some(
+                    golem_common::model::caller::PublicClaims::from_json(
+                        r#"{"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123,"groups":["auditors"]}"#.to_string(),
+                    )
+                    .unwrap(),
+                ),
             }),
             immediate: PublicPrincipal::Agent(PublicAgentPrincipal {
                 pair: Pair::new("https://golem.example", "agent:relay"),
-                agent_id: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(Uuid::from_u128(
-                        0xc0,
-                    )),
-                    agent_id: "Relay(\"r\")".to_string(),
-                },
+                agent_id: golem_common::model::AgentId::from_parts(7, 0xc0),
                 agent_type: "Relay".to_string(),
                 environment_id: golem_common::model::environment::EnvironmentId(Uuid::from_u128(
                     0xe0,
@@ -2684,7 +3262,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         }),
         PublicOplogEntry::Create(CreateParams {
             timestamp: timestamp(),
-            agent_id: agent_id("generated-agent"),
+            agent_id: agent_id(1),
+            agent_type_name: Some(golem_common::model::agent::AgentTypeName(
+                "GeneratedAgent".to_string(),
+            )),
             owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             agent_mode: golem_common::model::agent::AgentMode::Durable,
             component_revision: ComponentRevision::new(1).unwrap(),
@@ -2695,14 +3276,12 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 value: typed_string_value("configured"),
             }],
             environment_id: EnvironmentId::new(),
-            parent: Some(agent_id("parent-agent")),
+            parent: Some(agent_id(2)),
             component_size: 10,
             initial_total_linear_memory_size: 20,
             initial_active_plugins: BTreeSet::from_iter([plugin(0)]),
-            original_phantom_id: Some(
-                Uuid::parse_str("23a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
-            ),
             instance_id: Uuid::parse_str("33a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
+            never_live: true,
         }),
         PublicOplogEntry::Start(StartParams {
             timestamp: timestamp(),
@@ -2870,6 +3449,8 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             details: None,
             update_attempt_index: Some(OplogIndex::from_u64(20)),
             snapshot_assisted_details: None,
+            failure_class: golem_common::model::oplog::UpdateFailureClass::TargetRejected,
+            divergence: None,
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
             timestamp: timestamp(),
@@ -2884,6 +3465,62 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                     snapshot_index: OplogIndex::from_u64(19),
                 },
             ),
+            failure_class: golem_common::model::oplog::UpdateFailureClass::Divergence,
+            divergence: Some(Box::new(golem_common::model::oplog::ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(22),
+                expected: golem_common::model::oplog::ReplayStep::HostCall(
+                    golem_common::model::oplog::ReplayHostCall {
+                        function_name: "golem::api::generate_idempotency_key".to_string(),
+                        durable_function_type:
+                            golem_common::model::oplog::PublicDurableFunctionType::ReadLocal(
+                                golem_schema::Empty {},
+                            ),
+                        parent_start_index: None,
+                        invocation_id: None,
+                        observational_owner: None,
+                        carries_request: false,
+                        request: None,
+                    },
+                ),
+                actual: golem_common::model::oplog::ReplayStep::HostCall(
+                    golem_common::model::oplog::ReplayHostCall {
+                        function_name: "golem::api::get_oplog_index".to_string(),
+                        durable_function_type:
+                            golem_common::model::oplog::PublicDurableFunctionType::ReadLocal(
+                                golem_schema::Empty {},
+                            ),
+                        parent_start_index: Some(OplogIndex::from_u64(20)),
+                        invocation_id: Some(golem_common::model::oplog::DurableInvocationId {
+                            anchor: OplogIndex::from_u64(20),
+                            ordinal: 1,
+                        }),
+                        observational_owner: Some(OplogIndex::from_u64(20)),
+                        carries_request: true,
+                        request: None,
+                    },
+                ),
+                mismatched: vec![
+                    golem_common::model::oplog::StartIdentityField::FunctionName,
+                    golem_common::model::oplog::StartIdentityField::InvocationId,
+                    golem_common::model::oplog::StartIdentityField::ObservationalOwner,
+                    golem_common::model::oplog::StartIdentityField::RequestPresence,
+                    golem_common::model::oplog::StartIdentityField::Parent,
+                ],
+            })),
+        }),
+        PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(4).unwrap(),
+            details: None,
+            snapshot_assisted_details: None,
+            update_attempt_index: None,
+            failure_class: golem_common::model::oplog::UpdateFailureClass::TargetTrap,
+            divergence: Some(Box::new(golem_common::model::oplog::ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(23),
+                expected: golem_common::model::oplog::ReplayStep::invocation_end(),
+                actual: golem_common::model::oplog::ReplayStep::described("a pending invocation"),
+                mismatched: vec![],
+            })),
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {
             timestamp: timestamp(),
@@ -2998,7 +3635,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             timestamp: timestamp(),
             plugin: plugin(4),
             source_component_revision: ComponentRevision::INITIAL,
-            target_agent_id: agent_id("target-agent"),
+            target_agent_id: agent_id(3),
             confirmed_up_to: OplogIndex::from_u64(20),
             sending_up_to: OplogIndex::from_u64(21),
             last_batch_start: OplogIndex::from_u64(19),
@@ -3804,16 +4441,12 @@ fn arb_tool_invoke_help_result() -> OutputDocumentStrategy {
 fn arb_tool_invoke_result() -> OutputDocumentStrategy {
     use golem_client::model::NativeToolInvocationResponse;
     use golem_common::model::AgentId;
-    use golem_common::model::component::ComponentId;
 
     any::<u128>()
         .prop_map(|key| {
             to_structured_output_value(crate::model::tool_invoke::ToolInvokeView {
                 response: NativeToolInvocationResponse {
-                    agent_id: AgentId {
-                        component_id: ComponentId(uuid::Uuid::nil()),
-                        agent_id: "agent".into(),
-                    },
+                    agent_id: AgentId::from_parts(7, 1).0,
                     idempotency_key: uuid::Uuid::from_u128(key),
                     result: None,
                     status: None,
@@ -3881,15 +4514,10 @@ fn arb_value_and_type() -> BoxedStrategy<golem_common::schema::TypedSchemaValue>
 fn arb_agent_list_result() -> OutputDocumentStrategy {
     (
         proptest::collection::vec(arb_agent_metadata_view(), 0..5),
-        proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..4),
         proptest::option::of(arb_small_string()),
     )
         .prop_map(
-            |(agents, cursors, cursor)| crate::model::agent::AgentsMetadataResponseView {
-                agents,
-                cursors,
-                cursor,
-            },
+            |(agents, cursor)| crate::model::agent::AgentsMetadataResponseView { agents, cursor },
         )
         .prop_map(|output| {
             to_structured_output_value(output).expect("generated DTO should serialize")
@@ -3897,13 +4525,42 @@ fn arb_agent_list_result() -> OutputDocumentStrategy {
         .boxed()
 }
 
-fn arb_agent_new_result() -> OutputDocumentStrategy {
-    serialized_output((arb_small_string(), arb_small_string()).prop_map(
-        |(component_name, agent_id)| crate::model::agent::AgentCreateView {
-            component_name: golem_common::model::component::ComponentName(component_name),
-            agent_id: crate::model::agent::RawAgentId(agent_id),
-        },
-    ))
+fn arb_agent_create_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            arb_small_string(),
+            arb_small_string(),
+            arb_agent_id(),
+            arb_uuid(),
+        )
+            .prop_map(|(component_name, agent_type, agent_id, fingerprint)| {
+                crate::model::agent::AgentCreateView {
+                    component_name: golem_common::model::component::ComponentName(component_name),
+                    agent_type: golem_common::model::agent::AgentTypeName(agent_type),
+                    agent_id,
+                    agent_fingerprint: golem_common::model::AgentFingerprint(fingerprint),
+                }
+            }),
+    )
+}
+
+fn arb_agent_upsert_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            arb_small_string(),
+            arb_small_string(),
+            arb_agent_id(),
+            arb_uuid(),
+        )
+            .prop_map(|(component_name, agent_type, agent_id, fingerprint)| {
+                crate::model::agent::AgentUpsertView {
+                    component_name: golem_common::model::component::ComponentName(component_name),
+                    agent_type: golem_common::model::agent::AgentTypeName(agent_type),
+                    agent_id,
+                    agent_fingerprint: golem_common::model::AgentFingerprint(fingerprint),
+                }
+            }),
+    )
 }
 
 fn arb_agent_oplog_result() -> OutputDocumentStrategy {
@@ -3959,12 +4616,10 @@ fn arb_agent_oplog_export_header() -> OutputDocumentStrategy {
             |(keep, filtered, name)| {
                 let key = oplog_export_key();
                 let ctx = ObfuscationContext::new(&key, keep);
-                let agent_id = golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId(uuid!(
-                        "13a5c8d4-f05e-4e23-b982-f4d413e181cb"
-                    )),
-                    agent_id: format!("agent(\"{name}\")"),
-                };
+                let h = name
+                    .bytes()
+                    .fold(0u128, |h, b| (h << 8 | u128::from(b)) % (1 << 90));
+                let agent_id = golem_common::model::AgentId::from_parts(7, h);
                 crate::model::agent::oplog_export_view::AgentOplogExportHeaderView(
                     crate::oplog_export::model::OplogExportHeader {
                         obfuscate: true,
@@ -4037,6 +4692,45 @@ fn arb_agent_oplog_export_entry() -> OutputDocumentStrategy {
     serialized_output(
         prop_oneof![full, omitted]
             .prop_map(crate::model::agent::oplog_export_view::AgentOplogExportEntryView),
+    )
+}
+
+/// A report built from the generated header, entry and coverage documents, read back into their
+/// DTOs.
+fn arb_agent_oplog_export_report() -> OutputDocumentStrategy {
+    use crate::oplog_export::model::{
+        OplogExportCoverage, OplogExportHeader, OplogExportReport, OplogReportHeader, ReportEntry,
+    };
+    fn dto<T: serde::de::DeserializeOwned>(mut document: Value) -> T {
+        document
+            .as_object_mut()
+            .unwrap()
+            .remove(CLI_OUTPUT_TYPE_FIELD);
+        serde_json::from_value(document).unwrap()
+    }
+    serialized_output(
+        (
+            arb_agent_oplog_export_header(),
+            proptest::collection::vec(arb_agent_oplog_export_entry(), 0..4),
+            arb_agent_oplog_export_coverage(),
+            1u64..1000,
+            0u64..1000,
+        )
+            .prop_map(|(header, entries, coverage, from, span)| {
+                let mut export: OplogExportHeader = dto(header);
+                export.filtered = false;
+                crate::model::agent::oplog_export_view::AgentOplogExportReportView(
+                    OplogExportReport {
+                        header: OplogReportHeader {
+                            export,
+                            from,
+                            to: from + span,
+                        },
+                        entries: entries.into_iter().map(dto::<ReportEntry>).collect(),
+                        coverage: dto::<OplogExportCoverage>(coverage),
+                    },
+                )
+            }),
     )
 }
 
@@ -4378,7 +5072,7 @@ fn arb_agent_update_result() -> OutputDocumentStrategy {
 /// (`AgentUpdateMeta` / `AgentRedeploymentMeta`).
 type AgentTransitionFields = (
     golem_common::model::component::ComponentName,
-    crate::model::agent::RawAgentId,
+    golem_common::model::AgentId,
     golem_common::model::component::ComponentRevision,
     golem_common::model::component::ComponentRevision,
 );
@@ -4388,14 +5082,14 @@ type AgentTransitionFields = (
 fn arb_agent_transition_fields() -> BoxedStrategy<AgentTransitionFields> {
     (
         arb_small_string(),
-        arb_small_string(),
+        arb_agent_id(),
         arb_small_u64(),
         arb_small_u64(),
     )
         .prop_map(|(component_name, agent_id, from_revision, revision)| {
             (
                 golem_common::model::component::ComponentName(component_name),
-                crate::model::agent::RawAgentId(agent_id),
+                agent_id,
                 golem_common::model::component::ComponentRevision::new(from_revision)
                     .expect("generated revision should be valid"),
                 golem_common::model::component::ComponentRevision::new(revision)
@@ -4420,24 +5114,27 @@ fn arb_agent_update_meta() -> BoxedStrategy<crate::model::deploy::AgentUpdateMet
 
 fn arb_agent_redeployment_meta()
 -> BoxedStrategy<crate::model::agent::action_result::AgentRedeploymentMeta> {
-    arb_agent_transition_fields()
-        .prop_map(|(component_name, agent_id, from_revision, revision)| {
-            crate::model::agent::action_result::AgentRedeploymentMeta {
-                component_name,
-                agent_id,
-                from_revision,
-                revision,
-            }
-        })
+    (arb_agent_transition_fields(), arb_agent_id())
+        .prop_map(
+            |((component_name, agent_id, from_revision, revision), recreated_agent_id)| {
+                crate::model::agent::action_result::AgentRedeploymentMeta {
+                    component_name,
+                    agent_id,
+                    recreated_agent_id,
+                    from_revision,
+                    revision,
+                }
+            },
+        )
         .boxed()
 }
 
 fn arb_agent_action_error() -> BoxedStrategy<crate::model::agent::AgentActionError> {
-    (arb_small_string(), arb_small_string(), arb_small_string())
+    (arb_small_string(), arb_agent_id(), arb_small_string())
         .prop_map(
             |(component_name, agent_id, error)| crate::model::agent::AgentActionError {
                 component_name: golem_common::model::component::ComponentName(component_name),
-                agent_id: crate::model::agent::RawAgentId(agent_id),
+                agent_id,
                 error,
             },
         )
@@ -4446,11 +5143,11 @@ fn arb_agent_action_error() -> BoxedStrategy<crate::model::agent::AgentActionErr
 
 fn arb_agent_deletion_meta() -> BoxedStrategy<crate::model::agent::action_result::AgentDeletionMeta>
 {
-    (arb_small_string(), arb_small_string())
+    (arb_small_string(), arb_agent_id())
         .prop_map(|(component_name, agent_id)| {
             crate::model::agent::action_result::AgentDeletionMeta {
                 component_name: golem_common::model::component::ComponentName(component_name),
-                agent_id: crate::model::agent::RawAgentId(agent_id),
+                agent_id,
             }
         })
         .boxed()
@@ -4467,6 +5164,7 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
             proptest::collection::btree_map(arb_small_string(), arb_small_string(), 0..4),
             proptest::collection::vec(arb_agent_config_entry_dto(), 0..4),
             proptest::collection::vec(arb_agent_config_entry_dto(), 0..4),
+            arb_agent_status(),
             arb_agent_status(),
         ),
         (
@@ -4500,6 +5198,7 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
                 config,
                 default_config,
                 status,
+                underlying_status,
             ) = left;
             let (
                 component_revision,
@@ -4516,7 +5215,15 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
 
             crate::model::agent::AgentMetadataView {
                 component_name: golem_common::model::component::ComponentName(component_name),
-                agent_id: crate::model::agent::RawAgentId(agent_id),
+                agent_id: generated_agent_id(&agent_id),
+                agent_type: Some(golem_common::model::agent::AgentTypeName(
+                    "GeneratedAgent".to_string(),
+                )),
+                agent_key: (component_revision % 2 == 0)
+                    .then(|| format!("GeneratedAgent(\"{agent_id}\")")),
+                fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::from_u128(
+                    u128::from(retry_count),
+                )),
                 created_by: golem_common::model::account::AccountId(
                     uuid::Uuid::parse_str(&created_by).expect("generated UUID should parse"),
                 ),
@@ -4528,6 +5235,8 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
                 config,
                 default_config,
                 status,
+                underlying_status: (status == golem_common::model::AgentStatus::Sandboxed)
+                    .then_some(underlying_status),
                 component_revision: golem_common::model::component::ComponentRevision::new(
                     component_revision,
                 )
@@ -4642,6 +5351,8 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::agent::UpdateRecord
                         pending_update_index: None,
                         mode: golem_common::model::agent::AgentUpdateMode::Automatic,
                         snapshot_assisted_details: None,
+                        failure_class: golem_common::model::oplog::UpdateFailureClass::Operational,
+                        divergence: None,
                     },
                 )
             }),
@@ -4667,7 +5378,7 @@ fn arb_agent_delete_result() -> OutputDocumentStrategy {
         (any::<bool>(), arb_small_string()).prop_map(|(deleted, agent)| {
             crate::model::agent::action_result::AgentDeleteView {
                 deleted,
-                agent_id: agent,
+                agent_id: generated_agent_id(&agent),
             }
         }),
     )
@@ -4685,7 +5396,7 @@ fn arb_agent_file_contents_result() -> OutputDocumentStrategy {
             .prop_map(|(saved, agent, path, output_path, bytes)| {
                 crate::model::agent::action_result::AgentFileContentsResult {
                     saved,
-                    agent_id: agent,
+                    agent_id: generated_agent_id(&agent),
                     path,
                     output_path: output_path.into(),
                     bytes: bytes as usize,
@@ -4699,7 +5410,7 @@ fn arb_agent_interrupt_result() -> OutputDocumentStrategy {
         (any::<bool>(), arb_small_string()).prop_map(|(interrupted, agent)| {
             crate::model::agent::action_result::AgentInterruptResult {
                 interrupted,
-                agent_id: agent,
+                agent_id: generated_agent_id(&agent),
             }
         }),
     )
@@ -4710,7 +5421,7 @@ fn arb_agent_resume_result() -> OutputDocumentStrategy {
         (any::<bool>(), arb_small_string()).prop_map(|(resumed, agent)| {
             crate::model::agent::action_result::AgentResumeResult {
                 resumed,
-                agent_id: agent,
+                agent_id: generated_agent_id(&agent),
             }
         }),
     )
@@ -4721,7 +5432,7 @@ fn arb_agent_simulate_crash_result() -> OutputDocumentStrategy {
         (any::<bool>(), arb_small_string()).prop_map(|(simulated, agent)| {
             crate::model::agent::action_result::AgentSimulateCrashResult {
                 simulated,
-                agent_id: agent,
+                agent_id: generated_agent_id(&agent),
             }
         }),
     )
@@ -5242,17 +5953,131 @@ fn arb_card_managed_by() -> BoxedStrategy<golem_client::model::CardManagedBy> {
     .boxed()
 }
 
-fn arb_agent_cancel_invocation_result() -> OutputDocumentStrategy {
-    serialized_output(
-        (any::<bool>(), arb_small_string(), arb_small_string()).prop_map(
-            |(canceled, agent, idempotency_key)| {
-                crate::model::agent::action_result::AgentCancelInvocationResult {
-                    canceled,
-                    agent_id: agent,
-                    idempotency_key,
-                }
+fn arb_invocation_summary() -> BoxedStrategy<golem_client::model::InvocationSummary> {
+    use golem_client::model::{InvocationKind, InvocationState, InvocationSummary};
+
+    (
+        arb_uuid(),
+        arb_uuid(),
+        prop_oneof![
+            Just(InvocationState::Scheduled),
+            Just(InvocationState::Pending),
+            Just(InvocationState::Running),
+            Just(InvocationState::Waiting),
+            Just(InvocationState::Retrying),
+            Just(InvocationState::Interrupted),
+            Just(InvocationState::Completed),
+            Just(InvocationState::Failed),
+            Just(InvocationState::Cancelled),
+        ],
+        proptest::option::of(prop_oneof![
+            Just(InvocationKind::Method),
+            Just(InvocationKind::Constructor),
+            Just(InvocationKind::Tool),
+        ]),
+        proptest::option::of(arb_small_string()),
+        proptest::option::of(arb_datetime()),
+        arb_datetime(),
+    )
+        .prop_map(
+            |(uuid, agent, state, kind, operation, accepted_at, changed_at)| InvocationSummary {
+                invocation_id: format!("{agent}.{uuid}"),
+                agent_id: agent,
+                environment_id: uuid,
+                state,
+                kind,
+                operation,
+                accepted_at,
+                changed_at,
             },
-        ),
+        )
+        .boxed()
+}
+
+fn arb_external_typed_schema_value() -> BoxedStrategy<golem_common::schema::ExternalTypedSchemaValue>
+{
+    arb_value_and_type()
+        .prop_filter_map("value has an external form", |typed| {
+            golem_common::schema::ExternalTypedSchemaValue::try_from(typed).ok()
+        })
+        .boxed()
+}
+
+fn arb_invocation_outcome() -> BoxedStrategy<golem_client::model::InvocationOutcome> {
+    use golem_client::model::{
+        InvocationFailure, InvocationMethodResult, InvocationOutcome, InvocationToolResult,
+        NativeToolFailure, NativeToolResult, NativeToolSuccess,
+    };
+    use golem_common::model::tool::SerializableToolRpcError;
+
+    prop_oneof![
+        arb_external_typed_schema_value()
+            .prop_map(|value| InvocationOutcome::Method(InvocationMethodResult { value })),
+        proptest::option::of(arb_external_typed_schema_value()).prop_map(|result| {
+            InvocationOutcome::Tool(InvocationToolResult {
+                result: NativeToolResult::Success(NativeToolSuccess { result }),
+            })
+        }),
+        arb_small_string().prop_map(|message| {
+            InvocationOutcome::Tool(InvocationToolResult {
+                result: NativeToolResult::Failure(NativeToolFailure {
+                    error: SerializableToolRpcError::Denied(message),
+                }),
+            })
+        }),
+        arb_small_string()
+            .prop_map(|error| InvocationOutcome::Failure(InvocationFailure { error })),
+    ]
+    .boxed()
+}
+
+fn arb_invocation_get_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            arb_invocation_summary(),
+            proptest::option::of(arb_invocation_outcome()),
+        )
+            .prop_map(|(summary, result)| {
+                crate::model::invocation::InvocationGetView(golem_client::model::Invocation {
+                    summary,
+                    result,
+                })
+            }),
+    )
+}
+
+fn arb_invocation_get_matches_result() -> OutputDocumentStrategy {
+    serialized_output(
+        proptest::collection::vec(
+            (
+                arb_invocation_summary(),
+                proptest::option::of(arb_invocation_outcome()),
+            )
+                .prop_map(|(summary, result)| golem_client::model::Invocation { summary, result }),
+            2..4,
+        )
+        .prop_map(|invocations| crate::model::invocation::InvocationGetMatchesView { invocations }),
+    )
+}
+
+fn arb_invocation_list_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            proptest::collection::vec(arb_invocation_summary(), 0..4),
+            proptest::option::of(arb_small_string()),
+        )
+            .prop_map(|(invocations, next_cursor)| {
+                crate::model::invocation::InvocationListView(golem_client::model::InvocationPage {
+                    invocations,
+                    next_cursor,
+                })
+            }),
+    )
+}
+
+fn arb_invocation_cancel_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_invocation_summary().prop_map(crate::model::invocation::InvocationCancelView),
     )
 }
 
@@ -5302,7 +6127,7 @@ fn arb_agent_revert_result() -> OutputDocumentStrategy {
                 |(reverted, agent, last_oplog_index, number_of_invocations)| {
                     crate::model::agent::action_result::AgentRevertResult {
                         reverted,
-                        agent_id: agent,
+                        agent_id: generated_agent_id(&agent),
                         last_oplog_index,
                         number_of_invocations,
                     }
@@ -5322,7 +6147,7 @@ fn arb_agent_plugin_toggle_result() -> OutputDocumentStrategy {
             .prop_map(|(activated, agent, plugin, priority)| {
                 crate::model::agent::action_result::AgentPluginToggleResult {
                     activated,
-                    agent_id: agent,
+                    agent_id: generated_agent_id(&agent),
                     plugin,
                     priority,
                 }
@@ -6447,6 +7272,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: current_component_hash,
+                    package_metadata: None,
                     agent_types: BTreeMap::from_iter([(
                         "agent".to_string(),
                         golem_common::model::diff::HashOf::form_value(sample_agent_type_schema(
@@ -6492,6 +7318,11 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     }
                     .into(),
                     wasm_hash: new_component_hash,
+                    package_metadata: Some(golem_common::model::component::ComponentPackageMetadata {
+                        source: "./fixture.tar".into(),
+                        package_digest: format!("sha256:{}", "12".repeat(32)),
+                        layer_digest: format!("sha256:{}", "34".repeat(32)),
+                    }),
                     agent_types: BTreeMap::from_iter([
                         (
                             "agent".to_string(),

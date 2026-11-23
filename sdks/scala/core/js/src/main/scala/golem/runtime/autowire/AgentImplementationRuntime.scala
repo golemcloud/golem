@@ -18,17 +18,29 @@ package golem.runtime.autowire
 
 import golem.InvocationContext
 import golem.config.{ConfigHolder, ConfigLoader}
+import golem.host.js.schema.JsAgentError
 import golem.runtime.{
   AgentImplementationType,
   AsyncImplementationMethod,
   SnapshotRestoreContext,
   SyncImplementationMethod,
   WireAgentImplementationType,
+  WireAgentInputError,
   WireAgentMetadata
 }
 import golem.FutureInterop
 
+import scala.concurrent.Future
+import scala.scalajs.js
+import scala.util.control.NonFatal
+
 private[autowire] object AgentImplementationRuntime {
+  private def identityFields(ctor: Any): Vector[Any] = ctor match {
+    case ()                => Vector.empty
+    case values: Vector[?] => values.asInstanceOf[Vector[Any]]
+    case value             => Vector(value)
+  }
+
   def registerWire[Trait, Ctor](
     typeName: String,
     mode: AgentMode,
@@ -49,16 +61,13 @@ private[autowire] object AgentImplementationRuntime {
       bindings = implType.methods.map(MethodBinding.wire(implType.metadata, _)),
       mode = mode,
       snapshotHandlers = implType.snapshotHandlers,
-      restoreInstance = implType.snapshotHandlers.map { handlers => (bytes, agentId, identityInput, phantomId) =>
-        FutureInterop.toPromise(SchemaPayload.withWireInput(identityInput) { value =>
-          val identity = implType.ctorCodec.decode(value)
-          val fields   = identity match {
-            case ()                => Vector.empty
-            case values: Vector[?] => values.asInstanceOf[Vector[Any]]
-            case value             => Vector(value)
-          }
+      restoreInstance = implType.snapshotHandlers.map { handlers => (bytes, agentId, constructorInput) =>
+        FutureInterop.toPromise(SchemaPayload.withWireInput(constructorInput) { value =>
+          val ctor =
+            try implType.ctorCodec.decode(value)
+            catch { case NonFatal(error) => throw WireAgentInputError(String.valueOf(error.getMessage)) }
           val freshConfig = implType.configBuilder.map(builder => ConfigLoader.createLazyConfig(builder))
-          val context     = SnapshotRestoreContext(fields, agentId, phantomId, freshConfig)
+          val context     = SnapshotRestoreContext(identityFields(ctor), agentId, freshConfig)
           handlers
             .load(bytes, context)
             .map(instance => RestoredInstance(instance, freshConfig))(
@@ -103,25 +112,20 @@ private[autowire] object AgentImplementationRuntime {
       bindings = bindings,
       mode = mode,
       snapshotHandlers = implType.snapshotHandlers,
-      restoreInstance = implType.snapshotHandlers.map { handlers => (bytes, agentId, identityInput, phantomId) =>
-        SchemaPayload.decode[Ctor](identityInput)(implType.ctorCodec) match {
-          case Left(error)     => scala.scalajs.js.Promise.reject(new IllegalArgumentException(error.toString))
-          case Right(identity) =>
-            val fields = identity match {
-              case ()                => Vector.empty
-              case values: Vector[?] => values.asInstanceOf[Vector[Any]]
-              case value             => Vector(value)
-            }
-            val freshConfig = implType.configBuilder.map(builder => ConfigLoader.createLazyConfig(builder))
-            val context     = SnapshotRestoreContext(fields, agentId, phantomId, freshConfig)
-            FutureInterop.toPromise(
+      restoreInstance = implType.snapshotHandlers.map { handlers => (bytes, agentId, constructorInput) =>
+        FutureInterop.toPromise(
+          SchemaPayload.withDecodedInput[Ctor, RestoredInstance[Trait]](constructorInput) {
+            case Left(err)   => Future.failed(js.JavaScriptException(JsAgentError.invalidInput(err.toString)))
+            case Right(ctor) =>
+              val freshConfig = implType.configBuilder.map(builder => ConfigLoader.createLazyConfig(builder))
+              val context     = SnapshotRestoreContext(identityFields(ctor), agentId, freshConfig)
               handlers
                 .load(bytes, context)
                 .map(instance => RestoredInstance(instance, freshConfig))(
                   scala.concurrent.ExecutionContext.parasitic
                 )
-            )
-        }
+          }(implType.ctorCodec)
+        )
       }
     )
 

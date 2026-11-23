@@ -106,22 +106,22 @@ impl RustRpcBenchmarkAgent for RustRpcBenchmarkAgentImpl {
     }
 
     async fn echo(&mut self, message: String) -> String {
-        let mut client = RustBenchmarkAgentClient::get(self.name.clone());
+        let mut client = RustBenchmarkAgentClient::upsert(self.name.clone());
         client.echo(message).await
     }
 
     async fn large_input(&mut self, input: Vec<u8>) -> u32 {
-        let mut client = RustBenchmarkAgentClient::get(self.name.clone());
+        let mut client = RustBenchmarkAgentClient::upsert(self.name.clone());
         client.large_input(input).await
     }
 
     async fn cpu_intensive(&mut self, length: f64) -> u32 {
-        let mut client = RustBenchmarkAgentClient::get(self.name.clone());
+        let mut client = RustBenchmarkAgentClient::upsert(self.name.clone());
         client.cpu_intensive(length).await
     }
 
     async fn oplog_heavy(&mut self, length: u32, commit: bool) -> u32 {
-        let mut client = RustBenchmarkAgentClient::get(self.name.clone());
+        let mut client = RustBenchmarkAgentClient::upsert(self.name.clone());
         client.oplog_heavy(length, commit).await
     }
 }

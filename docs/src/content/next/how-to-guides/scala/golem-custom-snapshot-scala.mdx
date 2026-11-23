@@ -171,7 +171,7 @@ def loadSnapshot(
 ): Future[Implementation]
 ```
 
-The macro detects these convention methods and wires them into the snapshot exports automatically. The restore context provides identity fields, the full agent ID, restored principal, phantom ID, and fresh configuration.
+The macro detects these convention methods and wires them into the snapshot exports automatically. The restore context provides the identity fields (the decoded constructor parameters), the agent ID, the restored principal, and fresh configuration.
 
 ## Restoration Is Read-Only
 

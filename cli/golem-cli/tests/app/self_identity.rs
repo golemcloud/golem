@@ -72,13 +72,20 @@ async fn invoke(ctx: &TestContext, agent: &str, method: &str, args: &[String]) -
         .to_string()
 }
 
-async fn status(ctx: &TestContext, agent: &str) -> Value {
-    let result = invoke(ctx, agent, "status", &[]).await;
+/// The `status` of the agent at `address`, after checking that every way of reading its identity
+/// names the agent with ID `id`.
+async fn status(ctx: &TestContext, address: &str, id: &str) -> Value {
+    let result = invoke(ctx, address, "status", &[]).await;
     let status: Value = serde_json::from_str(&result).unwrap();
-    assert_eq!(status["current"], agent);
-    assert_eq!(status["metadata"], agent);
-    assert_eq!(status["addressed"], agent);
+    assert_eq!(status["current"], id);
+    assert_eq!(status["metadata"], id);
+    assert_eq!(status["addressed"], id);
     status
+}
+
+/// The address of the agent of `agent_type` with ID `id`.
+fn by_id(agent_type: &str, id: &str) -> String {
+    format!("{agent_type}[{id}]")
 }
 
 async fn fork_cutoff(ctx: &TestContext, agent: &str) -> String {
@@ -134,61 +141,54 @@ async fn self_identity_follows_durable_history(language: &str) {
 
     for agent_type in ["Identity", "SnapshotIdentity"] {
         let parent = format!("{agent_type}(\"parent\")");
-        let child = format!("{agent_type}(\"child\")");
-        let grandchild = format!("{agent_type}(\"grandchild\")");
-        assert_eq!(invoke(&ctx, &parent, "observe", &[]).await, parent);
+        let parent_id = invoke(&ctx, &parent, "observe", &[]).await;
+        assert!(uuid::Uuid::parse_str(&parent_id).is_ok(), "{parent_id}");
         let cutoff = fork_cutoff(&ctx, &parent).await;
-        invoke(
-            &ctx,
-            &parent,
-            "forkNamed",
-            &[json!("child").to_string(), json!(cutoff).to_string()],
-        )
-        .await;
-        let inherited = status(&ctx, &child).await;
+        let child_id = invoke(&ctx, &parent, "forkAt", &[json!(cutoff).to_string()]).await;
+        assert_ne!(child_id, parent_id);
+        let child = by_id(agent_type, &child_id);
+        let inherited = status(&ctx, &child, &child_id).await;
         assert_eq!(inherited["configured"], "parent");
-        assert_eq!(inherited["saved"], parent);
-        assert_eq!(inherited["trace"], json!([parent]));
-        assert_eq!(invoke(&ctx, &child, "observe", &[]).await, child);
-        assert_eq!(invoke(&ctx, &child, "observe", &[]).await, child);
+        assert_eq!(inherited["saved"], parent_id);
+        assert_eq!(inherited["trace"], json!([parent_id]));
+        assert_eq!(invoke(&ctx, &child, "observe", &[]).await, child_id);
+        assert_eq!(invoke(&ctx, &child, "observe", &[]).await, child_id);
 
         // Reconstruct both inherited parent reads and recorded child reads.
         ctx.server_process.take().unwrap().kill().await.unwrap();
         ctx.startup_ports = None;
         ctx.start_server().await;
-        let restarted = status(&ctx, &child).await;
-        assert_eq!(restarted["saved"], parent);
-        assert_eq!(restarted["trace"], json!([parent, child, child]));
+        let restarted = status(&ctx, &child, &child_id).await;
+        assert_eq!(restarted["saved"], parent_id);
+        assert_eq!(restarted["trace"], json!([parent_id, child_id, child_id]));
         if agent_type == "SnapshotIdentity" {
-            assert_eq!(restarted["snapshotIdentity"], child);
+            assert_eq!(restarted["snapshotIdentity"], child_id);
         }
         let cutoff = fork_cutoff(&ctx, &child).await;
-        invoke(
-            &ctx,
-            &child,
-            "forkNamed",
-            &[json!("grandchild").to_string(), json!(cutoff).to_string()],
-        )
-        .await;
-        let second_generation = status(&ctx, &grandchild).await;
-        assert_eq!(second_generation["trace"], json!([parent, child, child]));
-        assert_eq!(second_generation["saved"], parent);
-        assert_eq!(status(&ctx, &parent).await["trace"], json!([parent]));
+        let grandchild_id = invoke(&ctx, &child, "forkAt", &[json!(cutoff).to_string()]).await;
+        let second_generation =
+            status(&ctx, &by_id(agent_type, &grandchild_id), &grandchild_id).await;
+        assert_eq!(
+            second_generation["trace"],
+            json!([parent_id, child_id, child_id])
+        );
+        assert_eq!(second_generation["saved"], parent_id);
+        assert_eq!(
+            status(&ctx, &parent, &parent_id).await["trace"],
+            json!([parent_id])
+        );
 
         // A self-fork resumes the same invocation on both sides of the cut.
         let original: Value =
             serde_json::from_str(&invoke(&ctx, &child, "forkSelf", &[]).await).unwrap();
-        assert_eq!(original["before"], child);
-        assert_eq!(original["after"], child);
+        assert_eq!(original["before"], child_id);
+        assert_eq!(original["after"], child_id);
         assert_eq!(original["tag"], "original");
-        let phantom = original["target"].as_str().unwrap();
-        let forked = status(&ctx, phantom).await;
+        let forked_id = original["target"].as_str().unwrap();
+        let forked = status(&ctx, &by_id(agent_type, forked_id), forked_id).await;
         let transition: Value = serde_json::from_str(forked["lastFork"].as_str().unwrap()).unwrap();
-        assert_eq!(transition["before"], child);
-        assert_eq!(transition["after"], phantom);
+        assert_eq!(transition["before"], child_id);
+        assert_eq!(transition["after"], forked_id);
         assert_eq!(transition["tag"], "forked");
-        if language == "ts" {
-            assert!(transition["phantom"].as_str().is_some());
-        }
     }
 }

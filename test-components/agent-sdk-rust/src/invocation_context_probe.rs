@@ -52,7 +52,9 @@ fn observe() -> Observation {
     Observation {
         invocation_id: invocation_context::invocation_id().map(|id| {
             let owner = match id.owner {
-                InvocationOwner::Agent(agent_id) => agent_id.agent_id,
+                InvocationOwner::Agent(agent_id) => {
+                    golem_rust::Uuid::from(agent_id.uuid).to_string()
+                }
                 InvocationOwner::Tool(name) => format!("tool:{name}"),
             };
             format!("{owner}.{}", golem_rust::Uuid::from(id.id))
@@ -176,18 +178,17 @@ impl InvocationContextProbe for InvocationContextProbeImpl {
     }
 
     async fn report_of_peer(&self, peer: String) -> String {
-        let client = InvocationContextProbeClient::get(peer.clone());
+        let client = InvocationContextProbeClient::upsert(peer.clone());
         let report: serde_json::Value =
             serde_json::from_str(&client.report().await).expect("peer report should be JSON");
-        let rpc = WasmRpc::new(
+        let rpc = WasmRpc::upsert(
             "InvocationContextProbe",
             golem_rust::encode_schema_value(&SchemaValue::Record {
                 fields: vec![SchemaValue::String(peer)],
             })
             .expect("constructor should encode"),
-            None,
-            Vec::new(),
-        );
+        )
+        .expect("failed to create the RPC client");
         let input = golem_rust::encode_schema_value(&SchemaValue::Record { fields: vec![] })
             .expect("input should encode");
         let triggered = golem_rust::InvocationMetadata::from(

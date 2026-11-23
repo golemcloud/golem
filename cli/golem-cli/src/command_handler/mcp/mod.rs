@@ -42,8 +42,9 @@ use crate::error::{
     OutsideEnvironment, PipedExitCode, ProfileMissing, PromptAnswer,
 };
 use crate::log::{
-    LogColorize, OUTPUT_CAPTURE_LIMIT, Output, OutputCapture, discard_held_log,
-    error_message_for_output, log_action, log_error, log_warn, message_for_output, set_log_output,
+    LogColorize, LogOutput, OUTPUT_CAPTURE_LIMIT, Output, OutputCapture, TracingSuppression,
+    discard_held_log, error_message_for_output, log_action, log_error, log_warn,
+    message_for_output, print_line, set_log_output,
 };
 use crate::model::cli_output::{
     CLI_OUTPUT_TYPE_FIELD, command_output_schema_value, command_output_types,
@@ -69,6 +70,10 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+
+mod oplog_export;
+
+use oplog_export::{OPLOG_EXPORT_TOOL, OplogExportArguments};
 
 /// The tool argument that confirms a destructive command, as `--yes` does on the CLI.
 pub const CONFIRM_ARGUMENT: &str = "confirm";
@@ -129,7 +134,7 @@ impl ManagementTool {
     }
 }
 
-/// The MCP tool name of a command path: `agent cancel-invocation` is `agent_cancel_invocation`.
+/// The MCP tool name of a command path: `invocation cancel` is `invocation_cancel`.
 pub fn tool_name(path: &[&str]) -> String {
     path.join("_").replace('-', "_")
 }
@@ -585,7 +590,8 @@ fn find_cause<T: std::error::Error + Send + Sync + 'static>(error: &anyhow::Erro
         })
 }
 
-fn classify(error: &anyhow::Error, tool: &ManagementTool) -> ToolError {
+/// How `error` is reported. `tool` is the command tool of the call; `None` for a typed tool.
+fn classify(error: &anyhow::Error, tool: Option<&ManagementTool>) -> ToolError {
     if let Some(input) = find_cause::<InputRequired>(error) {
         return input_required(input, tool);
     }
@@ -634,24 +640,24 @@ fn classify(error: &anyhow::Error, tool: &ManagementTool) -> ToolError {
 }
 
 /// A question that the command asked: the question, and the tool argument that answers it on the
-/// next call, when the tool has one.
-fn input_required(input: &InputRequired, tool: &ManagementTool) -> ToolError {
+/// next call, when the tool has one. A typed tool, `None`, has no argument that answers one.
+fn input_required(input: &InputRequired, tool: Option<&ManagementTool>) -> ToolError {
     let confirmation = input.answer == Some(PromptAnswer::Yes);
-    let answer_with = match input.answer {
-        Some(PromptAnswer::Yes) => tool.row.destructive.then_some(CONFIRM_ARGUMENT),
+    let answer_with = tool.and_then(|tool| match input.answer {
+        Some(PromptAnswer::Yes) => tool.row.destructive.then_some((tool, CONFIRM_ARGUMENT)),
         Some(PromptAnswer::Argument(id)) => tool
             .arguments
             .iter()
             .any(|argument| argument.id == id)
-            .then_some(id),
+            .then_some((tool, id)),
         None => None,
-    };
+    });
     let how = match answer_with {
-        Some(CONFIRM_ARGUMENT) => format!(
+        Some((tool, CONFIRM_ARGUMENT)) => format!(
             "To answer yes, call `{}` again with `{CONFIRM_ARGUMENT}: true`.",
             tool.name()
         ),
-        Some(argument) => format!(
+        Some((tool, argument)) => format!(
             "To answer, call `{}` again with the argument `{argument}`.",
             tool.name()
         ),
@@ -670,7 +676,7 @@ fn input_required(input: &InputRequired, tool: &ManagementTool) -> ToolError {
     });
     tool_error.message = Some(format!("{input}. {how}"));
     tool_error.details.insert("prompt".to_string(), prompt);
-    if let Some(answer_with) = answer_with {
+    if let Some((_, answer_with)) = answer_with {
         tool_error
             .details
             .insert("answer_with".to_string(), json!(answer_with));
@@ -684,9 +690,16 @@ fn confirmed(tool: &ManagementTool, arguments: &JsonObject) -> bool {
     !tool.row.destructive || arguments.get(CONFIRM_ARGUMENT) == Some(&Value::Bool(true))
 }
 
+/// What a call runs.
+enum CallWork {
+    /// The command of the command tool at this index, with this argv.
+    Command { tool: usize, argv: Vec<String> },
+    /// A bounded oplog report of the `agent_oplog_export` tool.
+    OplogExport(OplogExportArguments),
+}
+
 struct ToolCall {
-    tool: usize,
-    argv: Vec<String>,
+    work: CallWork,
     /// The request's token: the client cancels it, and the server cancels it once it answered.
     cancellation: CancellationToken,
     reply: oneshot::Sender<CallToolResult>,
@@ -741,6 +754,8 @@ async fn run_until_cancelled<F: Future>(run: F, cancellation: &Cancellation) -> 
 #[derive(Clone)]
 struct ManagementMcpServer {
     tools: Arc<Vec<ManagementTool>>,
+    /// The typed tools, which no command row has: `agent_oplog_export`.
+    typed_tools: Arc<Vec<Tool>>,
     environment: String,
     calls: mpsc::Sender<ToolCall>,
 }
@@ -762,7 +777,11 @@ impl ServerHandler for ManagementMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult::with_all_items(
-            self.tools.iter().map(|tool| tool.tool.clone()).collect(),
+            self.tools
+                .iter()
+                .map(|tool| tool.tool.clone())
+                .chain(self.typed_tools.iter().cloned())
+                .collect(),
         ))
     }
 
@@ -771,37 +790,44 @@ impl ServerHandler for ManagementMcpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let Some(index) = self
-            .tools
-            .iter()
-            .position(|tool| tool.name() == request.name)
-        else {
-            return Err(ErrorData::invalid_params(
-                format!("Unknown tool: {}", request.name),
-                None,
-            ));
-        };
-        let tool = &self.tools[index];
         let arguments = request.arguments.unwrap_or_default();
-        let argv = match tool_call_argv(tool, &arguments) {
-            Ok(argv) => argv,
-            Err(message) => return Ok(error_result("invalid-arguments", message).into()),
+        let work = if request.name == OPLOG_EXPORT_TOOL {
+            match OplogExportArguments::parse(&arguments) {
+                Ok(arguments) => CallWork::OplogExport(arguments),
+                Err(message) => return Ok(error_result("invalid-arguments", message).into()),
+            }
+        } else {
+            let Some(index) = self
+                .tools
+                .iter()
+                .position(|tool| tool.name() == request.name)
+            else {
+                return Err(ErrorData::invalid_params(
+                    format!("Unknown tool: {}", request.name),
+                    None,
+                ));
+            };
+            let tool = &self.tools[index];
+            let argv = match tool_call_argv(tool, &arguments) {
+                Ok(argv) => argv,
+                Err(message) => return Ok(error_result("invalid-arguments", message).into()),
+            };
+            if !confirmed(tool, &arguments) {
+                return Ok(error_envelope(
+                    "confirmation-required",
+                    format!(
+                        "`{}` is destructive and runs only with `{CONFIRM_ARGUMENT}: true`",
+                        tool.name()
+                    ),
+                    Map::from_iter([("answer_with".to_string(), json!(CONFIRM_ARGUMENT))]),
+                )
+                .into());
+            }
+            CallWork::Command { tool: index, argv }
         };
-        if !confirmed(tool, &arguments) {
-            return Ok(error_envelope(
-                "confirmation-required",
-                format!(
-                    "`{}` is destructive and runs only with `{CONFIRM_ARGUMENT}: true`",
-                    tool.name()
-                ),
-                Map::from_iter([("answer_with".to_string(), json!(CONFIRM_ARGUMENT))]),
-            )
-            .into());
-        }
         let (reply, result) = oneshot::channel();
         let call = ToolCall {
-            tool: index,
-            argv,
+            work,
             cancellation: context.ct.clone(),
             reply,
         };
@@ -830,6 +856,7 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
     lazy: &mut LazyContext<Hooks>,
 ) -> anyhow::Result<()> {
     let tools = Arc::new(management_tools()?);
+    let typed_tools = Arc::new(vec![oplog_export::tool()?]);
     let ctx = lazy.get_or_init().await?;
     // The questions about the manifest are answered here, once, and every call keeps the answer.
     drop(ctx.app_context_lock_mut().await?);
@@ -845,7 +872,7 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
         "Serving",
         format!(
             "{} management tools over stdio in environment {}",
-            tools.len(),
+            tools.len() + typed_tools.len(),
             environment_name.log_color_highlight()
         ),
     );
@@ -854,6 +881,7 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
     let (calls, mut call_receiver) = mpsc::channel::<ToolCall>(1);
     let server = ManagementMcpServer {
         tools: tools.clone(),
+        typed_tools,
         environment: environment_name,
         calls,
     };
@@ -880,16 +908,33 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
             // Drops what was printed between calls, such as a late log line or a late document of
             // a cancelled call.
             capture.start_call(cancellation.token().clone());
-            let run = run_call(
-                hooks.clone(),
-                global_flags,
-                ctx,
-                environment,
-                capture,
-                &tools[call.tool],
-                call.argv,
-                cancellation.clone(),
-            );
+            let run = async {
+                match call.work {
+                    CallWork::Command { tool, argv } => {
+                        run_call(
+                            hooks.clone(),
+                            global_flags,
+                            ctx,
+                            environment,
+                            capture,
+                            &tools[tool],
+                            argv,
+                            cancellation.clone(),
+                        )
+                        .await
+                    }
+                    CallWork::OplogExport(arguments) => {
+                        run_oplog_export_call(
+                            ctx,
+                            environment,
+                            capture,
+                            arguments,
+                            cancellation.clone(),
+                        )
+                        .await
+                    }
+                }
+            };
             let result = run_until_cancelled(run, &cancellation).await;
             if capture.overflowed() {
                 discard_held_log();
@@ -1032,7 +1077,7 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
     let ctx = match server_ctx.for_tool_call(confirmed, environment.clone(), cancellation) {
         Ok(ctx) => Arc::new(ctx),
         Err(error) => {
-            let tool_error = classify(&error, tool);
+            let tool_error = classify(&error, Some(tool));
             let message = tool_error
                 .message
                 .unwrap_or_else(|| error_message_for_output(&error));
@@ -1047,8 +1092,95 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
             let (stdout, _) = capture.take();
             success(tool, &stdout)
         }
-        Err(error) => failure(error, &ctx, global_flags, capture, tool),
+        Err(error) => failure(error, &ctx, global_flags, capture, Some(tool)),
     }
+}
+
+/// Runs one call of `agent_oplog_export` with the call's own [`Context`]. The report is printed
+/// as one document, so that the output capture checks its size as for every other call.
+async fn run_oplog_export_call(
+    server_ctx: &Context,
+    environment: &ResolvedEnvironmentIdentity,
+    capture: &OutputCapture,
+    arguments: OplogExportArguments,
+    cancellation: Cancellation,
+) -> CallToolResult {
+    // The call logs nothing: the log and the tracing of a resolution or a read can quote the
+    // agent ID or data of the agent.
+    let result = {
+        let _silent = (LogOutput::new(Output::None), TracingSuppression::new());
+        match server_ctx.for_tool_call(false, environment.clone(), cancellation) {
+            Ok(ctx) => oplog_export::run(Arc::new(ctx), arguments, OUTPUT_CAPTURE_LIMIT).await,
+            Err(error) => Err(error),
+        }
+    };
+    match result {
+        Ok(document) => {
+            print_line(document);
+            discard_held_log();
+            let (stdout, _) = capture.take();
+            match json_documents(&stdout) {
+                Ok(mut documents) if documents.len() == 1 => {
+                    CallToolResult::structured(documents.remove(0))
+                }
+                _ => error_result(
+                    "command-failed",
+                    "The report is not one JSON document".to_string(),
+                ),
+            }
+        }
+        Err(error) => {
+            discard_held_log();
+            let _ = capture.take();
+            oplog_export_failure(&error)
+        }
+    }
+}
+
+/// The platform error codes that a failed `agent_oplog_export` call keeps: those of a failed
+/// resolution of the agent or a failed read. The code of a server response is any string.
+const OPLOG_EXPORT_PLATFORM_ERRORS: &[&str] = &[
+    error_code::ACCOUNT_NOT_FOUND,
+    error_code::AGENT_NOT_FOUND,
+    error_code::AGENT_TYPE_NOT_FOUND,
+    error_code::APPLICATION_NOT_FOUND,
+    error_code::AUTH_FORBIDDEN,
+    error_code::AUTH_UNAUTHORIZED,
+    error_code::CLI_UPDATE_REQUIRED,
+    error_code::COMPONENT_NOT_FOUND,
+    error_code::ENVIRONMENT_NOT_DEPLOYED,
+    error_code::ENVIRONMENT_NOT_FOUND,
+    error_code::LIMIT_EXCEEDED,
+    error_code::SERVER_STARTING,
+];
+
+/// The error of a failed `agent_oplog_export` call. An error of the export itself has its own
+/// code and message. Another error, such as when the CLI could not make the call's [`Context`] or
+/// resolve the agent, keeps only its code, and the service and the HTTP status of a service error:
+/// its message, its log and its other details can quote the agent ID or data of the agent. A
+/// platform error code that is not in [`OPLOG_EXPORT_PLATFORM_ERRORS`] becomes `command-failed`.
+fn oplog_export_failure(error: &anyhow::Error) -> CallToolResult {
+    if let Some((code, message, details)) = oplog_export::export_failure(error) {
+        return error_envelope(code, message, details);
+    }
+    let mut tool_error = classify(error, None);
+    if let Some(code) = find_cause::<ServiceError>(error).and_then(ServiceError::error_code)
+        && tool_error.code == platform_error_id(code)
+        && !OPLOG_EXPORT_PLATFORM_ERRORS.contains(&code)
+    {
+        tool_error.code = "command-failed".to_string();
+    }
+    let details = tool_error
+        .details
+        .into_iter()
+        .filter(|(key, _)| key == "service" || key == "status")
+        .collect();
+    let message = format!(
+        "`{OPLOG_EXPORT_TOOL}` failed with `{}`. The message of the error is not shown, because \
+         it can contain the agent ID or data of the agent.",
+        tool_error.code
+    );
+    error_envelope(&tool_error.code, message, details)
 }
 
 /// The JSON documents that a command printed, one per line.
@@ -1099,7 +1231,7 @@ fn failure(
     ctx: &Arc<Context>,
     global_flags: &GolemCliGlobalFlags,
     capture: &OutputCapture,
-    tool: &ManagementTool,
+    tool: Option<&ManagementTool>,
 ) -> CallToolResult {
     set_log_output(Output::Stderr);
     // A hint error and a context error are explained by the messages that their handlers log, as
@@ -1122,7 +1254,7 @@ fn failure(
 /// documents that it printed are the payload's `output`; they are not the tool's result.
 fn failure_envelope(
     error: &anyhow::Error,
-    tool: &ManagementTool,
+    tool: Option<&ManagementTool>,
     logged: bool,
     stdout: &[u8],
     stderr: &[u8],
@@ -1156,9 +1288,9 @@ fn failure_envelope(
 #[cfg(test)]
 mod tests {
     use super::{
-        ArgumentKind, CONFIRM_ARGUMENT, ClientInput, ManagementTool, ResultShape,
+        ArgumentKind, CONFIRM_ARGUMENT, CallWork, ClientInput, ManagementTool, ResultShape,
         SERVICE_END_GRACE, ToolCall, classify, error_envelope, execute_calls, failure_envelope,
-        management_tools, run_until_cancelled, success, tool_call_argv,
+        management_tools, oplog_export_failure, run_until_cancelled, success, tool_call_argv,
     };
     use crate::command::{GolemCliCommand, GolemCliCommandParseResult};
     use crate::command_handler::agent::invocation_session::InvocationFailure;
@@ -1167,7 +1299,8 @@ mod tests {
     use crate::context::Cancellation;
     use crate::error::service::{ServiceError, ServiceErrorKind, ServiceErrorResponse};
     use crate::error::{
-        LoginRequired, NonSuccessfulExit, PipedExitCode, ProfileMissing, PromptAnswer,
+        LoginRequired, NonSuccessfulExit, OutsideEnvironment, PipedExitCode, ProfileMissing,
+        PromptAnswer,
     };
     use crate::model::format::Format;
     use golem_common::model::invocation_session_public::PublicErrorCode;
@@ -1289,7 +1422,7 @@ mod tests {
 
     fn reported(error: anyhow::Error, tool_name: &str) -> Value {
         let tool = tool(tool_name);
-        let tool_error = classify(&error, &tool);
+        let tool_error = classify(&error, Some(&tool));
         envelope(&error_envelope(
             &tool_error.code,
             tool_error.message.unwrap_or_else(|| error.to_string()),
@@ -1387,6 +1520,75 @@ mod tests {
     }
 
     #[test]
+    fn an_oplog_export_failure_outside_the_export_keeps_only_its_code() {
+        let marker = "CUSTOMER-MARKER";
+        let mut additional_fields = serde_json::Map::new();
+        additional_fields.insert(
+            "workerError".to_string(),
+            json!({"cause": marker, "stderr": marker}),
+        );
+        let service = ServiceError {
+            service_name: "Worker",
+            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
+                status_code: 404,
+                errors: vec![format!("agent {marker} does not exist")],
+                code: Some("AGENT_NOT_FOUND".to_string()),
+                additional_fields,
+            }),
+        };
+        let report = envelope(&oplog_export_failure(
+            &anyhow::Error::from(service).context(format!("resolving {marker}")),
+        ));
+        assert_eq!(report["error"], "agent-not-found");
+        assert_eq!(
+            report["payload"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            vec!["message", "service", "status"],
+            "{report}"
+        );
+        assert_eq!(report["payload"]["status"], 404);
+        assert!(!report.to_string().contains(marker), "{report}");
+
+        let outside = anyhow::Error::new(OutsideEnvironment {
+            requested: marker.to_string(),
+            environment: "local".to_string(),
+        });
+        // A server response can have any code; the error code is lowercase.
+        let unknown_code = ServiceError {
+            service_name: "Worker",
+            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
+                status_code: 400,
+                errors: vec![],
+                code: Some(marker.to_string()),
+                additional_fields: Default::default(),
+            }),
+        };
+        let failures = [
+            (outside, "outside-environment"),
+            (anyhow::Error::from(unknown_code), "command-failed"),
+            (anyhow::anyhow!("{marker}"), "command-failed"),
+            (
+                anyhow::Error::new(NonSuccessfulExit).context(marker),
+                "command-failed",
+            ),
+        ];
+        for (error, code) in failures {
+            let report = envelope(&oplog_export_failure(&error));
+            assert_eq!(report["error"], code, "{report}");
+            assert!(
+                !report
+                    .to_string()
+                    .to_lowercase()
+                    .contains(&marker.to_lowercase()),
+                "{report}"
+            );
+        }
+    }
+
+    #[test]
     fn a_failure_that_only_ends_with_a_status_keeps_what_the_command_printed() {
         let tool_invoke = tool("tool_invoke");
         // As `tool invoke` reports a native tool's failure on stdout, then ends with status 1.
@@ -1395,7 +1597,7 @@ mod tests {
         let printed = format!("{report}\n");
         let quiet = envelope(&failure_envelope(
             &anyhow::Error::new(PipedExitCode(1)),
-            &tool_invoke,
+            Some(&tool_invoke),
             false,
             printed.as_bytes(),
             b"",
@@ -1409,7 +1611,7 @@ mod tests {
 
         let logged = envelope(&failure_envelope(
             &anyhow::Error::new(NonSuccessfulExit),
-            &tool_invoke,
+            Some(&tool_invoke),
             false,
             printed.as_bytes(),
             b"Invoking bash\n",
@@ -1420,7 +1622,7 @@ mod tests {
         // An error with its own message is not a report on stdout.
         let failed = envelope(&failure_envelope(
             &anyhow::anyhow!("connection refused"),
-            &tool_invoke,
+            Some(&tool_invoke),
             false,
             printed.as_bytes(),
             b"",
@@ -1438,7 +1640,7 @@ mod tests {
                 stderr: Some("failure stderr".to_string()),
             })
             .context(NonSuccessfulExit),
-            &tool("agent_invoke"),
+            Some(&tool("agent_invoke")),
             false,
             format!("{event}\n").as_bytes(),
             b"",
@@ -1570,8 +1772,10 @@ mod tests {
             replies.push(waiting);
             calls
                 .send(ToolCall {
-                    tool,
-                    argv: Vec::new(),
+                    work: CallWork::Command {
+                        tool,
+                        argv: Vec::new(),
+                    },
                     cancellation: tokio_util::sync::CancellationToken::new(),
                     reply,
                 })
@@ -1600,7 +1804,7 @@ mod tests {
                 let held_work_ended = held_work_ended.take();
                 let (disconnected, queued_call_ran) = (&disconnected, &queued_call_ran);
                 async move {
-                    if call.tool == 1 {
+                    if matches!(call.work, CallWork::Command { tool: 1, .. }) {
                         queued_call_ran.store(true, Ordering::SeqCst);
                         return;
                     }
@@ -1644,7 +1848,7 @@ mod tests {
                 let (disconnected, first_call_ran, queued_call_ran) =
                     (&disconnected, &first_call_ran, &queued_call_ran);
                 async move {
-                    if call.tool == 1 {
+                    if matches!(call.work, CallWork::Command { tool: 1, .. }) {
                         queued_call_ran.store(true, Ordering::SeqCst);
                     } else {
                         first_call_ran.store(true, Ordering::SeqCst);
@@ -1822,6 +2026,181 @@ mod tests {
                 "{other}"
             );
         }
+    }
+
+    #[test]
+    fn every_tool_owned_output_type_is_the_result_of_a_typed_tool() {
+        let schema = crate::model::cli_output::command_output_schema_value().unwrap();
+        let typed = super::oplog_export::tool().unwrap();
+        let mut owned = Vec::new();
+        for (output_type, definition) in schema["definitions"].as_object().unwrap() {
+            if let Some(owner) = definition.get("x-golem-mcp-tool") {
+                assert_eq!(owner, &*typed.name, "{output_type}");
+                owned.push(output_type.clone());
+            }
+        }
+        assert_eq!(owned, vec!["agent.oplog-export".to_string()]);
+        let output_schema = Value::Object(typed.output_schema.as_deref().unwrap().clone());
+        assert_eq!(
+            output_schema["oneOf"],
+            json!([{"$ref": "#/definitions/agent.oplog-export"}])
+        );
+        assert_eq!(output_schema["type"], "object");
+        for tool in management_tools().unwrap() {
+            assert_ne!(tool.name(), &*typed.name);
+            assert!(
+                !tool
+                    .output_types
+                    .contains(&"agent.oplog-export".to_string()),
+                "{}",
+                tool.name()
+            );
+        }
+    }
+
+    #[test]
+    fn oplog_export_takes_a_closed_range_and_no_continuation() {
+        use super::oplog_export::OplogExportArguments;
+        let parse = |arguments: Value| {
+            let Value::Object(arguments) = arguments else {
+                unreachable!()
+            };
+            OplogExportArguments::parse(&arguments)
+        };
+        let parsed = parse(
+            json!({"agent_id": "A()", "from": 3, "to": 5, "keep_shape": true,
+            "max_entry_bytes": null}),
+        )
+        .unwrap();
+        assert_eq!((parsed.from, parsed.to), (3, 5));
+        assert_eq!(parsed.keep_shape, Some(true));
+        assert_eq!(parsed.max_entry_bytes, None);
+
+        assert!(parse(json!({"agent_id": "A()", "from": 3})).is_err());
+        assert!(parse(json!({"agent_id": "A()", "to": 3})).is_err());
+        assert!(parse(json!({"agent_id": "A()", "from": -1, "to": 3})).is_err());
+        for continuation in [
+            "cursor",
+            "page",
+            "exportId",
+            "tokenScope",
+            "afterIndex",
+            "obfuscate",
+        ] {
+            assert!(
+                parse(json!({"agent_id": "A()", "from": 1, "to": 2, continuation: "x"})).is_err(),
+                "{continuation}"
+            );
+        }
+        // The error never quotes a value of the call: a value can be customer data.
+        for malformed in [
+            json!({"agent_id": "A()", "from": "SECRET-MARKER", "to": 3}),
+            json!({"agent_id": ["SECRET-MARKER"], "from": 1, "to": 3}),
+            json!({"agent_id": "A()", "from": 1, "to": 3, "keep_shape": "SECRET-MARKER"}),
+            json!({"agent_id": "A()", "from": 1, "to": 3, "cursor": "SECRET-MARKER"}),
+            json!({"agent_id": "A()", "from": 1, "to": 3, "SECRET-MARKER": 1}),
+        ] {
+            let refused = parse(malformed.clone()).unwrap_err();
+            assert!(!refused.contains("SECRET-MARKER"), "{malformed}: {refused}");
+            assert!(refused.contains("`agent_id`"), "{refused}");
+        }
+        let schema = super::oplog_export::tool().unwrap().input_schema;
+        assert_eq!(schema["additionalProperties"], json!(false));
+        assert_eq!(schema["required"], json!(["agent_id", "from", "to"]));
+    }
+
+    #[test]
+    fn oplog_export_failures_have_their_own_codes_and_no_report() {
+        use crate::oplog_export::export::OplogExportError;
+        let failure = |error: OplogExportError| {
+            let (code, message, details) = super::oplog_export::export_failure(
+                &anyhow::Error::new(error).context("reading the range"),
+            )
+            .unwrap();
+            (code, message, Value::Object(details))
+        };
+        let (code, message, details) =
+            failure(OplogExportError::ScanBudgetExceeded { from: 2, to: 9 });
+        assert_eq!(code, "scan-budget-exceeded");
+        assert!(message.contains("from 2 to 9"), "{message}");
+        assert!(message.contains("--obfuscate"), "{message}");
+        assert_eq!(details, json!({}));
+
+        let (code, _, details) = failure(OplogExportError::OutputTooLarge {
+            limit_bytes: 4096,
+            matched_entries: None,
+        });
+        assert_eq!(code, "output-too-large");
+        assert_eq!(details, json!({"limit_bytes": 4096}));
+        let (_, _, details) = failure(OplogExportError::OutputTooLarge {
+            limit_bytes: 4096,
+            matched_entries: Some(7),
+        });
+        assert_eq!(details, json!({"limit_bytes": 4096, "matched_entries": 7}));
+
+        assert_eq!(
+            failure(OplogExportError::RangePastEnd {
+                to: 9,
+                last_index: 4
+            })
+            .0,
+            "invalid-arguments"
+        );
+        assert_eq!(failure(OplogExportError::StaleCursor).0, "stale-cursor");
+        assert_eq!(failure(OplogExportError::RootChanged).0, "command-failed");
+        assert!(super::oplog_export::export_failure(&anyhow::anyhow!("other")).is_none());
+    }
+
+    #[test]
+    fn an_oplog_report_fits_up_to_the_last_byte_of_the_limit() {
+        use super::oplog_export::fitted_document;
+        use crate::oplog_export::export::OplogExportError;
+        use crate::oplog_export::model::{
+            OplogExportCoverage, OplogExportHeader, OplogExportReport, OplogReportHeader,
+            ReportAgentRef, ReportToken,
+        };
+        // Escaped and non-ASCII text, so that bytes, characters and the text differ in length.
+        let report = OplogExportReport {
+            header: OplogReportHeader {
+                export: OplogExportHeader {
+                    obfuscate: true,
+                    keep_scalars: false,
+                    keep_shape: false,
+                    keep_error_text: false,
+                    filtered: false,
+                    root: ReportAgentRef {
+                        token: ReportToken("agent:00".to_string()),
+                    },
+                    cli_version: "1.0 \"quoted\"\n\u{1F600}".to_string(),
+                    generated_at: "2026-11-18T00:00:00+00:00 Zürich".to_string(),
+                },
+                from: 2,
+                to: 3,
+            },
+            entries: vec![],
+            coverage: OplogExportCoverage::new(vec!["tab\there".to_string()]),
+        };
+        let document = fitted_document(report.clone(), usize::MAX).unwrap();
+        assert!(document.len() > document.chars().count(), "{document}");
+        let parsed: Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(parsed["$type"], "agent.oplog-export");
+        assert_eq!(parsed["header"]["from"], 2);
+        assert_eq!(parsed["coverage"]["notes"], json!(["tab\there"]));
+        assert_eq!(
+            fitted_document(report.clone(), document.len() + 1).unwrap(),
+            document
+        );
+        let refused = fitted_document(report, document.len())
+            .unwrap_err()
+            .downcast::<OplogExportError>()
+            .unwrap();
+        assert_eq!(
+            refused,
+            OplogExportError::OutputTooLarge {
+                limit_bytes: document.len(),
+                matched_entries: Some(0),
+            }
+        );
     }
 
     #[test]

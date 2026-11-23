@@ -2,9 +2,9 @@
  * Host service bundling the agent-metadata + webhook subset of two
  * related WIT interfaces:
  *
- * - `golem:agent/host@2.0.0.parseAgentId` — recovers a structured
- *   `(typeName, ctorDataValue, phantomId?)` tuple from the
- *   `GOLEM_AGENT_ID` env var. Used by the snapshot-load dispatcher.
+ * - `golem:agent/host@2.0.0` agent-type discovery (`getAgentType`,
+ *   `getAgentTypeByAgentId`, `getAllAgentTypes`), used by `Reflection`
+ *   and by binding a client to an agent ID.
  * - `golem:agent/host@2.0.0.createWebhook` — mints a public POST URL
  *   bound to a previously-allocated host promise. Used by
  *   `src/webhook.ts:create`.
@@ -12,20 +12,14 @@
  *   full metadata. Used by the uncached `SelfAgentId` effect and by
  *   `src/agents.ts:getSelfMetadata` for user-facing reads.
  * - `golem:api/host@1.5.0.getAgentMetadata` / `updateAgent` /
- *   `forkAgent` / `revertAgent` / `fork` — agent-lifecycle calls used
- *   by `src/agents.ts`.
- * - `golem:api/host@1.5.0.resolveComponentId` / `resolveAgentId` /
- *   `resolveAgentIdStrict` — id-resolution helpers used by
+ *   `forkAgent` / `revertAgent` / `fork` / `resolveComponentId` /
+ *   `GetAgents` — agent-lifecycle and enumeration calls used by
  *   `src/agents.ts`.
- * - `golem:api/host@1.5.0.GetAgents` — paged-iterator constructor used
- *   by `src/agents.ts:getAgents`.
  *
- * Pragmatically grouped here because they all answer the same
+ * They are grouped here because they all answer the same
  * "who am I?" / "where am I reachable?" / "who else is around?"
  * question, even though several live in `golem:api/host` rather than
- * `golem:agent/host`. The eventual plan splits these further into
- * `ParseAgentIdClient` + `WebhookClient` + `AgentMetadataClient`; for
- * now the bundle keeps the wiring footprint small.
+ * `golem:agent/host`.
  *
  * @internal — not re-exported from `src/index.ts`.
  */
@@ -35,21 +29,14 @@ import * as ApiHost from "golem:api/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 
 export interface AgentHostClientShape {
-  /** Construct an environment-scoped agent identity. */
-  readonly makeAgentId: typeof AgentHost.makeAgentId
   /** Mirrors optional agent-type discovery by name. */
   readonly getAgentType: (name: string) => AgentHost.RegisteredAgentType | undefined
-  /** Mirrors optional agent-type discovery by environment-scoped agent ID. */
-  readonly getAgentTypeByAgentId: (agentId: string) => AgentHost.RegisteredAgentType | undefined
+  /** Mirrors discovery of the deployed agent type that the type tag of an agent ID names. */
+  readonly getAgentTypeByAgentId: (
+    agentId: CoreTypes.AgentId,
+  ) => AgentHost.RegisteredAgentType | undefined
   /** Mirrors discovery of every visible agent type. */
   readonly getAllAgentTypes: () => ReadonlyArray<AgentHost.RegisteredAgentType>
-  /**
-   * Mirrors `golem:agent/host.parseAgentId`. Errors thrown by the host
-   * become Effect defects when wrapped at the call site.
-   */
-  readonly parseAgentId: (
-    agentId: string,
-  ) => [string, CoreTypes.TypedSchemaValue, CoreTypes.Uuid | undefined]
   /**
    * Mirrors `golem:api/host.getSelfMetadata`. Synchronous; errors
    * thrown by the host become Effect defects when wrapped at the call
@@ -72,31 +59,20 @@ export interface AgentHostClientShape {
     targetRevision: ApiHost.ComponentRevision,
     mode: ApiHost.UpdateMode,
   ) => void
-  /** Mirrors `golem:api/host.forkAgent`. */
+  /** Mirrors `golem:api/host.forkAgent`; returns the ID that Golem issued for the new agent. */
   readonly forkAgent: (
     source: ApiHost.AgentId,
-    target: ApiHost.AgentId,
     oplogIdxCutOff: ApiHost.OplogIndex,
-  ) => void
+  ) => ApiHost.AgentId
   /** Mirrors `golem:api/host.revertAgent`. */
   readonly revertAgent: (id: ApiHost.AgentId, target: ApiHost.RevertAgentTarget) => void
   /** Mirrors `golem:api/host.fork`. */
   readonly fork: () => ApiHost.ForkResult
   /** Mirrors `golem:api/host.resolveComponentId`. */
   readonly resolveComponentId: (componentReference: string) => ApiHost.ComponentId | undefined
-  /** Mirrors `golem:api/host.resolveAgentId`. */
-  readonly resolveAgentId: (
-    componentReference: string,
-    agentName: string,
-  ) => ApiHost.AgentId | undefined
-  /** Mirrors `golem:api/host.resolveAgentIdStrict`. */
-  readonly resolveAgentIdStrict: (
-    componentReference: string,
-    agentName: string,
-  ) => ApiHost.AgentId | undefined
-  /** Mirrors `new GetAgents(componentId, filter, precise)`. */
+  /** Mirrors `new GetAgents(agentTypeName, filter, precise)`. */
   readonly getAgentsCtor: (
-    componentId: ApiHost.ComponentId,
+    agentTypeName: string,
     filter: ApiHost.AgentAnyFilter | undefined,
     precise: boolean,
   ) => ApiHost.GetAgents
@@ -117,22 +93,18 @@ export class AgentHostClient extends Context.Service<AgentHostClient, AgentHostC
 export const AgentHostLive: Layer.Layer<AgentHostClient> = Layer.succeed(
   AgentHostClient,
   AgentHostClient.of({
-    makeAgentId: (name, input, phantomId) => AgentHost.makeAgentId(name, input, phantomId),
     getAgentType: (name) => AgentHost.getAgentType(name),
     getAgentTypeByAgentId: (agentId) => AgentHost.getAgentTypeByAgentId(agentId),
     getAllAgentTypes: () => AgentHost.getAllAgentTypes(),
-    parseAgentId: (agentId) => AgentHost.parseAgentId(agentId),
     getSelfMetadata: () => ApiHost.getSelfMetadata(),
     createWebhook: (promiseId) => AgentHost.createWebhook(promiseId),
     getAgentMetadata: (id) => ApiHost.getAgentMetadata(id),
     updateAgent: (id, t, m) => ApiHost.updateAgent(id, t, m),
-    forkAgent: (s, t, o) => ApiHost.forkAgent(s, t, o),
+    forkAgent: (s, o) => ApiHost.forkAgent(s, o),
     revertAgent: (id, t) => ApiHost.revertAgent(id, t),
     fork: () => ApiHost.fork(),
     resolveComponentId: (r) => ApiHost.resolveComponentId(r),
-    resolveAgentId: (r, n) => ApiHost.resolveAgentId(r, n),
-    resolveAgentIdStrict: (r, n) => ApiHost.resolveAgentIdStrict(r, n),
-    getAgentsCtor: (c, f, p) => new ApiHost.GetAgents(c, f, p),
+    getAgentsCtor: (t, f, p) => new ApiHost.GetAgents(t, f, p),
     trap: (reason) => {
       ApiHost.trap(reason)
       // The line above never returns at runtime (the host call is an

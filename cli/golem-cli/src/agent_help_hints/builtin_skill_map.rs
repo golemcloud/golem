@@ -113,7 +113,7 @@ pub const SKILL_BINDINGS: &[SkillBinding] = &[
     SkillBinding { cli_path: &["server", "clean"], basename: "golem-local-dev-server", kind: SkillKind::Common, summary: "Clean local Golem dev server state." },
 
     // ── agents (top-level grouping) ──────────────────────────────────────
-    SkillBinding { cli_path: &["agent", "new"],         basename: "golem-create-agent-instance", kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Create a new agent instance." },
+    SkillBinding { cli_path: &["agent", "create"],      basename: "golem-create-agent-instance", kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Create a new agent instance." },
     SkillBinding { cli_path: &["agent", "invoke"],      basename: "golem-invoke-agent",          kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Invoke a method on an agent." },
     SkillBinding { cli_path: &["agent", "invoke"],      basename: "golem-trigger-agent",         kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Trigger a fire-and-forget invocation." },
     SkillBinding { cli_path: &["agent", "invoke"],      basename: "golem-schedule-agent",        kind: SkillKind::PerLanguage(ALL_LANGS), summary: "Schedule a future invocation." },
@@ -125,7 +125,9 @@ pub const SKILL_BINDINGS: &[SkillBinding] = &[
     SkillBinding { cli_path: &["agent", "oplog"],       basename: "golem-debug-agent-history",   kind: SkillKind::Common, summary: "Query the agent operation log." },
     SkillBinding { cli_path: &["agent", "files"],       basename: "golem-view-agent-files",      kind: SkillKind::Common, summary: "List files in an agent's virtual filesystem." },
     SkillBinding { cli_path: &["agent", "file-contents"], basename: "golem-view-agent-files",    kind: SkillKind::Common, summary: "Read files from an agent's virtual filesystem." },
-    SkillBinding { cli_path: &["agent", "cancel-invocation"], basename: "golem-cancel-queued-invocation", kind: SkillKind::Common, summary: "Cancel a queued invocation." },
+    SkillBinding { cli_path: &["invocation", "get"],    basename: "golem-cancel-queued-invocation", kind: SkillKind::Common, summary: "Inspect an invocation's state and result." },
+    SkillBinding { cli_path: &["invocation", "list"],   basename: "golem-cancel-queued-invocation", kind: SkillKind::Common, summary: "List the invocations of an agent." },
+    SkillBinding { cli_path: &["invocation", "cancel"], basename: "golem-cancel-queued-invocation", kind: SkillKind::Common, summary: "Cancel a queued invocation." },
     SkillBinding { cli_path: &["agent", "interrupt"],   basename: "golem-interrupt-resume-agent", kind: SkillKind::Common, summary: "Interrupt or resume an agent." },
     SkillBinding { cli_path: &["agent", "resume"],      basename: "golem-interrupt-resume-agent", kind: SkillKind::Common, summary: "Interrupt or resume an agent." },
     SkillBinding { cli_path: &["agent", "update"],      basename: "golem-update-running-agents",  kind: SkillKind::Common, summary: "Update components used by running agents." },

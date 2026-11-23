@@ -222,7 +222,7 @@ async fn follow_pages(
     let mut pages = Vec::new();
     loop {
         let page = structured(&call(client, tool, arguments.clone()).await).clone();
-        let cursor = page.get("cursor").cloned();
+        let cursor = page.get("cursor").filter(|value| !value.is_null()).cloned();
         pages.push(page);
         let Some(cursor) = cursor else {
             return pages;
@@ -287,11 +287,13 @@ async fn mcp_serve_offers_one_tool_per_management_command() {
         .iter()
         .map(|tool| tool.name.to_string())
         .collect::<BTreeSet<_>>();
-    let expected = COMMAND_TABLE
+    let mut expected = COMMAND_TABLE
         .iter()
         .filter(|row| !row.interactive)
         .map(tool_name)
         .collect::<BTreeSet<_>>();
+    // The typed tools, which no command row has.
+    expected.insert("agent_oplog_export".to_string());
     assert_eq!(offered, expected);
     for row in COMMAND_TABLE.iter().filter(|row| row.interactive) {
         assert!(!offered.contains(&tool_name(row)), "{}", tool_name(row));
@@ -349,6 +351,7 @@ async fn mcp_serve_offers_one_tool_per_management_command() {
             &[
                 "agent_id",
                 "arguments",
+                "expected_fingerprint",
                 "function_name",
                 "idempotency_key",
                 "schedule_at",
@@ -1346,5 +1349,225 @@ async fn mcp_serve_reads_the_oplog_and_the_agent_list_page_by_page() {
         agent_ids(listed[0]["agents"].as_array().unwrap().iter().collect())
     );
     assert_eq!(paged.len(), agents.len(), "{paged:?}");
+    client.cancel().await.unwrap();
+}
+
+/// The oplog indexes of `agent`, through the plain `agent_oplog` tool.
+async fn oplog_indexes(client: &RunningService<RoleClient, ()>, agent: &str) -> Vec<u64> {
+    let pages = follow_pages(client, "agent_oplog", json!({"agent_id": agent}), "cursor").await;
+    items(&pages, "entries")
+        .into_iter()
+        .map(|entry| entry["index"].as_u64().unwrap())
+        .collect()
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn mcp_serve_exports_one_bounded_oplog_report() {
+    // Pages of 2 and a scan budget of 10 entries: a range read charges the entries before `from`
+    // and the entries of the range, so a range up to index 10 fits the budget only when every page
+    // spends the same budget.
+    let ctx = counters_context_with(
+        &["local", "staging"],
+        "",
+        &[
+            ("GOLEM_HTTP_BATCH_SIZE", "2"),
+            ("GOLEM__WORKER_EXECUTOR__LIMITS__SCAN_BUDGET__ENTRIES", "10"),
+        ],
+    )
+    .await;
+    let agent = r#"Counter("mcp-export")"#;
+    for _ in 0..4 {
+        invoke(&ctx, "local", agent).await;
+    }
+    let staging_agent = r#"Counter("mcp-export-staging")"#;
+    invoke(&ctx, "staging", staging_agent).await;
+    let client = mcp_client(&ctx, &["-E", "local"]).await;
+
+    let tools = client.list_all_tools().await.unwrap();
+    let export_tool = tools
+        .iter()
+        .find(|tool| tool.name == "agent_oplog_export")
+        .unwrap();
+    assert_eq!(
+        properties(export_tool),
+        [
+            "agent_id",
+            "from",
+            "keep_error_text",
+            "keep_scalars",
+            "keep_shape",
+            "max_entry_bytes",
+            "to"
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    );
+    let annotations = export_tool.annotations.as_ref().unwrap();
+    assert_eq!(annotations.read_only_hint, Some(true));
+    let output_schema = Value::Object(export_tool.output_schema.as_deref().unwrap().clone());
+    let validator = jsonschema::options().build(&output_schema).unwrap();
+
+    let indexes = oplog_indexes(&client, agent).await;
+    let last = *indexes.last().unwrap();
+    assert!(
+        last > 12,
+        "the oplog is too short for the test: {indexes:?}"
+    );
+
+    // A range in the middle: both ends included, nothing outside, over five pages of one budget.
+    let range = json!({"agent_id": agent, "from": 3, "to": 10, "keep_shape": true});
+    let result = call(&client, "agent_oplog_export", range.clone()).await;
+    let report = structured(&result).clone();
+    assert!(
+        validator.is_valid(&report),
+        "{:?}",
+        validator
+            .iter_errors(&report)
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(report["$type"], "agent.oplog-export");
+    assert_eq!(report["header"]["from"], 3);
+    assert_eq!(report["header"]["to"], 10);
+    assert_eq!(report["header"]["filtered"], false);
+    assert_eq!(report["header"]["keepShape"], true);
+    assert_eq!(
+        report["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["index"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        (3..=10).collect::<Vec<_>>()
+    );
+    assert!(report["coverage"].is_object());
+    let text = report.to_string();
+    assert!(
+        !text.contains("mcp-export"),
+        "the report holds the agent ID"
+    );
+
+    // A second call starts an independent report, without continuation data.
+    let again = call(&client, "agent_oplog_export", range).await;
+    assert_eq!(
+        comparable(structured(&again))["entries"],
+        comparable(&report)["entries"]
+    );
+
+    // A range past the budget fails as a whole, although each page of 2 fits the budget.
+    let refused = call(
+        &client,
+        "agent_oplog_export",
+        json!({"agent_id": agent, "from": 3, "to": 12}),
+    )
+    .await;
+    assert_eq!(error_code(&refused), "scan-budget-exceeded", "{refused:?}");
+    let message = error_message(&refused);
+    assert!(message.contains("--obfuscate"), "{message}");
+    let payload = error(&refused)["payload"].clone();
+    assert_eq!(
+        payload.as_object().unwrap().keys().collect::<Vec<_>>(),
+        vec!["message"],
+        "{payload}"
+    );
+
+    // Bounds outside the oplog, inverted bounds and continuation arguments are refused.
+    for (arguments, code) in [
+        (
+            json!({"agent_id": agent, "from": 2, "to": last + 1}),
+            "invalid-arguments",
+        ),
+        (
+            json!({"agent_id": agent, "from": 5, "to": 4}),
+            "invalid-arguments",
+        ),
+        (
+            json!({"agent_id": agent, "from": 0, "to": 4}),
+            "invalid-arguments",
+        ),
+        (json!({"agent_id": agent, "to": 4}), "invalid-arguments"),
+        (
+            json!({"agent_id": agent, "from": 1, "to": 2, "cursor": "2-0-"}),
+            "invalid-arguments",
+        ),
+        (
+            json!({"agent_id": agent, "from": 1, "to": 2, "page": true}),
+            "invalid-arguments",
+        ),
+        (
+            json!({"agent_id": agent, "from": 1, "to": 2, "exportId": "x"}),
+            "invalid-arguments",
+        ),
+    ] {
+        let refused = call(&client, "agent_oplog_export", arguments.clone()).await;
+        assert_eq!(error_code(&refused), code, "{arguments}");
+    }
+
+    // The server reads only its own environment.
+    let outside = call(
+        &client,
+        "agent_oplog_export",
+        json!({"agent_id": format!("{APP}/staging/{staging_agent}"), "from": 1, "to": 2}),
+    )
+    .await;
+    assert_eq!(error_code(&outside), "outside-environment");
+
+    // An agent ID that does not resolve and an argument that does not parse fail without quoting
+    // the value, in the result and on the server's stderr: also when the server holds its log
+    // back until an error, and when it traces at debug level.
+    let marker = "CUSTOMER-MARKER";
+    for global_args in [
+        &["-E", "local"][..],
+        &["-E", "local", "-q"],
+        &["-E", "local", "-vvv"],
+    ] {
+        let (transport, stderr) = TokioChildProcess::builder(server_command(&ctx, global_args))
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stderr = stderr.unwrap();
+        let stderr = tokio::spawn(async move {
+            let mut text = String::new();
+            stderr.read_to_string(&mut text).await.unwrap();
+            text
+        });
+        let marker_client = ().serve(transport).await.unwrap();
+        for arguments in [
+            json!({"agent_id": format!("a/b/c/d/{marker}"), "from": 1, "to": 2}),
+            json!({"agent_id": format!(r#"Counter("{marker}")"#), "from": 1, "to": 2}),
+            json!({"agent_id": agent, "from": marker, "to": 2}),
+        ] {
+            let unresolved = call(&marker_client, "agent_oplog_export", arguments).await;
+            assert_eq!(unresolved.is_error, Some(true), "{unresolved:?}");
+            assert!(
+                !format!("{unresolved:?}").contains(marker),
+                "{unresolved:?}"
+            );
+        }
+        marker_client.cancel().await.unwrap();
+        let stderr = stderr.await.unwrap();
+        assert!(!stderr.contains(marker), "{global_args:?}:\n{stderr}");
+    }
+
+    // A cancelled call returns nothing, and the next call is complete on its own.
+    let handle = send_call(
+        &client,
+        "agent_oplog_export",
+        json!({"agent_id": agent, "from": 1, "to": 10}),
+    )
+    .await;
+    handle.cancel(None).await.unwrap();
+    let after = call(
+        &client,
+        "agent_oplog_export",
+        json!({"agent_id": agent, "from": 1, "to": 2}),
+    )
+    .await;
+    let after = structured(&after);
+    assert_eq!(after["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(after["entries"][0]["kind"], "Create");
+
     client.cancel().await.unwrap();
 }

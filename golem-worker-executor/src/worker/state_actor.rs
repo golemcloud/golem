@@ -1561,7 +1561,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         let new_status = Arc::new(new_status);
         let previous_status = self.last_known_status.swap(new_status.clone());
         self.metrics_status
-            .update(previous_metrics_status, new_status.status);
+            .update(previous_metrics_status, new_status.reported_status());
         self.status_flusher
             .on_status_changed(&previous_status, &new_status)
             .await;
@@ -1645,7 +1645,7 @@ fn can_append_invocation(
     status.invocation_results.change_generation() == expected_result_generation
         && status.invocation_results.revert_generation() == expected_revert_generation
         && !status.invocation_results.contains_key(idempotency_key)
-        && status.current_idempotency_key.as_ref() != Some(idempotency_key)
+        && status.current_idempotency_key() != Some(idempotency_key)
         && !status
             .pending_invocations
             .iter()
@@ -1660,7 +1660,6 @@ mod tests {
     };
     use crate::services::oplog::{CommitLevel, Oplog, OplogRefusal, gated_ephemeral_fixture};
     use crate::workerctx::default::Context;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogEntry;
     use golem_common::model::oplog::OplogIndex;
@@ -1755,13 +1754,8 @@ mod tests {
                     },
                 );
                 let weak_stop = Arc::downgrade(&stop);
-                let owned_agent_id = OwnedAgentId::new(
-                    EnvironmentId::new(),
-                    &AgentId {
-                        component_id: ComponentId::new(),
-                        agent_id: "actor-stop".into(),
-                    },
-                );
+                let owned_agent_id =
+                    OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
                 let actor = Arc::new(WorkerStateActor::<Context> {
                     commit: Arc::new(OwnerCommitController {
                         status_jobs,
@@ -1866,6 +1860,7 @@ mod tests {
             oplog_index: OplogIndex::INITIAL,
             idempotency_key: Some(key),
             manual_update_target_revision: None,
+            operation: None,
         }
     }
 
@@ -2043,13 +2038,7 @@ mod tests {
     async fn a_confirmation_to_a_stopped_status_task_is_deferred_and_does_not_panic() {
         use super::{ConfirmOutcome, WorkerLifecycle};
         use golem_common::model::oplog::FilesystemSnapshotName;
-        let owned_agent_id = OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "stopped-status".into(),
-            },
-        );
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 2));
         let (status_jobs, status_rx) = mpsc::unbounded_channel();
         let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
         let stop = WorkerStateActorStop::new(
@@ -2085,13 +2074,7 @@ mod tests {
     async fn a_confirmation_gives_the_reply_of_the_status_task() {
         use super::{ConfirmOutcome, WorkerLifecycle};
         use golem_common::model::oplog::FilesystemSnapshotName;
-        let owned_agent_id = OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "replying-status".into(),
-            },
-        );
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 3));
         let (status_jobs, mut status_rx) = mpsc::unbounded_channel();
         let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
         let stop = WorkerStateActorStop::new(
@@ -2162,6 +2145,10 @@ mod tests {
         golem_common::model::InvocationResultPosition {
             terminal,
             request: None,
+            end: golem_common::model::InvocationEnd::Completed,
+            operation: None,
+            accepted_at: None,
+            changed_at: golem_common::model::Timestamp::from(0),
         }
     }
 
@@ -2181,7 +2168,16 @@ mod tests {
         ));
 
         status.pending_invocations.clear();
-        status.current_idempotency_key = Some(key);
+        status.running = Some(golem_common::model::RunningInvocation {
+            key,
+            request: golem_common::model::InvocationRequestRef {
+                index: OplogIndex::INITIAL,
+                accepted_at: golem_common::model::Timestamp::from(0),
+                operation: None,
+            },
+            last_change: OplogIndex::INITIAL,
+            last_change_at: golem_common::model::Timestamp::from(0),
+        });
         assert!(!can_append_invocation(
             &status,
             &key,
@@ -2189,7 +2185,7 @@ mod tests {
             revert_generation
         ));
 
-        status.current_idempotency_key = None;
+        status.running = None;
         status
             .invocation_results
             .insert(InvocationId(Uuid::new_v4()), result_at(OplogIndex::INITIAL));

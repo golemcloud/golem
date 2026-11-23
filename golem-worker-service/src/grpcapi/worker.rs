@@ -13,7 +13,10 @@
 // limitations under the License.
 
 use super::error::WorkerTraceErrorKind;
-use super::{bad_request_error, validate_protobuf_agent_id};
+use super::{
+    bad_request_error, validate_protobuf_agent_id, validate_protobuf_environment_id,
+    validate_protobuf_owned_agent_id,
+};
 use crate::service::worker::{
     InvocationRequestStream, InvocationResponseStream, WorkerService, WorkerServiceError,
 };
@@ -105,9 +108,9 @@ fn request_identity(
     Option<golem_api_grpc::proto::golem::worker::AgentId>,
 ) {
     match request.request.as_ref() {
-        Some(invocation_request::Request::Start(start)) => (None, start.agent_id.clone()),
+        Some(invocation_request::Request::Start(start)) => (None, start.target_agent_id().cloned()),
         Some(invocation_request::Request::ResumeAttach(resume)) => {
-            (resume.idempotency_key, resume.agent_id.clone())
+            (resume.idempotency_key, resume.agent_id)
         }
         _ => (None, None),
     }
@@ -286,7 +289,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let record = recorded_grpc_api_request!(
             "launch_new_worker",
             component_id = ComponentId::render_proto(request.component_id),
-            name = request.name
         );
 
         let response = match self
@@ -320,7 +322,6 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let record = recorded_grpc_api_request!(
             "prepare_worker",
             component_id = ComponentId::render_proto(request.component_id),
-            name = request.name
         );
 
         let response = match self
@@ -491,7 +492,12 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke_agent",
-            agent_id = proto_agent_id_string(&request.agent_id),
+            agent_id = proto_agent_id_string(
+                &request
+                    .target
+                    .as_ref()
+                    .and_then(|target| target.agent_id().cloned())
+            ),
             method_name = request.method_name
         );
 
@@ -598,7 +604,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
                             InvocationRejectionReason::Validation,
                             error,
                             None,
-                            start.agent_id,
+                            agent_id,
                         )));
                     }
                 };
@@ -635,9 +641,9 @@ impl GrpcWorkerService for WorkerGrpcApi {
             ))),
             Err(error) => {
                 let reason = match &error {
-                    WorkerServiceError::AuthError(_) | WorkerServiceError::LimitError(_) => {
-                        InvocationRejectionReason::Unauthorized
-                    }
+                    WorkerServiceError::AuthError(_)
+                    | WorkerServiceError::AgentAccessDenied(_)
+                    | WorkerServiceError::LimitError(_) => InvocationRejectionReason::Unauthorized,
                     WorkerServiceError::ComponentNotFound(_)
                     | WorkerServiceError::AgentNotFound(_)
                     | WorkerServiceError::AccountIdNotFound(_) => {
@@ -813,10 +819,15 @@ impl WorkerGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
 
-        let agent_id = AgentId {
-            component_id,
-            agent_id: request.name,
-        };
+        let constructor: golem_common::model::agent::ParsedAgentKey = request
+            .constructor
+            .ok_or_else(|| bad_request_error("Missing constructor"))?
+            .try_into()
+            .map_err(|e: String| bad_request_error(format!("Invalid constructor: {e}")))?;
+        let unkeyed_id = request
+            .unkeyed_id
+            .map(|id| validate_protobuf_agent_id(Some(id)))
+            .transpose()?;
 
         let config = request
             .config
@@ -825,60 +836,30 @@ impl WorkerGrpcApi {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| bad_request_error(format!("failed converting config: {e}")))?;
 
-        let caller = request
-            .caller
-            .ok_or_else(|| bad_request_error("caller is missing"))?;
-
-        let (latest_component_revision, fingerprint) = if prepare {
-            let method_name = request
-                .method_name
-                .ok_or_else(|| bad_request_error("Missing method name"))?;
-            let freshness_disposition = sanitize_invocation_freshness_disposition(
-                request.freshness_disposition,
-                matches!(&auth, AuthCtx::System | AuthCtx::Agent(_)),
-            );
-            self.worker_service
-                .prepare_for_invocation(
-                    &AgentTarget::Current(agent_id.clone()),
-                    method_name,
-                    request.env,
-                    config,
-                    request.ignore_already_existing,
-                    auth,
-                    request.context,
-                    caller,
-                    request.idempotency_key.map(Into::into),
-                    freshness_disposition,
-                )
-                .await?
-        } else if let Some(method_name) = request.method_name {
-            self.worker_service
-                .create_for_invocation(
-                    &AgentTarget::Current(agent_id.clone()),
-                    method_name,
-                    request.env,
-                    config,
-                    request.ignore_already_existing,
-                    auth,
-                    request.context,
-                    caller,
-                    request.idempotency_key.map(Into::into),
-                )
-                .await?
-        } else {
-            self.worker_service
-                .create(
-                    &AgentTarget::Current(agent_id.clone()),
-                    request.env,
-                    config,
-                    request.ignore_already_existing,
-                    auth,
-                    request.context,
-                    caller,
-                    request.idempotency_key.map(Into::into),
-                )
-                .await?
-        };
+        let freshness_disposition = sanitize_invocation_freshness_disposition(
+            request.freshness_disposition,
+            matches!(&auth, AuthCtx::System | AuthCtx::Agent(_)),
+        );
+        let (agent_id, latest_component_revision, fingerprint) = self
+            .worker_service
+            .launch_agent(
+                component_id,
+                constructor,
+                unkeyed_id,
+                request.method_name,
+                prepare,
+                request.env,
+                config,
+                request.ignore_already_existing,
+                auth,
+                request.context,
+                request
+                    .caller
+                    .ok_or_else(|| bad_request_error("caller is missing"))?,
+                request.idempotency_key.map(Into::into),
+                freshness_disposition,
+            )
+            .await?;
 
         Ok((agent_id, latest_component_revision, fingerprint))
     }
@@ -893,6 +874,7 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let agent_id = validate_protobuf_agent_id(request.agent_id)?;
+        let environment_id = validate_protobuf_environment_id(request.environment_id)?;
 
         let parameters = request
             .complete_parameters
@@ -912,7 +894,7 @@ impl WorkerGrpcApi {
 
         let result = self
             .worker_service
-            .complete_promise(promise_id, parameters.data, auth)
+            .complete_promise(environment_id, promise_id, parameters.data, auth)
             .await?;
 
         Ok(result)
@@ -924,10 +906,10 @@ impl WorkerGrpcApi {
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
-        let agent_id = validate_protobuf_agent_id(request.agent_id)?;
+        let agent_id = validate_protobuf_owned_agent_id(request.agent_id, request.environment_id)?;
 
         self.worker_service
-            .resume(&agent_id, request.force.unwrap_or(false), auth)
+            .resume(&agent_id, request.force.unwrap_or(false), None, auth)
             .await?;
 
         Ok(())
@@ -944,7 +926,7 @@ impl WorkerGrpcApi {
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
-        let agent_id = validate_protobuf_agent_id(request.agent_id)?;
+        let agent_id = validate_protobuf_owned_agent_id(request.agent_id, request.environment_id)?;
         let target_revision: ComponentRevision = request
             .target_revision
             .try_into()
@@ -957,6 +939,7 @@ impl WorkerGrpcApi {
                 worker_update_mode,
                 target_revision,
                 disable_wakeup,
+                None,
                 Some(requester),
                 auth,
             )
@@ -970,17 +953,22 @@ impl WorkerGrpcApi {
             .ok_or(bad_request_error("auth_ctx not found"))?
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
-        let source_agent_id = validate_protobuf_agent_id(request.source_agent_id)?;
-        let target_agent_id = validate_protobuf_agent_id(request.target_agent_id)?;
+        let source_agent_id =
+            validate_protobuf_owned_agent_id(request.source_agent_id, request.environment_id)?;
+        let target_agent_id = request
+            .target_agent_id
+            .map(|id| validate_protobuf_agent_id(Some(id)))
+            .transpose()?;
         let oplog_idx = OplogIndex::from_u64(request.oplog_index_cutoff);
         let caller = required_caller(request.caller)?;
 
         self.worker_service
             .fork_worker(
                 &source_agent_id,
-                &target_agent_id,
+                target_agent_id,
                 oplog_idx,
                 Some(caller),
+                None,
                 auth,
             )
             .await?;
@@ -995,7 +983,7 @@ impl WorkerGrpcApi {
             .try_into()
             .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
 
-        let agent_id = validate_protobuf_agent_id(request.agent_id)?;
+        let agent_id = validate_protobuf_owned_agent_id(request.agent_id, request.environment_id)?;
 
         let target = request
             .target
@@ -1012,7 +1000,7 @@ impl WorkerGrpcApi {
                 });
 
         self.worker_service
-            .revert_worker_prepared(&agent_id, target, resolved_revert, auth)
+            .revert_worker_prepared(&agent_id, target, resolved_revert, None, auth)
             .await?;
 
         Ok(())
@@ -1062,7 +1050,10 @@ impl WorkerGrpcApi {
             trusted_internal_caller,
         );
 
-        let agent_id = validate_protobuf_agent_id(request.agent_id)?;
+        let environment_id = validate_protobuf_environment_id(request.environment_id)?;
+        let proto_target = request
+            .target
+            .ok_or_else(|| bad_request_error("Missing target"))?;
 
         if !is_lookup {
             if request.method_name.is_none() {
@@ -1081,21 +1072,16 @@ impl WorkerGrpcApi {
             .caller
             .ok_or_else(|| bad_request_error("caller is missing"))?;
 
-        let environment_id = request
-            .environment_id
-            .map(|id| id.try_into())
-            .transpose()
-            .map_err(|e| bad_request_error(format!("invalid environment_id: {e}")))?;
-
         let output = if is_lookup {
             self.worker_service
                 .lookup_agent_invocation(
                     golem_api_grpc::proto::golem::worker::InvocationStart {
-                        agent_id: Some(agent_id.into()),
+                        target: Some(proto_target),
                         idempotency_key: request.idempotency_key,
                         request_key: Some(request_key.into()),
                         context: request.context,
                         caller: Some(caller),
+                        environment_id: Some(environment_id.into()),
                         attempt_id: Some(uuid::Uuid::new_v4().into()),
                         expected_callee_fingerprint: request.expected_callee_fingerprint,
                         ..Default::default()
@@ -1104,9 +1090,24 @@ impl WorkerGrpcApi {
                 )
                 .await?
         } else {
+            let target = AgentTarget::try_from(proto_target)
+                .map_err(|e| bad_request_error(format!("Invalid target: {e}")))?;
+            let constructor = request
+                .constructor
+                .map(golem_common::model::agent::ParsedAgentKey::try_from)
+                .transpose()
+                .map_err(|e| bad_request_error(format!("Invalid constructor: {e}")))?;
+            let component_id = request
+                .component_id
+                .map(ComponentId::try_from)
+                .transpose()
+                .map_err(|e| bad_request_error(format!("Invalid component_id: {e}")))?;
             self.worker_service
                 .invoke_agent(
-                    &AgentTarget::Current(agent_id),
+                    environment_id,
+                    target,
+                    constructor,
+                    component_id,
                     request.method_name,
                     request.method_parameters,
                     request.mode,
@@ -1118,7 +1119,6 @@ impl WorkerGrpcApi {
                     config,
                     auth,
                     caller,
-                    environment_id,
                     request.scope_card,
                     request
                         .expected_callee_fingerprint
@@ -1191,10 +1191,17 @@ impl WorkerGrpcApi {
             .metadata
             .ok_or_else(|| bad_request_error("Missing metadata"))?;
 
+        let component_id: ComponentId = request
+            .component_id
+            .ok_or_else(|| bad_request_error("Missing component_id"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("invalid component_id: {e}")))?;
+
         self.worker_service
             .process_oplog_entries(
                 &agent_id,
                 environment_id,
+                component_id,
                 component_revision,
                 idempotency_key,
                 account_id,
@@ -1298,11 +1305,13 @@ impl WorkerGrpcApi {
                 .map_err(Into::into);
         }
 
+        let environment_id = validate_protobuf_environment_id(request.environment_id)?;
         let canceled = self
             .worker_service
             .cancel_invocation(
-                &agent_id,
+                &OwnedAgentId::new(environment_id, &agent_id),
                 &IdempotencyKey::new(idempotency_key.to_string()),
+                None,
                 auth,
             )
             .await?;
@@ -1583,15 +1592,7 @@ mod protocol_tests {
     }
 
     fn agent_id() -> Option<AgentId> {
-        Some(AgentId {
-            component_id: Some(golem_api_grpc::proto::golem::component::ComponentId {
-                value: Some(Uuid {
-                    high_bits: 0,
-                    low_bits: 20,
-                }),
-            }),
-            name: "agent".to_string(),
-        })
+        Some(golem_common::model::AgentId::from_parts(7, 20).into())
     }
 
     fn start() -> InvocationRequest {

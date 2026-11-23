@@ -28,13 +28,14 @@ import scala.scalajs.js
 object WasmRpcApiSpec extends ZIOSpecDefault {
 
   private val invocationUuid   = java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")
-  private val expectedMetadata = InvocationMetadata("Agent(\"a.b\")", InvocationId("Agent(\"a.b\")", invocationUuid))
+  private val agentId          = golem.AgentId(java.util.UUID.fromString("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))
+  private val expectedMetadata = InvocationMetadata(agentId, InvocationId(agentId, invocationUuid))
 
   private def scheduledReceipt: js.Object =
     js.Dynamic
       .literal(
         "metadata" -> js.Dynamic.literal(
-          "agentId"      -> expectedMetadata.agentId,
+          "agentId"      -> golem.host.js.JsAgentId.fromAgentId(agentId),
           "invocationId" -> js.Dynamic.literal(
             "owner" -> js.Dynamic.literal("tag" -> "agent", "val" -> js.Dynamic.literal()),
             "id"    -> JsUuid.fromUuid(invocationUuid)

@@ -74,6 +74,6 @@ var _ = Inspect.Handle(func(ctx *tool.Context, a InspectArgs) (Result, error) {
 		WeightedSize:     int64(a.Request.Dimensions.Width)*int64(a.Request.Dimensions.Height)*a.Multiplier + int64(len(a.Request.Labels)),
 		LabelSummary:     strings.Join(labels, "|"),
 		Principal:        principalName(ctx.Caller().Immediate),
-		OwnerAgentID:     golem.MustGetSelfMetadata().AgentID.AgentID,
+		OwnerAgentID:     golem.MustGetSelfMetadata().AgentID.String(),
 	}, nil
 })

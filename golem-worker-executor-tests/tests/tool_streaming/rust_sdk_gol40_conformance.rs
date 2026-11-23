@@ -69,7 +69,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "gol40-rust-sdk-conformance");
+    let agent_id = agent_key!("ToolStreamingCaller", "gol40-rust-sdk-conformance");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -152,13 +152,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
     assert!(terminals.cancelled_reader_result);
     assert_eq!(terminals.dropped_observer_bytes, b"marker:detached");
 
-    if let Some(active) = executor
-        .active_entity_metadata(&OwnedAgentId::new(
-            context.default_environment_id,
-            &worker_id,
-        ))
-        .await
-    {
+    if let Some(active) = executor.active_entity_metadata(&worker_id.clone()).await {
         assert!(active.tool_operations.operations.is_empty());
         assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
     }
@@ -175,7 +169,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
         caller_checkpoint_server,
         mut caller_checkpoint_arrivals,
     ) = start_crash_checkpoint_server().await;
-    let exception_agent_id = agent_id!("ToolStreamingCaller", "gol40-rust-sdk-exception");
+    let exception_agent_id = agent_key!("ToolStreamingCaller", "gol40-rust-sdk-exception");
     let exception_worker_id = executor
         .start_agent_with(
             &caller_component.id,
