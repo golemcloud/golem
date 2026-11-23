@@ -97,7 +97,14 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
         .await?;
     assert!(
         worker
-            .cancel_scheduled_invocation(cancelled, receipt, &owner.agent_id)
+            .cancel_scheduled_invocation(
+                cancelled,
+                receipt,
+                &callers::agent_principal(
+                    owner.agent_id,
+                    AgentTypeName("ScheduledInvocationClient".to_string())
+                )
+            )
             .await?
     );
     let scheduled = InvocationId(uuid::Uuid::new_v4());

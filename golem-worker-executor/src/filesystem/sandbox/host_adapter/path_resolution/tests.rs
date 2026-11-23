@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(target_os = "linux")]
+use super::{
+    NativeDirectoryHandle, NativeFileIdentity, NativeNameComparisonMode, NativeNameModeSource,
+    SandboxDirectory, SandboxDirectoryId, directory_identity,
+};
 use crate::filesystem::sandbox::SandboxAccessMode;
 #[cfg(target_os = "macos")]
 use crate::filesystem::sandbox::SandboxFileDisposition;
@@ -29,18 +34,8 @@ use crate::filesystem::sandbox::host_adapter::sandbox_cleanup::{LeaseState, Nati
 use crate::filesystem::sandbox::host_adapter::sandbox_provisioning::SandboxFilesystemName;
 use crate::filesystem::sandbox::host_adapter::sandbox_provisioning::SandboxFilesystemProvisioning;
 #[cfg(target_os = "linux")]
-use crate::filesystem::sandbox::host_adapter::{
-    NativeNameModeSource, NativeRoot, QuotaAuthority, tree_copy,
-};
-#[cfg(target_os = "linux")]
-use crate::filesystem::sandbox::name_comparison::NativeNameComparisonMode;
-#[cfg(target_os = "linux")]
-use crate::filesystem::sandbox::object_identity::{
-    NativeFileIdentity, SandboxDirectoryId, directory_identity,
-};
+use crate::filesystem::sandbox::host_adapter::{NativeRoot, QuotaAuthority, tree_copy};
 use crate::filesystem::sandbox::open_handles::SandboxHandle;
-#[cfg(target_os = "linux")]
-use crate::filesystem::sandbox::open_handles::{NativeDirectoryHandle, SandboxDirectory};
 use crate::filesystem::sandbox::sandbox_paths::SandboxPath;
 #[cfg(target_os = "linux")]
 use crate::filesystem::volume::FilesystemVolume;

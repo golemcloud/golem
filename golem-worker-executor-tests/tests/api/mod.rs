@@ -1745,11 +1745,11 @@ impl WorkerProxy for RecordingWorkerProxy {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -9049,12 +9049,18 @@ async fn scheduled_invocation(
         .start_agent(&component.id, client_agent_id.clone())
         .await?;
 
+    // The account that starts each schedule, and another account that calls the client before the
+    // scheduled call runs.
+    let scheduling_account = callers::account(AccountId::new());
+    let other_account = callers::account(AccountId::new());
+
     // first invocation: schedule increment in the future and poll
     {
         executor
-            .invoke_and_await_agent(
+            .invoke_and_await_agent_as_caller(
                 &component,
                 &client_agent_id,
+                scheduling_account.clone(),
                 "test1",
                 data_value!(server_agent_name.clone()),
             )
@@ -9138,6 +9144,100 @@ async fn scheduled_invocation(
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
+    }
+
+    // fourth invocation: a schedule keeps the caller of the invocation that made it, also when
+    // another caller invokes the scheduling agent before the scheduled call runs
+    {
+        let late_server_name = format!("scheduled-late-server-{}", context.redis_prefix());
+        let late_server_agent_id =
+            agent_key!("ScheduledInvocationServer", late_server_name.clone());
+        let late_server = executor
+            .start_agent(&component.id, late_server_agent_id.clone())
+            .await?;
+        let due = Utc::now() + chrono::Duration::seconds(3);
+        executor
+            .invoke_and_await_agent_as_caller(
+                &component,
+                &client_agent_id,
+                scheduling_account.clone(),
+                "schedule_at",
+                data_value!(
+                    late_server_name,
+                    due.timestamp() as u64,
+                    due.timestamp_subsec_nanos()
+                ),
+            )
+            .await?;
+        executor
+            .invoke_and_await_agent_as_caller(
+                &component,
+                &client_agent_id,
+                other_account,
+                "get_global_value",
+                data_value!(),
+            )
+            .await?;
+        assert!(
+            Utc::now() < due,
+            "the second caller must reach the client before the scheduled call runs"
+        );
+        loop {
+            let value = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &late_server_agent_id,
+                    "get_global_value",
+                    data_value!(),
+                )
+                .await?
+                .into_typed::<u64>()?;
+            if value == 17 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let client = callers::agent_in(
+            client_worker.agent_id,
+            client_agent_id.agent_type.clone(),
+            executor
+                .get_worker_metadata(&client_worker)
+                .await?
+                .fingerprint,
+            component.environment_id,
+        )
+        .immediate;
+        let expected = golem_common::model::caller::Caller {
+            immediate: client,
+            ..scheduling_account.clone()
+        };
+        let recorded = executor
+            .recorded_callers(&late_server.agent_id)
+            .await
+            .into_iter()
+            .filter(|(name, _)| name.ends_with("inc_global_by"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            recorded
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["pending inc_global_by", "inc_global_by"]
+        );
+        for (name, recorded) in recorded {
+            assert_eq!(recorded, expected, "{name}");
+        }
+
+        // The first schedule recorded the same caller.
+        let first = executor
+            .recorded_callers(&server_worker.agent_id)
+            .await
+            .into_iter()
+            .filter(|(name, _)| name == "inc_global_by")
+            .map(|(_, caller)| caller)
+            .collect::<Vec<_>>();
+        assert_eq!(first, [expected]);
     }
 
     executor.check_oplog_is_queryable(&client_worker).await?;
@@ -9820,6 +9920,7 @@ async fn local_schedule_rejects_recreated_cached_target(
                 scope_card: None,
             },
             Utc::now() + chrono::Duration::hours(1),
+            &target.agent_id,
             &AuthCtx::System,
         )
         .await;
@@ -9924,7 +10025,16 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
             assert!(
                 tokio::time::timeout(
                     Duration::from_secs(30),
-                    worker.cancel_scheduled_invocation(key, receipt, &owner.agent_id),
+                    worker.cancel_scheduled_invocation(
+                        key,
+                        receipt,
+                        &callers::agent_principal(
+                            owner.agent_id,
+                            golem_common::model::agent::AgentTypeName(
+                                "ScheduledInvocationClient".to_string()
+                            ),
+                        ),
+                    ),
                 )
                 .await
                 .context("cancelling the selected invocation before Started timed out")??
@@ -9950,8 +10060,14 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
                 let worker = worker.clone();
                 let owner = owner.clone();
                 async move {
+                    let canceller = callers::agent_principal(
+                        owner.agent_id,
+                        golem_common::model::agent::AgentTypeName(
+                            "ScheduledInvocationClient".to_string(),
+                        ),
+                    );
                     let mut cancellation =
-                        Box::pin(worker.cancel_scheduled_invocation(key, receipt, &owner.agent_id));
+                        Box::pin(worker.cancel_scheduled_invocation(key, receipt, &canceller));
                     assert!(futures::poll!(&mut cancellation).is_pending());
                     blocked_tx.send(()).unwrap();
                     cancellation.await
@@ -10072,7 +10188,16 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         .await?;
     assert!(
         worker
-            .cancel_scheduled_invocation(key, receipt, &owner.agent_id)
+            .cancel_scheduled_invocation(
+                key,
+                receipt,
+                &callers::agent_principal(
+                    owner.agent_id,
+                    golem_common::model::agent::AgentTypeName(
+                        "ScheduledInvocationClient".to_string()
+                    ),
+                ),
+            )
             .await?
     );
     assert_eq!(
@@ -10158,6 +10283,96 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         OplogEntry::AgentInvocationStarted { invocation_id, .. } if invocation_id == &fresh_key))
             .count(),
         1
+    );
+    drop(worker);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn scheduled_cancellation_by_another_agent_is_refused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentInvocation;
+    use golem_worker_executor::model::LookupResult;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server = agent_key!("ScheduledInvocationServer", "wrong-canceller");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let owner = executor
+        .start_agent(
+            &component.id,
+            agent_key!("ScheduledInvocationClient", "wrong-canceller-owner"),
+        )
+        .await?;
+    let other = executor
+        .start_agent(
+            &component.id,
+            agent_key!("ScheduledInvocationClient", "wrong-canceller-other"),
+        )
+        .await?;
+    let owned = target.clone();
+    let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
+    let due = Utc::now() + chrono::Duration::seconds(5);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let receipt = worker
+        .schedule_invocation(
+            AgentInvocation::AgentMethod {
+                idempotency_key: key,
+                method_name: "inc_global_by".to_string(),
+                input: data_value!(37u64).into_parts().1,
+                invocation_context: InvocationContextStack::fresh(),
+                caller: callers::agent(
+                    owner.agent_id,
+                    golem_common::model::agent::AgentTypeName(
+                        "ScheduledInvocationClient".to_string(),
+                    ),
+                ),
+                scope_card: None,
+            },
+            due,
+        )
+        .await?;
+
+    // Another agent holds the right receipt, but it is not the recorded immediate caller.
+    assert!(
+        !worker
+            .cancel_scheduled_invocation(
+                key,
+                receipt,
+                &callers::agent_principal(
+                    other.agent_id,
+                    golem_common::model::agent::AgentTypeName(
+                        "ScheduledInvocationClient".to_string()
+                    )
+                ),
+            )
+            .await?
+    );
+
+    // The call completes with a successful result: it was not cancelled.
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if let LookupResult::Complete(result) = worker.lookup_invocation_result(&key).await {
+                break result;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        37
     );
     drop(worker);
     Ok(())

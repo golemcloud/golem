@@ -26,6 +26,14 @@ where
     actual.defs.sort_by(|a, b| a.id.cmp(&b.id));
     expected.defs.sort_by(|a, b| a.id.cmp(&b.id));
     assert_eq!(actual, expected);
+    let mut arena = direct::WireSchemaBuilder::default();
+    let (unrelated, _) = arena.reserve("unrelated-test-type".into(), None);
+    let unrelated_body = arena.push(wire::SchemaTypeBody::U8Type(None));
+    arena.commit(unrelated, unrelated_body);
+    let root = T::append_schema(&mut arena);
+    let mut projected = golem_schema::schema::wit::decode_graph(&arena.project(root)).unwrap();
+    projected.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(projected, expected);
     assert_eq!(T::wire_type_id(), T::type_id().0);
     let tree = encode(&value).unwrap();
     assert_eq!(
@@ -469,7 +477,10 @@ enum Fault {
 
 #[test]
 fn wire_schema_derive_builds_recursive_flat_arena() {
-    let graph = schema::<Request>();
+    let mut arena = direct::WireSchemaBuilder::default();
+    String::append_schema(&mut arena);
+    let root = Request::append_schema(&mut arena);
+    let graph = arena.project(root);
     assert_eq!(graph.defs.len(), 2);
     assert_eq!(graph.defs[0].id, "example.Request");
     assert!(graph.defs.iter().all(|definition| definition.body >= 0));

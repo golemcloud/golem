@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    RunLate, SaveExit, backup_options, open_existing, ran_at_shutdown, repository_snapshots,
-    save_failure, save_ran, settle_may_land, store_backup_options, whole_millis_from,
+    RunLate, SaveExit, backup_options, ran_at_shutdown, save_failure, save_ran, settle_may_land,
+    store_backup_options, whole_millis_from,
 };
 use crate::filesystem_snapshot::backend::rustic::blob_io::LateWrites;
 use crate::filesystem_snapshot::backend::rustic::failure_classification::OperationCancelled;
@@ -30,7 +30,7 @@ use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
 };
 use crate::filesystem_snapshot::backend::rustic::test_support::{
     LIMIT, LONG_DEADLINE, NEVER, REACH_LIMIT, SHORT_DEADLINE, SHORT_WRITE_DEADLINE, SharedSlots,
-    backend_of, blobs, calls_of, key,
+    blobs, calls_of,
 };
 use std::path::PathBuf;
 
@@ -560,6 +560,9 @@ fn a_save_time_is_the_first_whole_millisecond_that_is_not_before_the_call() {
 #[test]
 #[timeout("60s")]
 async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
+    use crate::filesystem_snapshot::backend::rustic::repository::open_existing;
+    use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::repository_snapshots;
+    use crate::filesystem_snapshot::backend::rustic::test_support::{backend_of, key};
     use std::os::fd::AsRawFd;
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
@@ -2335,15 +2338,19 @@ async fn no_blob_call_of_a_save_starts_after_it_answered() {
     let Some(tree) = large_tree_with_an_unreadable_file(16 << 20) else {
         return;
     };
-    let storage =
-        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let calls = calls.clone();
+        move |op_label, path| {
+            calls.fetch_add(1, Ordering::SeqCst);
             if op_label == "write" && path.starts_with("data") {
                 Script::HangThenLand(Duration::from_millis(500))
             } else {
                 Script::Pass
             }
-        });
-    let store = store(storage.clone(), runs_policy(Duration::from_secs(2), 1));
+        }
+    });
+    let mut store = store(storage.clone(), runs_policy(Duration::from_secs(2), 1));
 
     let _ = store
         .save(
@@ -2356,9 +2363,20 @@ async fn no_blob_call_of_a_save_starts_after_it_answered() {
         )
         .await;
     let at_the_answer = storage.calls().len();
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    drop(storage);
+    // Keep the store alive: exclusivity excludes strong and weak capabilities without cancelling
+    // late work or preventing a weak storage owner from upgrading while it still exists.
+    tokio::time::timeout(LIMIT, async {
+        while !Arc::get_mut(&mut store)
+            .is_some_and(|store| Arc::get_mut(&mut store.storage).is_some())
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("save retained a store or storage capability after its answer");
 
-    assert_eq!(storage.calls().len(), at_the_answer);
+    assert_eq!(calls.load(Ordering::SeqCst), at_the_answer);
 }
 
 #[test]
@@ -2692,7 +2710,6 @@ async fn a_save_whose_first_pack_lands_after_the_backup_failed(
     let storage = scripted_first_pack(inner.clone(), first, |_, _| Script::Pass);
     let store = store(storage.clone(), runs_policy(Duration::from_secs(20), 3));
     let scope = new_scope();
-    let started = std::time::Instant::now();
 
     let saved = store
         .save(
@@ -2708,11 +2725,7 @@ async fn a_save_whose_first_pack_lands_after_the_backup_failed(
         return None;
     }
     store.delete_all(&scope, &Unlimited).await.unwrap();
-    tokio::time::sleep(
-        (started + Duration::from_secs(17)).saturating_duration_since(std::time::Instant::now())
-            + Duration::from_secs(1),
-    )
-    .await;
+    assert!(polled_until(REACH_LIMIT, || storage.landed() == 1).await);
     Some((saved, blobs(&*inner, scope.namespace(), "").await))
 }
 
@@ -3388,7 +3401,7 @@ async fn a_save_whose_backup_fails_with_a_pack_write_in_flight_answers_after_the
         .await;
     let sent_before_the_answer = wrote_a_pack(&storage);
     store.delete_all(&scope, &Unlimited).await.unwrap();
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(eventually(|| storage.landed() == 1).await);
 
     assert!(sent_before_the_answer);
     assert_eq!(
@@ -3422,7 +3435,7 @@ async fn a_save_whose_lost_publish_try_lands_after_a_later_try_answers_only_afte
         .await;
     let sent_before_the_answer = calls_of(&storage, "publish");
     store.delete_all(&scope, &Unlimited).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(eventually(|| storage.landed() == 1).await);
 
     assert!(saved.is_ok(), "{saved:?}");
     assert_eq!(sent_before_the_answer, 2);

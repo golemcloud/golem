@@ -204,6 +204,14 @@ When changing SDK code generation, guest bridge generation, canonical ABI wrappe
 
 Do not run `cargo make fix` by default. It mutates the entire root and `dev-tools` workspaces and does not validate the separately built SDKs. Use scoped auto-fix commands only when needed, and inspect their diff afterward.
 
+Clippy's `--all-targets` covers Cargo targets, not operating systems. Before accepting an
+unused-import or dead-code fix, inspect references behind `#[cfg]`, including test modules.
+When an item is used only on another platform, gate its import or definition to match its callers
+instead of deleting it or suppressing the lint. Review auto-fix deletions for this case. Changes
+to platform-specific code require compilation on the affected platform before landing; a passing
+host build is not evidence for code excluded on that host. If the user skips checks or the platform
+is unavailable, report that coverage gap explicitly.
+
 Pull requests to `main` run no tests. The continuous `Main validation` workflow validates the latest main commit after merge. Maintenance branches retain full CI.
 
 Before opening or merging a PR, run the smallest local checks that cover the changed behavior and directly affected callers. After revisions, rerun the checks affected by those revisions. Broaden only for a specific affected contract that narrower checks cannot cover, or when the user requests broader validation. Do not run every test merely because PRs no longer run tests. Report the checks run, their outcomes and remaining coverage limits; post-merge validation does not replace affected local checks.

@@ -801,6 +801,129 @@ impl TestWorkerExecutor {
             .captures(outcome)
     }
 
+    /// The callers that the durable agent recorded, in oplog order: one row per `Create` entry
+    /// (named `create`), per pending invocation (named `pending <name>`), per started invocation
+    /// (named after the invocation) and per tool or middleware invocation that the agent's code
+    /// started (named `entity <tool or middleware name>`). Rows of invocations without a caller
+    /// are left out.
+    pub async fn recorded_callers(&self, agent_id: &AgentId) -> Vec<(String, Caller)> {
+        use golem_worker_executor::services::HasOplogService;
+
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let oplog = match (&self.services, &self.production_oplog) {
+            (Some(services), _) => services.oplog_service(),
+            (None, Some(oplog)) => Arc::clone(oplog),
+            (None, None) => panic!("the executor has no captured oplog service"),
+        };
+        let mut rows = Vec::new();
+        for entry in self.stored_oplog(agent_id).await {
+            let (prefix, operation, payload) = match entry {
+                OplogEntry::Create { parameters, .. } => {
+                    rows.push(("create".to_string(), parameters.create_request.caller));
+                    continue;
+                }
+                OplogEntry::PendingAgentInvocation {
+                    operation, payload, ..
+                } => ("pending ", operation, payload),
+                OplogEntry::AgentInvocationStarted {
+                    operation, payload, ..
+                } => ("", operation, payload),
+                OplogEntry::Start {
+                    function_name,
+                    request: Some(request),
+                    ..
+                } if function_name.to_string() == "golem::entity::invoke" => {
+                    let request: golem_common::model::oplog::HostRequest = match request {
+                        OplogPayload::Inline(value) => *value,
+                        OplogPayload::SerializedInline { bytes, .. } => {
+                            golem_common::serialization::decode(&bytes)
+                                .expect("the stored entity request decodes")
+                        }
+                        OplogPayload::External {
+                            payload_id,
+                            md5_hash,
+                            ..
+                        } => golem_common::serialization::decode(
+                            &oplog
+                                .download_raw_payload(
+                                    &owned_agent_id,
+                                    AgentMode::Durable,
+                                    payload_id,
+                                    md5_hash,
+                                )
+                                .await
+                                .expect("the stored entity request downloads"),
+                        )
+                        .expect("the stored entity request decodes"),
+                    };
+                    let golem_common::model::oplog::HostRequest::EntityInvocation(request) =
+                        request
+                    else {
+                        panic!("an entity invocation Start holds an entity invocation request")
+                    };
+                    let metadata: golem_common::model::entity::EntityInvocationRequest =
+                        desert_rust::deserialize(&request.metadata)
+                            .expect("the entity invocation metadata decodes");
+                    rows.push((
+                        format!("entity {}", metadata.entity.name()),
+                        metadata.caller,
+                    ));
+                    continue;
+                }
+                _ => continue,
+            };
+            let stored: golem_common::model::StoredAgentInvocationPayload = match payload {
+                OplogPayload::Inline(value) => *value,
+                OplogPayload::SerializedInline { bytes, .. } => {
+                    golem_common::serialization::decode(&bytes)
+                        .expect("the stored invocation payload decodes")
+                }
+                OplogPayload::External {
+                    payload_id,
+                    md5_hash,
+                    ..
+                } => golem_common::serialization::decode(
+                    &oplog
+                        .download_raw_payload(
+                            &owned_agent_id,
+                            AgentMode::Durable,
+                            payload_id,
+                            md5_hash,
+                        )
+                        .await
+                        .expect("the stored invocation payload downloads"),
+                )
+                .expect("the stored invocation payload decodes"),
+            };
+            let invocation = stored
+                .with_operation(*operation)
+                .expect("the stored invocation payload matches its operation");
+            use golem_common::model::AgentInvocationPayload as Payload;
+            let (name, caller) = match invocation {
+                Payload::AgentInitialization { caller, .. } => ("initialize".to_string(), caller),
+                Payload::AgentMethod {
+                    method_name,
+                    caller,
+                    ..
+                } => (method_name, caller),
+                Payload::ExternalTool {
+                    tool_name,
+                    command_path,
+                    caller,
+                    ..
+                } => (format!("{tool_name}:{}", command_path.join("/")), caller),
+                Payload::LoadSnapshot { caller, .. } => ("load-snapshot".to_string(), caller),
+                Payload::SaveSnapshot { caller } => ("save-snapshot".to_string(), caller),
+                Payload::ProcessOplogEntries { caller, .. } => {
+                    ("process-oplog-entries".to_string(), caller)
+                }
+                Payload::ManualUpdate { .. } => continue,
+            };
+            rows.push((format!("{prefix}{name}"), caller));
+        }
+        rows
+    }
+
     /// Reads the stored oplog of the durable agent from the oplog service. It does not ask the
     /// executor, so it works when the shard of the agent is no longer assigned here. It works with
     /// the test worker context and with the production worker context.
@@ -9848,12 +9971,12 @@ impl Rpc for RecordingRpc {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, ServiceRpcError> {
         self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -9864,6 +9987,7 @@ impl Rpc for RecordingRpc {
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
         self.call_count.fetch_add(1, Ordering::Relaxed);
@@ -9874,6 +9998,7 @@ impl Rpc for RecordingRpc {
                 request_key,
                 invocation,
                 scheduled_at,
+                self_agent_id,
                 auth_ctx,
             )
             .await
@@ -10025,11 +10150,11 @@ impl Rpc for FailingRpc {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, ServiceRpcError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -10040,6 +10165,7 @@ impl Rpc for FailingRpc {
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
         self.inner
@@ -10049,6 +10175,7 @@ impl Rpc for FailingRpc {
                 request_key,
                 invocation,
                 scheduled_at,
+                self_agent_id,
                 auth_ctx,
             )
             .await

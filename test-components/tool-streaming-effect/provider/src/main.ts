@@ -72,9 +72,9 @@ const ChunkMRejected = Schema.Struct({ reason: Schema.String })
 
 const selfAgentIdText = Effect.map(SelfAgentId.SelfAgentId, AgentId.format) as Effect.Effect<string>
 
-/** The immediate caller as "<kind> <ref text>", or "anonymous". */
+/** Both roles of the caller: "<original>|<immediate>", each "<kind> <ref text>" or "anonymous". */
 const callerLabel = (context: { readonly caller: InvocationContext.Caller }): string =>
-  context.caller.immediate.toString()
+  `${context.caller.original.toString()}|${context.caller.immediate.toString()}`
 
 const evidence = (principal: string, ownerAgentId: string) => ({
   provider: "effect",

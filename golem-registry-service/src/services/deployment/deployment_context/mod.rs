@@ -565,6 +565,7 @@ impl DeploymentContext {
                     &metadata.definition.version,
                     TOOL_METADATA_WIT_VERSION,
                     metadata_digest,
+                    false,
                     warnings,
                 ) else {
                     continue;
@@ -590,6 +591,7 @@ impl DeploymentContext {
                     &metadata.definition.version,
                     TOOL_METADATA_WIT_VERSION,
                     metadata_digest,
+                    false,
                     warnings,
                 ) {
                     agent_tool_bindings.push(binding);
@@ -739,6 +741,7 @@ impl DeploymentContext {
                     &release.version,
                     &release.metadata_version,
                     release.metadata_digest,
+                    release.is_builtin_shell(),
                     warnings,
                 ) else {
                     continue;
@@ -764,6 +767,7 @@ impl DeploymentContext {
                     &release.version,
                     &release.metadata_version,
                     release.metadata_digest,
+                    release.is_builtin_shell(),
                     warnings,
                 ) {
                     agent_tool_bindings.push(binding);
@@ -1574,6 +1578,7 @@ fn compile_tool_binding(
     version: &str,
     metadata_version: &str,
     metadata_digest: golem_common::model::diff::Hash,
+    shell: bool,
     warnings: &mut Vec<super::DeployValidationWarning>,
 ) -> Option<CompiledToolBinding> {
     let (binding, revealable_scope_narrowed) = diff::effective_tool_binding(environment, agent)?;
@@ -1602,6 +1607,7 @@ fn compile_tool_binding(
         secret_keys_revealable: binding.secret_keys_revealable,
         filesystem_access: binding.filesystem_access,
         source,
+        shell,
     })
 }
 
