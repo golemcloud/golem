@@ -13,6 +13,10 @@ on:
         description: Run overlapping R3 controls on every partition host (requires publish=false)
         type: boolean
         default: false
+      coverage_pilot:
+        description: Run only the bounded unpublished N=5 routing-coverage pilot
+        type: boolean
+        default: false
       short_validation:
         description: Run the build-free unpublished diagnostic instead of normal benchmark jobs
         type: boolean
@@ -76,8 +80,18 @@ env:
   WASI_SDK_PATH: /opt/wasi-sdk
 
 jobs:
+  coverage-pilot:
+    if: github.event_name == 'workflow_dispatch' && inputs.coverage_pilot
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/benchmark-coverage.yaml
+    with:
+      deadline: ${{ inputs.deadline }}
+      isolated: ${{ !inputs.publish && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle && !inputs.prepare_executor && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.r3_controls }}
+
   paired-comparison:
-    if: github.event_name == 'workflow_dispatch' && (inputs.paired || inputs.paired_deadline_probe)
+    if: github.event_name == 'workflow_dispatch' && !inputs.coverage_pilot && (inputs.paired || inputs.paired_deadline_probe)
     permissions:
       contents: read
       actions: write
@@ -94,7 +108,7 @@ jobs:
       isolated: ${{ !inputs.publish && !inputs.prepare_bundle && !inputs.prepare_executor && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.r3_controls }}
 
   short-validation:
-    if: github.event_name == 'workflow_dispatch' && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle && !inputs.prepare_executor && (inputs.short_validation || inputs.trace_diagnostic)
+    if: github.event_name == 'workflow_dispatch' && !inputs.coverage_pilot && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle && !inputs.prepare_executor && (inputs.short_validation || inputs.trace_diagnostic)
     permissions:
       contents: read
       actions: read
@@ -108,7 +122,7 @@ jobs:
       executor_source: ${{ inputs.executor_source }}
 
   prepare-executor:
-    if: github.event_name == 'workflow_dispatch' && inputs.prepare_executor && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle
+    if: github.event_name == 'workflow_dispatch' && !inputs.coverage_pilot && inputs.prepare_executor && !inputs.paired && !inputs.paired_deadline_probe && !inputs.prepare_bundle
     runs-on: blacksmith-32vcpu-ubuntu-2204
     timeout-minutes: 30
     permissions:
@@ -155,7 +169,7 @@ jobs:
           retention-days: 30
 
   build-benchmarks:
-    if: ${{ !inputs.paired && !inputs.paired_deadline_probe && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.prepare_executor }}
+    if: ${{ !inputs.coverage_pilot && !inputs.paired && !inputs.paired_deadline_probe && !inputs.short_validation && !inputs.trace_diagnostic && !inputs.prepare_executor }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
     timeout-minutes: ${{ inputs.prepare_bundle && 45 || 360 }}
     outputs:
