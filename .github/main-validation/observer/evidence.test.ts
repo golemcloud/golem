@@ -17,7 +17,7 @@ afterEach(async () => {
 })
 test("malformed report cannot hide valid reports or contribute partial totals; recovered is not repeated all-passing", async () => {
   await write(resolve(directory, "progress.json"), { tasks: [] })
-  await fs.writeFile(resolve(directory, "executor-binaries.json"), "not a CTRF report")
+  await fs.writeFile(resolve(directory, "executor-selection.json"), "not a CTRF report")
   await write(resolve(directory, "ctrf-a-bad.json"), { results: { tests: null } })
   await write(resolve(directory, "ctrf-b-partial.json"), {
     results: { tests: [{ name: "must_not_count", status: "passed" }, { status: "failed", extra: 17 }] }
@@ -127,4 +127,139 @@ test("missing logs, path traversal and symlinks outside artifact are unavailable
     expect(task.log_state).toBe("unavailable")
     expect(task.first_error).toBeNull()
   }
+})
+
+test("runner events attribute actual reports instead of console guesses without overriding workload failure", async () => {
+  const id = "worker--group--11111111-1111-4111-8111-111111111111"
+  await fs.mkdir(resolve(directory, "runner-events"))
+  await write(resolve(directory, "progress.json"), {
+    tasks: [{ id: "worker--group", status: "failed", exit_code: 101, log: "task.log" }]
+  })
+  await fs.writeFile(resolve(directory, "task.log"), "Logging to /runner/ctrf-decoy.json\nerror: workload failed\n")
+  await write(resolve(directory, "ctrf-actual.json"), {
+    results: {
+      tests: [{
+        name: "recovered",
+        status: "passed",
+        extra: {
+          testR: {
+            attempts: [
+              { status: "failed" },
+              { status: "failed" },
+              { status: "passed" }
+            ]
+          }
+        }
+      }]
+    }
+  })
+  const events = [
+    { event: "invocation-started", "binary-ids": ["pkg::lib"] },
+    { event: "binary-started", "binary-id": "pkg::lib", attempt: 1 },
+    {
+      event: "binary-finished",
+      "binary-id": "pkg::lib",
+      attempt: 1,
+      outcome: "failed",
+      "exit-code": 101,
+      signal: null,
+      reports: [
+        { path: "/runner/ctrf-actual.json", format: "ctrf" },
+        { path: "/unconfined/opaque-report.json" }
+      ]
+    },
+    {
+      event: "invocation-finished",
+      outcome: "failed",
+      "exit-code": 101,
+      "not-run": 0,
+      passed: 0,
+      failed: 1,
+      crashed: 0,
+      "launch-failed": 0,
+      "timed-out": 0,
+      cancelled: 0
+    }
+  ].map((event, seq) => ({
+    v: 1,
+    seq,
+    time: `2026-11-20T20:00:0${3 - seq}.000Z`,
+    "elapsed-ms": seq,
+    "invocation-id": id,
+    ...event
+  }))
+  const eventPath = resolve(directory, "runner-events", `${id}.jsonl`)
+  const saveEvents = async (values: unknown[], newline = true) =>
+    fs.writeFile(eventPath, values.map((event) => JSON.stringify(event)).join("\n") + (newline ? "\n" : ""))
+  await saveEvents(events)
+  const evidence = await run(collectEvidence(directory)), task = evidence.tasks[0]!
+  expect(task.exit_code).toBe(101)
+  expect(task.first_error?.message).toBe("error: workload failed")
+  expect(task.reports).toEqual([{ file: "ctrf-actual.json", state: "reported", tests: 1 }])
+  expect(task.runner_invocations[0]?.complete).toBe(true)
+  expect(evidence.limits).toEqual([])
+  expect((await run(summarize(directory))).recovered).toHaveLength(1)
+
+  const unavailable = Bun.spawn([process.execPath, resolve(import.meta.dir, "task-evidence.ts"), directory], {
+    env: { ...process.env, PATH: "" },
+    stdout: "pipe",
+    stderr: "pipe"
+  })
+  const [unavailableCode, unavailableOutput, unavailableError] = await Promise.all([
+    unavailable.exited,
+    new Response(unavailable.stdout).text(),
+    new Response(unavailable.stderr).text()
+  ])
+  expect(unavailableCode, unavailableError).toBe(0)
+  const missingInspector = JSON.parse(unavailableOutput) as typeof evidence
+  expect(missingInspector.tasks[0]?.exit_code).toBe(101)
+  expect(missingInspector.tasks[0]?.runner_invocations[0]?.complete).toBe(false)
+  expect(missingInspector.tasks[0]?.reports).toEqual([])
+  expect(missingInspector.limits.join("\n")).toContain("Runner inspection unavailable")
+
+  for (
+    const state of [
+      "null",
+      "empty",
+      "truncated",
+      "missing-final",
+      "sequence-gap",
+      "wrong-id",
+      "not-run",
+      "launch-failed",
+      "unknown-format",
+      "missing-report"
+    ] as const
+  ) {
+    const changed = structuredClone(events)
+    if (state === "null") Object.assign(changed[2]!, { reports: null })
+    if (state === "empty") Object.assign(changed[2]!, { reports: [] })
+    if (state === "unknown-format") Object.assign(changed[2]!, { reports: [{ path: "/runner/ctrf-actual.json" }] })
+    if (state === "missing-final") changed.pop()
+    if (state === "sequence-gap") changed[2]!.seq = 4
+    if (state === "wrong-id") changed[2]!["invocation-id"] = "another-invocation"
+    if (state === "not-run") {
+      Object.assign(changed[0]!, { "binary-ids": ["pkg::lib", "pkg::absent"] })
+      Object.assign(changed[3]!, { "not-run": 1 })
+    }
+    if (state === "launch-failed") {
+      Object.assign(changed[1]!, { event: "binary-launch-failed", error: "fixture launch failure" })
+      Object.assign(changed[3]!, { failed: 0, "launch-failed": 1 })
+      changed.splice(2, 1)
+      changed.forEach((event, seq) => {
+        event.seq = seq
+      })
+    }
+    if (state === "missing-report") await fs.unlink(resolve(directory, "ctrf-actual.json"))
+    await saveEvents(changed, state !== "truncated")
+    const partial = await run(collectEvidence(directory))
+    expect(partial.tasks[0]?.runner_invocations[0]?.complete, state).toBe(false)
+    expect(partial.limits.length, state).toBeGreaterThan(0)
+    expect(partial.tasks[0]?.exit_code).toBe(101)
+    expect(partial.tasks[0]?.reports.some((report) => report.file === "ctrf-decoy.json")).toBe(false)
+  }
+  await write(resolve(directory, "progress.json"), {
+    tasks: [{ id: "worker--group", status: "passed", exit_code: 0, log: "task.log" }]
+  })
+  expect((await run(collectEvidence(directory))).limits.length).toBeGreaterThan(0)
 })

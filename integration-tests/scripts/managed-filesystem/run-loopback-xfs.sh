@@ -1,6 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+prepare_guest_snapshot() {
+  local host_selection=${GOLEM_MANAGED_XFS_SELECTION:?reuse requires GOLEM_MANAGED_XFS_SELECTION}
+  local host_digest=${GOLEM_MANAGED_XFS_SELECTION_DIGEST:?reuse requires GOLEM_MANAGED_XFS_SELECTION_DIGEST}
+  local executable_checksums=${GOLEM_MANAGED_XFS_EXECUTABLE_CHECKSUMS:?reuse requires GOLEM_MANAGED_XFS_EXECUTABLE_CHECKSUMS}
+  if [[ ${host_selection} != /* || ${executable_checksums} != /* || ! ${host_digest} =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "managed XFS reuse requires absolute selection/checksum paths and a sha256 manifest digest" >&2
+    return 1
+  fi
+  printf '%s  %s\n' "${host_digest#sha256:}" "${host_selection}" | sha256sum --check --strict - || return
+  sha256sum --check --strict "${executable_checksums}" || return
+
+  # Re-resolve the guest loader and libraries, rather than trusting host library identities.
+  local guest_snapshot=${work_dir}/guest-snapshot
+  "${cargo_test_r}" snapshot --selection "${host_selection}" --out "${guest_snapshot}" \
+    --deadline 10m --kill-grace 10s || return
+  printf '%s  %s\n' "${host_digest#sha256:}" "${host_selection}" | sha256sum --check --strict - || return
+  sha256sum --check --strict "${executable_checksums}" || return
+  guest_selection=${guest_snapshot}/selection.json
+  guest_selection_digest=$(sha256sum "${guest_selection}") || return
+  guest_selection_digest=sha256:${guest_selection_digest%% *}
+  # Native staging is root-only. Permit traversal and manifest reads, not writes;
+  # executable modes remain exactly as recorded by snapshot.
+  chmod 0755 "${guest_snapshot}" "${guest_snapshot}/bin" || return
+  chmod 0644 "${guest_selection}" || return
+  "${cargo_test_r}" verify --selection "${guest_selection}" --expect-digest "${guest_selection_digest}" \
+    --deadline 10m --kill-grace 10s || return
+
+  local report_dir evidence_dir
+  report_dir=$(dirname "${executable_checksums}")
+  evidence_dir=$(mktemp -d "${report_dir}/guest-snapshot-evidence.XXXXXX") || return
+  cp "${guest_selection}" "${evidence_dir}/selection.json" || return
+  printf '%s\n' "${guest_selection_digest}" > "${evidence_dir}/selection.digest" || return
+  chmod 0755 "${evidence_dir}" || return
+  chmod 0644 "${evidence_dir}/selection.json" "${evidence_dir}/selection.digest" || return
+  echo "Managed XFS guest selection: ${guest_selection} ${guest_selection_digest}; evidence: ${evidence_dir}"
+}
+
 require_exactly_one_passed_test() {
   local result_file=$1
   local filter=$2
@@ -325,7 +362,7 @@ filesystem_image_size=$(select_filesystem_image_size \
   "${filesystem_workload_benchmark}" \
   "${filesystem_native_workload_baseline}")
 
-for command in bun flock getent losetup mkfs.xfs mount setpriv stat tee timeout truncate; do
+for command in flock getent losetup mkfs.xfs mount setpriv sha256sum stat tee timeout truncate; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "missing required command: ${command}" >&2
     exit 1
@@ -441,6 +478,15 @@ if [[ ${validate_cache_only} == 1 ]]; then
   exit
 fi
 
+# Resolve the user's installation before running snapshot or tests as root.
+if ! resolved_cargo_test_r=$(run_vm_cargo bash -c 'command -v "$1"' bash "${cargo_test_r}"); then
+  echo "missing required command: ${cargo_test_r}" >&2
+  echo "Install cargo-test-r 2.2.14 in the build user's PATH (inside the VM when using Lima)." >&2
+  echo "Run as that user: cargo install --locked cargo-test-r --version 2.2.14" >&2
+  exit 1
+fi
+cargo_test_r=${resolved_cargo_test_r}
+
 work_dir=$(mktemp -d /tmp/golem-managed-xfs.XXXXXX)
 chmod 0755 "${work_dir}"
 loop_devices=()
@@ -529,7 +575,7 @@ build_test_binaries() {
   fi
   echo "Building managed XFS test binaries with profile ${cargo_profile_dir} and ${CARGO_BUILD_JOBS:-default} Cargo jobs" >&2
   local build_messages=${work_dir}/cargo-test-artifacts.jsonl
-  local selected_executables=${work_dir}/cargo-test-executables.tsv
+  local cargo_metadata=${work_dir}/cargo-metadata.json
   local lib_decoy=${target_dir}/${cargo_profile_dir}/deps/golem_worker_executor-stale-decoy
   local integration_decoy=${target_dir}/${cargo_profile_dir}/deps/integration-stale-decoy
   run_vm_cargo mkdir -p "${target_dir}/${cargo_profile_dir}/deps"
@@ -555,24 +601,18 @@ build_test_binaries() {
 
   lib_test_binary=
   integration_test_binary=
-  if ! run_vm_cargo bun \
-    "${repo_root}/.github/main-validation/select-test-executables.ts" \
-    "${build_messages}" "${repo_root}" lib integration > "${selected_executables}"; then
+  if ! run_vm_cargo cargo metadata --no-deps --format-version 1 > "${cargo_metadata}" ||
+    ! lib_test_binary=$(run_vm_cargo "${cargo_test_r}" list \
+      --cargo-messages "${build_messages}" --cargo-metadata "${cargo_metadata}" \
+      --package golem-worker-executor --binary-id golem-worker-executor \
+      --expect-count 1 --output executable-path --deadline 10m --kill-grace 10s) ||
+    ! integration_test_binary=$(run_vm_cargo "${cargo_test_r}" list \
+      --cargo-messages "${build_messages}" --cargo-metadata "${cargo_metadata}" \
+      --package golem-worker-executor-tests --binary-id golem-worker-executor-tests::integration \
+      --expect-count 1 --output executable-path --deadline 10m --kill-grace 10s); then
     run_vm_cargo rm -f "${lib_decoy}" "${integration_decoy}"
     return 1
   fi
-  local target executable
-  while IFS=$'\t' read -r target executable; do
-    case ${target} in
-      lib) lib_test_binary=${executable} ;;
-      integration) integration_test_binary=${executable} ;;
-      *)
-        echo "unexpected Cargo test target selected: ${target}" >&2
-        run_vm_cargo rm -f "${lib_decoy}" "${integration_decoy}"
-        return 1
-        ;;
-    esac
-  done < "${selected_executables}"
   run_vm_cargo rm -f "${lib_decoy}" "${integration_decoy}"
   if [[ -z ${lib_test_binary} || -z ${integration_test_binary} ]]; then
     echo "cargo did not emit both managed XFS test executables" >&2
@@ -635,10 +675,7 @@ run_selected_test() {
   fi
 
   if [[ ${reuse_test_binaries} == 1 ]]; then
-    local target_args=()
-    if [[ -n ${GOLEM_MANAGED_XFS_BINARIES_METADATA:-} ]]; then
-      target_args=(--binaries-metadata "${GOLEM_MANAGED_XFS_BINARIES_METADATA}")
-    fi
+    local target_args=(--selection "${guest_selection}" --expect-digest "${guest_selection_digest}")
     if [[ ${target} == integration ]]; then
       target_args+=(--package golem-worker-executor-tests --test integration)
     else
@@ -648,6 +685,7 @@ run_selected_test() {
       timeout --kill-after=30s 5m \
       "${runner[@]}" \
       "${cargo_test_r}" run "${target_args[@]}" \
+      --deadline 5m --kill-grace 10s \
       "${filter}" -- --exact --include-ignored --nocapture --report-time
     return
   fi
@@ -817,6 +855,8 @@ lib_test_binary=
 integration_test_binary=
 if [[ ${reuse_test_binaries} == 0 ]]; then
   build_test_binaries
+else
+  prepare_guest_snapshot
 fi
 
 if [[ ${filesystem_benchmark} == true || ${filesystem_workload_benchmark} == true || ${filesystem_native_workload_baseline} == true ]]; then
