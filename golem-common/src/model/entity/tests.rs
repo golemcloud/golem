@@ -189,7 +189,7 @@ fn entity_invocation_id_protobuf_roundtrip_is_structured() {
 fn owner_principal(owner: &OwnedAgentId) -> Principal {
     Principal::Agent(AgentPrincipal::of_agent(
         "https://golem.example".to_string(),
-        owner.agent_id.clone(),
+        owner.agent_id,
         crate::model::AgentFingerprint(uuid::Uuid::from_u128(0xf1)),
         AgentTypeName("Relay".to_string()),
         owner.environment_id,
@@ -537,7 +537,7 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
         .unwrap(),
         OplogIndex::from_u64(84),
         middleware_activation.clone(),
-        crate::base_model::caller::test_support::sample_caller().immediate,
+        owner_principal(&owner),
         InvocationExecutionMode::ReplayingIncomplete,
         InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543214)),
         true,
