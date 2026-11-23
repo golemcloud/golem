@@ -16,7 +16,6 @@ use crate::repo::{Deps, TestDb, test_environment_default_card_record};
 use anyhow::Error;
 use assert2::{assert, check, let_assert};
 use async_trait::async_trait;
-use chrono::{Datelike, Utc};
 use futures::FutureExt;
 use futures::future::join_all;
 use golem_common::base_model::agent::{
@@ -185,6 +184,7 @@ use golem_service_base::storage::blob::{
     BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
 };
 use heck::ToKebabCase;
+use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::default::Default;
 use std::path::PathBuf;
@@ -487,8 +487,8 @@ fn runtime_card(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap(),
-        expires_at: Some(chrono::DateTime::from_timestamp(1_800_000_000, 987_654_321).unwrap()),
+        created_at: jiff::Timestamp::new(1_700_000_000, 123_456_789).unwrap(),
+        expires_at: Some(jiff::Timestamp::new(1_800_000_000, 987_654_321).unwrap()),
         system_card: false,
         managed_by: None,
     })
@@ -729,7 +729,7 @@ pub async fn test_runtime_card_parent_integrity(deps: &Deps) {
     let mut expired_parent = runtime_card(expired_parent_id, Vec::new())
         .into_concrete()
         .unwrap();
-    expired_parent.expires_at = Some(chrono::DateTime::from_timestamp(1_600_000_000, 0).unwrap());
+    expired_parent.expires_at = Some(jiff::Timestamp::new(1_600_000_000, 0).unwrap());
     services
         .card_service
         .create_runtime_card(
@@ -942,7 +942,7 @@ pub async fn test_component_deletion_racing_runtime_derivation(deps: &Deps) {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -1104,7 +1104,7 @@ pub async fn test_component_deletion_racing_multi_parent_runtime_derivation(deps
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -1275,7 +1275,7 @@ pub async fn test_component_deletion_racing_runtime_derivation_from_descendant(d
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -1674,7 +1674,7 @@ pub async fn test_update(deps: &Deps) {
 }
 
 pub async fn test_application_create(deps: &Deps) {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let owner = deps.create_account().await;
     let user = deps.create_account().await;
     let app_name = format!("app-name-{}", new_repo_uuid());
@@ -2789,7 +2789,7 @@ pub async fn test_environment_deletion_revokes_component_card_runtime_descendant
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -3540,7 +3540,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -3636,7 +3636,7 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -3841,7 +3841,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -3932,7 +3932,7 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -4044,7 +4044,7 @@ pub async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -4158,7 +4158,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -4655,7 +4655,9 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
             source: AccountResourceOverrideSource::SelfService,
             override_value: 5678.into(),
             reason: AccountResourceOverrideReason::UserSelfServe,
-            expires_at: Some(SqlDateTime::new(Utc::now() - chrono::Duration::seconds(1))),
+            expires_at: Some(SqlDateTime::new(
+                Timestamp::now() - jiff::SignedDuration::from_secs(1),
+            )),
             created_by: account.revision.account_id,
             created_at: now.clone(),
         })
@@ -4668,7 +4670,9 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
             source: AccountResourceOverrideSource::SelfService,
             override_value: 5678.into(),
             reason: AccountResourceOverrideReason::UserSelfServe,
-            expires_at: Some(SqlDateTime::new(Utc::now() - chrono::Duration::seconds(1))),
+            expires_at: Some(SqlDateTime::new(
+                Timestamp::now() - jiff::SignedDuration::from_secs(1),
+            )),
             created_by: account.revision.account_id,
             created_at: now.clone(),
         })
@@ -5335,7 +5339,7 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
         .await
         .unwrap();
 
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(1));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(1));
     let granted = deps
         .account_resource_override_repo
         .set_admin_grant(
@@ -5358,7 +5362,7 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
         .await
         .unwrap();
 
-    let cleanup_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(2));
+    let cleanup_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(2));
     assert!(
         deps.account_resource_override_repo
             .get_active_admin_grants(account_id, &cleanup_at)
@@ -5413,14 +5417,14 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
     assert_eq!(events[0].reason, AdminResourceGrantReason::Promotional);
     assert_eq!(events[0].actor_account_id, AccountId(account_id));
     assert_eq!(
-        events[0].changed_at.timestamp_micros(),
-        granted.changed_at.timestamp_micros()
+        events[0].changed_at.as_microsecond(),
+        granted.changed_at.as_microsecond()
     );
     assert_eq!(events[0].old_value, 5000);
     assert_eq!(events[0].new_value, finite_change_value(7000));
     assert_eq!(
-        events[0].expires_at.map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+        events[0].expires_at.map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
     assert_eq!(
         events[1].event_type,
@@ -5431,12 +5435,12 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
     assert_eq!(events[1].new_value, finite_change_value(6000));
     assert_eq!(events[1].actor_account_id, AccountId::SYSTEM);
     assert_eq!(
-        events[1].changed_at.timestamp_micros(),
-        cleanup_at.as_utc().timestamp_micros()
+        events[1].changed_at.as_microsecond(),
+        cleanup_at.as_utc().as_microsecond()
     );
     assert_eq!(
-        events[1].expires_at.map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+        events[1].expires_at.map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
 
     assert!(matches!(
@@ -5486,9 +5490,9 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
         i64::try_from(2 * FUEL_PER_GCU).unwrap(),
     );
     deps.account_usage_repo.add(&exhausted_usage).await.unwrap();
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::seconds(1));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_secs(1));
     let just_before_expiry =
-        SqlDateTime::new(expires_at.as_utc().to_owned() - chrono::Duration::microseconds(1));
+        SqlDateTime::new(expires_at.as_utc().to_owned() - jiff::SignedDuration::from_micros(1));
 
     let granted = deps
         .account_resource_override_repo
@@ -5538,14 +5542,14 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
         AccountId(account_id)
     );
     assert_eq!(
-        before_expiry.admin_grants[0].granted_at.timestamp_micros(),
-        granted_at.as_utc().timestamp_micros()
+        before_expiry.admin_grants[0].granted_at.as_microsecond(),
+        granted_at.as_utc().as_microsecond()
     );
     assert_eq!(
         before_expiry.admin_grants[0]
             .expires_at
-            .map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+            .map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
 
     let after_expiry = deps
@@ -5614,18 +5618,18 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
     );
     assert_eq!(events[1].actor_account_id, AccountId::SYSTEM);
     assert_eq!(
-        events[1].changed_at.timestamp_micros(),
-        replacement.changed_at.timestamp_micros()
+        events[1].changed_at.as_microsecond(),
+        replacement.changed_at.as_microsecond()
     );
     assert_eq!(
-        events[1].expires_at.map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+        events[1].expires_at.map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
     assert_eq!(
         deps.account_resource_override_repo
-            .cleanup_expired_admin_grants(
-                SqlDateTime::new(Utc::now() + chrono::Duration::hours(3),)
-            )
+            .cleanup_expired_admin_grants(SqlDateTime::new(
+                Timestamp::now() + jiff::SignedDuration::from_hours(3),
+            ))
             .await
             .unwrap(),
         0
@@ -5656,7 +5660,7 @@ pub async fn test_admin_grant_operations_observe_time_after_locks(deps: &Deps) {
     let replacement_account_id = replacement_account.revision.account_id;
     let clear_account_id = clear_account.revision.account_id;
     let dimension = AccountResourceOverrideDimension::MonthlyComputeGcu;
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::seconds(2));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_secs(2));
     for account_id in [replacement_account_id, clear_account_id] {
         deps.account_resource_override_repo
             .set_admin_grant(
@@ -5706,10 +5710,10 @@ pub async fn test_admin_grant_operations_observe_time_after_locks(deps: &Deps) {
         }
     });
     wait_for_postgres_locks(&pool, "FROM plans", 2).await;
-    let remaining = expires_at
+    let remaining: std::time::Duration = expires_at
         .as_utc()
-        .signed_duration_since(Utc::now())
-        .to_std()
+        .duration_since(Timestamp::now())
+        .try_into()
         .expect("grant expired before both operations reached the Plan lock");
     tokio::time::sleep(remaining + std::time::Duration::from_millis(50)).await;
     blocker.commit().await.unwrap();
@@ -5777,8 +5781,8 @@ pub async fn test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(d
     let account = deps.create_account().await;
     let account_id = account.revision.account_id;
     let mut plan = assign_grant_test_plan(deps, &account).await;
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(1));
-    let cleanup_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(2));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(1));
+    let cleanup_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(2));
     deps.account_resource_override_repo
         .set_admin_grant(
             account_id,
@@ -5851,14 +5855,14 @@ pub async fn test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(d
     );
     assert_eq!(monthly_expiry.actor_account_id, AccountId::SYSTEM);
     assert_eq!(
-        monthly_expiry.changed_at.timestamp_micros(),
-        cleanup_at.as_utc().timestamp_micros()
+        monthly_expiry.changed_at.as_microsecond(),
+        cleanup_at.as_utc().as_microsecond()
     );
     assert_eq!(
         monthly_expiry
             .expires_at
-            .map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+            .map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
     let storage_expiry = events
         .iter()
@@ -5920,7 +5924,8 @@ pub async fn test_plan_update_preserves_active_grants(deps: &Deps) {
             .unwrap();
     }
 
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::days(1));
+    let expires_at =
+        SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours((1) * 24));
     for (dimension, value) in [
         (AccountResourceOverrideDimension::MonthlyComputeGcu, 3),
         (
@@ -6278,8 +6283,10 @@ pub async fn test_multi_account_expiry_cleanup_uses_deadlock_safe_lock_order(dep
     ];
     account_ids.sort_unstable();
     let granted_at = SqlDateTime::now();
-    let expires_at = SqlDateTime::new(granted_at.as_utc().to_owned() + chrono::Duration::hours(1));
-    let cleanup_at = SqlDateTime::new(granted_at.as_utc().to_owned() + chrono::Duration::hours(2));
+    let expires_at =
+        SqlDateTime::new(granted_at.as_utc().to_owned() + jiff::SignedDuration::from_hours(1));
+    let cleanup_at =
+        SqlDateTime::new(granted_at.as_utc().to_owned() + jiff::SignedDuration::from_hours(2));
     for account_id in &account_ids {
         deps.account_resource_override_repo
             .upsert(AccountResourceOverrideRecord {
@@ -7725,8 +7732,10 @@ pub async fn test_account_usage_history(deps: &Deps) {
     use golem_service_base::model::auth::AuthCtx;
 
     let account = deps.create_account().await;
-    let previous_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(40));
-    let older_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(80));
+    let previous_month =
+        SqlDateTime::new(Timestamp::now() - jiff::SignedDuration::from_hours((40) * 24));
+    let older_month =
+        SqlDateTime::new(Timestamp::now() - jiff::SignedDuration::from_hours((80) * 24));
     let mut usage = deps
         .account_usage_repo
         .get(account.revision.account_id, &previous_month)
@@ -7760,8 +7769,8 @@ pub async fn test_account_usage_history(deps: &Deps) {
         .get_usage_history(
             account.revision.account_id,
             golem_common::model::account_usage::AccountUsagePeriod {
-                year: Utc::now().year(),
-                month: Utc::now().month(),
+                year: i32::from(jiff::tz::Offset::UTC.to_datetime(Timestamp::now()).year()),
+                month: (jiff::tz::Offset::UTC.to_datetime(Timestamp::now()).month() as u32),
             },
             1,
         )
@@ -8365,7 +8374,6 @@ pub async fn test_resource_reads_exclude_disabled_monthly_usage_and_baselines(de
 }
 
 pub async fn test_all_off_resource_reads_do_not_create_monthly_billing_rows(deps: &Deps) {
-    use chrono::TimeZone;
     use golem_common::model::account_usage::MeteringStatus;
     use golem_registry_service::services::account_usage::ResourceUsageUpdate;
     use golem_service_base::clients::registry::ResourceUsageMetering;
@@ -8471,10 +8479,11 @@ pub async fn test_all_off_resource_reads_do_not_create_monthly_billing_rows(deps
         (period.year, period.month + 1)
     };
     let next_month = SqlDateTime::new(
-        chrono::Utc
-            .with_ymd_and_hms(year, month, 1, 0, 0, 0)
-            .single()
-            .unwrap(),
+        jiff::civil::date(year as i16, month as i8, 1)
+            .at(0, 0, 0, 0)
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp(),
     );
     let next = deps
         .account_usage_repo

@@ -103,7 +103,7 @@ uu_dd = { version = "0.13", default-features = false }
 uu_du = { version = "0.13", default-features = false }
 futures = { workspace = true }
 thiserror = "2"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+jiff = "1.0.1"
 # GNU's date grammar for `find -newerXt` (relative dates, month names, offsets). Already in the
 # wasm build through uu_date/uu_touch; the same version the coreutils fork pins.
 parse_datetime = "0.16"

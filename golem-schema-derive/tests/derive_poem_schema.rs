@@ -37,6 +37,39 @@ use test_r::test;
 
 test_r::enable!();
 
+#[test]
+fn jiff_timestamps_have_datetime_schemas() {
+    use jiff::Timestamp;
+
+    #[derive(Serialize, Deserialize, PoemSchema)]
+    struct Timestamps {
+        required: Timestamp,
+        optional: Option<jiff::Timestamp>,
+        many: Vec<jiff::Timestamp>,
+    }
+
+    let mut registry = Registry::default();
+    Timestamps::register(&mut registry);
+    let schema = registry.schemas.get("Timestamps").unwrap();
+    let MetaSchemaRef::Inline(required) = &schema.properties[0].1 else {
+        panic!("timestamp schema must be inline");
+    };
+    assert_eq!(required.ty, "string");
+    assert_eq!(required.format, Some("date-time"));
+    let MetaSchemaRef::Inline(optional) = &schema.properties[1].1 else {
+        panic!("optional timestamp schema must be inline");
+    };
+    assert!(optional.nullable);
+    assert_eq!(optional.format, Some("date-time"));
+    let value = serde_json::to_value(Timestamps {
+        required: Timestamp::UNIX_EPOCH,
+        optional: Some(Timestamp::new(-1, 123456789).unwrap()),
+        many: vec![Timestamp::UNIX_EPOCH],
+    })
+    .unwrap();
+    validate(&registry, &Timestamps::schema_ref(), &value).unwrap();
+}
+
 mod recursive_internal_newtype {
     use super::*;
     use test_r::test;

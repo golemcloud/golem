@@ -66,7 +66,7 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use arc_swap::ArcSwap;
-use chrono::Utc;
+
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
 use golem_common::model::InvocationId;
@@ -1599,7 +1599,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             self.deps
                 .scheduler_service()
                 .schedule(
-                    Utc::now() + archive_interval,
+                    jiff::Timestamp::now() + archive_interval,
                     ScheduledAction::ArchiveOplog {
                         account_id: self.created_by,
                         owned_agent_id: self.owned_agent_id.clone(),

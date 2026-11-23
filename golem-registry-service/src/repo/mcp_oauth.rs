@@ -413,10 +413,10 @@ impl DbMcpOAuthGrantRepo<PostgresPool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration, Utc};
     use golem_common::config::DbSqliteConfig;
     use golem_service_base::db;
     use golem_service_base::migration::{Migrations, MigrationsDir};
+    use jiff::{SignedDuration, Timestamp};
     use std::path::PathBuf;
     use test_r::test;
 
@@ -490,7 +490,7 @@ mod tests {
             session: flow(marker).session,
             access_token: format!("access-{marker}"),
             refresh_token: Some(format!("refresh-{marker}")),
-            expires_at: Some(Utc::now() + Duration::hours(1)),
+            expires_at: Some(Timestamp::now() + SignedDuration::from_hours(1)),
             scopes: vec!["tools".into()],
         }
     }
@@ -503,13 +503,13 @@ mod tests {
             .begin_authorization(
                 key.clone(),
                 b"expired".to_vec(),
-                (Utc::now() - Duration::seconds(1)).into(),
+                (Timestamp::now() - SignedDuration::from_secs(1)).into(),
                 flow("expired"),
             )
             .await
             .unwrap();
         assert!(
-            repo.claim_callback(key.environment_id, b"expired", Utc::now().into())
+            repo.claim_callback(key.environment_id, b"expired", Timestamp::now().into())
                 .await
                 .unwrap()
                 .is_none()
@@ -518,26 +518,26 @@ mod tests {
             .begin_authorization(
                 key.clone(),
                 b"state".to_vec(),
-                (Utc::now() + Duration::minutes(5)).into(),
+                (Timestamp::now() + SignedDuration::from_mins(5)).into(),
                 flow("one"),
             )
             .await
             .unwrap();
         assert_ne!(expired.generation, auth.generation);
         assert!(
-            repo.claim_callback(Uuid::new_v4(), b"state", Utc::now().into())
+            repo.claim_callback(Uuid::new_v4(), b"state", Timestamp::now().into())
                 .await
                 .unwrap()
                 .is_none()
         );
         let claim = repo
-            .claim_callback(key.environment_id, b"state", Utc::now().into())
+            .claim_callback(key.environment_id, b"state", Timestamp::now().into())
             .await
             .unwrap()
             .unwrap();
         assert_eq!(claim.flow.pkce_verifier, "pkce-one");
         assert!(
-            repo.claim_callback(key.environment_id, b"state", Utc::now().into())
+            repo.claim_callback(key.environment_id, b"state", Timestamp::now().into())
                 .await
                 .unwrap()
                 .is_none()
@@ -594,7 +594,7 @@ mod tests {
             expired.tokens.as_ref().unwrap().refresh_token,
             refresh_token
         );
-        assert!(expired.tokens.unwrap().expires_at.unwrap() <= Utc::now());
+        assert!(expired.tokens.unwrap().expires_at.unwrap() <= Timestamp::now());
         assert!(
             !repo
                 .expire_access_token(&key, current.generation, SqlDateTime::now())
@@ -624,7 +624,7 @@ mod tests {
             .begin_authorization(
                 key.clone(),
                 b"new".to_vec(),
-                (Utc::now() + Duration::minutes(5)).into(),
+                (Timestamp::now() + SignedDuration::from_mins(5)).into(),
                 flow("new"),
             )
             .await
@@ -672,12 +672,12 @@ mod tests {
             .begin_authorization(
                 key.clone(),
                 b"state".to_vec(),
-                (Utc::now() + Duration::minutes(5)).into(),
+                (Timestamp::now() + SignedDuration::from_mins(5)).into(),
                 flow("initial"),
             )
             .await
             .unwrap();
-        repo.claim_callback(key.environment_id, b"state", Utc::now().into())
+        repo.claim_callback(key.environment_id, b"state", Timestamp::now().into())
             .await
             .unwrap()
             .unwrap();

@@ -729,7 +729,7 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
             lower_negative: vec![],
             upper_positive: vec![],
             upper_negative: vec![],
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: true,
         });

@@ -88,7 +88,7 @@ impl Rpc for CreateThenHangRpc {
         expected_fingerprint: AgentFingerprint,
         request_key: InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
         self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {

@@ -840,7 +840,7 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
                 worker
                     .schedule_invocation(
                         invocation,
-                        chrono::Utc::now() + chrono::Duration::hours(1),
+                        jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
                     )
                     .await
                     .expect_err("a failed constructor must refuse a new schedule")
@@ -1296,7 +1296,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
     for schedule_at in [
         None,
         Some(prost_types::Timestamp {
-            seconds: chrono::Utc::now().timestamp() + 1,
+            seconds: jiff::Timestamp::now().as_second() + 1,
             nanos: 0,
         }),
     ] {
@@ -1343,7 +1343,10 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
         golem_common::model::ShardAssignment::unexpiring(1, [golem_common::model::ShardId::new(0)]);
     assert_eq!(
         scheduler
-            .count_due(chrono::Utc::now() + chrono::Duration::days(1), &assignment)
+            .count_due(
+                jiff::Timestamp::now() + jiff::SignedDuration::from_hours((1) * 24),
+                &assignment
+            )
             .await?,
         0,
         "rejection must not create an immediate or delayed scheduled action"
@@ -2008,7 +2011,7 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             ),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: Some(prost_types::Timestamp {
-                seconds: chrono::Utc::now().timestamp() + 3,
+                seconds: jiff::Timestamp::now().as_second() + 3,
                 nanos: 0,
             }),
             idempotency_key: Some(idempotency_key.into()),
@@ -3167,7 +3170,7 @@ async fn assert_every_mode_refuses_fingerprint(
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::worker::AgentInvocationMode;
     let later = prost_types::Timestamp {
-        seconds: chrono::Utc::now().timestamp() + 3600,
+        seconds: jiff::Timestamp::now().as_second() + 3600,
         nanos: 0,
     };
     for (mode, schedule_at) in [

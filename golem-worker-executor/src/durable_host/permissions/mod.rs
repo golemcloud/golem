@@ -104,7 +104,7 @@ use crate::services::card::{CardRevokeResult, CardState, RuntimeCardCreation};
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use chrono::{DateTime, TimeDelta, Utc};
+
 use desert_rust::{BinaryCodec, BinaryDeserializer, BinarySerializer};
 use golem_common::base_model::oplog::QueuedCardEventTransfer;
 use golem_common::model::account::AccountEmail;
@@ -196,7 +196,7 @@ struct DerivedGrantSets<P = PolymorphicPermissionPattern> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ScopeDerivationParent {
     root_card_ids: Vec<CardId>,
-    expires_at: Option<DateTime<Utc>>,
+    expires_at: Option<jiff::Timestamp>,
     delegation: DelegationCard,
 }
 
@@ -214,14 +214,14 @@ enum DecidedScopeParent {
 
 async fn durable_now<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> anyhow::Result<DateTime<Utc>> {
+) -> anyhow::Result<jiff::Timestamp> {
     let now =
         <DurableWorkerCtx<Ctx> as wasmtime_wasi::p2::bindings::clocks::wall_clock::Host>::now(ctx)
             .await?;
     let seconds = i64::try_from(now.seconds)
         .map_err(|_| anyhow!("durable wall-clock timestamp is out of range"))?;
-    DateTime::from_timestamp(seconds, now.nanoseconds)
-        .ok_or_else(|| anyhow!("durable wall-clock timestamp is invalid"))
+    jiff::Timestamp::new(seconds, (now.nanoseconds) as i32)
+        .map_err(|_| anyhow!("durable wall-clock timestamp is invalid"))
 }
 
 #[derive(Clone, Copy)]

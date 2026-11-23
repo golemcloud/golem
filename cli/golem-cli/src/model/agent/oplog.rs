@@ -1909,7 +1909,7 @@ mod tests {
                         secret_id,
                         config_key: Some(vec!["database".to_string(), "password".to_string()]),
                         version: 7,
-                        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                        resolved_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
                         category: Some("api-key".to_string()),
                     }),
                     SchemaValue::QuotaToken(QuotaTokenValuePayload {
@@ -1917,7 +1917,7 @@ mod tests {
                         resource_name: "private-quota-resource".to_string(),
                         expected_use: 1,
                         last_credit: 0,
-                        last_credit_at: chrono::DateTime::from_timestamp(1_700_000_001, 0).unwrap(),
+                        last_credit_at: jiff::Timestamp::new(1_700_000_001, 0).unwrap(),
                     }),
                     SchemaValue::PermissionCard(PermissionCardValuePayload {
                         card_id: permission_card_id,

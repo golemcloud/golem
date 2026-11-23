@@ -210,6 +210,24 @@ fn bytes_schema_round_trip() {
     assert_eq!(bytes::Bytes::from_value(&value.to_value()).unwrap(), value);
 }
 
+#[cfg(feature = "bit_vec")]
+#[test]
+fn bit_vec_schema_round_trip() {
+    use golem_rust::schema::wit::direct::{decode, encode};
+
+    for value in [
+        bit_vec::BitVec::new(),
+        bit_vec::BitVec::from_iter([true, false, true, true, false, false, true, false, true]),
+    ] {
+        let encoded = value.to_value();
+        assert_eq!(bit_vec::BitVec::from_value(&encoded).unwrap(), value);
+        assert_eq!(
+            decode::<bit_vec::BitVec>(encode(&value).unwrap()).unwrap(),
+            value
+        );
+    }
+}
+
 #[cfg(feature = "mac_address")]
 #[test]
 fn mac_address_schema_round_trip() {

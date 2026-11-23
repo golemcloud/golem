@@ -32,7 +32,7 @@ use crate::schema::validation::value::PreparedValueValidator;
 use crate::schema::validation::value::{
     ValueError, ValuePathSegment, validate_record_fields, validate_value,
 };
-use chrono::Utc;
+use jiff::Timestamp;
 use proptest::prelude::*;
 use test_r::test;
 
@@ -145,7 +145,9 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
         }),
         Just((
             SchemaType::datetime(),
-            SchemaValue::Datetime { value: Utc::now() }
+            SchemaValue::Datetime {
+                value: Timestamp::now()
+            }
         )),
         any::<i64>().prop_map(|n| (
             SchemaType::duration(),
@@ -170,7 +172,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                 secret_id: uuid::Uuid::nil(),
                 config_key: None,
                 version: 0,
-                resolved_at: Utc::now(),
+                resolved_at: Timestamp::now(),
                 category: None,
             })
         )),
@@ -185,7 +187,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                     resource_name: resource,
                     expected_use: 1,
                     last_credit: 0,
-                    last_credit_at: Utc::now(),
+                    last_credit_at: Timestamp::now(),
                 }),
             )
         }),

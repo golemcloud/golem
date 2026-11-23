@@ -35,13 +35,13 @@ use crate::oplog_export::model::{
 };
 use crate::oplog_export::obfuscator::{KeepFlags, TokenKey};
 use async_trait::async_trait;
-use chrono::Utc;
 use golem_client::api::WorkerClient;
 use golem_common::base_model::api::error_code;
 use golem_common::model::AgentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogCursor, OplogScanAllowance, PublicOplogEntryWithIndex};
+use jiff::Timestamp;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -186,7 +186,7 @@ pub fn export_options(
         query,
         page_size,
         cli_version: crate::version().to_string(),
-        generated_at: Utc::now().to_rfc3339(),
+        generated_at: Timestamp::now().to_string(),
     }
 }
 
@@ -311,7 +311,7 @@ pub async fn oplog_export_report(
         query: None,
         page_size: ctx.http_batch_size(),
         cli_version: crate::version().to_string(),
-        generated_at: Utc::now().to_rfc3339(),
+        generated_at: Timestamp::now().to_string(),
     };
     let reads = RestOplogReads {
         ctx: ctx.clone(),

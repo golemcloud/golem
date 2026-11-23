@@ -23,7 +23,6 @@ use super::resource_definition_fetcher::{FetchError, ResourceDefinitionFetcher};
 use crate::config::QuotaServiceConfig;
 use crate::sharding::persistence::ExternalRevision;
 use async_trait::async_trait;
-use chrono::Utc;
 use golem_common::model::Pod;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::LeaseEpoch;
@@ -33,6 +32,7 @@ use golem_common::model::quota::{
     ResourceRateLimit, TimePeriod,
 };
 use golem_service_base::repo::Blob;
+use jiff::Timestamp;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -1258,7 +1258,7 @@ async fn capacity_limit_does_not_refill() {
 /// `count` one-slot leases on a 200-slot concurrency resource, all expired, the `i`-th expiring
 /// `i` milliseconds after the first.
 fn state_with_expired_leases(count: usize) -> QuotaState {
-    let first_expiry = Utc::now() - chrono::Duration::minutes(5);
+    let first_expiry = Timestamp::now() - jiff::SignedDuration::from_mins(5);
     let leases = (0..count)
         .map(|i| {
             let pod = Pod {
@@ -1268,8 +1268,8 @@ fn state_with_expired_leases(count: usize) -> QuotaState {
             let lease = PodLease {
                 epoch: LeaseEpoch(1),
                 allocated: 1,
-                granted_at: first_expiry - chrono::Duration::minutes(1),
-                expires_at: first_expiry + chrono::Duration::milliseconds(i as i64),
+                granted_at: first_expiry - jiff::SignedDuration::from_mins(1),
+                expires_at: first_expiry + jiff::SignedDuration::from_millis(i as i64),
                 pending_reservations: vec![],
             };
             (pod, lease)
@@ -1278,8 +1278,8 @@ fn state_with_expired_leases(count: usize) -> QuotaState {
     QuotaState::from_persisted(
         make_concurrency_definition(env_id(), "slots", 200),
         200 - count as u64,
-        Utc::now(),
-        Utc::now(),
+        Timestamp::now(),
+        Timestamp::now(),
         leases,
     )
 }

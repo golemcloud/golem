@@ -18,7 +18,7 @@ use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use axum::Router;
 use axum::routing::get;
-use chrono::{DateTime, Utc};
+
 use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem::worker::{UpdateMode, log_event};
 use golem_common::model::account::AccountId;
@@ -1556,7 +1556,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<jiff::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -1886,7 +1886,7 @@ async fn card_transfer_to_an_unknown_agent_does_not_create_it(
         lower_negative: vec![],
         upper_positive: vec![],
         upper_negative: vec![],
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -6483,13 +6483,18 @@ async fn stale_scheduled_actions_do_not_recreate_or_mutate_agents(
             storage
                 .insert(
                     ScheduleId::fresh(),
-                    Utc::now(),
+                    jiff::Timestamp::now(),
                     ShardId::new(0),
                     &serialize(&action).map_err(anyhow::Error::msg)?,
                 )
                 .await?;
             tokio::time::timeout(Duration::from_secs(30), async {
-                while storage.count_due(Utc::now(), &assignment).await.unwrap() != 0 {
+                while storage
+                    .count_due(jiff::Timestamp::now(), &assignment)
+                    .await
+                    .unwrap()
+                    != 0
+                {
                     tokio::task::yield_now().await;
                 }
             })
@@ -9077,7 +9082,7 @@ async fn scheduled_invocation(
         let late_server = executor
             .start_agent(&component.id, late_server_agent_id.clone())
             .await?;
-        let due = Utc::now() + chrono::Duration::seconds(3);
+        let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(3);
         executor
             .invoke_and_await_agent_as_caller(
                 &component,
@@ -9086,8 +9091,8 @@ async fn scheduled_invocation(
                 "schedule_at",
                 data_value!(
                     late_server_name,
-                    due.timestamp() as u64,
-                    due.timestamp_subsec_nanos()
+                    due.as_second() as u64,
+                    due.subsec_nanosecond() as u32
                 ),
             )
             .await?;
@@ -9101,7 +9106,7 @@ async fn scheduled_invocation(
             )
             .await?;
         assert!(
-            Utc::now() < due,
+            jiff::Timestamp::now() < due,
             "the second caller must reach the client before the scheduled call runs"
         );
         loop {
@@ -9191,7 +9196,7 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
     let pending_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let complete_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let raced_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
-    let deadline = Utc::now() + chrono::Duration::hours(1);
+    let deadline = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
     let request =
         |key: &golem_common::model::InvocationId, value, scope_card| AgentInvocation::AgentMethod {
             idempotency_key: *key,
@@ -9238,7 +9243,7 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
             worker
                 .schedule_invocation(
                     request(&pending_key, 17u64, None),
-                    deadline + chrono::Duration::hours(1)
+                    deadline + jiff::SignedDuration::from_hours(1)
                 )
                 .await?,
             receipt,
@@ -9302,9 +9307,10 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
                         pending_count += 1;
                         assert_eq!(
                             parameters.not_before.unwrap().to_millis(),
-                            deadline.timestamp_millis() as u64
+                            deadline.as_millisecond() as u64
                                 + u64::from(
-                                    !deadline.timestamp_subsec_nanos().is_multiple_of(1_000_000)
+                                    !(deadline.subsec_nanosecond() as u32)
+                                        .is_multiple_of(1_000_000)
                                 )
                         );
                     }
@@ -9370,7 +9376,7 @@ async fn grpc_schedule_commits_pending_without_loading_target(
     )
     .id();
     assert_ne!(key.to_string(), raw_key.value);
-    let future = Utc::now() + chrono::Duration::hours(1);
+    let future = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
 
     for round in 0..2 {
         if round == 1 {
@@ -9380,8 +9386,8 @@ async fn grpc_schedule_commits_pending_without_loading_target(
         // A repair may change its proposed deadline, but cannot change the accepted input.
         for (at, value) in [
             (future, 101u64),
-            (future + chrono::Duration::hours(1), 101),
-            (future + chrono::Duration::hours(1), 999),
+            (future + jiff::SignedDuration::from_hours(1), 101),
+            (future + jiff::SignedDuration::from_hours(1), 999),
         ] {
             let (_, input) = data_value!(value).into_parts();
             let request = InvocationRequest {
@@ -9398,8 +9404,8 @@ async fn grpc_schedule_commits_pending_without_loading_target(
                     mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule
                         as i32,
                     schedule_at: Some(prost_types::Timestamp {
-                        seconds: at.timestamp(),
-                        nanos: at.timestamp_subsec_nanos() as i32,
+                        seconds: at.as_second(),
+                        nanos: at.subsec_nanosecond() as u32 as i32,
                     }),
                     caller: Some(callers::anonymous().into()),
                     ..Default::default()
@@ -9468,8 +9474,8 @@ async fn grpc_schedule_commits_pending_without_loading_target(
         })
         .collect::<Vec<_>>();
         assert_eq!(pending.len(), 1);
-        let expected_millis = future.timestamp_millis() as u64
-            + u64::from(!future.timestamp_subsec_nanos().is_multiple_of(1_000_000));
+        let expected_millis = future.as_millisecond() as u64
+            + u64::from(!(future.subsec_nanosecond() as u32).is_multiple_of(1_000_000));
         assert_eq!(pending[0].not_before.unwrap().to_millis(), expected_millis);
         let PublicAgentInvocation::AgentMethodInvocation(method) = &pending[0].invocation else {
             unreachable!()
@@ -9528,7 +9534,7 @@ async fn due_wake_runs_scheduled_invocation_on_unloaded_target(
     })
     .await??;
 
-    let due = Utc::now() + chrono::Duration::seconds(3);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(3);
     executor
         .invoke_and_await_agent(
             &component,
@@ -9536,8 +9542,8 @@ async fn due_wake_runs_scheduled_invocation_on_unloaded_target(
             "schedule_at",
             data_value!(
                 server_name.to_string(),
-                due.timestamp() as u64,
-                due.timestamp_subsec_nanos()
+                due.as_second() as u64,
+                due.subsec_nanosecond() as u32
             ),
         )
         .await?;
@@ -9641,7 +9647,7 @@ async fn owner_load_restores_lost_invocation_wake(
         async fn insert(
             &self,
             id: ScheduleId,
-            due: chrono::DateTime<Utc>,
+            due: jiff::Timestamp,
             shard: ShardId,
             action: &[u8],
         ) -> Result<(), SchedulerStorageError> {
@@ -9661,7 +9667,7 @@ async fn owner_load_restores_lost_invocation_wake(
 
         async fn claim_due(
             &self,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
             assignment: &ShardAssignment,
             limit: u32,
             ttl: Duration,
@@ -9671,7 +9677,7 @@ async fn owner_load_restores_lost_invocation_wake(
 
         async fn count_due(
             &self,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
             assignment: &ShardAssignment,
         ) -> Result<u64, SchedulerStorageError> {
             self.inner.count_due(now, assignment).await
@@ -9681,8 +9687,8 @@ async fn owner_load_restores_lost_invocation_wake(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
-            until: chrono::DateTime<Utc>,
-            now: chrono::DateTime<Utc>,
+            until: jiff::Timestamp,
+            now: jiff::Timestamp,
         ) -> Result<bool, SchedulerStorageError> {
             self.inner.extend_lease(id, owner, until, now).await
         }
@@ -9691,7 +9697,7 @@ async fn owner_load_restores_lost_invocation_wake(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
         ) -> Result<bool, SchedulerStorageError> {
             self.inner.ack(id, owner, now).await
         }
@@ -9721,13 +9727,13 @@ async fn owner_load_restores_lost_invocation_wake(
     let caller = agent_key!("ScheduledInvocationClient", "lost-wake-owner");
     let target = executor.start_agent(&component.id, server.clone()).await?;
     executor.start_agent(&component.id, caller.clone()).await?;
-    let due = Utc::now() + chrono::Duration::seconds(20);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(20);
     executor
         .invoke_and_await_agent(
             &component,
             &caller,
             "schedule_at",
-            data_value!(server_name.to_string(), due.timestamp() as u64, 0u32),
+            data_value!(server_name.to_string(), due.as_second() as u64, 0u32),
         )
         .await?;
     assert!(
@@ -9747,7 +9753,7 @@ async fn owner_load_restores_lost_invocation_wake(
         0
     );
     assert!(
-        Utc::now() < due,
+        jiff::Timestamp::now() < due,
         "the owner load must precede the scheduled deadline"
     );
 
@@ -9841,7 +9847,7 @@ async fn local_schedule_rejects_recreated_cached_target(
                 caller: callers::anonymous(),
                 scope_card: None,
             },
-            Utc::now() + chrono::Duration::hours(1),
+            jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
             &target.agent_id,
             &AuthCtx::System,
         )
@@ -9891,7 +9897,7 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
     let started_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
 
     for (key, value, cancel_wins) in [(cancelled_key, 71u64, true), (started_key, 29u64, false)] {
-        let due = Utc::now() + chrono::Duration::seconds(5);
+        let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(5);
         let receipt = worker
             .schedule_invocation(
                 AgentInvocation::AgentMethod {
@@ -9937,7 +9943,7 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
             let (selected, release_selection) =
                 executor.gate_next_oplog_read(&target.agent_id, pending.oplog_index);
             assert!(
-                Utc::now() < due,
+                jiff::Timestamp::now() < due,
                 "the selection gate must precede the deadline"
             );
             tokio::time::timeout(Duration::from_secs(30), selected)
@@ -9967,7 +9973,7 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
                 .gate_next_invocation_started_append(&target.agent_id)
                 .await;
             assert!(
-                Utc::now() < due,
+                jiff::Timestamp::now() < due,
                 "the Started gate must precede the deadline"
             );
             assert!(
@@ -10103,7 +10109,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         };
     let owned = target.clone();
     let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
-    let due = Utc::now() + chrono::Duration::seconds(5);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(5);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let receipt = worker
         .schedule_invocation(invocation(&key, 71), due)
@@ -10167,7 +10173,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         }
     })
     .await??;
-    assert!(Utc::now() >= due);
+    assert!(jiff::Timestamp::now() >= due);
     assert_eq!(
         worker
             .schedule_invocation(invocation(&key, 71), due)
@@ -10242,7 +10248,7 @@ async fn scheduled_cancellation_by_another_agent_is_refused(
         .await?;
     let owned = target.clone();
     let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
-    let due = Utc::now() + chrono::Duration::seconds(5);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(5);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let receipt = worker
         .schedule_invocation(
@@ -10331,13 +10337,13 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
         anyhow::Ok(())
     })
     .await??;
-    let due = Utc::now() + chrono::Duration::hours(1);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
     executor
         .invoke_and_await_agent(
             &component,
             &caller,
             "schedule_at",
-            data_value!(server_name.to_string(), due.timestamp() as u64, 0u32),
+            data_value!(server_name.to_string(), due.as_second() as u64, 0u32),
         )
         .await?;
     assert!(!executor.worker_is_loaded(&owned).await);
@@ -10351,7 +10357,7 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
     let key = *scheduled[0].idempotency_key().unwrap();
     assert_eq!(
         scheduled[0].not_before.unwrap().to_millis(),
-        due.timestamp() as u64 * 1000
+        due.as_second() as u64 * 1000
     );
     let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint;
     let receipt = ScheduleId::for_invocation(fingerprint, &key);
@@ -12528,7 +12534,7 @@ async fn send_increment(
         ),
         mode: mode as i32,
         schedule_at: delayed.then(|| prost_types::Timestamp {
-            seconds: chrono::Utc::now().timestamp() + 3600,
+            seconds: jiff::Timestamp::now().as_second() + 3600,
             nanos: 0,
         }),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
@@ -12798,7 +12804,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
         async fn insert(
             &self,
             id: ScheduleId,
-            due: chrono::DateTime<Utc>,
+            due: jiff::Timestamp,
             shard: ShardId,
             action: &[u8],
         ) -> Result<(), SchedulerStorageError> {
@@ -12811,7 +12817,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
 
         async fn claim_due(
             &self,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
             assignment: &ShardAssignment,
             limit: u32,
             ttl: Duration,
@@ -12836,7 +12842,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
 
         async fn count_due(
             &self,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
             assignment: &ShardAssignment,
         ) -> Result<u64, SchedulerStorageError> {
             self.inner.count_due(now, assignment).await
@@ -12846,8 +12852,8 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
-            until: chrono::DateTime<Utc>,
-            now: chrono::DateTime<Utc>,
+            until: jiff::Timestamp,
+            now: jiff::Timestamp,
         ) -> Result<bool, SchedulerStorageError> {
             self.inner.extend_lease(id, owner, until, now).await
         }
@@ -12856,7 +12862,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
         ) -> Result<bool, SchedulerStorageError> {
             if self.wakes.lock().unwrap().contains(id) {
                 self.wake_acked.store(true, Ordering::Release);
@@ -12952,7 +12958,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             ),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: Some(prost_types::Timestamp {
-                seconds: chrono::Utc::now().timestamp() + 1,
+                seconds: jiff::Timestamp::now().as_second() + 1,
                 nanos: 0,
             }),
             idempotency_key: Some(IdempotencyKey::fresh().into()),

@@ -16,7 +16,7 @@ use super::golem_config::WorkerServiceGrpcConfig;
 use super::rpc::DurableStreamRemoteError;
 use crate::worker::target::ResolvedTarget;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use desert_rust::BinaryCodec;
 use futures::Stream;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
@@ -162,7 +162,7 @@ pub trait WorkerProxy: Send + Sync {
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<jiff::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -549,7 +549,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<jiff::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -570,8 +570,8 @@ impl WorkerProxy for RemoteWorkerProxy {
         let proto_mode = proto_mode as i32;
 
         let proto_schedule_at = schedule_at.map(|dt| prost_types::Timestamp {
-            seconds: dt.timestamp(),
-            nanos: dt.timestamp_subsec_nanos() as i32,
+            seconds: dt.as_nanosecond().div_euclid(1_000_000_000) as i64,
+            nanos: dt.as_nanosecond().rem_euclid(1_000_000_000) as i32,
         });
 
         let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =

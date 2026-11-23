@@ -47,7 +47,6 @@ async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 cookie = { workspace = true }
 dashmap = { workspace = true }
@@ -67,6 +66,7 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 include_dir = { workspace = true }
 ipnet = { workspace = true }
+jiff = { workspace = true }
 jsonschema = { workspace = true }
 mime = { workspace = true }
 mime_guess = { workspace = true }
@@ -96,6 +96,7 @@ sqlx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
+time = { workspace = true, features = ["parsing"] }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }

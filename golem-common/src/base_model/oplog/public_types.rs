@@ -248,7 +248,7 @@ mod host_managed_redaction_tests {
     use crate::schema::{
         SchemaGraph, SchemaType, SchemaValue, SecretValuePayload, find_host_managed_value,
     };
-    use chrono::{TimeZone, Utc};
+    use jiff::Timestamp as JiffTimestamp;
     use test_r::test;
 
     fn secret() -> TypedSchemaValue {
@@ -258,7 +258,7 @@ mod host_managed_redaction_tests {
                 secret_id: uuid::Uuid::nil(),
                 config_key: Some(vec!["credential".to_string()]),
                 version: 7,
-                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                resolved_at: JiffTimestamp::UNIX_EPOCH,
                 category: None,
             }),
         )

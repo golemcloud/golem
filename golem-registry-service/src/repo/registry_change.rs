@@ -794,8 +794,9 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
     }
 
     async fn cleanup_old_events(&self, retention_seconds: i64) -> RepoResult<u64> {
-        let cutoff =
-            SqlDateTime::new(chrono::Utc::now() - chrono::Duration::seconds(retention_seconds));
+        let cutoff = SqlDateTime::new(
+            jiff::Timestamp::now() - jiff::SignedDuration::from_secs(retention_seconds),
+        );
         let result = self
             .with_rw("cleanup_old_events")
             .execute(
@@ -919,8 +920,9 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
     }
 
     async fn cleanup_old_events(&self, retention_seconds: i64) -> RepoResult<u64> {
-        let cutoff =
-            SqlDateTime::new(chrono::Utc::now() - chrono::Duration::seconds(retention_seconds));
+        let cutoff = SqlDateTime::new(
+            jiff::Timestamp::now() - jiff::SignedDuration::from_secs(retention_seconds),
+        );
         let result = self
             .with_rw("cleanup_old_events")
             .execute(

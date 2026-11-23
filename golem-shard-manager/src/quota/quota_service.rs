@@ -19,7 +19,6 @@ use super::resource_definition_fetcher::{FetchError, ResourceDefinitionFetcher};
 use crate::config::QuotaServiceConfig;
 use crate::sharding::persistence::{ExternalRevision, NO_REVISION};
 use anyhow::anyhow;
-use chrono::Utc;
 use golem_common::model::Pod;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::LeaseEpoch;
@@ -27,6 +26,7 @@ use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::{IntoAnyhow, SafeDisplay};
 use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::Blob;
+use jiff::Timestamp;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -369,7 +369,7 @@ impl QuotaService {
     fn unlimited_lease(&self, pod: Pod) -> QuotaLease {
         QuotaLease::Unlimited {
             pod,
-            expires_at: Utc::now() + self.lease_duration,
+            expires_at: Timestamp::now() + self.lease_duration,
         }
     }
 

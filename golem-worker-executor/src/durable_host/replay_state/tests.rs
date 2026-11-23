@@ -244,7 +244,7 @@ fn stored_test_card(card_id: CardId) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -2698,7 +2698,7 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
     let StoredCard::Concrete(card_data) = &mut card else {
         unreachable!("the test fixture always creates a concrete card");
     };
-    card_data.expires_at = Some(chrono::DateTime::UNIX_EPOCH);
+    card_data.expires_at = Some(jiff::Timestamp::UNIX_EPOCH);
 
     // ReplayState's complete input is this oplog. In particular, it has no clock, card service,
     // effective surface, or authorization callback. An already-expired card therefore remains a
@@ -15091,7 +15091,7 @@ fn wallet_test_component(
             Vec::new(),
             Default::default(),
         ),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         package_metadata: None,
         object_store_key: "wallet-prefixes".to_string(),
@@ -15402,7 +15402,7 @@ async fn runtime_card_audits_use_physical_predecessors_independent_of_lookup_ord
                 if let OplogEntry::CardDerived { card, .. } = &mut entries[13]
                     && let StoredCard::Concrete(card) = card.as_mut()
                 {
-                    card.expires_at = Some(chrono::DateTime::UNIX_EPOCH);
+                    card.expires_at = Some(jiff::Timestamp::UNIX_EPOCH);
                 }
             }
             3 => {

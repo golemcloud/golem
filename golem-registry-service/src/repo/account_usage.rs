@@ -22,7 +22,6 @@ use crate::repo::model::account_usage::{
     billable_excess_delta, exact_usage_delta,
 };
 use async_trait::async_trait;
-use chrono::Datelike;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -873,8 +872,8 @@ impl DbAccountUsageRepo<PostgresPool> {
         self.with_tx("get", |tx| {
             async move {
                 let period = AccountUsagePeriod {
-                    year: date.as_utc().year(),
-                    month: date.as_utc().month(),
+                    year: i32::from(jiff::tz::Offset::UTC.to_datetime(*date.as_utc()).year()),
+                    month: (jiff::tz::Offset::UTC.to_datetime(*date.as_utc()).month() as u32),
                 };
                 let (monthly_policy_revision, account_plan) = if let Some(metering) = metering.filter(|metering| metering.any_enabled()) {
                     let Some(resolved_policy) = Self::resolve_monthly_policy_revision_in_tx(
@@ -998,8 +997,8 @@ impl DbAccountUsageRepo<PostgresPool> {
                 let monthly_usage_mode = account_plan.monthly_usage_mode()?;
                 let account_usage = AccountUsage {
                     account_id,
-                    year: date.as_utc().year(),
-                    month: date.as_utc().month(),
+                    year: i32::from(jiff::tz::Offset::UTC.to_datetime(*date.as_utc()).year()),
+                    month: (jiff::tz::Offset::UTC.to_datetime(*date.as_utc()).month() as u32),
                     usage,
                     storage_limit: storage_limit(&account_plan),
                     max_memory_per_worker: max_memory_per_worker(&account_plan),
@@ -1080,14 +1079,20 @@ impl DbAccountUsageRepo<PostgresPool> {
         previous_mode: MonthlyUsageMode,
         new_mode: MonthlyUsageMode,
     ) -> RepoResult<PersistedMonthlyUsageModeTransition> {
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         let changed_at = SqlDateTime::new(
-            chrono::DateTime::from_timestamp_micros(now.timestamp_micros())
+            jiff::Timestamp::from_microsecond(now.as_microsecond())
                 .expect("current timestamp is representable at microsecond precision"),
         );
         let period = AccountUsagePeriod {
-            year: changed_at.as_utc().year(),
-            month: changed_at.as_utc().month(),
+            year: i32::from(
+                jiff::tz::Offset::UTC
+                    .to_datetime(*changed_at.as_utc())
+                    .year(),
+            ),
+            month: (jiff::tz::Offset::UTC
+                .to_datetime(*changed_at.as_utc())
+                .month() as u32),
         };
         let baseline = Self::usage_baseline_in_tx(
             tx,
@@ -1402,8 +1407,8 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         let monthly_usage_mode = account_plan.monthly_usage_mode()?;
         Ok(Some(AccountUsage {
             account_id,
-            year: date.as_utc().year(),
-            month: date.as_utc().month(),
+            year: i32::from(jiff::tz::Offset::UTC.to_datetime(*date.as_utc()).year()),
+            month: (jiff::tz::Offset::UTC.to_datetime(*date.as_utc()).month() as u32),
             usage,
             storage_limit: storage_limit(&account_plan),
             max_memory_per_worker: max_memory_per_worker(&account_plan),
@@ -2342,7 +2347,8 @@ fn max_memory_per_worker(account_plan: &AccountUsagePlan) -> MemoryLimit {
 }
 
 fn date_to_usage_key(date: &SqlDateTime) -> String {
-    year_and_month_to_usage_key(date.as_utc().year(), date.as_utc().month())
+    let date = jiff::tz::Offset::UTC.to_datetime(*date.as_utc());
+    year_and_month_to_usage_key(i32::from(date.year()), date.month() as u32)
 }
 
 fn year_and_month_to_usage_key(year: i32, month: u32) -> String {

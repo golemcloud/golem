@@ -47,7 +47,7 @@ impl Rpc for RemoteInvocationRpc {
         expected_fingerprint: AgentFingerprint,
         request_key: InvocationRequestKey,
         invocation: AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
         self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
@@ -620,7 +620,7 @@ pub(super) fn scheduled_invocation_start(
     expected_fingerprint: AgentFingerprint,
     request_key: InvocationRequestKey,
     invocation: AgentInvocation,
-    scheduled_at: chrono::DateTime<chrono::Utc>,
+    scheduled_at: jiff::Timestamp,
     self_agent_id: &AgentId,
     auth_ctx: &AuthCtx,
 ) -> Result<(InvocationStart, golem_common::model::InvocationId), RpcError> {
@@ -666,8 +666,8 @@ pub(super) fn scheduled_invocation_start(
         component_owner_account_id: None,
         mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
         schedule_at: Some(prost_types::Timestamp {
-            seconds: scheduled_at.timestamp(),
-            nanos: scheduled_at.timestamp_subsec_nanos() as i32,
+            seconds: scheduled_at.as_nanosecond().div_euclid(1_000_000_000) as i64,
+            nanos: scheduled_at.as_nanosecond().rem_euclid(1_000_000_000) as i32,
         }),
         freshness_disposition:
             golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,

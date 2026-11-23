@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::custom_api::openapi::OpenApiDocument;
-use chrono::{DateTime, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{BinarySource, TextSource};
 use golem_common::model::deployment::DeploymentRevision;
@@ -26,6 +25,7 @@ use golem_service_base::custom_api::{
 };
 use golem_service_base::custom_api::{PathSegment, RouteBehaviour, RouteId};
 use http::{HeaderMap, StatusCode};
+use jiff::Timestamp;
 use openidconnect::Scope;
 use openidconnect::core::CoreIdTokenClaims;
 use std::collections::HashSet;
@@ -47,12 +47,12 @@ pub struct OidcSession {
 
     pub claims: CoreIdTokenClaims,
     pub scopes: HashSet<Scope>,
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: Timestamp,
 }
 
 impl OidcSession {
     pub fn is_expired(&self) -> bool {
-        Utc::now() >= self.expires_at
+        Timestamp::now() >= self.expires_at
     }
 
     pub fn scopes(&self) -> &HashSet<Scope> {

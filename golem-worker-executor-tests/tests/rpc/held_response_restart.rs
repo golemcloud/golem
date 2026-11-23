@@ -120,7 +120,7 @@ impl Rpc for HoldResponseRpc {
         expected_fingerprint: golem_common::model::AgentFingerprint,
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
@@ -578,13 +578,13 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
-    let due = chrono::Utc::now() + chrono::Duration::hours(1);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
     executor
         .invoke_and_await_agent(
             &component,
             &caller_id,
             "schedule_at",
-            data_value!(server_name.to_string(), due.timestamp() as u64, 0u32),
+            data_value!(server_name.to_string(), due.as_second() as u64, 0u32),
         )
         .await?;
     let scheduled_key = executor

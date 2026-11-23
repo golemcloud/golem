@@ -13,17 +13,16 @@
 // limitations under the License.
 
 use super::{
-    CardAlgebraError, CardParseError, CardVerb, DateTime, DurableWorkerCtx, PermissionPattern,
+    CardAlgebraError, CardParseError, CardVerb, DurableWorkerCtx, PermissionPattern,
     PolymorphicPermissionPattern, RenderedPermissionFields, ResolvedPermissionCard, StoredCard,
-    TimeDelta, Utc, WorkerCtx, parse_permission_fields, parse_polymorphic_permission_fields,
-    permissions_types,
+    WorkerCtx, parse_permission_fields, parse_polymorphic_permission_fields, permissions_types,
 };
 
-impl From<DateTime<Utc>> for permissions_types::Timestamp {
-    fn from(timestamp: DateTime<Utc>) -> Self {
+impl From<jiff::Timestamp> for permissions_types::Timestamp {
+    fn from(timestamp: jiff::Timestamp) -> Self {
         Self {
-            seconds: timestamp.timestamp(),
-            nanoseconds: timestamp.timestamp_subsec_nanos(),
+            seconds: timestamp.as_nanosecond().div_euclid(1_000_000_000) as i64,
+            nanoseconds: timestamp.as_nanosecond().rem_euclid(1_000_000_000) as u32,
         }
     }
 }
@@ -255,7 +254,7 @@ pub(super) fn invalid_lifespan_error(
 
 pub(super) fn parse_lifespan(
     lifespan: Option<&permissions_types::Duration>,
-) -> Result<Option<TimeDelta>, permissions_types::PermissionError> {
+) -> Result<Option<jiff::SignedDuration>, permissions_types::PermissionError> {
     let Some(lifespan) = lifespan else {
         return Ok(None);
     };
@@ -267,14 +266,14 @@ pub(super) fn parse_lifespan(
 
     let duration = golem_schema::schema::canonical::duration::from_text(&lifespan.iso_8601)
         .map_err(invalid_lifespan_error)?;
-    Ok(Some(TimeDelta::nanoseconds(duration.nanoseconds)))
+    Ok(Some(jiff::SignedDuration::from_nanos(duration.nanoseconds)))
 }
 
 pub(super) fn derive_expires_at(
-    now: DateTime<Utc>,
+    now: jiff::Timestamp,
     lifespan: Option<&permissions_types::Duration>,
-    parent_expires_at: Option<DateTime<Utc>>,
-) -> Result<Option<DateTime<Utc>>, permissions_types::PermissionError> {
+    parent_expires_at: Option<jiff::Timestamp>,
+) -> Result<Option<jiff::Timestamp>, permissions_types::PermissionError> {
     if parent_expires_at.is_some_and(|expires_at| expires_at <= now) {
         return Err(permissions_types::PermissionError::CardExpired(
             "cannot derive from an expired parent card".to_string(),
@@ -292,8 +291,8 @@ pub(super) fn derive_expires_at(
         };
     };
     let expires_at = now
-        .checked_add_signed(lifespan)
-        .ok_or_else(|| invalid_lifespan_error("resulting expiry is out of range"))?;
+        .checked_add(lifespan)
+        .map_err(|_| invalid_lifespan_error("resulting expiry is out of range"))?;
 
     if parent_expires_at.is_some_and(|parent_expires_at| expires_at > parent_expires_at) {
         return Err(permissions_types::PermissionError::CardExpired(

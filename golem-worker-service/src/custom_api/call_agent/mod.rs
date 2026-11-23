@@ -678,12 +678,12 @@ mod tests {
     use test_r::test;
 
     fn oidc_session(issuer: &str, subject: &str) -> crate::custom_api::model::OidcSession {
-        use chrono::{TimeDelta, Utc};
+        use jiff::{SignedDuration, Timestamp};
         use openidconnect::{
             EmptyAdditionalClaims, IdTokenClaims, IssuerUrl, StandardClaims, SubjectIdentifier,
         };
 
-        let issued_at = Utc::now();
+        let issued_at = Timestamp::now();
         crate::custom_api::model::OidcSession {
             subject: subject.to_string(),
             issuer: issuer.to_string(),
@@ -697,13 +697,15 @@ mod tests {
             claims: IdTokenClaims::new(
                 IssuerUrl::new(issuer.to_string()).unwrap(),
                 Vec::new(),
-                issued_at + TimeDelta::hours(1),
-                issued_at,
+                std::time::SystemTime::try_from(issued_at + SignedDuration::from_hours(1))
+                    .unwrap()
+                    .into(),
+                std::time::SystemTime::try_from(issued_at).unwrap().into(),
                 StandardClaims::new(SubjectIdentifier::new(subject.to_string())),
                 EmptyAdditionalClaims {},
             ),
             scopes: Default::default(),
-            expires_at: issued_at + TimeDelta::hours(1),
+            expires_at: issued_at + SignedDuration::from_hours(1),
         }
     }
 

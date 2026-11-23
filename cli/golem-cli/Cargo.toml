@@ -49,7 +49,7 @@ blake3 = { workspace = true }
 bzip2 = { workspace = true }
 bytes = { workspace = true }
 camino = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 clap = { workspace = true }
 comfy-table = { workspace = true }
 clap-verbosity-flag = { workspace = true }

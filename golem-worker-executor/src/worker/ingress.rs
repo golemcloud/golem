@@ -18,9 +18,32 @@ use uuid::Uuid;
 use golem_common::model::InvocationId;
 
 use crate::worker::*;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{IdempotencyKey, ScheduleId, ScheduledAction};
+
+fn invocation_wake_time(deadline: Timestamp) -> Result<jiff::Timestamp, WorkerExecutorError> {
+    i64::try_from(deadline.to_millis())
+        .ok()
+        .and_then(|millis| jiff::Timestamp::from_millisecond(millis).ok())
+        .ok_or_else(|| {
+            WorkerExecutorError::invalid_request(
+                "scheduled invocation deadline is outside the supported timestamp range",
+            )
+        })
+}
+
+fn scheduled_invocation_deadline(
+    scheduled_at: jiff::Timestamp,
+) -> Result<Timestamp, WorkerExecutorError> {
+    // Oplog timestamps persist milliseconds. Round up before validating so the wake cannot
+    // precede the requested instant or become unrepresentable after the pending entry commits.
+    let nanos = scheduled_at.as_nanosecond().max(0);
+    let millis = nanos.div_euclid(1_000_000) as u64 + u64::from(nanos.rem_euclid(1_000_000) != 0);
+    let deadline = Timestamp::from(millis);
+    invocation_wake_time(deadline)?;
+    Ok(deadline)
+}
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn enqueue_oplog_processor<T>(
@@ -1279,7 +1302,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn schedule_invocation(
         &self,
         invocation: AgentInvocation,
-        scheduled_at: DateTime<Utc>,
+        scheduled_at: jiff::Timestamp,
     ) -> Result<ScheduleId, WorkerExecutorError> {
         if !matches!(invocation, AgentInvocation::ExternalTool { .. }) {
             self.ensure_component_agent_ingress("scheduled invocation")?;
@@ -1287,21 +1310,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let key = Self::require_idempotency_key(&invocation)?;
         let fingerprint = self.initial_worker_metadata.fingerprint;
         let schedule_id = ScheduleId::for_invocation(fingerprint, &key);
-        // Oplog timestamps persist milliseconds. Round up so serialization cannot make an
-        // invocation runnable before the requested instant, including after reconstruction.
-        let millis = scheduled_at.timestamp_millis().max(0) as u64
-            + u64::from(
-                !scheduled_at
-                    .timestamp_subsec_nanos()
-                    .is_multiple_of(1_000_000),
-            );
         // A same-key retry returns the original receipt, also from an ephemeral agent that has
         // already begun its execution and accepts nothing new.
         if self.lookup_matching_invocation(&invocation).await? == LookupResult::New {
+            let deadline = scheduled_invocation_deadline(scheduled_at)?;
             self.enqueue_worker_invocation_with_effect(
                 invocation,
                 read_only_cache::InvocationEffect::UnknownAssumeMutating,
-                Some(Timestamp::from(millis)),
+                Some(deadline),
             )
             .await?;
         }
@@ -1315,7 +1331,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .find(|pending| pending.has_idempotency_key(&key))
             && let Some(deadline) = pending.not_before
         {
-            self.register_invocation_wake(key, deadline).await;
+            self.register_invocation_wake(key, deadline).await?;
         }
         Ok(schedule_id)
     }
@@ -1339,14 +1355,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .filter_map(|pending| Some((*pending.idempotency_key()?, pending.not_before?)))
             .collect::<Vec<_>>();
         for (key, deadline) in scheduled {
-            self.register_invocation_wake(key, deadline).await;
+            if let Err(error) = self.register_invocation_wake(key, deadline).await {
+                tracing::error!(
+                    agent_id = %self.owned_agent_id,
+                    invocation_id = %key,
+                    error = %error,
+                    "Failed to register pending invocation wake"
+                );
+            }
         }
     }
 
-    async fn register_invocation_wake(&self, key: InvocationId, deadline: Timestamp) {
+    async fn register_invocation_wake(
+        &self,
+        key: InvocationId,
+        deadline: Timestamp,
+    ) -> Result<(), WorkerExecutorError> {
         let fingerprint = self.initial_worker_metadata.fingerprint;
-        let scheduled_at = DateTime::from_timestamp_millis(deadline.to_millis() as i64)
-            .expect("persisted invocation deadline is in the chrono range");
+        let scheduled_at = invocation_wake_time(deadline)?;
         self.deps
             .scheduler_service()
             .schedule_with_id(
@@ -1359,6 +1385,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 },
             )
             .await;
+        Ok(())
     }
 
     pub(in crate::worker) fn accept_ephemeral_invocation(

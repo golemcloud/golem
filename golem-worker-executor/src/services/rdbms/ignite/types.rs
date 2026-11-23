@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use bigdecimal::BigDecimal;
-use chrono::{Duration, NaiveTime, TimeZone, Timelike, Utc};
+
 use golem_common::model::oplog::payload::types::SerializableDbValue;
 use golem_common::model::oplog::types::{
     SerializableDbColumn, SerializableDbColumnType, SerializableDbColumnTypeNode,
@@ -241,8 +241,8 @@ impl Display for DbValue {
             DbValue::String(v) => write!(f, "{v}"),
             DbValue::Uuid(v) => write!(f, "{v}"),
             DbValue::Date(ms) => {
-                let date = chrono::DateTime::from_timestamp_millis(*ms)
-                    .map(|dt| dt.date_naive())
+                let date = jiff::Timestamp::from_millisecond(*ms)
+                    .map(|dt| dt.to_zoned_datetime(jiff::tz::TimeZone::UTC).date())
                     .unwrap_or_default();
                 write!(f, "{date}")
             }
@@ -274,15 +274,15 @@ impl From<DbValue> for SerializableDbValue {
             DbValue::String(v) => SerializableDbValueNode::Text(v),
             DbValue::Uuid(v) => SerializableDbValueNode::Uuid(v),
             DbValue::Date(ms) => {
-                let date = chrono::DateTime::from_timestamp_millis(ms)
-                    .map(|dt| dt.date_naive())
+                let date = jiff::Timestamp::from_millisecond(ms)
+                    .map(|dt| dt.to_zoned_datetime(jiff::tz::TimeZone::UTC).date())
                     .unwrap_or_default();
                 SerializableDbValueNode::Date(date)
             }
             DbValue::Timestamp(ms, nanos) => {
-                let dt = Utc.timestamp_millis_opt(ms).single().unwrap_or_default();
+                let dt = jiff::Timestamp::from_millisecond(ms).unwrap_or_default();
                 // Combine ms-level dt with sub-ms nanos
-                let dt_with_ns = dt + Duration::nanoseconds(nanos as i64);
+                let dt_with_ns = dt + jiff::SignedDuration::from_nanos(nanos as i64);
                 SerializableDbValueNode::Timestamptz(dt_with_ns)
             }
             DbValue::Time(ms) => {
@@ -292,7 +292,8 @@ impl From<DbValue> for SerializableDbValue {
                 let s = ((total_nanos % 60_000_000_000) / 1_000_000_000) as u32;
                 let ns = (total_nanos % 1_000_000_000) as u32;
                 SerializableDbValueNode::Time(
-                    NaiveTime::from_hms_nano_opt(h, m, s, ns).unwrap_or_default(),
+                    jiff::civil::Time::new((h) as i8, (m) as i8, (s) as i8, (ns) as i32)
+                        .unwrap_or_default(),
                 )
             }
             DbValue::Decimal(v) => SerializableDbValueNode::Decimal(v),
@@ -334,24 +335,31 @@ impl TryFrom<SerializableDbValue> for DbValue {
             | SerializableDbValueNode::Longtext(v) => DbValue::String(v),
             SerializableDbValueNode::Uuid(v) => DbValue::Uuid(v),
             SerializableDbValueNode::Date(v) => {
-                let ms = v
-                    .and_hms_opt(0, 0, 0)
-                    .map(|dt| dt.and_utc().timestamp_millis())
+                let ms = jiff::tz::TimeZone::UTC
+                    .to_timestamp(v.at(0, 0, 0, 0))
+                    .map(|dt| dt.as_nanosecond().div_euclid(1_000_000) as i64)
                     .unwrap_or(0);
                 DbValue::Date(ms)
             }
             SerializableDbValueNode::Timestamp(v) => {
-                let ms = v.and_utc().timestamp_millis();
+                let ms = jiff::tz::TimeZone::UTC
+                    .to_timestamp(v)
+                    .expect("UTC civil timestamp must be representable")
+                    .as_nanosecond()
+                    .div_euclid(1_000_000) as i64;
                 DbValue::Timestamp(ms, 0)
             }
             SerializableDbValueNode::Timestamptz(v) => {
-                let ms = v.timestamp_millis();
-                let nanos = (v.timestamp_nanos_opt().unwrap_or_default() - ms * 1_000_000) as i32;
+                let ms = v.as_nanosecond().div_euclid(1_000_000) as i64;
+                let nanos = (v.as_nanosecond() - i128::from(ms) * 1_000_000) as i32;
                 DbValue::Timestamp(ms, nanos)
             }
             SerializableDbValueNode::Time(v) => {
-                let ns =
-                    v.num_seconds_from_midnight() as i64 * 1_000_000_000 + v.nanosecond() as i64;
+                let ns = (i64::from(v.hour()) * 3_600
+                    + i64::from(v.minute()) * 60
+                    + i64::from(v.second()))
+                    * 1_000_000_000
+                    + i64::from(v.subsec_nanosecond());
                 let ms = ns / 1_000_000;
                 DbValue::Time(ms)
             }

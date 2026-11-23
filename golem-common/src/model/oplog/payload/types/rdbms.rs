@@ -144,10 +144,10 @@ impl Display for Interval {
 }
 
 impl TimeTz {
-    pub fn new(time: chrono::NaiveTime, offset: chrono::FixedOffset) -> Self {
+    pub fn new(time: jiff::civil::Time, offset: jiff::tz::Offset) -> Self {
         TimeTz {
             time,
-            offset: offset.utc_minus_local(),
+            offset: -offset.seconds(),
         }
     }
 }
@@ -245,22 +245,38 @@ impl From<Interval> for PgInterval {
     }
 }
 
-impl From<PgTimeTz> for TimeTz {
-    fn from(value: PgTimeTz) -> Self {
+impl From<PgTimeTz<time::Time, time::UtcOffset>> for TimeTz {
+    fn from(value: PgTimeTz<time::Time, time::UtcOffset>) -> Self {
         Self {
-            time: value.time,
-            offset: value.offset.utc_minus_local(),
+            time: jiff::civil::Time::new(
+                value.time.hour() as i8,
+                value.time.minute() as i8,
+                value.time.second() as i8,
+                value.time.nanosecond() as i32,
+            )
+            .expect("SQL time is representable in Jiff"),
+            offset: -value.offset.whole_seconds(),
         }
     }
 }
 
-impl TryFrom<TimeTz> for PgTimeTz {
+impl TryFrom<TimeTz> for PgTimeTz<time::Time, time::UtcOffset> {
     type Error = String;
     fn try_from(value: TimeTz) -> Result<Self, Self::Error> {
-        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
+        let offset = value
+            .offset
+            .checked_neg()
+            .filter(|offset| (-86_399..=86_399).contains(offset))
+            .and_then(|offset| time::UtcOffset::from_whole_seconds(offset).ok())
             .ok_or("Offset value is not valid")?;
         Ok(Self {
-            time: value.time,
+            time: time::Time::from_hms_nano(
+                value.time.hour() as u8,
+                value.time.minute() as u8,
+                value.time.second() as u8,
+                value.time.subsec_nanosecond() as u32,
+            )
+            .map_err(|error| error.to_string())?,
             offset,
         })
     }
@@ -327,5 +343,34 @@ impl EnumerationType {
 impl Display for EnumerationType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
+    }
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn sql_time_with_offset_preserves_nanoseconds_and_offset_direction() {
+        let time = jiff::civil::Time::new(23, 59, 58, 123_456_789).unwrap();
+        for seconds in [-86_399, -3_600, 0, 3_600, 86_399] {
+            let value = TimeTz::new(time, jiff::tz::Offset::from_seconds(seconds).unwrap());
+            assert_eq!(value.offset, -seconds);
+            let sql: PgTimeTz<time::Time, time::UtcOffset> = value.clone().try_into().unwrap();
+            assert_eq!(sql.offset.whole_seconds(), seconds);
+            assert_eq!(TimeTz::from(sql), value);
+        }
+    }
+
+    #[test]
+    fn sql_time_with_offset_rejects_unrepresentable_offset() {
+        for offset in [i32::MIN, -86_400, 86_400, i32::MAX] {
+            let value = TimeTz {
+                time: jiff::civil::Time::MIN,
+                offset,
+            };
+            assert!(PgTimeTz::<time::Time, time::UtcOffset>::try_from(value).is_err());
+        }
     }
 }

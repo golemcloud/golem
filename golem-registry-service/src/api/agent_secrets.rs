@@ -310,11 +310,11 @@ impl AgentSecretsApi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
     use golem_common::model::agent_secret::{
         AgentSecretCreation as DomainAgentSecretCreation, AgentSecretPath,
     };
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, SecretValuePayload};
+    use jiff::Timestamp;
     use test_r::test;
 
     #[test]
@@ -326,7 +326,7 @@ mod tests {
                 secret_id: uuid::Uuid::nil(),
                 config_key: None,
                 version: 1,
-                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                resolved_at: Timestamp::new(0, 0).unwrap(),
                 category: None,
             })),
         };

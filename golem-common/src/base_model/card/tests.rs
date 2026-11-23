@@ -69,7 +69,7 @@ use crate::model::card::recipient::RecipientPattern;
 use RecipientPattern as AccountRecipientPattern;
 use RecipientPattern as AgentRecipientPattern;
 use RecipientPattern as EnvironmentRecipientPattern;
-use chrono::Utc;
+use jiff::Timestamp as JiffTimestamp;
 use test_r::test;
 use uuid::uuid;
 
@@ -278,7 +278,7 @@ fn card_with_bounds(
         lower_negative,
         upper_positive,
         upper_negative,
-        created_at: Utc::now(),
+        created_at: JiffTimestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,

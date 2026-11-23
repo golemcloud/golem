@@ -96,7 +96,11 @@ pub(crate) async fn open_file_for_inspection<Adapter: SandboxFilesystemAdapter>(
                 metadata: FileReadMetadata {
                     total_size: attrs.size,
                     selection: selection.resolve(attrs.size)?,
-                    modified_at: attrs.modified.map(Into::into),
+                    modified_at: attrs
+                        .modified
+                        .map(jiff::Timestamp::try_from)
+                        .transpose()
+                        .map_err(|_| FileReadError::Storage)?,
                 },
             });
         }

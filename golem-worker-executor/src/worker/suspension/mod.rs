@@ -1183,8 +1183,8 @@ impl RuntimeStore {
                     continue;
                 };
                 if let Wakeup::At(deadline) = attempt.wakeup {
-                    let when = chrono::Utc::now()
-                        + chrono::Duration::from_std(
+                    let when = jiff::Timestamp::now()
+                        + jiff::SignedDuration::try_from(
                             deadline.saturating_duration_since(Instant::now()),
                         )?;
                     scheduler.sleep_until(when).await?;

@@ -7,7 +7,7 @@
 //     http://license.golem.cloud/LICENSE
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InvocationAccepted, StreamInvocationIdentity, UpdateMode,
     invocation_request, invocation_response,
@@ -334,7 +334,7 @@ impl Rpc for StreamingRemoteRpc {
         expected_fingerprint: AgentFingerprint,
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
@@ -736,7 +736,7 @@ impl WorkerProxy for LocalResumeProxy {
         method: String,
         input: SchemaValue,
         mode: AgentInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<jiff::Timestamp>,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,

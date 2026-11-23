@@ -14,10 +14,10 @@
 
 use super::{
     AcceptedInvocation, AccountId, AgentId, AgentInvocation, AgentInvocationOutput,
-    AgentInvocationResult, AgentMode, ComponentRevision, DateTime, Future, HasAll,
-    HasComponentService, InvocationFreshnessDisposition, InvocationStart, InvocationStatus, Pin,
-    SchemaValue, ScopeCard, UsesAllDeps, Utc, Worker, WorkerCtx, WorkerExecutorError,
-    WorkerExecutorImpl, build_durable_streaming_request, from_proto_invocation_context, golem,
+    AgentInvocationResult, AgentMode, ComponentRevision, Future, HasAll, HasComponentService,
+    InvocationFreshnessDisposition, InvocationStart, InvocationStatus, Pin, SchemaValue, ScopeCard,
+    UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
+    build_durable_streaming_request, from_proto_invocation_context, golem,
     validate_agent_method_invocation,
 };
 use golem_common::model::InvocationRequestKey;
@@ -170,10 +170,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(WorkerExecutorError::invalid_request)?;
         let owner_key = request_key.owner_key(&method_name);
 
-        let schedule_at: Option<DateTime<Utc>> = request
+        let schedule_at: Option<jiff::Timestamp> = request
             .schedule_at
             .as_ref()
-            .and_then(|ts| DateTime::from_timestamp(ts.seconds, ts.nanos as u32));
+            .filter(|ts| (0..1_000_000_000).contains(&ts.nanos))
+            .and_then(|ts| jiff::Timestamp::new(ts.seconds, ts.nanos).ok());
 
         let _account_id: AccountId = request
             .component_owner_account_id

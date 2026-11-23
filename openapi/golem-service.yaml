@@ -25236,7 +25236,7 @@ components:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
         actorAccountId: 00000000-0000-0000-0000-000000000002
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         dimension: monthlyComputeGcu
         eventType: override_granted
         newValue:
@@ -25871,7 +25871,7 @@ components:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
         actorAccountId: 00000000-0000-0000-0000-000000000002
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         dimension: monthlyComputeGcu
         eventType: override_cleared
         newValue:
@@ -28286,7 +28286,7 @@ components:
         activeAdminGrant:
           actorAccountId: 00000000-0000-0000-0000-000000000002
           dimension: maxMemoryPerAgent
-          grantedAt: 2023-11-14T22:13:20+00:00
+          grantedAt: 2023-11-14T22:13:20Z
           reason: support
           value: 2147483648
         ceiling:
@@ -28476,7 +28476,7 @@ components:
     MonthlyUsageModeTransition:
       example:
         actorAccountId: 00000000-0000-0000-0000-000000000001
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         newMode: hardLimit
         previousMode: allowOverage
         source: owner
@@ -30107,7 +30107,7 @@ components:
         activeAdminGrant:
           actorAccountId: 00000000-0000-0000-0000-000000000002
           dimension: maxStoragePerAgent
-          grantedAt: 2023-11-14T22:13:20+00:00
+          grantedAt: 2023-11-14T22:13:20Z
           reason: support
           value: 2147483648
         ceiling:

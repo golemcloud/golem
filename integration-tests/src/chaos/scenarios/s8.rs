@@ -63,7 +63,7 @@ use crate::chaos::signal::{BaselineReady, FaultSignals, FaultTarget};
 use crate::chaos::summary::{AgentReadback, ChaosSummary, ExactlyOnceReport, TerminationReason};
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
-use chrono::Utc;
+
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use std::collections::BTreeMap;
@@ -88,7 +88,7 @@ pub async fn run(
     signals: &FaultSignals,
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
-    let started_at = Utc::now();
+    let started_at = jiff::Timestamp::now();
     let pinned_config = config.require_pinned()?;
     let history = OperationHistory::new(ScenarioCode::S8.as_str());
     let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S8);
@@ -202,11 +202,11 @@ pub async fn run(
         chosen.agents.len(),
         config.phases.baseline()
     );
-    phases.baseline = Some(PhaseWindow::started(Utc::now()));
+    phases.baseline = Some(PhaseWindow::started(jiff::Timestamp::now()));
     let handle = pinned::start(ctx.clone(), &chosen, pinned_config);
     tokio::time::sleep(config.phases.baseline()).await;
     if let Some(window) = phases.baseline.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
 
     let baseline_operations = history.confirmed_in_phase(Phase::Baseline);
@@ -250,7 +250,7 @@ pub async fn run(
     );
     signals.write_baseline_ready(&BaselineReady {
         scenario_code: ScenarioCode::S8.as_str().to_string(),
-        ready_at: Utc::now(),
+        ready_at: jiff::Timestamp::now(),
         baseline_operations,
         fault_target: Some(FaultTarget {
             pod_address: chosen.pod_address.clone(),
@@ -303,7 +303,7 @@ pub async fn run(
         config.phases.recovery()
     );
     ctx.phase.set(Phase::Recovery);
-    phases.recovery = Some(PhaseWindow::started(Utc::now()));
+    phases.recovery = Some(PhaseWindow::started(jiff::Timestamp::now()));
     tokio::time::sleep(config.phases.recovery()).await;
 
     // Stopping waits for in-flight operations to record themselves rather than
@@ -312,7 +312,7 @@ pub async fn run(
     // ones.
     handle.stop().await;
     if let Some(window) = phases.recovery.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
     routing_snapshots.push(snapshot_routing(deps, "after-recovery").await);
 
@@ -462,8 +462,8 @@ mod tests {
             agent: agent.to_string(),
             method: "sleep_and_increment".to_string(),
             idempotency_key: key,
-            submitted_at: Utc::now(),
-            completed_at: Some(Utc::now()),
+            submitted_at: jiff::Timestamp::now(),
+            completed_at: Some(jiff::Timestamp::now()),
             attempts: 1,
             outcome,
             duration_ms: 20_000,
@@ -473,7 +473,7 @@ mod tests {
             error_class: None,
             attempt_log: vec![crate::chaos::history::AttemptRecord {
                 attempt: 1,
-                started_at: Utc::now(),
+                started_at: jiff::Timestamp::now(),
                 duration_ms: 20_000,
                 returned_value: value,
                 succeeded: outcome == Outcome::Confirmed,

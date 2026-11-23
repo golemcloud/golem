@@ -124,7 +124,13 @@ declare_structs! {
         pub package_digest: String,
         pub layer_digest: String,
     }
+}
 
+crate::declare_datetime_struct! {
+    crate::base_model::component::ComponentDto,
+    [],
+    [],
+    [],
     pub struct ComponentDto {
         pub id: ComponentId,
         pub revision: ComponentRevision,
@@ -135,11 +141,13 @@ declare_structs! {
         pub account_id: AccountId,
         pub component_size: u64,
         pub metadata: ComponentMetadataDto,
-        pub created_at: chrono::DateTime<chrono::Utc>,
+        pub created_at: jiff::Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         pub wasm_hash: diff::Hash,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub package_metadata: Option<ComponentPackageMetadata>,
     }
+}
+declare_structs! {
 
     pub struct ComponentCreation {
         pub component_name: ComponentName,
@@ -381,6 +389,7 @@ declare_structs! {
         pub permissions: AgentFilePermissions,
         pub size: u64,
     }
+
 }
 
 impl AgentTypeInitialPermissions {
@@ -419,7 +428,7 @@ impl AgentTypeInitialPermissions {
             lower_negative: self.lower_bound.negative.clone(),
             upper_positive: self.upper_bound.positive.clone(),
             upper_negative: self.upper_bound.negative.clone(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
         }

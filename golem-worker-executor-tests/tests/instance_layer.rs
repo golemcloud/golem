@@ -693,7 +693,7 @@ async fn cross_store_wallet_change(
         } else {
             Vec::new()
         },
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -2257,7 +2257,7 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         secret_id: secret_id.0,
         config_key: Some(vec!["walletSecret".to_string()]),
         version: AgentSecretRevision::INITIAL.get(),
-        resolved_at: chrono::Utc::now(),
+        resolved_at: jiff::Timestamp::now(),
         category: None,
     };
     let lane = active_agent.execution().lane();
@@ -2536,7 +2536,7 @@ async fn run_incomplete_tool_reveal_tail_reauthorization(
         secret_id: secret_id.0,
         config_key: Some(vec!["walletSecret".to_string()]),
         version: AgentSecretRevision::INITIAL.get(),
-        resolved_at: chrono::Utc::now(),
+        resolved_at: jiff::Timestamp::now(),
         category: None,
     };
     let lane = active_agent.execution().lane();

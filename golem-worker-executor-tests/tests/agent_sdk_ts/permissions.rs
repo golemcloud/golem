@@ -17,7 +17,7 @@
 
 use crate::Tracing;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::agent::{
@@ -246,7 +246,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<jiff::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -885,7 +885,7 @@ async fn ts_permissions_wallet_labels_card_kinds_and_scope_expiry(
     let context = TestContext::new(last_unique_id);
     let scenario = start_scenario(deps, &context, agent_sdk_ts, "kinds").await?;
 
-    let started = chrono::Utc::now().timestamp() as f64;
+    let started = jiff::Timestamp::now().as_second() as f64;
     let observed = scenario
         .executor
         .invoke_and_await_agent(

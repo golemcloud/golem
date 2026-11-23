@@ -69,7 +69,7 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 | `export_load_snapshot` | Snapshot loading support |
 | `export_save_snapshot` | Snapshot saving support |
 
-| `chrono` | Chrono type conversions |
+| `jiff` | Jiff civil type and signed duration conversions; `jiff::Timestamp` support is always enabled |
 | `uuid` | UUID type conversions (always enabled) |
 | `url` | URL type conversions |
 | `bytes` | Bytes type conversions |

@@ -366,7 +366,7 @@ pub(crate) mod replay_divergence_test_values {
             secret_id: uuid::Uuid::nil(),
             config_key: Some(vec!["credential".to_string()]),
             version: 3,
-            resolved_at: chrono::DateTime::UNIX_EPOCH,
+            resolved_at: jiff::Timestamp::UNIX_EPOCH,
             category: None,
         });
         let quota_token = SchemaValue::QuotaToken(QuotaTokenValuePayload {
@@ -374,7 +374,7 @@ pub(crate) mod replay_divergence_test_values {
             resource_name: "gpu-quota".to_string(),
             expected_use: 1,
             last_credit: 0,
-            last_credit_at: chrono::DateTime::UNIX_EPOCH,
+            last_credit_at: jiff::Timestamp::UNIX_EPOCH,
         });
         let permission_card = SchemaValue::PermissionCard(PermissionCardValuePayload {
             card_id: uuid::Uuid::nil(),

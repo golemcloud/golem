@@ -16,7 +16,7 @@ use crate::Tracing;
 use crate::durability::assert_snapshot_recovery_loaded;
 use crate::tool_discovery::deployment_state;
 use async_trait::async_trait;
-use chrono::Utc;
+
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::{AgentConfigEntryDto, RevertToOplogIndex, RevertWorkerTarget};
@@ -451,7 +451,7 @@ struct ScopeCardService {
 
 fn card_is_expired(card: &StoredCard) -> bool {
     card.expires_at()
-        .is_some_and(|expires_at| expires_at <= Utc::now())
+        .is_some_and(|expires_at| expires_at <= jiff::Timestamp::now())
 }
 
 /// Decrements `counter` if it is positive, and returns whether it was.
@@ -1380,7 +1380,7 @@ fn concrete_card_granting(parent: CardId, verb: &str) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -1689,7 +1689,7 @@ async fn an_install_denial_keeps_its_outcome_after_a_later_grant_on_reconstructi
 }
 
 /// A concrete card derived from `parent` that grants card inspection.
-fn concrete_inspect_card(parent: CardId, expires_at: Option<chrono::DateTime<Utc>>) -> StoredCard {
+fn concrete_inspect_card(parent: CardId, expires_at: Option<jiff::Timestamp>) -> StoredCard {
     StoredCard::Concrete(Card {
         card_id: CardId::new(),
         parent_ids: vec![parent],
@@ -1700,7 +1700,7 @@ fn concrete_inspect_card(parent: CardId, expires_at: Option<chrono::DateTime<Utc
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at,
         system_card: false,
         managed_by: None,
@@ -1843,13 +1843,13 @@ async fn scope_card_reports_the_earliest_root_expiry_to_its_deriver_and_callee(
     // does not expire. Only the minimum gives one hour: the first, the last
     // and the latest expiring parent all differ from it.
     // Whole seconds, so the expiry survives any timestamp encoding unchanged.
-    let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0)
+    let now = jiff::Timestamp::new(jiff::Timestamp::now().as_second(), 0)
         .expect("the current time is a valid timestamp");
-    let earliest_expiry = now + chrono::Duration::hours(1);
+    let earliest_expiry = now + jiff::SignedDuration::from_hours(1);
     let parent_expiries = [
-        now + chrono::Duration::hours(2),
+        now + jiff::SignedDuration::from_hours(2),
         earliest_expiry,
-        now + chrono::Duration::hours(3),
+        now + jiff::SignedDuration::from_hours(3),
     ];
     for expires_at in parent_expiries {
         let card = concrete_inspect_card(root_card, Some(expires_at));
@@ -1860,11 +1860,16 @@ async fn scope_card_reports_the_earliest_root_expiry_to_its_deriver_and_callee(
     }
     let parent_expiries = parent_expiries
         .iter()
-        .map(|expires_at| (expires_at.timestamp(), expires_at.timestamp_subsec_nanos()))
+        .map(|expires_at| {
+            (
+                expires_at.as_second(),
+                expires_at.subsec_nanosecond() as u32,
+            )
+        })
         .collect::<Vec<_>>();
     let expected = Some((
-        earliest_expiry.timestamp(),
-        earliest_expiry.timestamp_subsec_nanos(),
+        earliest_expiry.as_second(),
+        earliest_expiry.subsec_nanosecond() as u32,
     ));
 
     let (earliest, scope_expiry, (listed, callee_expiry)) = executor
@@ -3974,7 +3979,7 @@ async fn p3_tcp_expiration_is_enforced_at_the_first_due_live_boundary(
         .await?;
     let caller = agent_key!("Networking", "permission-expiration");
     configure_scope_card_root(&authority, &component, &caller)?;
-    let expiration = Utc::now() + chrono::Duration::seconds(30);
+    let expiration = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(30);
     let caller_worker = executor.start_agent(&component.id, caller.clone()).await?;
     let expiring_card = StoredCard::Polymorphic(PolymorphicCard {
         card_id: CardId::new(),
@@ -3983,7 +3988,7 @@ async fn p3_tcp_expiration_is_enforced_at_the_first_due_live_boundary(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: Some(expiration),
         system_card: false,
     });
@@ -3999,7 +4004,12 @@ async fn p3_tcp_expiration_is_enforced_at_the_first_due_live_boundary(
     assert_eq!(first, Ok("authorized".to_string()));
     assert_eq!(connection_count.load(Ordering::SeqCst), 1);
 
-    tokio::time::sleep((expiration - Utc::now()).to_std().unwrap_or_default()).await;
+    tokio::time::sleep(
+        (expiration - jiff::Timestamp::now())
+            .try_into()
+            .unwrap_or_default(),
+    )
+    .await;
     let denied = executor
         .invoke_and_await_agent(&component, &caller, "tcp_collect_p3", data_value!(port))
         .await?
@@ -8755,7 +8765,8 @@ async fn derive_from_a_card_that_expires_before_its_creation_records_card_expire
     );
     let expire_during_creation = async {
         create_gate.entered().await?;
-        let remaining = (child_expires_at - Utc::now()).to_std().unwrap_or_default();
+        let remaining =
+            Duration::try_from(child_expires_at - jiff::Timestamp::now()).unwrap_or_default();
         tokio::time::sleep(remaining + Duration::from_millis(500)).await;
         create_gate.release();
         Ok::<_, anyhow::Error>(())
@@ -8910,7 +8921,7 @@ fn unparented_card(verb: &str) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,

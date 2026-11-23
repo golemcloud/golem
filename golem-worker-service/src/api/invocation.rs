@@ -16,9 +16,9 @@ use crate::api::agents::NativeToolResult;
 use crate::api::common::ApiEndpointError;
 use crate::service::auth::AuthService;
 use crate::service::worker::{InvocationListQuery, WorkerService};
-use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::poem::datetime::OpenApiTimestamp;
 use golem_common::model::{AgentId, IdempotencyKey, OwnedInvocationId};
 use golem_common::recorded_http_api_request;
 use golem_common::schema::ExternalTypedSchemaValue;
@@ -76,8 +76,8 @@ impl InvocationApi {
         #[oai(default)]
         state: Query<Vec<InvocationState>>,
         kind: Query<Option<InvocationKind>>,
-        since: Query<Option<DateTime<Utc>>>,
-        until: Query<Option<DateTime<Utc>>>,
+        since: Query<Option<OpenApiTimestamp>>,
+        until: Query<Option<OpenApiTimestamp>>,
         /// At most 1000; the default is 100
         #[oai(name = "pageSize")]
         page_size: Query<Option<u32>>,
@@ -95,8 +95,8 @@ impl InvocationApi {
             operation: operation.0,
             states: state.0,
             kind: kind.0,
-            since: since.0,
-            until: until.0,
+            since: since.0.map(|value| value.0),
+            until: until.0.map(|value| value.0),
             page_size: page_size.0,
             cursor: cursor.0,
         };
@@ -279,8 +279,8 @@ pub struct InvocationSummary {
     pub kind: Option<InvocationKind>,
     /// The method name, or `tool:<tool>/<command path>`. Absent for the constructor run.
     pub operation: Option<String>,
-    pub accepted_at: Option<DateTime<Utc>>,
-    pub changed_at: DateTime<Utc>,
+    pub accepted_at: Option<OpenApiTimestamp>,
+    pub changed_at: OpenApiTimestamp,
 }
 
 /// An invocation with its result. `result` is present once the invocation is `completed` or

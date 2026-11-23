@@ -240,7 +240,7 @@ use crate::workerctx::{
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 pub(crate) use concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 pub use durability::*;
 use golem_common::base_model::oplog::QueuedCardEvent;
@@ -1352,7 +1352,10 @@ pub(crate) struct WakeupScheduler {
 }
 
 impl WakeupScheduler {
-    pub(crate) async fn sleep_until(&self, when: DateTime<Utc>) -> Result<(), WorkerExecutorError> {
+    pub(crate) async fn sleep_until(
+        &self,
+        when: jiff::Timestamp,
+    ) -> Result<(), WorkerExecutorError> {
         let promise_id = self
             .promise_service
             .create(
@@ -1376,7 +1379,7 @@ impl WakeupScheduler {
             .await;
         debug!(
             "Schedule added to awake suspended worker at {} with id {}",
-            when.to_rfc3339(),
+            when.to_string(),
             schedule_id
         );
 

@@ -3997,8 +3997,8 @@ impl WorkerService {
             component_owner_account_id: Some(component.account_id.into()),
             mode: proto_mode,
             schedule_at: request.schedule_at.map(|at| ::prost_types::Timestamp {
-                seconds: at.timestamp(),
-                nanos: at.timestamp_subsec_nanos() as i32,
+                seconds: at.0.as_nanosecond().div_euclid(1_000_000_000) as i64,
+                nanos: at.0.as_nanosecond().rem_euclid(1_000_000_000) as i32,
             }),
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
@@ -4340,8 +4340,8 @@ impl WorkerService {
             })?;
 
         let proto_schedule_at = request.schedule_at.map(|dt| ::prost_types::Timestamp {
-            seconds: dt.timestamp(),
-            nanos: dt.timestamp_subsec_nanos() as i32,
+            seconds: dt.0.as_nanosecond().div_euclid(1_000_000_000) as i64,
+            nanos: dt.0.as_nanosecond().rem_euclid(1_000_000_000) as i32,
         });
 
         let caller: golem_api_grpc::proto::golem::component::Caller =
@@ -4517,7 +4517,6 @@ mod tests {
         ExistingAgent, RoutedTarget, WorkerClient, WorkerResult, WorkerServiceError, WorkerStream,
     };
     use async_trait::async_trait;
-    use chrono::Utc;
     use futures::{StreamExt, stream};
     use golem_api_grpc::proto::golem::worker::{
         InvocationContext, InvocationStart, LogEvent, ResumeAttach, ResumeOperation,
@@ -4582,6 +4581,7 @@ mod tests {
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
     use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+    use jiff::Timestamp as JiffTimestamp;
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
@@ -6240,7 +6240,7 @@ mod tests {
                 lower_negative: Vec::new(),
                 upper_positive: Vec::new(),
                 upper_negative: Vec::new(),
-                created_at: Utc::now(),
+                created_at: JiffTimestamp::now(),
                 expires_at: None,
                 system_card: false,
             },
@@ -6277,7 +6277,7 @@ mod tests {
                 vec![agent_type],
                 BTreeMap::from([(agent_type_name, provision_config)]),
             ),
-            created_at: Utc::now(),
+            created_at: JiffTimestamp::now(),
             wasm_hash: Hash::empty(),
             package_metadata: None,
             object_store_key: String::new(),
@@ -6296,7 +6296,7 @@ mod tests {
             lower_negative: vec![],
             upper_positive: vec![],
             upper_negative: vec![],
-            created_at: Utc::now(),
+            created_at: JiffTimestamp::now(),
             expires_at: None,
             system_card: false,
             managed_by: None,
@@ -7256,7 +7256,7 @@ mod tests {
             lower_negative: vec![],
             upper_positive: vec![],
             upper_negative: vec![],
-            created_at: Utc::now(),
+            created_at: JiffTimestamp::now(),
             expires_at: None,
             system_card: false,
             managed_by: None,
@@ -8273,11 +8273,12 @@ mod tests {
         for (mode, schedule_at) in [
             (AgentInvocationMode::Await, None),
             (AgentInvocationMode::Schedule, None),
-            (AgentInvocationMode::Schedule, Some(Utc::now())),
+            (AgentInvocationMode::Schedule, Some(JiffTimestamp::now())),
         ] {
             let mut request = harness.invoke_request();
             request.mode = mode;
-            request.schedule_at = schedule_at;
+            request.schedule_at =
+                schedule_at.map(golem_common::model::poem::datetime::OpenApiTimestamp);
             let error = harness
                 .invoke_rest(request, None, AuthCtx::system())
                 .await
@@ -8303,11 +8304,12 @@ mod tests {
         for (mode, schedule_at) in [
             (AgentInvocationMode::Await, None),
             (AgentInvocationMode::Schedule, None),
-            (AgentInvocationMode::Schedule, Some(Utc::now())),
+            (AgentInvocationMode::Schedule, Some(JiffTimestamp::now())),
         ] {
             let mut request = harness.invoke_request();
             request.mode = mode;
-            request.schedule_at = schedule_at;
+            request.schedule_at =
+                schedule_at.map(golem_common::model::poem::datetime::OpenApiTimestamp);
             harness
                 .invoke_rest(request, None, AuthCtx::system())
                 .await
@@ -8817,11 +8819,12 @@ mod tests {
                 for (mode, schedule_at) in [
                     (AgentInvocationMode::Await, None),
                     (AgentInvocationMode::Schedule, None),
-                    (AgentInvocationMode::Schedule, Some(Utc::now())),
+                    (AgentInvocationMode::Schedule, Some(JiffTimestamp::now())),
                 ] {
                     let mut request = harness.invoke_request();
                     request.mode = mode;
-                    request.schedule_at = schedule_at;
+                    request.schedule_at =
+                        schedule_at.map(golem_common::model::poem::datetime::OpenApiTimestamp);
                     let error = harness
                         .invoke_rest(request, None, AuthCtx::system())
                         .await
@@ -8967,14 +8970,16 @@ mod tests {
         let auth = scoped_invocation_auth();
         let seed = InvocationRequestKey::external(auth.idempotency_scope(), Some(&idempotency_key))
             .owner_key("run");
-        let schedule_at = Utc::now();
+        let schedule_at = JiffTimestamp::now();
         let expected_schedule_at = ::prost_types::Timestamp {
-            seconds: schedule_at.timestamp(),
-            nanos: schedule_at.timestamp_subsec_nanos() as i32,
+            seconds: schedule_at.as_second(),
+            nanos: schedule_at.subsec_nanosecond() as i32,
         };
         let mut request = harness.invoke_request();
         request.mode = AgentInvocationMode::Schedule;
-        request.schedule_at = Some(schedule_at);
+        request.schedule_at = Some(golem_common::model::poem::datetime::OpenApiTimestamp(
+            schedule_at,
+        ));
 
         let response = harness
             .invoke_rest(request, Some(idempotency_key), auth)

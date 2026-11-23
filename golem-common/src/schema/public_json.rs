@@ -1264,7 +1264,7 @@ fn external_value_charge(
         }
         SchemaValue::Path { path } => path.len() as u64,
         SchemaValue::Url { url } => url.len() as u64,
-        SchemaValue::Datetime { value } => value.to_rfc3339().len() as u64,
+        SchemaValue::Datetime { value } => value.to_string().len() as u64,
         SchemaValue::Duration(_) => 8,
         SchemaValue::Quantity(value) => 12 + value.unit.len() as u64,
         SchemaValue::Union(value) => {

@@ -37,7 +37,6 @@ bigdecimal.workspace = true
 bitflags = { workspace = true }
 blake3.workspace = true
 bytes = { workspace = true }
-chrono = { workspace = true }
 derive_more.workspace = true
 desert_rust = { workspace = true }
 figment = { workspace = true }
@@ -54,6 +53,7 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 include_dir = { workspace = true }
 indexmap.workspace = true
+jiff = { workspace = true }
 lazy_static = { workspace = true }
 libsqlite3-sys = { workspace = true }
 metrics-prometheus = { workspace = true }
@@ -82,13 +82,14 @@ sqlx = { workspace = true, features = [
     "uuid",
     "migrate",
     "bigdecimal",
-    "chrono",
+    "time",
 ] }
 stacker = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+time = { workspace = true }
 tokio = { workspace = true }
 tokio-metrics = { workspace = true }
 tokio-rustls = { workspace = true }

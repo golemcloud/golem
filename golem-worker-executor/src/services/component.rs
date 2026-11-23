@@ -933,7 +933,7 @@ mod tests {
             environment_name: EnvironmentName::try_from("test-env").unwrap(),
             component_size: 1,
             metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             wasm_hash: golem_common::model::diff::Hash::new(blake3::hash(b"wasm-hash")),
             package_metadata: None,
             object_store_key: "test-object".to_string(),

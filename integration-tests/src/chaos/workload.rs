@@ -45,7 +45,7 @@ use crate::chaos::errors::{self, ErrorClass};
 use crate::chaos::history::{
     AttemptRecord, OperationHistory, OperationRecord, Outcome, Phase, Stream,
 };
-use chrono::Utc;
+
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::{OwnedAgentId, ParsedAgentKey};
 use golem_common::model::component::ComponentDto;
@@ -259,7 +259,7 @@ where
 {
     let op_id = ctx.history.next_op_id();
     let phase = ctx.phase.get();
-    let submitted_at = Utc::now();
+    let submitted_at = jiff::Timestamp::now();
     let started = Instant::now();
     let idempotency_key = IdempotencyKey::new(key.clone());
 
@@ -270,7 +270,7 @@ where
 
     loop {
         attempts += 1;
-        let attempt_started_at = Utc::now();
+        let attempt_started_at = jiff::Timestamp::now();
         let attempt_started = Instant::now();
         last = match tokio::time::timeout(ATTEMPT_TIMEOUT, invoke(idempotency_key.clone())).await {
             Ok(Ok(value)) => AttemptResult {
@@ -364,7 +364,7 @@ where
         method: method.to_string(),
         idempotency_key: key,
         submitted_at,
-        completed_at: Some(Utc::now()),
+        completed_at: Some(jiff::Timestamp::now()),
         attempts,
         outcome,
         duration_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,

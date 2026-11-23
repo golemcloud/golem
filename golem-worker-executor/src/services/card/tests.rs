@@ -18,7 +18,7 @@ use golem_common::model::InvocationId;
 
 use super::*;
 use async_trait::async_trait;
-use chrono::Utc;
+
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
@@ -750,7 +750,7 @@ fn stored_card_with_parents(card_id: CardId, parent_ids: Vec<CardId>) -> StoredC
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -1188,7 +1188,7 @@ async fn expired_card_is_not_reported_live() {
     let lookup_count = Arc::new(AtomicUsize::new(0));
     let card_id = CardId::new();
     let expired_card = StoredCard::Concrete(Card {
-        expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+        expires_at: Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1)),
         ..match stored_card(card_id) {
             StoredCard::Concrete(card) => card,
             StoredCard::Polymorphic(_) => unreachable!(),
@@ -1478,7 +1478,7 @@ async fn exhausted_generation_retries_do_not_return_final_fetch_live_from_before
 async fn exhausted_generation_retries_report_expired_fetched_card_as_revoked() {
     let card_id = CardId::new();
     let expired_card = StoredCard::Concrete(Card {
-        expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+        expires_at: Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1)),
         ..match stored_card(card_id) {
             StoredCard::Concrete(card) => card,
             StoredCard::Polymorphic(_) => unreachable!(),
@@ -1512,7 +1512,7 @@ async fn exhausted_generation_retries_report_expired_fetched_card_as_revoked() {
 async fn exhausted_generation_retries_do_not_return_expired_cached_live_card() {
     let cached_card_id = CardId::new();
     let fetched_card_id = CardId::new();
-    let expires_at = Utc::now() + chrono::Duration::milliseconds(300);
+    let expires_at = jiff::Timestamp::now() + jiff::SignedDuration::from_millis(300);
     let cached_card = StoredCard::Concrete(Card {
         expires_at: Some(expires_at),
         ..match stored_card(cached_card_id) {
@@ -1586,11 +1586,10 @@ async fn exhausted_generation_retries_do_not_return_expired_cached_live_card() {
         .notify_one();
     assert_live(&repopulate_cached_card.await.unwrap(), cached_card_id);
 
-    let sleep_for = expires_at
-        .signed_duration_since(Utc::now())
-        .to_std()
-        .unwrap_or_default()
-        + std::time::Duration::from_millis(25);
+    let sleep_for =
+        std::time::Duration::try_from(expires_at.duration_since(jiff::Timestamp::now()))
+            .unwrap_or_default()
+            + std::time::Duration::from_millis(25);
     tokio::time::sleep(sleep_for).await;
     final_blocked_mixed_lookup.notify_one();
 

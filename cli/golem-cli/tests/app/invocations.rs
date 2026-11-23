@@ -160,7 +160,7 @@ async fn invocation_commands_get_list_and_cancel(_tracing: &Tracing) {
     assert!(!outputs.success());
 
     // A call scheduled for later is `scheduled` until it is cancelled.
-    let schedule_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let schedule_at = (jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1)).to_string();
     let outputs = ctx
         .cli([
             flag::YES,
