@@ -13,21 +13,16 @@
 // limitations under the License.
 
 use super::*;
+use crate::worker::invocation::{ReturnRecorded, record_result_at_return};
 use std::future::Future;
 use std::pin::Pin;
 use wasmtime::StoreContextMut;
-
-/// The outcome of recording a replayed result at the export's return.
-enum ReplayRecorded {
-    Succeeded(Result<(), WorkerExecutorError>),
-    MethodFailed(Result<(), WorkerExecutorError>),
-}
 
 /// Records a replayed result at the export's return: it consumes the recorded terminal, or at
 /// the replay tail records the result live.
 struct ReplayRecorder {
     uses_streams: bool,
-    outcome: Option<ReplayRecorded>,
+    outcome: Option<ReturnRecorded>,
 }
 
 impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for ReplayRecorder {
@@ -35,57 +30,14 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for ReplayRecorder {
         &'a mut self,
         store: &'a mut StoreContextMut<'_, Ctx>,
         display_name: &'a str,
-        result: &'a InvokeResult,
-    ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        result: InvokeResult,
+    ) -> Pin<Box<dyn Future<Output = (InvokeResult, bool)> + Send + 'a>> {
         Box::pin(async move {
-            match result {
-                InvokeResult::Succeeded {
-                    result,
-                    consumed_fuel,
-                } => {
-                    let mut output = AgentInvocationOutput {
-                        result: (**result).clone(),
-                        consumed_fuel: Some(*consumed_fuel),
-                        invocation_status: None,
-                        component_revision: Some(store.data().component_metadata().revision),
-                        agent_id: None,
-                        idempotency_key: None,
-                        oplog_index: None,
-                        agent_fingerprint: None,
-                        background_failure: None,
-                    };
-                    let recorded = store
-                        .data_mut()
-                        .on_agent_invocation_success(
-                            display_name,
-                            *consumed_fuel,
-                            &mut output,
-                            ResultRecordedAt::ExportReturn,
-                        )
-                        .await;
-                    let ok = recorded.is_ok();
-                    self.outcome = Some(ReplayRecorded::Succeeded(recorded));
-                    ok
-                }
-                InvokeResult::MethodFailed { error, .. } => {
-                    let recorded = DurableWorkerCtx::<Ctx>::on_agent_method_failure(
-                        store,
-                        display_name,
-                        error.clone(),
-                        self.uses_streams,
-                        ResultRecordedAt::ExportReturn,
-                    )
-                    .await
-                    .map_err(|error| match error {
-                        crate::worker::MethodFailureSettlementError::Invocation(error)
-                        | crate::worker::MethodFailureSettlementError::Recovery(error) => error,
-                    });
-                    let ok = recorded.is_ok();
-                    self.outcome = Some(ReplayRecorded::MethodFailed(recorded));
-                    ok
-                }
-                _ => false,
-            }
+            let (result, recorded) =
+                record_result_at_return(store, display_name, result, self.uses_streams).await;
+            let ok = recorded.as_ref().is_some_and(ReturnRecorded::is_recorded);
+            self.outcome = recorded;
+            (result, ok)
         })
     }
 }
@@ -330,15 +282,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                         let recorded_success = match recorder.outcome.take() {
                             Some(
-                                ReplayRecorded::Succeeded(Err(error))
-                                | ReplayRecorded::MethodFailed(Err(error)),
+                                ReturnRecorded::Succeeded(Err(error))
+                                | ReturnRecorded::MethodFailed(Err(
+                                    crate::worker::MethodFailureSettlementError::Invocation(error)
+                                    | crate::worker::MethodFailureSettlementError::Recovery(error),
+                                )),
                             ) => break Err(error),
-                            Some(ReplayRecorded::Succeeded(Ok(())))
+                            Some(ReturnRecorded::Succeeded(Ok(())))
                                 if matches!(invoke_result, Ok(InvokeResult::Succeeded { .. })) =>
                             {
                                 Some(true)
                             }
-                            Some(ReplayRecorded::MethodFailed(Ok(())))
+                            Some(ReturnRecorded::MethodFailed(Ok(())))
                                 if matches!(invoke_result, Ok(InvokeResult::MethodFailed { .. })) =>
                             {
                                 Some(false)

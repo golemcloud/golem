@@ -29,14 +29,16 @@ use crate::preview2::oplog_processor_plugin::exports::golem::api1_5_0::oplog_pro
 use crate::preview2::{golem_agent, golem_api_1_x};
 use crate::services::HasWorker;
 use crate::services::oplog::UnreadableOplog;
-use crate::workerctx::{PublicWorkerIo, WorkerCtx};
+use crate::workerctx::{PublicWorkerIo, ResultRecordedAt, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::AgentId;
 use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::tool::{ToolActivationSnapshot, ToolName};
-use golem_common::model::{AgentInvocation, AgentInvocationResult, OplogIndex};
+use golem_common::model::{
+    AgentInvocation, AgentInvocationOutput, AgentInvocationResult, OplogIndex,
+};
 use golem_common::schema::SchemaValue;
 #[cfg(test)]
 use golem_common::schema::agent::InputSchema;
@@ -1377,15 +1379,87 @@ pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
 /// The invocation loop and the replay driver supply it. It keeps the outcome of the recording,
 /// which the caller reads after [`invoke_observed_and_traced`] returns.
 pub trait ReturnRecorder<Ctx: WorkerCtx>: Send {
-    /// Records `result`, a `Succeeded` or `MethodFailed` result. `true` means the result is
-    /// recorded and the background work drains; `false` means it is not recorded, and the
-    /// invocation returns `result` without a drain.
+    /// Records `result`, a `Succeeded` or `MethodFailed` result, and gives it back. `true` means
+    /// the result is recorded and the background work drains; `false` means it is not recorded,
+    /// and the invocation returns `result` without a drain.
     fn record<'a>(
         &'a mut self,
         store: &'a mut StoreContextMut<'_, Ctx>,
         display_name: &'a str,
-        result: &'a InvokeResult,
-    ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
+        result: InvokeResult,
+    ) -> Pin<Box<dyn Future<Output = (InvokeResult, bool)> + Send + 'a>>;
+}
+
+/// The outcome of recording a result at the export's return.
+pub(crate) enum ReturnRecorded {
+    Succeeded(Result<(), WorkerExecutorError>),
+    MethodFailed(Result<(), crate::worker::MethodFailureSettlementError>),
+}
+
+impl ReturnRecorded {
+    /// Whether the result is recorded.
+    pub(crate) fn is_recorded(&self) -> bool {
+        match self {
+            Self::Succeeded(recorded) => recorded.is_ok(),
+            Self::MethodFailed(recorded) => recorded.is_ok(),
+        }
+    }
+}
+
+/// Records a `Succeeded` or `MethodFailed` result at the export's return, live or by consuming
+/// the recorded terminal in replay, and gives `result` back. Any other result records nothing.
+pub(crate) async fn record_result_at_return<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    display_name: &str,
+    result: InvokeResult,
+    uses_streams: bool,
+) -> (InvokeResult, Option<ReturnRecorded>) {
+    match result {
+        InvokeResult::Succeeded {
+            result,
+            consumed_fuel,
+        } => {
+            let mut output = AgentInvocationOutput {
+                result: *result,
+                consumed_fuel: Some(consumed_fuel),
+                invocation_status: None,
+                component_revision: Some(store.data().component_metadata().revision),
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+                background_failure: None,
+            };
+            let recorded = store
+                .data_mut()
+                .on_agent_invocation_success(
+                    display_name,
+                    consumed_fuel,
+                    &mut output,
+                    ResultRecordedAt::ExportReturn,
+                )
+                .await;
+            (
+                InvokeResult::Succeeded {
+                    result: Box::new(output.result),
+                    consumed_fuel,
+                },
+                Some(ReturnRecorded::Succeeded(recorded)),
+            )
+        }
+        InvokeResult::MethodFailed { ref error, .. } => {
+            let recorded = crate::durable_host::DurableWorkerCtx::<Ctx>::on_agent_method_failure(
+                store,
+                display_name,
+                error.clone(),
+                uses_streams,
+                ResultRecordedAt::ExportReturn,
+            )
+            .await;
+            (result, Some(ReturnRecorded::MethodFailed(recorded)))
+        }
+        other => (other, None),
+    }
 }
 
 /// Runs a guest export call on the store's event loop until the root future resolves, leaving
@@ -1506,7 +1580,7 @@ async fn record_at_return_and_drain<Ctx: WorkerCtx>(
             return unrecorded_at_return(store, Ok(failure));
         }
     }
-    let recorded = recorder.record(store, display_name, &result).await;
+    let (result, recorded) = recorder.record(store, display_name, result).await;
     if !recorded {
         return unrecorded_at_return(store, Ok(result));
     }

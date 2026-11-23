@@ -2,7 +2,7 @@ use super::*;
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durability::DurabilityHost;
 use crate::worker::MethodFailureSettlementError;
-use crate::worker::invocation::ReturnRecorder;
+use crate::worker::invocation::{ReturnRecorded, ReturnRecorder, record_result_at_return};
 use golem_common::model::InvocationId;
 use std::future::Future;
 use std::pin::Pin;
@@ -15,8 +15,8 @@ enum LoopRecorded {
         consumed_fuel: u64,
         interrupt_kind: InterruptKind,
     },
-    Succeeded(Result<(), WorkerExecutorError>),
-    MethodFailed(Result<(), MethodFailureSettlementError>),
+    /// The recording of the result at the export's return, which may have failed.
+    Recorded(ReturnRecorded),
 }
 
 /// Records a live result at the export's return, unless a pending interrupt claims the
@@ -32,8 +32,8 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for LoopRecorder<Ctx> {
         &'a mut self,
         store: &'a mut StoreContextMut<'_, Ctx>,
         display_name: &'a str,
-        result: &'a InvokeResult,
-    ) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+        result: InvokeResult,
+    ) -> Pin<Box<dyn Future<Output = (InvokeResult, bool)> + Send + 'a>> {
         Box::pin(async move {
             if let Some(interrupt) = self.parent.interrupt_signal.claim_pending_terminal().await {
                 interrupt.establishment.wait().await;
@@ -41,52 +41,13 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for LoopRecorder<Ctx> {
                     consumed_fuel: result.consumed_fuel(),
                     interrupt_kind: interrupt.kind,
                 });
-                return false;
+                return (result, false);
             }
-            match result {
-                InvokeResult::Succeeded {
-                    result,
-                    consumed_fuel,
-                } => {
-                    let mut output = AgentInvocationOutput {
-                        result: (**result).clone(),
-                        consumed_fuel: Some(*consumed_fuel),
-                        invocation_status: None,
-                        component_revision: Some(store.data().component_metadata().revision),
-                        agent_id: None,
-                        idempotency_key: None,
-                        oplog_index: None,
-                        agent_fingerprint: None,
-                        background_failure: None,
-                    };
-                    let recorded = store
-                        .data_mut()
-                        .on_agent_invocation_success(
-                            display_name,
-                            *consumed_fuel,
-                            &mut output,
-                            ResultRecordedAt::ExportReturn,
-                        )
-                        .await;
-                    let ok = recorded.is_ok();
-                    self.outcome = Some(LoopRecorded::Succeeded(recorded));
-                    ok
-                }
-                InvokeResult::MethodFailed { error, .. } => {
-                    let recorded = DurableWorkerCtx::<Ctx>::on_agent_method_failure(
-                        store,
-                        display_name,
-                        error.clone(),
-                        self.uses_streams,
-                        ResultRecordedAt::ExportReturn,
-                    )
-                    .await;
-                    let ok = recorded.is_ok();
-                    self.outcome = Some(LoopRecorded::MethodFailed(recorded));
-                    ok
-                }
-                _ => false,
-            }
+            let (result, recorded) =
+                record_result_at_return(store, display_name, result, self.uses_streams).await;
+            let ok = recorded.as_ref().is_some_and(ReturnRecorded::is_recorded);
+            self.outcome = recorded.map(LoopRecorded::Recorded);
+            (result, ok)
         })
     }
 }
@@ -334,7 +295,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )
                 .await
             }
-            (Some(LoopRecorded::Succeeded(Ok(()))), Ok(InvokeResult::Succeeded { .. })) => {
+            (
+                Some(LoopRecorded::Recorded(ReturnRecorded::Succeeded(Ok(())))),
+                Ok(InvokeResult::Succeeded { .. }),
+            ) => {
                 self.agent_invocation_recorded(
                     display_name,
                     &invocation_idempotency_key,
@@ -343,7 +307,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )
                 .await
             }
-            (Some(LoopRecorded::MethodFailed(Ok(()))), Ok(InvokeResult::MethodFailed { .. })) => {
+            (
+                Some(LoopRecorded::Recorded(ReturnRecorded::MethodFailed(Ok(())))),
+                Ok(InvokeResult::MethodFailed { .. }),
+            ) => {
                 self.agent_method_failure_recorded(
                     &display_name,
                     &invocation_idempotency_key,
@@ -351,7 +318,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )
                 .await
             }
-            (Some(LoopRecorded::Succeeded(Err(error))), _) => {
+            (Some(LoopRecorded::Recorded(ReturnRecorded::Succeeded(Err(error)))), _) => {
                 self.agent_invocation_recorded(
                     display_name,
                     &invocation_idempotency_key,
@@ -360,7 +327,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 )
                 .await
             }
-            (Some(LoopRecorded::MethodFailed(Err(error))), _) => {
+            (Some(LoopRecorded::Recorded(ReturnRecorded::MethodFailed(Err(error)))), _) => {
                 self.agent_method_failure_recorded(
                     &display_name,
                     &invocation_idempotency_key,
