@@ -3405,7 +3405,7 @@ fn layout_ids() -> (EnvironmentId, ComponentId, AgentId, AgentFingerprint) {
 fn layout_namespaces() -> Vec<BlobStorageNamespace> {
     let (environment_id, component_id, agent_id, fingerprint) = layout_ids();
     let mut namespaces = vec![
-        BlobStorageNamespace::CompilationCache { environment_id },
+        BlobStorageNamespace::CompilationCache,
         BlobStorageNamespace::CustomStorage { environment_id },
         BlobStorageNamespace::InitialAgentFiles { environment_id },
         BlobStorageNamespace::Components { environment_id },
@@ -3481,7 +3481,7 @@ async fn without_namespace_prefixes_each_namespace_has_the_keys_of_its_own_bucke
     let agent = agent_path_segment(&agent_id);
     let expected = |prefix: &str| {
         let expected = [
-            format!("/golem-compiled-components/{prefix}{environment_id}/blob"),
+            format!("/golem-compiled-components/{prefix}compilation_cache/blob"),
             format!("/custom-data/{prefix}{environment_id}/blob"),
             format!("/golem-initial-agent-files/{prefix}{environment_id}/blob"),
             format!("/component-store/{prefix}{environment_id}/blob"),
@@ -3509,7 +3509,7 @@ async fn with_namespace_prefixes_each_namespace_is_below_the_segment_of_its_kind
     let agent = agent_path_segment(&agent_id);
     let expected = |prefix: &str| {
         let expected = [
-            format!("/golem/{prefix}compilation_cache/{environment_id}/blob"),
+            format!("/golem/{prefix}compilation_cache/blob"),
             format!("/golem/{prefix}custom_data/{environment_id}/blob"),
             format!("/golem/{prefix}initial_agent_files/{environment_id}/blob"),
             format!("/golem/{prefix}component_store/{environment_id}/blob"),

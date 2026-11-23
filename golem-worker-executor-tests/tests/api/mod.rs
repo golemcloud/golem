@@ -43,11 +43,13 @@ use golem_common::{agent_id, data_value};
 use golem_service_base::clients::registry::{
     RegistryService, RegistryServiceError, ResourceUsageUpdate,
 };
+use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{AccountResourceLimits, MonthlyResourcePolicy};
+use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, join_blob_key};
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::{
     AgentResult, count_agent_invocation_pair_since, drain_connection, stdout_event_matching,
@@ -7012,7 +7014,13 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     // case: WASM can be parsed, but wasmtime does not support it
-    let executor = start(deps, &context).await?;
+    let blob_dir = tempfile::tempdir()?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        isolated_compilation_cache(blob_dir.path().to_path_buf()),
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -7054,6 +7062,19 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     Ok(())
 }
 
+// These tests corrupt Wasm and must not read or remove an artifact shared with another test.
+fn isolated_compilation_cache(root: std::path::PathBuf) -> TestExecutorOverrides {
+    TestExecutorOverrides {
+        configure: Some(Arc::new(move |config| {
+            config.blob_storage =
+                BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
+                    root: root.clone(),
+                });
+        })),
+        ..Default::default()
+    }
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -7063,7 +7084,9 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let blob_dir = tempfile::tempdir()?;
+    let overrides = isolated_compilation_cache(blob_dir.path().to_path_buf());
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -7086,10 +7109,8 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     )?;
     let artifact_fingerprint =
         golem_common::wasmtime_config::wasmtime_artifact_fingerprint(&engine);
-    let compiled_component_path = join_blob_key(
-        &format!("{}/0", component.id),
-        &format!("{artifact_fingerprint}.cwasm"),
-    );
+    let compiled_component_path =
+        DefaultCompiledComponentService::key(component.wasm_hash, &artifact_fingerprint);
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
@@ -7108,20 +7129,18 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     .unwrap();
 
     debug!("Deleting {:?}", compiled_component_path);
-    FileSystemBlobStorage::new(&deps.blob_storage_root())
+    FileSystemBlobStorage::new(blob_dir.path())
         .await?
         .delete(
             "test",
             "delete-compiled-component",
-            BlobStorageNamespace::CompilationCache {
-                environment_id: component.environment_id,
-            },
+            BlobStorageNamespace::CompilationCache,
             compiled_component_path.as_ref(),
         )
         .await
         .expect("Failed to delete compiled component");
 
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
 
     debug!("Trying to invoke recovered worker");
 

@@ -23,7 +23,9 @@ use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::tracing::TraceOrigin;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::component::Component;
@@ -34,7 +36,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::task::spawn_blocking;
-use tracing::{debug, info_span, warn};
+use tracing::{Instrument, debug, info_span, warn};
 use wasmtime::Engine;
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -109,8 +111,9 @@ pub fn configured(
     ))
 }
 
+#[derive(Clone)]
 pub struct ComponentServiceDefault {
-    component_cache: Cache<ComponentKey, (), wasmtime::component::Component, WorkerExecutorError>,
+    component_cache: LoadedComponentCache,
     component_metadata_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
     current_component_metadata_cache: Cache<ComponentId, (), Component, WorkerExecutorError>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
@@ -152,107 +155,39 @@ impl ComponentService for ComponentServiceDefault {
         component_id: ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
-        let key = ComponentKey {
-            component_id,
-            component_revision,
-        };
-        let engine = engine.clone();
-        let compiled_component_service = self.compiled_component_service.clone();
-        let compilation_limiter = self.compilation_limiter.clone();
         let metadata = self
             .get_metadata(component_id, Some(component_revision))
             .await?;
-        let environment_id = metadata.environment_id;
+        let wasm_hash = metadata.wasm_hash;
+        let key = LoadedComponentKey(wasm_hash, engine.clone());
+        let revision_key = ComponentKey {
+            component_id,
+            component_revision,
+        };
 
-        let component = self
+        let service = self.clone();
+        let load_engine = engine.clone();
+        let load_metadata = metadata.clone();
+        let load_revision = revision_key.clone();
+        let origin = TraceOrigin::capture_current();
+        let result = self
             .component_cache
-            .get_or_insert_simple(&key.clone(), || {
-                Box::pin(async move {
-                    let result = compiled_component_service
-                        .get(environment_id, component_id, component_revision, &engine)
-                        .await;
-
-                    let component = match result {
-                        Ok(component) => component,
-                        Err(err) => {
-                            warn!("Failed to download compiled component {:?}: {}", key, err);
-                            None
-                        }
-                    };
-
-                    match component {
-                        Some(component) => Ok(component),
-                        None => {
-                            // Bound the local compile fallback working set when
-                            // both the in-process cache and compiled artifact
-                            // store miss.
-                            compilation_limiter
-                                .run(async move {
-                                    let bytes = self
-                                        .registry_client
-                                        .download_component(component_id, component_revision)
-                                        .await
-                                        .map_err(|error| {
-                                            registry_error(
-                                                RegistryCall::DownloadComponent,
-                                                component_id,
-                                                Some(component_revision),
-                                                error,
-                                            )
-                                        })?;
-
-                                    let start = Instant::now();
-                                    let span = info_span!("Loading WASM component");
-                                    let component = spawn_blocking(move || {
-                                        let _enter = span.enter();
-                                        wasmtime::component::Component::from_binary(&engine, &bytes)
-                                            .map_err(|e| {
-                                                WorkerExecutorError::ComponentParseFailed {
-                                                    component_id,
-                                                    component_revision,
-                                                    reason: format!("{e}"),
-                                                }
-                                            })
-                                    })
-                                    .await
-                                    .map_err(compilation_join_error)??;
-                                    let end = Instant::now();
-
-                                    let compilation_time = end.duration_since(start);
-                                    record_compilation_time(compilation_time);
-                                    debug!(
-                                        "Compiled {} in {}ms",
-                                        component_id,
-                                        compilation_time.as_millis(),
-                                    );
-
-                                    let result = compiled_component_service
-                                        .put(
-                                            environment_id,
-                                            component_id,
-                                            component_revision,
-                                            &component,
-                                        )
-                                        .await;
-
-                                    match result {
-                                        Ok(_) => Ok(component),
-                                        Err(err) => {
-                                            warn!(
-                                                "Failed to upload compiled component {:?}: {}",
-                                                key, err
-                                            );
-                                            Ok(component)
-                                        }
-                                    }
-                                })
-                                .await
-                        }
-                    }
-                })
+            .get_or_insert_simple_spawned(&key, move || {
+                let span = golem_common::related_span!(origin, tracing::Level::INFO, "Load shared component", %wasm_hash);
+                async move {
+                    service
+                        .load_component(&load_engine, &load_metadata)
+                        .await
+                        .map_err(|error| (load_revision, error))
+                }.instrument(span)
             })
-            .await?;
-
+            .await;
+        let component = match result {
+            Ok(component) => component,
+            Err((owner, error)) if owner == revision_key => return Err(error),
+            // A download failure for another revision must not prevent this one from loading.
+            Err(_) => self.load_component(engine, &metadata).await?,
+        };
         Ok((component, metadata))
     }
 
@@ -425,6 +360,83 @@ struct ComponentKey {
     component_revision: ComponentRevision,
 }
 
+impl ComponentServiceDefault {
+    async fn load_component(
+        &self,
+        engine: &Engine,
+        metadata: &Component,
+    ) -> Result<wasmtime::component::Component, WorkerExecutorError> {
+        let Component {
+            id: component_id,
+            revision: component_revision,
+            wasm_hash,
+            environment_id,
+            ..
+        } = *metadata;
+        match self
+            .compiled_component_service
+            .get(wasm_hash, component_id, component_revision, engine)
+            .await
+        {
+            Ok(Some(component)) => return Ok(component),
+            Ok(None) => (),
+            Err(error) => {
+                warn!(%component_id, %component_revision, %error, "Failed to download compiled component")
+            }
+        }
+
+        // Bound the local compile fallback working set when both caches miss.
+        self.compilation_limiter.run(async {
+            let bytes = self.registry_client.download_component(component_id, component_revision).await
+                .map_err(|error| registry_error(RegistryCall::DownloadComponent, component_id, Some(component_revision), error))?;
+            let start = Instant::now();
+            let span = info_span!("Loading WASM component");
+            let engine = engine.clone();
+            let component = spawn_blocking(move || {
+                let _enter = span.enter();
+                if blake3::hash(&bytes) != *wasm_hash.as_blake3_hash() {
+                    return Err(WorkerExecutorError::component_download_failed(component_id, component_revision, "Wasm hash mismatch".to_string()));
+                }
+                wasmtime::component::Component::from_binary(&engine, &bytes)
+                    .map_err(|error| WorkerExecutorError::ComponentParseFailed { component_id, component_revision, reason: error.to_string() })
+            }).await.map_err(compilation_join_error)??;
+            let compilation_time = start.elapsed();
+            record_compilation_time(compilation_time);
+            debug!(%component_id, compilation_time_ms = compilation_time.as_millis(), "Compiled component");
+
+            if let Err(error) = self.compiled_component_service.put(environment_id, wasm_hash, component_id, component_revision, &component).await {
+                warn!(%component_id, %component_revision, %error, "Failed to upload compiled component");
+            }
+            Ok(component)
+        }).await
+    }
+}
+
+// Loaded components belong to an engine instance, not just a compatible engine configuration.
+#[derive(Clone, Debug)]
+struct LoadedComponentKey(Hash, Engine);
+
+type LoadedComponentCache = Cache<
+    LoadedComponentKey,
+    (),
+    wasmtime::component::Component,
+    (ComponentKey, WorkerExecutorError),
+>;
+
+impl PartialEq for LoadedComponentKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 && Engine::same(&self.1, &other.1)
+    }
+}
+
+impl Eq for LoadedComponentKey {}
+
+impl std::hash::Hash for LoadedComponentKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.0, state);
+    }
+}
+
 fn create_component_metadata_cache(
     max_capacity: usize,
     time_to_idle: Duration,
@@ -455,10 +467,7 @@ fn create_current_component_metadata_cache(
     )
 }
 
-fn create_component_cache(
-    max_capacity: usize,
-    time_to_idle: Duration,
-) -> Cache<ComponentKey, (), wasmtime::component::Component, WorkerExecutorError> {
+fn create_component_cache(max_capacity: usize, time_to_idle: Duration) -> LoadedComponentCache {
     Cache::new(
         Some(max_capacity),
         FullCacheEvictionMode::LeastRecentlyUsed(1),
@@ -569,6 +578,8 @@ mod tests {
     use golem_service_base::model::environment::EnvironmentState;
     use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
     use golem_service_base::service::compiled_component::CompiledComponentServiceDisabled;
+    use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use std::collections::HashMap;
     use test_r::test;
 
@@ -595,8 +606,10 @@ mod tests {
     }
 
     struct MockRegistryService {
-        components: HashMap<ComponentId, Component>,
+        components: HashMap<(ComponentId, ComponentRevision), Component>,
         deployed_component_calls: Arc<std::sync::Mutex<HashMap<ComponentId, usize>>>,
+        wasm: HashMap<ComponentId, Vec<u8>>,
+        missing_wasm_gate: Option<(tokio::sync::Notify, tokio::sync::Notify)>,
     }
 
     impl MockRegistryService {
@@ -604,9 +617,11 @@ mod tests {
             Self {
                 components: components
                     .into_iter()
-                    .map(|component| (component.id, component))
+                    .map(|component| ((component.id, component.revision), component))
                     .collect(),
                 deployed_component_calls: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                wasm: HashMap::new(),
+                missing_wasm_gate: None,
             }
         }
 
@@ -675,19 +690,28 @@ mod tests {
 
         async fn download_component(
             &self,
-            _component_id: ComponentId,
+            component_id: ComponentId,
             _component_revision: ComponentRevision,
         ) -> Result<Vec<u8>, RegistryServiceError> {
-            unimplemented!()
+            if let Some(wasm) = self.wasm.get(&component_id) {
+                return Ok(wasm.clone());
+            }
+            let (entered, release) = self
+                .missing_wasm_gate
+                .as_ref()
+                .expect("unexpected Wasm download");
+            entered.notify_one();
+            release.notified().await;
+            Err(RegistryServiceError::NotFound("missing Wasm".into()))
         }
 
         async fn get_component_metadata(
             &self,
             component_id: ComponentId,
-            _component_revision: ComponentRevision,
+            component_revision: ComponentRevision,
         ) -> Result<Component, RegistryServiceError> {
             self.components
-                .get(&component_id)
+                .get(&(component_id, component_revision))
                 .cloned()
                 .ok_or_else(|| RegistryServiceError::NotFound("missing component".to_string()))
         }
@@ -701,7 +725,9 @@ mod tests {
             drop(calls);
 
             self.components
-                .get(&component_id)
+                .values()
+                .filter(|component| component.id == component_id)
+                .max_by_key(|component| component.revision)
                 .cloned()
                 .ok_or_else(|| RegistryServiceError::NotFound("missing component".to_string()))
         }
@@ -851,6 +877,150 @@ mod tests {
             package_metadata: None,
             object_store_key: "test-object".to_string(),
         }
+    }
+
+    #[test]
+    async fn loads_shared_wasm_once_per_engine_and_keeps_revision_metadata() -> anyhow::Result<()> {
+        let config = golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache();
+        let engine = Engine::new(&config)?;
+        let other_engine = Engine::new(&config)?;
+        let mut first = make_component(ComponentId::new(), EnvironmentId::new());
+        let mut second = make_component(ComponentId::new(), EnvironmentId::new());
+        let original = wat::parse_str("(component)")?;
+        let different = wat::parse_str("(component (core module (memory 1)))")?;
+        first.wasm_hash = blake3::hash(&original).into();
+        second.wasm_hash = first.wasm_hash;
+        let mut updated = first.clone();
+        updated.revision = ComponentRevision::new(2).unwrap();
+        updated.wasm_hash = blake3::hash(&different).into();
+        let compiled = Arc::new(DefaultCompiledComponentService::new(Arc::new(
+            InMemoryBlobStorage::new(),
+        )));
+        for (metadata, bytes) in [(&first, &original), (&updated, &different)] {
+            let artifact = wasmtime::component::Component::from_binary(&engine, bytes)?;
+            compiled
+                .put(
+                    metadata.environment_id,
+                    metadata.wasm_hash,
+                    metadata.id,
+                    metadata.revision,
+                    &artifact,
+                )
+                .await?;
+        }
+        // The registry mock does not implement Wasm downloads: a persistent cache miss fails the test.
+        let registry = Arc::new(MockRegistryService::new([
+            first.clone(),
+            second.clone(),
+            updated.clone(),
+        ]));
+        let service = ComponentServiceDefault::new(
+            registry.clone(),
+            8,
+            8,
+            Duration::from_secs(60),
+            1,
+            compiled.clone(),
+        );
+        let (first_loaded, _) = service.get(&engine, first.id, first.revision).await?;
+        let (second_loaded, second_metadata) =
+            service.get(&engine, second.id, second.revision).await?;
+        assert!(wasmtime::component::Component::same(
+            &first_loaded,
+            &second_loaded
+        ));
+        assert_eq!(second_metadata.id, second.id);
+        assert_eq!(second_metadata.environment_id, second.environment_id);
+        let (updated_loaded, _) = service.get(&engine, updated.id, updated.revision).await?;
+        assert!(!wasmtime::component::Component::same(
+            &first_loaded,
+            &updated_loaded
+        ));
+        let (still_original, _) = service.get(&engine, second.id, second.revision).await?;
+        assert!(wasmtime::component::Component::same(
+            &first_loaded,
+            &still_original
+        ));
+        let (other_loaded, _) = service
+            .get(&other_engine, second.id, second.revision)
+            .await?;
+        assert!(Engine::same(other_loaded.engine(), &other_engine));
+        let fresh =
+            ComponentServiceDefault::new(registry, 8, 8, Duration::from_secs(60), 1, compiled);
+        fresh.get(&engine, second.id, second.revision).await?;
+        Ok(())
+    }
+
+    #[test]
+    async fn rejects_mismatched_wasm_without_populating_compiled_cache() -> anyhow::Result<()> {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let mut metadata = make_component(ComponentId::new(), EnvironmentId::new());
+        metadata.wasm_hash = blake3::hash(&wat::parse_str("(component)")?).into();
+        let mut registry = MockRegistryService::new([metadata.clone()]);
+        registry.wasm.insert(
+            metadata.id,
+            wat::parse_str("(component (core module (memory 1)))")?,
+        );
+        let compiled = Arc::new(DefaultCompiledComponentService::new(Arc::new(
+            InMemoryBlobStorage::new(),
+        )));
+        let service = ComponentServiceDefault::new(
+            Arc::new(registry),
+            8,
+            8,
+            Duration::from_secs(60),
+            1,
+            compiled.clone(),
+        );
+
+        assert!(matches!(
+            service.get(&engine, metadata.id, metadata.revision).await,
+            Err(WorkerExecutorError::ComponentDownloadFailed { component_id, .. })
+                if component_id == metadata.id
+        ));
+        assert!(!compiled.exists(metadata.wasm_hash, &engine).await?);
+        Ok(())
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn shared_cache_miss_does_not_share_revision_download_errors() -> anyhow::Result<()> {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let bytes = wat::parse_str("(component)")?;
+        let mut missing = make_component(ComponentId::new(), EnvironmentId::new());
+        let mut present = make_component(ComponentId::new(), EnvironmentId::new());
+        missing.wasm_hash = blake3::hash(&bytes).into();
+        present.wasm_hash = missing.wasm_hash;
+        let mut registry = MockRegistryService::new([missing.clone(), present.clone()]);
+        registry.wasm.insert(present.id, bytes);
+        registry.missing_wasm_gate = Some(Default::default());
+        let registry = Arc::new(registry);
+        let (entered, release) = registry.missing_wasm_gate.as_ref().unwrap();
+        let service = ComponentServiceDefault::new(
+            registry.clone(),
+            8,
+            8,
+            Duration::from_secs(60),
+            1,
+            Arc::new(CompiledComponentServiceDisabled::new()),
+        );
+
+        let miss = service.get(&engine, missing.id, missing.revision);
+        let hit = async {
+            entered.notified().await;
+            let mut pending = std::pin::pin!(service.get(&engine, present.id, present.revision));
+            assert!(futures::poll!(pending.as_mut()).is_pending());
+            release.notify_one();
+            pending.await
+        };
+        let (miss, hit) = tokio::join!(miss, hit);
+        assert!(
+            matches!(miss, Err(WorkerExecutorError::ComponentServiceRefused { component_id, .. }) if component_id == missing.id)
+        );
+        assert_eq!(hit?.1.id, present.id);
+        Ok(())
     }
 
     #[test]

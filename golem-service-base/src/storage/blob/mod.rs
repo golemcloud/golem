@@ -1213,9 +1213,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BlobStorageNamespace {
-    CompilationCache {
-        environment_id: EnvironmentId,
-    },
+    CompilationCache,
     InitialAgentFiles {
         environment_id: EnvironmentId,
     },
@@ -1300,9 +1298,7 @@ pub fn agent_path_segment(agent_id: &AgentId) -> String {
 /// deletes below the location of a namespace touches no blob of another namespace.
 pub(crate) fn namespace_segments(namespace: &BlobStorageNamespace) -> Vec<String> {
     match namespace {
-        BlobStorageNamespace::CompilationCache { environment_id } => {
-            vec!["compilation_cache".to_string(), environment_id.to_string()]
-        }
+        BlobStorageNamespace::CompilationCache => vec!["compilation_cache".to_string()],
         BlobStorageNamespace::CustomStorage { environment_id } => {
             vec!["custom_data".to_string(), environment_id.to_string()]
         }

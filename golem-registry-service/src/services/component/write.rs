@@ -514,7 +514,12 @@ impl ComponentWriteService {
             )?;
 
         self.component_compilation
-            .enqueue_compilation(environment_id, component_id, stored_component.revision)
+            .enqueue_compilation(
+                environment_id,
+                component_id,
+                stored_component.revision,
+                stored_component.wasm_hash,
+            )
             .await;
 
         Ok(stored_component)
@@ -910,7 +915,12 @@ impl ComponentWriteService {
             )?;
 
         self.component_compilation
-            .enqueue_compilation(environment_id, component_id, stored_component.revision)
+            .enqueue_compilation(
+                environment_id,
+                component_id,
+                stored_component.revision,
+                stored_component.wasm_hash,
+            )
             .await;
 
         Ok(stored_component)

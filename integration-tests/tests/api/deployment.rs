@@ -434,6 +434,103 @@ fn assert_secret_type_is_string(secret_type: &SchemaGraph) {
 }
 
 #[test]
+#[timeout("60s")]
+async fn packaged_wasm_uses_one_compiled_artifact_across_environments(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    use golem_test_framework::config::EnvBasedTestDependenciesConfig;
+    use sha2::{Digest, Sha256};
+    use std::time::Duration;
+
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = deps.registry_service().client(&user.token).await;
+    let (_, first) = user.app_and_env().await?;
+    let (_, second) = user.app_and_env().await?;
+    let (_, marker_env) = user.app_and_env().await?;
+
+    // An empty component with a unique custom section avoids hitting an artifact from another run.
+    let mut wasm = b"\0asm\x0d\0\x01\0\0\x12\x01x".to_vec();
+    wasm.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
+    let digest = format!("sha256:{:x}", Sha256::digest(&wasm));
+    let request = serde_json::from_value(json!({
+        "componentName": "probe:packaged",
+        "packageMetadata": {
+            "source": "./fixture.tar",
+            "packageDigest": digest,
+            "layerDigest": digest,
+        },
+    }))?;
+
+    for environment in [&first, &second] {
+        client
+            .create_component(&environment.id.0, &request, wasm.clone(), None::<Vec<u8>>)
+            .await?;
+        let plan = client
+            .get_environment_deployment_plan(&environment.id.0)
+            .await?;
+        client
+            .deploy_environment(
+                &environment.id.0,
+                &deployment_creation(&plan, "0.0.1", plan.deployment_hash, vec![], vec![]),
+            )
+            .await?;
+    }
+
+    // A different artifact submitted after the duplicate tells us the compiler has processed it.
+    let mut changed_wasm = wasm;
+    changed_wasm[11] = b'y';
+    let marker = serde_json::from_value(json!({ "componentName": "probe:marker" }))?;
+    client
+        .create_component(&marker_env.id.0, &marker, changed_wasm, None::<Vec<u8>>)
+        .await?;
+
+    let port = EnvBasedTestDependenciesConfig::new().compilation_http_port;
+    let http = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{port}/metrics");
+    let uploads = |metrics: &str, environment_id| {
+        let label = format!("environment_id=\"{environment_id}\"");
+        metrics
+            .lines()
+            .filter(|line| {
+                line.starts_with("golem_compilation_cache_objects_written_total{")
+                    && line.contains(&label)
+            })
+            .map(|line| {
+                line.split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+            })
+            .sum::<u64>()
+    };
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let metrics = http
+                .get(&url)
+                .send()
+                .await?
+                .error_for_status()?
+                .text()
+                .await?;
+            if uploads(&metrics, marker_env.id) == 1 {
+                assert_eq!(uploads(&metrics, first.id), 1);
+                assert_eq!(
+                    uploads(&metrics, second.id),
+                    0,
+                    "the second environment should reuse the compiled artifact"
+                );
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await??;
+
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);

@@ -55,6 +55,7 @@ goldenfile = { workspace = true }
 h2 = { workspace = true }
 http = { workspace = true }
 redis = { workspace = true }
+sha2 = { workspace = true }
 sqlx = { workspace = true }
 test-r = { workspace = true }
 url = { workspace = true }
