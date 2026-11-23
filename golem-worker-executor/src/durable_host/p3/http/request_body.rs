@@ -1196,6 +1196,11 @@ pub(crate) enum HttpTransmissionResolution {
     },
 }
 
+type HttpRequestTrailersWrite = (
+    FutureAny,
+    HttpRequestWriteInterceptor<Result<Option<Resource<Trailers>>, ErrorCode>>,
+);
+
 /// Wiring of a P3 request or response body transmission future, interposed between
 /// the built-in `WasiHttp` future and its guest or transferred host consumer.
 ///
@@ -1221,10 +1226,7 @@ pub(crate) struct PendingHttpRequestBodyTransmission {
     demand_rx: oneshot::Receiver<()>,
     delivery: Arc<HttpFutureDelivery>,
     contents_write: Option<(StreamAny, HttpRequestWriteInterceptor<u8>)>,
-    trailers_write: Option<(
-        FutureAny,
-        HttpRequestWriteInterceptor<Result<Option<Resource<Trailers>>, ErrorCode>>,
-    )>,
+    trailers_write: Option<HttpRequestTrailersWrite>,
     pub(super) recovery: RequestBodyRecovery,
 }
 

@@ -127,7 +127,7 @@ async fn outgoing_http_unsent_body_returns_to_the_guest_without_write_records(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent = agent_id!("HttpClient4");
+    let agent = agent_key!("HttpClient4");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     for (write_first, cancel) in [(false, false), (true, false), (true, true)] {
         let result = timeout(
@@ -192,7 +192,7 @@ async fn outgoing_http_retained_request_write_settles_and_replays_across_invocat
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent = agent_id!("HttpClient4");
+    let agent = agent_key!("HttpClient4");
     let worker = executor
         .start_agent_with(
             &component.id,

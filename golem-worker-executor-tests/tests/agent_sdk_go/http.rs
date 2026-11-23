@@ -318,7 +318,7 @@ async fn go_http_write_acknowledgement_repairs_an_incomplete_start(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent = agent_id!("HttpAgent", "incomplete-write-ack");
+    let agent = agent_key!("HttpAgent", "incomplete-write-ack");
     let worker = executor
         .start_agent_with(
             &component.id,
@@ -328,7 +328,7 @@ async fn go_http_write_acknowledgement_repairs_an_incomplete_start(
         )
         .await?;
     let (accepted, release) = executor.gate_next_oplog_function_end(
-        &worker,
+        &worker.agent_id,
         HostFunctionName::P3HttpRequestContentsWrite,
         true,
     );
@@ -337,7 +337,7 @@ async fn go_http_write_acknowledgement_repairs_an_incomplete_start(
         .invoke_agent_with_key(&component, &agent, &key, "run-parallel", data_value!(1u16))
         .await?;
     timeout(Duration::from_secs(30), accepted).await??;
-    executor.commit_oplog(&worker).await?;
+    executor.commit_oplog(&worker.agent_id).await?;
     let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     let (write_index, recorded) = before
         .iter()
@@ -359,7 +359,7 @@ async fn go_http_write_acknowledgement_repairs_an_incomplete_start(
     );
     assert!(!before.iter().any(|entry| matches!(&entry.entry,
         PublicOplogEntry::End(end) if end.start_index == write_index)));
-    let crashed = executor.signal_simulated_crash(&worker).await?;
+    let crashed = executor.signal_simulated_crash(&worker.agent_id).await?;
     release.send(()).unwrap();
     timeout(Duration::from_secs(30), crashed).await??;
     let result = timeout(
