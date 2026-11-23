@@ -3,7 +3,7 @@ on:
   workflow_call:
     inputs:
       deadline:
-        description: Immutable UTC epoch deadline shared with the orb
+        description: Immutable UTC epoch deadline for the CI diagnostic
         required: true
         type: string
       cohort:
@@ -18,6 +18,14 @@ on:
         description: Must be false for diagnostics
         default: false
         type: boolean
+      executor_run_id:
+        description: Preparation run containing the instrumented executor overlay
+        default: ''
+        type: string
+      executor_source:
+        description: Exact source SHA of the instrumented executor
+        default: ''
+        type: string
 permissions:
   contents: read
   actions: read
@@ -35,6 +43,8 @@ jobs:
       STUDY_HOST: ${{ matrix.host }}
       TRACE_DIAGNOSTIC: ${{ inputs.trace_diagnostic }}
       PUBLISH: ${{ inputs.publish }}
+      EXECUTOR_RUN_ID: ${{ inputs.executor_run_id }}
+      EXECUTOR_SOURCE: ${{ inputs.executor_source }}
     steps:
       - name: Check the shared deadline
         run: |
@@ -46,10 +56,30 @@ jobs:
           if [[ "$TRACE_DIAGNOSTIC" == true ]]; then
             (( STUDY_DEADLINE <= now + 1800 ))
           fi
+          if [[ -n "$EXECUTOR_RUN_ID" || -n "$EXECUTOR_SOURCE" ]]; then
+            [[ "$TRACE_DIAGNOSTIC" == true ]]
+            [[ "$EXECUTOR_RUN_ID" =~ ^[0-9]+$ && "$EXECUTOR_SOURCE" =~ ^[0-9a-f]{40}$ ]]
+          fi
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - name: Validate executor preparation identity
+        if: inputs.executor_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$EXECUTOR_RUN_ID" > "$RUNNER_TEMP/executor-origin.json"
+          jq -e --arg source "$EXECUTOR_SOURCE" \
+            '.head_sha == $source and .event == "workflow_dispatch" and .run_attempt == 1 and .conclusion == "success"' \
+            "$RUNNER_TEMP/executor-origin.json"
+      - uses: actions/download-artifact@v8
+        if: inputs.executor_run_id != ''
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.executor_run_id }}
+          name: executor-overlay-attempt1
+          path: ${{ runner.temp }}/executor
       - uses: actions/download-artifact@v8
         with:
           github-token: ${{ github.token }}
@@ -69,6 +99,10 @@ jobs:
           if [[ "$TRACE_DIAGNOSTIC" == true ]]; then
             options+=(--trace-diagnostic --last 2)
           fi
+          if [[ -n "$EXECUTOR_RUN_ID" ]]; then
+            options+=(--executor-overlay "$RUNNER_TEMP/executor/executor-overlay.tar.gz"
+              --executor-source "$EXECUTOR_SOURCE" --executor-run-id "$EXECUTOR_RUN_ID")
+          fi
           python3 .github/scripts/run-benchmark-validation.py \
             --archive "$RUNNER_TEMP/bundle/benchmark-bundle.tar.gz" \
             --output "$RUNNER_TEMP/short-results" \
@@ -79,6 +113,10 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ${{ inputs.trace_diagnostic && 'trace' || 'short' }}-study-${{ matrix.host }}-attempt${{ github.run_attempt }}
-          path: ${{ runner.temp }}/short-results
+          path: |
+            ${{ runner.temp }}/short-results
+            ${{ runner.temp }}/executor-origin.json
+            ${{ runner.temp }}/executor/executor-overlay.sha256
+            ${{ runner.temp }}/executor/executor-toolchain.txt
           if-no-files-found: warn
           retention-days: 30

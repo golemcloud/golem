@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import tarfile
 import time
@@ -120,6 +121,40 @@ def validate(path, run_id, runner, suite_path=SUITE):
     return run
 
 
+def install_executor_overlay(args, manifest):
+    """Replace only the executor; retain an explicit source map for this mixed bundle."""
+    if not args.executor_overlay:
+        return None
+    with tarfile.open(args.executor_overlay) as archive:
+        members = archive.getmembers()
+        if ({member.name for member in members} != {'worker-executor', 'executor-provenance.json'}
+                or len(members) != 2 or any(not member.isfile() for member in members)):
+            raise ValueError('Executor overlay must contain only its executable and provenance')
+        provenance = json.load(archive.extractfile('executor-provenance.json'))
+        if (provenance['source'] != args.executor_source
+                or provenance['run_id'] != args.executor_run_id or provenance['attempt'] != '1'):
+            raise ValueError('Executor overlay identity differs from its preparation run')
+        executable = archive.getmember('worker-executor')
+        digest = hashlib.file_digest(archive.extractfile(executable), 'sha256').hexdigest()
+        if digest != provenance['sha256'] or not executable.mode & 0o100:
+            raise ValueError('Executor overlay hash or executable mode differs')
+        member = 'target/release/worker-executor'
+        provenance.update(base_source=SOURCE, base_bundle_sha256=BUNDLE_SHA,
+                          base_executor_sha256=manifest[member],
+                          overlay_sha256=hashlib.file_digest(args.executor_overlay.open('rb'), 'sha256').hexdigest())
+        save(args.output / 'executor-overlay.json', provenance)
+        with (ROOT / member).open('wb') as destination:
+            with archive.extractfile(executable) as source:
+                shutil.copyfileobj(source, destination)
+        (ROOT / member).chmod(executable.mode & 0o777)
+        manifest[member] = digest
+    save(args.output / 'artifact-sources.json', {
+        member: args.executor_source if member == 'target/release/worker-executor' else SOURCE
+        for member in manifest
+    })
+    return provenance
+
+
 def preflight(args):
     deadline = min(args.deadline, time.time() + 720)
     suite_path = TRACE_SUITE if getattr(args, 'trace_diagnostic', False) else SUITE
@@ -138,6 +173,7 @@ def preflight(args):
                     raise ValueError('Installed bundle member differs')
                 if bool(installed.stat().st_mode & 0o111) != bool(member.mode & 0o111):
                     raise ValueError('Executable permission differs')
+    overlay = install_executor_overlay(args, manifest)
     manifest_path = args.output / 'bundle-members.json'
     if manifest_path.exists():
         if json.loads(manifest_path.read_text()) != manifest:
@@ -160,6 +196,7 @@ def preflight(args):
     checked(['target/benchmarks/benchmarks', 'suite', '--check-artifacts', str(suite_path), 'spawned'], deadline)
     save(args.output / f'preflight-{args.first}.json', dict(
         source=SOURCE, bundle_sha256=BUNDLE_SHA, postgres=image, redis=redis.strip(),
+        executor_overlay=overlay,
         orchestration=checked(['git', 'rev-parse', 'HEAD'], deadline).strip(),
         suite_sha256=hashlib.sha256((ROOT / suite_path).read_bytes()).hexdigest(),
         deadline=args.deadline, runner=args.runner, host=args.host, cohort=args.cohort,
@@ -376,13 +413,20 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--deadline', type=int, required=True)
     parser.add_argument('--cohort', required=True)
-    parser.add_argument('--runner', required=True, choices=['amp-orb-a1.xxlarge', 'github-actions-blacksmith-32vcpu'])
-    parser.add_argument('--host', required=True, choices=['orb', '1', '2', '3', '4'])
+    parser.add_argument('--runner', required=True, choices=['github-actions-blacksmith-32vcpu'])
+    parser.add_argument('--host', required=True, choices=['1', '2', '3', '4'])
     parser.add_argument('--first', type=int, default=1)
     parser.add_argument('--last', type=int, default=5)
     parser.add_argument('--trace-diagnostic', action='store_true')
+    parser.add_argument('--executor-overlay', type=Path)
+    parser.add_argument('--executor-source')
+    parser.add_argument('--executor-run-id')
     args = parser.parse_args()
-    if args.trace_diagnostic and (args.host == 'orb' or args.first != 1 or args.last != 2
+    if any((args.executor_overlay, args.executor_source, args.executor_run_id)):
+        if not (args.executor_overlay and args.executor_source and args.executor_run_id
+                and args.trace_diagnostic and args.first == 1):
+            parser.error('An executor overlay requires its source/run identity and a fresh CI trace diagnostic')
+    if args.trace_diagnostic and (args.first != 1 or args.last != 2
                                   or args.deadline > time.time() + 1800):
         parser.error('Trace diagnostic requires a CI host, exactly two arms and a 30-minute deadline')
     if not 1 <= args.first <= args.last <= 5:

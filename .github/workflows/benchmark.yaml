@@ -21,6 +21,16 @@ on:
         description: Run only the bounded traced/untraced diagnostic (requires publish=false)
         type: boolean
         default: false
+      prepare_executor:
+        description: Build only an instrumented executor overlay, without measurement or publication
+        type: boolean
+        default: false
+      executor_run_id:
+        description: Successful preparation run supplying the executor overlay for a trace diagnostic
+        type: string
+      executor_source:
+        description: Exact source SHA of the prepared executor overlay
+        type: string
       deadline:
         description: Immutable UTC epoch deadline for the short diagnostic
         type: string
@@ -35,7 +45,7 @@ env:
 
 jobs:
   short-validation:
-    if: github.event_name == 'workflow_dispatch' && (inputs.short_validation || inputs.trace_diagnostic)
+    if: github.event_name == 'workflow_dispatch' && !inputs.prepare_executor && (inputs.short_validation || inputs.trace_diagnostic)
     permissions:
       contents: read
       actions: read
@@ -45,9 +55,58 @@ jobs:
       cohort: ${{ inputs.cohort }}
       trace_diagnostic: ${{ inputs.trace_diagnostic }}
       publish: ${{ inputs.publish }}
+      executor_run_id: ${{ inputs.executor_run_id }}
+      executor_source: ${{ inputs.executor_source }}
+
+  prepare-executor:
+    if: github.event_name == 'workflow_dispatch' && inputs.prepare_executor
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Require an isolated unpublished preparation
+        env:
+          PUBLISH: ${{ inputs.publish }}
+          SHORT: ${{ inputs.short_validation }}
+          TRACE: ${{ inputs.trace_diagnostic }}
+        run: |
+          [[ "$PUBLISH" == false && "$SHORT" == false && "$TRACE" == false ]]
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix-key: 'v3-rust'
+          cache-shared-key: 'release'
+          cache-save-if: 'false'
+          install-cargo-make: 'false'
+      - name: Build only the instrumented executor
+        run: cargo build --locked --release -p golem-worker-executor --bin worker-executor
+      - name: Package the executor with its source identity
+        run: |
+          target="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
+          mkdir "$RUNNER_TEMP/executor-overlay"
+          cp "$target/release/worker-executor" "$RUNNER_TEMP/executor-overlay/worker-executor"
+          sha="$(sha256sum "$RUNNER_TEMP/executor-overlay/worker-executor" | cut -d' ' -f1)"
+          jq -n --arg source "$GITHUB_SHA" --arg sha256 "$sha" \
+            --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            '{source: $source, sha256: $sha256, run_id: $run, attempt: $attempt}' \
+            > "$RUNNER_TEMP/executor-overlay/executor-provenance.json"
+          rustc --version --verbose > "$RUNNER_TEMP/executor-toolchain.txt"
+          tar -czf "$RUNNER_TEMP/executor-overlay.tar.gz" -C "$RUNNER_TEMP/executor-overlay" worker-executor executor-provenance.json
+          sha256sum "$RUNNER_TEMP/executor-overlay.tar.gz" > "$RUNNER_TEMP/executor-overlay.sha256"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: executor-overlay-attempt1
+          path: |
+            ${{ runner.temp }}/executor-overlay.tar.gz
+            ${{ runner.temp }}/executor-overlay.sha256
+            ${{ runner.temp }}/executor-toolchain.txt
+          if-no-files-found: error
+          retention-days: 30
 
   build-benchmarks:
-    if: ${{ !inputs.short_validation && !inputs.trace_diagnostic }}
+    if: ${{ !inputs.short_validation && !inputs.trace_diagnostic && !inputs.prepare_executor }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
     outputs:
       timestamp: ${{ steps.bundle.outputs.timestamp }}
