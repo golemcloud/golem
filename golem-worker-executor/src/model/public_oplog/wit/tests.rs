@@ -1208,3 +1208,84 @@ fn failed_update_divergence_requests_drop_their_owned_handles() {
         OplogEnrichmentEntry::try_from(handle_free()).unwrap()
     );
 }
+
+/// A guest supplies raw entries to `enrich-oplog-entries`, so the agent config of a raw `create`
+/// can hold owned streams and owned capability handles. They are deleted from the resource table
+/// in every config entry and the batch is rejected.
+#[test]
+fn create_agent_config_rejection_drops_owned_stream_and_handles() {
+    use golem_common::model::agent::{AgentMode, OwnerKind};
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::{CreateParameters, CreateRequest, CreateRequestKind};
+    use golem_schema::schema::wit::{SecretHandleRep, wire};
+    use golem_schema::schema::{SchemaValueStream, SchemaValueStreamHandleRep};
+    use wasmtime::component::{Resource, ResourceTable};
+
+    let mut dropper = TableCapabilityDropper {
+        table: ResourceTable::new(),
+    };
+    let stream = dropper
+        .table
+        .push(SchemaValueStreamHandleRep::new(
+            SchemaValueStream::from_host_endpoint(()),
+        ))
+        .unwrap();
+    let secret = dropper.table.push(SecretHandleRep::new(())).unwrap();
+    let stream_probe = Resource::<SchemaValueStreamHandleRep>::new_borrow(stream.rep());
+    let secret_probe = Resource::<SecretHandleRep>::new_borrow(secret.rep());
+
+    let entry = OplogEntry::Create {
+        timestamp: Timestamp::from(1_000),
+        parameters: Box::new(CreateParameters {
+            component_id: ComponentId::new(),
+            agent_type_name: None,
+            canonical_key: None,
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_mode: AgentMode::Durable,
+            component_revision: ComponentRevision::new(1).unwrap(),
+            env: Vec::new(),
+            environment_id: EnvironmentId(Uuid::from_u128(1)),
+            created_by: golem_common::model::account::AccountId(Uuid::from_u128(2)),
+            parent: None,
+            component_size: 0,
+            initial_total_linear_memory_size: 0,
+            initial_active_plugins: Default::default(),
+            local_agent_config: Vec::new(),
+            constructor_parameters: None,
+            instance_id: Uuid::from_u128(3),
+            create_request: CreateRequest::new(
+                CreateRequestKind::GetOrCreate,
+                None,
+                Caller::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
+            never_live: false,
+        }),
+    };
+    let oplog::OplogEntry::Create(mut raw) = oplog::OplogEntry::try_from(entry).unwrap() else {
+        panic!("expected create")
+    };
+    let config = |path: &str, value_nodes| oplog::RawLocalAgentConfigEntry {
+        path: vec![path.to_string()],
+        value: wire::SchemaValueTree {
+            value_nodes,
+            root: 0,
+        },
+    };
+    raw.local_agent_config = vec![
+        config("stream", vec![wire::SchemaValueNode::StreamValue(stream)]),
+        config("secret", vec![wire::SchemaValueNode::SecretValue(secret)]),
+    ];
+
+    let result = super::reject_quota_handles_in_oplog_entries(
+        vec![(1, oplog::OplogEntry::Create(raw))],
+        &mut dropper,
+    );
+    assert!(dropper.table.get(&stream_probe).is_err());
+    assert!(dropper.table.get(&secret_probe).is_err());
+    assert!(
+        matches!(result, Err(error) if error.starts_with("agent config value must not contain an owned handle"))
+    );
+}
