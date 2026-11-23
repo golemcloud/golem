@@ -2064,22 +2064,126 @@ fn oplog_page_entry_keeps_the_exact_claims_text_of_its_callers() {
     }
 }
 
-/// The structured output holds a `serde_json::Value`, so it holds the claims as a `Value` object.
-/// A number that rounds still gives an object. A number beyond `f64` is an error, never a
-/// string.
+/// Every structured format prints the claims of a caller as a string that holds their exact JSON
+/// text: a number that no `f64` holds, a number beyond the `f64` range, the order of the members,
+/// and a nesting depth that a `serde_json::Value` refuses. The test renders the documents that
+/// `agent oplog --show-claims` and `agent oplog --show-claims --page` print, and reads each
+/// format back.
 #[test]
-fn structured_output_holds_claims_with_long_numbers_as_an_object() {
-    use golem_common::model::caller::PublicClaims;
-    let claims = PublicClaims::from_json(
-        r#"{"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123}"#
-            .to_string(),
-    )
-    .unwrap();
-    assert!(serde_json::to_value(&claims).unwrap().is_object());
+fn every_structured_format_prints_the_exact_claims_text() {
+    use crate::command_handler::log::{
+        TOON_FRAME_END, TOON_FRAME_START, render_command_output_document,
+    };
+    use crate::model::agent::oplog::{
+        AgentOplogEntryContent, AgentOplogEntryView, AgentOplogPageView,
+    };
+    use crate::model::format::Format;
+    use golem_common::model::caller::{PublicClaims, PublicPrincipal};
+    use golem_common::model::oplog::{
+        PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryAttribution,
+    };
 
-    let beyond = PublicClaims::from_json(r#"{"sub":"bob","n":1e400}"#.to_string()).unwrap();
-    assert!(serde_json::to_value(&beyond).is_err());
-    assert_eq!(serde_json::to_string(&beyond).unwrap(), beyond.as_json());
+    fn set_claims_of_original(entry: &mut PublicOplogEntry, claims: &str) -> bool {
+        if let PublicOplogEntry::AgentInvocationStarted(params) = entry
+            && let PublicAgentInvocation::AgentMethodInvocation(invocation) = &mut params.invocation
+            && let PublicPrincipal::User(user) = &mut invocation.caller.original
+        {
+            user.claims = Some(PublicClaims::from_json(claims.to_string()).unwrap());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The value of every `claims` member in a document.
+    fn claims_members(value: &Value, found: &mut Vec<Value>) {
+        match value {
+            Value::Object(members) => {
+                for (key, member) in members {
+                    if key == "claims" {
+                        found.push(member.clone());
+                    } else {
+                        claims_members(member, found);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| claims_members(item, found)),
+            _ => {}
+        }
+    }
+
+    fn read_back(format: Format, rendered: &str) -> Value {
+        match format {
+            Format::Json | Format::PrettyJson => serde_json::from_str(rendered).unwrap(),
+            Format::Yaml | Format::PrettyYaml => serde_yaml::from_str(rendered).unwrap(),
+            Format::Toon => crate::toon::decode::decode(
+                rendered
+                    .strip_prefix(TOON_FRAME_START)
+                    .and_then(|body| body.strip_suffix(TOON_FRAME_END))
+                    .expect("a TOON document has its frame")
+                    .trim_matches('\n'),
+            )
+            .unwrap(),
+            Format::Text => unreachable!("text is not a structured format"),
+        }
+    }
+
+    let sample = sample_public_oplog_entries()
+        .into_iter()
+        .find(|entry| set_claims_of_original(&mut entry.clone(), "{}"))
+        .expect("a sample entry whose caller is a user");
+
+    let claim_sets = [
+        r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
+        r#"{"sub":"bob","n":1e400}"#.to_string(),
+        r#"{"zeta":1,"alpha":2,"sub":"bob","score":0.12345678901234567890123}"#.to_string(),
+        format!(
+            r#"{{"sub":"bob","deep":{}1{}}}"#,
+            "[".repeat(130),
+            "]".repeat(130)
+        ),
+    ];
+    for claims in &claim_sets {
+        let mut entry = sample.clone();
+        assert!(set_claims_of_original(&mut entry, claims));
+        let view = AgentOplogEntryView {
+            index: 7,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        };
+        let page = AgentOplogPageView {
+            entries: vec![view.clone()],
+            cursor: None,
+        };
+        for format in [
+            Format::Json,
+            Format::PrettyJson,
+            Format::Yaml,
+            Format::PrettyYaml,
+            Format::Toon,
+        ] {
+            for (command, rendered) in [
+                (
+                    "agent oplog",
+                    render_command_output_document(format, false, view.clone()),
+                ),
+                (
+                    "agent oplog --page",
+                    render_command_output_document(format, false, page.clone()),
+                ),
+            ] {
+                let rendered = rendered
+                    .unwrap_or_else(|error| panic!("{command}, {format:?}, {claims}: {error}"));
+                let mut found = Vec::new();
+                claims_members(&read_back(format, &rendered), &mut found);
+                assert_eq!(
+                    found,
+                    vec![Value::String(claims.clone())],
+                    "{command}, {format:?}:\n{rendered}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

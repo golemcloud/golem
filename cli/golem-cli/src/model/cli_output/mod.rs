@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod raw_json_as_text;
+
 use crate::model::masking::MaskingConfig;
 use anyhow::{anyhow, bail};
+use raw_json_as_text::RawJsonAsText;
 use serde::Serialize;
 use serde::Serializer;
 use serde_json::{Map, Value};
@@ -246,7 +249,9 @@ pub fn to_structured_output_value_masked<Output: StructuredOutput>(
     output: Output,
     config: MaskingConfig,
 ) -> anyhow::Result<Value> {
-    let value = output.serialize_masked(serde_json::value::Serializer, config)?;
+    // A raw JSON value, such as the claims of a user, becomes a string with its exact text: a
+    // `Value` cannot hold every raw JSON value, so the formats print that string.
+    let value = output.serialize_masked(RawJsonAsText(serde_json::value::Serializer), config)?;
     let type_value = Value::String(Output::type_name());
 
     match value {

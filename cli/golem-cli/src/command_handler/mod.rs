@@ -81,7 +81,7 @@ mod card;
 mod component;
 mod environment;
 pub(crate) mod interactive;
-mod log;
+pub(crate) mod log;
 mod mcp;
 mod partial_match;
 mod plugin;
