@@ -124,14 +124,25 @@ with a `GolemServiceError` of status 404.
 
 Pass local configuration values and environment variables in the options of `create`. With
 `keyed: true` it creates the keyed agent of the constructor parameters instead, and rejects with
-a `GolemServiceError` of status 409 when that agent exists:
+a `GolemConflictError` when that agent exists. This subclass of `GolemServiceError` has status 409
+and can be inspected in a catch block:
 
 ```typescript
-const agent = await MyAgent.create('my-instance', {
-  keyed: true,
-  config: { someConfigField: someConfigValue },
-  env: { LOG_LEVEL: 'debug' },
-});
+import { GolemConflictError } from '@golemcloud/golem-ts-bridge';
+
+try {
+  const agent = await MyAgent.create('my-instance', {
+    keyed: true,
+    config: { someConfigField: someConfigValue },
+    env: { LOG_LEVEL: 'debug' },
+  });
+} catch (error) {
+  if (error instanceof GolemConflictError) {
+    console.error('Keyed agent already exists:', error.status, error.body);
+  } else {
+    throw error;
+  }
+}
 ```
 
 `upsert` takes no configuration or environment.

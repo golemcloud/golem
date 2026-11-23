@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
-use crate::model::{AgentId, InvocationId};
+use crate::model::{AgentFingerprint, AgentId, InvocationId};
 use crate::schema::SchemaGraph;
 
 pub const INVOCATION_SESSION_SUBPROTOCOL: &str = "golem.agent-invocation.v1";
@@ -243,9 +243,27 @@ impl<'de> Deserialize<'de> for DecimalU64 {
 pub struct InvocationSelector {
     pub agent_type: String,
     pub application: String,
-    pub constructor_parameters: Value,
+    pub target: PublicAgentTarget,
     pub environment: String,
     pub method: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum PublicAgentTarget {
+    Key {
+        constructor_parameters: Value,
+    },
+    Id {
+        agent_id: AgentId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_fingerprint: Option<AgentFingerprint>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1596,13 +1614,15 @@ mod tests {
     #[cfg(feature = "full")]
     use super::new_durable_stream_session_id;
     use super::{
-        BinaryMessageKind, MAX_WEBSOCKET_MESSAGE_SIZE, PublicByteStreamRole, PublicClientMessage,
-        PublicErrorCode, PublicInvocationResult, PublicNativeToolTarget, PublicServerMessage,
-        PublicTypedValue, decode_binary_message, decode_client_text, decode_server_text,
-        encode_text, validate_durable_stream_session_id, validate_message_size,
+        BinaryMessageKind, InvocationSelector, MAX_WEBSOCKET_MESSAGE_SIZE, PublicAgentTarget,
+        PublicByteStreamRole, PublicClientMessage, PublicErrorCode, PublicInvocationResult,
+        PublicNativeToolTarget, PublicServerMessage, PublicTypedValue, decode_binary_message,
+        decode_client_text, decode_server_text, encode_text, validate_durable_stream_session_id,
+        validate_message_size,
     };
     use crate::schema::{SchemaGraph, SchemaType};
     use serde::Deserialize;
+    use serde_json::Value;
     use test_r::test;
 
     #[derive(Deserialize)]
@@ -1885,8 +1905,49 @@ mod tests {
     }
 
     #[test]
+    fn session_selectors_require_an_explicit_key_or_id_target() {
+        let id = "00000007-0000-8000-8000-000000000001";
+        let selector = serde_json::json!({
+            "agentType": "agent", "application": "app", "environment": "env", "method": "run",
+            "target": {"kind": "key", "constructorParameters": id}
+        });
+        let key: InvocationSelector = serde_json::from_value(selector.clone()).unwrap();
+        assert_eq!(
+            key.target,
+            PublicAgentTarget::Key {
+                constructor_parameters: Value::String(id.into())
+            }
+        );
+        let mut by_id = selector.clone();
+        by_id["target"] = serde_json::json!({"kind": "id", "agentId": id});
+        let parsed: InvocationSelector = serde_json::from_value(by_id.clone()).unwrap();
+        assert_eq!(
+            parsed.target,
+            PublicAgentTarget::Id {
+                agent_id: id.parse().unwrap(),
+                expected_fingerprint: None
+            }
+        );
+        assert_eq!(serde_json::to_value(parsed).unwrap(), by_id);
+        for invalid in [
+            serde_json::json!({"kind": "id", "agentId": id, "constructorParameters": {}}),
+            serde_json::json!({"kind": "key", "constructorParameters": {}, "agentId": id}),
+            serde_json::json!({"kind": "id", "agentId": "not-an-id"}),
+            serde_json::json!({"kind": "key"}),
+        ] {
+            let mut invalid_selector = selector.clone();
+            invalid_selector["target"] = invalid;
+            assert!(serde_json::from_value::<InvocationSelector>(invalid_selector).is_err());
+        }
+        let mut legacy = selector;
+        legacy.as_object_mut().unwrap().remove("target");
+        legacy["constructorParameters"] = serde_json::json!({});
+        assert!(serde_json::from_value::<InvocationSelector>(legacy).is_err());
+    }
+
+    #[test]
     fn client_attempt_ids_must_be_uuid_v4() {
-        let input = br#"{"attemptId":"00000000-0000-0000-0000-000000000000","config":[],"idempotencyKey":"key","methodParameters":{},"selector":{"agentType":"agent","application":"app","constructorParameters":{},"environment":"env","method":"run"},"type":"invocationStart","version":1}"#;
+        let input = br#"{"attemptId":"00000000-0000-0000-0000-000000000000","config":[],"idempotencyKey":"key","methodParameters":{},"selector":{"agentType":"agent","application":"app","target":{"kind":"key","constructorParameters":{}},"environment":"env","method":"run"},"type":"invocationStart","version":1}"#;
 
         assert!(
             decode_client_text(input).is_err(),
@@ -1896,7 +1957,7 @@ mod tests {
 
     #[test]
     fn client_attempt_ids_must_use_the_rfc4122_variant() {
-        let input = br#"{"attemptId":"00000000-0000-4000-0000-000000000000","config":[],"idempotencyKey":"key","methodParameters":{},"selector":{"agentType":"agent","application":"app","constructorParameters":{},"environment":"env","method":"run"},"type":"invocationStart","version":1}"#;
+        let input = br#"{"attemptId":"00000000-0000-4000-0000-000000000000","config":[],"idempotencyKey":"key","methodParameters":{},"selector":{"agentType":"agent","application":"app","target":{"kind":"key","constructorParameters":{}},"environment":"env","method":"run"},"type":"invocationStart","version":1}"#;
 
         assert!(
             decode_client_text(input).is_err(),
