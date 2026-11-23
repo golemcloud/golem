@@ -44,7 +44,7 @@ send-invocation-input: invocation : send [none] @ invocation
 list-invocations: invocation : read [none] @ agent | tool | environment
 read-task: invocation : read [none] @ task
 cancel-task: invocation : cancel [none] @ task
-send-task-input: invocation : send [none] @ task
+send-task-input: invocation : read [none] @ task ; promise : send [none] @ promise
 read-stream: invocation : read [none] @ stream
 append-stream: invocation : send [none] @ stream
 send-to-promise: promise : send [none] @ promise

@@ -123,10 +123,15 @@ catalog! {
     ListInvocations("list-invocations") => [
         (Verb::Invocation(InvocationVerb::Read), None, [Agent, Tool, Environment]),
     ],
-    /// A2A task access, cancellation and input, on invocation grants.
+    /// A2A task access and cancellation, on invocation grants.
     ReadTask("read-task") => [(Verb::Invocation(InvocationVerb::Read), None, [Task])],
     CancelTask("cancel-task") => [(Verb::Invocation(InvocationVerb::Cancel), None, [Task])],
-    SendTaskInput("send-task-input") => [(Verb::Invocation(InvocationVerb::Send), None, [Task])],
+    /// Input that continues an A2A task: invocation `read` on the task, then `send` on the task's
+    /// pending input promise. No invocation grant implies the promise `send`.
+    SendTaskInput("send-task-input") => [
+        (Verb::Invocation(InvocationVerb::Read), None, [Task]),
+        (Verb::Promise(PromiseVerb::Send), None, [Promise]),
+    ],
     /// Durable Streams reads and appends, on invocation grants.
     ReadStream("read-stream") => [(Verb::Invocation(InvocationVerb::Read), None, [Stream])],
     AppendStream("append-stream") => [(Verb::Invocation(InvocationVerb::Send), None, [Stream])],

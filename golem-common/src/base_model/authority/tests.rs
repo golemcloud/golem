@@ -22,7 +22,7 @@ use crate::base_model::component::ComponentId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::security_scheme::SecuritySchemeId;
 use crate::base_model::tool::ToolName;
-use crate::base_model::{AgentFingerprint, AgentId, InvocationId};
+use crate::base_model::{AgentFingerprint, AgentId, InvocationId, OplogIndex, PromiseId};
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 use test_r::test;
@@ -479,7 +479,7 @@ fn entity_targets_must_have_the_owner_kind_that_the_catalog_names() {
 }
 
 #[test]
-fn invocation_listing_and_task_cancel_and_input_are_in_the_catalog() {
+fn invocation_listing_and_task_read_and_cancel_are_in_the_catalog() {
     let environment = Target::Environment(EnvironmentTarget {
         account_id: AccountId(Uuid::from_u128(0xacc0)),
         application_id: ApplicationId(Uuid::from_u128(0xa0)),
@@ -501,11 +501,65 @@ fn invocation_listing_and_task_cancel_and_input_are_in_the_catalog() {
     for (operation, verb) in [
         (CatalogOperation::ReadTask, InvocationVerb::Read),
         (CatalogOperation::CancelTask, InvocationVerb::Cancel),
-        (CatalogOperation::SendTaskInput, InvocationVerb::Send),
     ] {
         let built = Operation::single(operation, Resource::None, task.clone()).unwrap();
         assert_eq!(built.parts()[0].verb, Verb::Invocation(verb));
     }
+}
+
+#[test]
+fn task_input_needs_invocation_read_on_the_task_and_promise_send_on_its_input_promise() {
+    let task = Target::Task(EntityTarget {
+        id: EntityIdText("task_7".to_string()),
+        owner: Owner::Agent(agent()),
+    });
+    let input_promise = Target::Promise(PromiseTarget {
+        promise_id: PromiseId {
+            agent_id: agent().agent_id,
+            fingerprint: agent().fingerprint,
+            oplog_idx: OplogIndex::from_u64(42),
+        },
+        owner: agent(),
+    });
+
+    assert_eq!(
+        CatalogOperation::SendTaskInput
+            .parts()
+            .iter()
+            .map(class_and_verb)
+            .collect::<Vec<_>>(),
+        vec![(Class::Invocation, "read"), (Class::Promise, "send")]
+    );
+    let operation = Operation::new(
+        CatalogOperation::SendTaskInput,
+        vec![
+            OperationPart::new(InvocationVerb::Read, Resource::None, task.clone()),
+            OperationPart::new(PromiseVerb::Send, Resource::None, input_promise),
+        ],
+    )
+    .unwrap();
+    assert_eq!(operation.parts()[0].target, task);
+
+    // No invocation grant alone continues a task: the promise part is always there.
+    assert!(matches!(
+        Operation::single(
+            CatalogOperation::SendTaskInput,
+            Resource::None,
+            task.clone()
+        ),
+        Err(OperationShapeError::PartCount { .. })
+    ));
+    assert!(matches!(
+        Operation::new(
+            CatalogOperation::SendTaskInput,
+            vec![OperationPart::new(
+                InvocationVerb::Send,
+                Resource::None,
+                task
+            )],
+        ),
+        Err(OperationShapeError::PartCount { .. })
+    ));
 }
 
 #[test]
