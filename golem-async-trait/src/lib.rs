@@ -70,6 +70,26 @@ impl VisitMut for AssociatedTypes {
     }
 }
 
+fn reject_conditional_instrumentation(meta: &syn::Meta) -> syn::Result<()> {
+    if let syn::Meta::List(list) = meta
+        && list.path.is_ident("cfg_attr")
+    {
+        let args = list.parse_args_with(
+            syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+        )?;
+        for attr in args.iter().skip(1) {
+            if attr.path().segments.last().unwrap().ident == "instrument" {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "region_simple does not support instrument inside cfg_attr; use a direct instrument attribute",
+                ));
+            }
+            reject_conditional_instrumentation(attr)?;
+        }
+    }
+    Ok(())
+}
+
 fn transform(mut item: ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
     let Some((_, trait_path, _)) = &item.trait_ else {
         return Err(syn::Error::new_spanned(
@@ -234,14 +254,22 @@ fn transform(mut item: ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
             );
         }
         for attr in &mut helper.attrs {
+            reject_conditional_instrumentation(&attr.meta)?;
             if attr.path().segments.last().unwrap().ident == "instrument" {
                 let args = match &attr.meta {
                     syn::Meta::List(list) => list.tokens.clone(),
                     _ => proc_macro2::TokenStream::new(),
                 };
                 let tokens: Vec<_> = args.clone().into_iter().collect();
-                let has_name = tokens.windows(2).any(|w| matches!((&w[0], &w[1]),
-                    (proc_macro2::TokenTree::Ident(i), proc_macro2::TokenTree::Punct(p)) if i == "name" && p.as_char() == '='));
+                let has_name = tokens
+                    .split(|token| matches!(token, proc_macro2::TokenTree::Punct(p) if p.as_char() == ','))
+                    .any(|arg| match arg {
+                        [proc_macro2::TokenTree::Ident(i), proc_macro2::TokenTree::Punct(p), ..]
+                            if i == "name" && p.as_char() == '=' => true,
+                        [proc_macro2::TokenTree::Literal(literal)] =>
+                            syn::parse2::<syn::LitStr>(quote!(#literal)).is_ok(),
+                        _ => false,
+                    });
                 if !has_name {
                     let name = method.sig.ident.to_string();
                     let path = attr.path().clone();
@@ -321,6 +349,32 @@ fn transform(mut item: ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
 /// #[golem_async_trait::region_simple]
 /// #[async_trait::async_trait]
 /// impl Operation for Subject { async fn run(&self) {} }
+/// ```
+///
+/// Conditional instrumentation is unsupported, including nested conditions:
+///
+/// ```compile_fail
+/// #[async_trait::async_trait]
+/// trait Operation { async fn run(&self); }
+/// struct Subject;
+/// #[async_trait::async_trait]
+/// #[golem_async_trait::region_simple]
+/// impl Operation for Subject {
+///     #[cfg_attr(all(), tracing::instrument(skip_all))]
+///     async fn run(&self) {}
+/// }
+/// ```
+///
+/// ```compile_fail
+/// #[async_trait::async_trait]
+/// trait Operation { async fn run(&self); }
+/// struct Subject;
+/// #[async_trait::async_trait]
+/// #[golem_async_trait::region_simple]
+/// impl Operation for Subject {
+///     #[cfg_attr(all(), cfg_attr(all(), tracing::instrument(skip_all)))]
+///     async fn run(&self) {}
+/// }
 /// ```
 #[proc_macro_attribute]
 pub fn region_simple(args: TokenStream, input: TokenStream) -> TokenStream {

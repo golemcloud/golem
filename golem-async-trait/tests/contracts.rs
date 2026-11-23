@@ -259,3 +259,166 @@ fn qualified_traits_and_generic_instantiations_do_not_collide() {
         Poll::Ready(39)
     );
 }
+
+#[async_trait]
+trait Traced {
+    async fn positional(&self) -> usize;
+    async fn trailing(&self) -> usize;
+    async fn named(&self) -> usize;
+    async fn default_name(&self) -> usize;
+}
+
+struct TracedSubject;
+#[async_trait]
+#[region_simple]
+impl Traced for TracedSubject {
+    #[tracing::instrument("positional span", skip_all)]
+    async fn positional(&self) -> usize {
+        11
+    }
+    #[tracing::instrument(skip_all, "trailing span")]
+    async fn trailing(&self) -> usize {
+        23
+    }
+    #[tracing::instrument(name = "named span", skip_all)]
+    async fn named(&self) -> usize {
+        37
+    }
+    #[cfg_attr(all(), allow(dead_code))]
+    #[tracing::instrument(target = "other target", skip_all, fields(name = "field value"))]
+    async fn default_name(&self) -> usize {
+        41
+    }
+}
+
+#[test]
+fn instrument_names_and_lazy_spans() {
+    let events: Events = Arc::new(Mutex::new(Vec::new()));
+    let _subscriber = tracing::subscriber::set_default(Subscriber(events.clone()));
+    let subject = TracedSubject;
+    let cases = [
+        (subject.positional(), "positional span", 11),
+        (subject.trailing(), "trailing span", 23),
+        (subject.named(), "named span", 37),
+        (subject.default_name(), "default_name", 41),
+    ];
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "construction must not create spans"
+    );
+    for (mut future, name, expected) in cases {
+        assert_eq!(poll(future.as_mut()), Poll::Ready(expected));
+        drop(future);
+        let mut events = events.lock().unwrap();
+        assert_eq!(
+            events.as_slice(),
+            &[
+                ("new", name),
+                ("enter", "run"),
+                ("exit", "run"),
+                ("enter", "run"),
+                ("exit", "run"),
+            ]
+        );
+        events.clear();
+    }
+}
+
+mod allocation {
+    use super::*;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    use test_r::test;
+
+    thread_local! {
+        static ALLOCATIONS: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    struct CountingAllocator;
+    #[global_allocator]
+    static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    fn record_allocation() {
+        // Other test threads and allocations outside the measurement are ignored.
+        let _ = ALLOCATIONS.try_with(|count| {
+            if let Some(value) = count.get() {
+                count.set(Some(value + 1));
+            }
+        });
+    }
+
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            record_allocation();
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            record_allocation();
+            unsafe { System.alloc_zeroed(layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            record_allocation();
+            unsafe { System.realloc(ptr, layout, size) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+
+    fn measured<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                ALLOCATIONS.set(None);
+            }
+        }
+        ALLOCATIONS.set(Some(0));
+        let _reset = Reset;
+        let result = operation();
+        (result, ALLOCATIONS.get().unwrap())
+    }
+
+    #[async_trait]
+    trait Value {
+        async fn value(&self, input: usize) -> usize;
+    }
+    struct Plain;
+    struct Region;
+    #[async_trait]
+    impl Value for Plain {
+        async fn value(&self, input: usize) -> usize {
+            input * 3 + 1
+        }
+    }
+    #[async_trait]
+    #[region_simple]
+    impl Value for Region {
+        async fn value(&self, input: usize) -> usize {
+            input * 3 + 1
+        }
+    }
+
+    #[test]
+    fn one_allocation_through_completion() {
+        for subject in [&Plain as &dyn Value, &Region as &dyn Value] {
+            let (result, allocations) = measured(|| {
+                let mut future = std::hint::black_box(subject.value(7));
+                let result = poll(future.as_mut());
+                drop(future);
+                result
+            });
+            assert_eq!(result, Poll::Ready(22));
+            assert_eq!(allocations, 1);
+        }
+        let state = AtomicUsize::new(11);
+        let generic = Generic(&state, 1u8);
+        let (result, allocations) = measured(|| {
+            let mut future = std::hint::black_box(generic.compute((), &3, &17));
+            let result = poll(future.as_mut());
+            drop(future);
+            result
+        });
+        assert_eq!(result, Poll::Ready(43));
+        assert_eq!(allocations, 1);
+    }
+}
