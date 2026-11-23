@@ -21,19 +21,22 @@ use golem_common::model::account::AccountId;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentId, AgentStatus, OwnedAgentId};
+use golem_common::model::{AgentId, AgentStatus, OwnedAgentId, PromiseId};
+use golem_common::schema::FromSchema;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
-    start_with_snapshot_policy,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    WorkerExecutorTestDependencies, start, start_with_overrides, start_with_snapshot_policy,
 };
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
+use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
+use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -738,4 +741,87 @@ async fn background_work_after_the_method_returns_reads_its_invocation_live_and_
         false,
     )
     .await
+}
+
+/// A promise completes while an invocation waits for it, after the executor unloaded the agent.
+/// The resumed invocation still has the caller of the request that started it: Golem wakes the
+/// agent itself, and the request that completes the promise has another caller.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_promise_wake_up_keeps_the_caller_of_the_waiting_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // The executor checks a blocked guest for suspension at this interval. The default interval
+    // equals the wait for the suspended status below.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let (waiter, waiter_text) = golem_user();
+    let probe = agent_key!(PROBE, format!("promise-{}", context.redis_prefix()));
+    let agent_id = executor.start_agent(&component.id, probe.clone()).await?;
+
+    let promise = executor
+        .invoke_and_await_agent(&component, &probe, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .expect("create_promise returns a promise ID");
+    let waiting = tokio::spawn({
+        let (executor, component, probe) = (executor.clone(), component.clone(), probe.clone());
+        let params = crate::raw_params(vec![promise.clone()]);
+        async move {
+            executor
+                .invoke_and_await_agent_as_caller(
+                    &component,
+                    &probe,
+                    waiter,
+                    "caller_around_promise",
+                    params,
+                )
+                .await
+        }
+        .in_current_span()
+    });
+    executor
+        .wait_for_status(&agent_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&agent_id).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await?;
+
+    executor
+        .complete_promise(
+            &context.default_environment_id,
+            &PromiseId::from_value(&promise).expect("the guest returned a promise ID"),
+            vec![1],
+        )
+        .await?;
+
+    let observed: Vec<String> = waiting.await??.into_typed()?;
+    let expected = caller_text(&waiter_text, &waiter_text);
+    assert_eq!(
+        observed,
+        vec![expected.clone(), expected],
+        "the caller before the wait and after the wake-up is the caller of the waiting request"
+    );
+    Ok(())
 }
