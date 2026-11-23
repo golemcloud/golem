@@ -324,6 +324,129 @@ async fn count_based_revert_rejects_a_stale_resolution_without_writing(
     Ok(())
 }
 
+/// Two count-based reverts of the last invocation carry the same resolution, as a repaired guest
+/// call or a retried request sends them. The first drops the last invocation. The second finds
+/// that revert already applied and succeeds without writing. A new resolution of the last
+/// invocation skips the dropped one. After a new invocation starts, the same resolution is stale.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn a_repeated_count_based_revert_of_the_same_resolution_writes_nothing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent_id = agent_key!("RpcCounter", "double-revert");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "inc_by", data_value!(1u64))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "inc_by", data_value!(10u64))
+        .await?;
+
+    let resolve = || {
+        let mut client = executor.client.clone();
+        let request = ResolveRevertLastInvocationsRequest {
+            agent_id: Some(worker_id.agent_id.clone().into()),
+            number_of_invocations: 1,
+            environment_id: Some(context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+        };
+        async move {
+            match client
+                .resolve_revert_last_invocations(request)
+                .await?
+                .into_inner()
+                .result
+            {
+                Some(resolve_revert_last_invocations_response::Result::Success(resolved)) => {
+                    Ok(resolved)
+                }
+                other => Err(anyhow::anyhow!("failed to resolve the revert: {other:?}")),
+            }
+        }
+    };
+    let revert = |resolved| {
+        let mut client = executor.client.clone();
+        let request = RevertWorkerRequest {
+            agent_id: Some(worker_id.agent_id.clone().into()),
+            target: Some(
+                RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                    number_of_invocations: 1,
+                })
+                .into(),
+            ),
+            environment_id: Some(context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
+            resolved_revert: Some(resolved),
+            expected_fingerprint: None,
+        };
+        async move { anyhow::Ok(client.revert_worker(request).await?.into_inner().result) }
+    };
+
+    let resolved = resolve().await?;
+    match revert(resolved.clone()).await? {
+        Some(revert_worker_response::Result::Success(_)) => {}
+        other => anyhow::bail!("the first revert failed: {other:?}"),
+    }
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+
+    let resolved_again = resolve().await?;
+    assert!(
+        resolved_again.last_oplog_index < resolved.last_oplog_index,
+        "the resolution after the revert counted the dropped invocation: {resolved_again:?}, \
+         first resolution {resolved:?}"
+    );
+
+    match revert(resolved.clone()).await? {
+        Some(revert_worker_response::Result::Success(_)) => {}
+        other => anyhow::bail!("the repeated revert of an applied resolution failed: {other:?}"),
+    }
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        before.last().map(|entry| entry.oplog_index),
+        after.last().map(|entry| entry.oplog_index),
+        "the repeated revert wrote an oplog entry"
+    );
+
+    let value = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(value, 1, "the first revert drops only the last invocation");
+
+    let before = crate::revert_replay_tail::settled_oplog(&executor, &worker_id).await?;
+    match revert(resolved).await? {
+        Some(revert_worker_response::Result::Failure(error)) => {
+            assert!(
+                format!("{error:?}").contains("Stale count-based revert resolution"),
+                "unexpected stale revert error: {error:?}"
+            );
+        }
+        other => anyhow::bail!("the resolution applied again after a new invocation: {other:?}"),
+    }
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        before.last().map(|entry| entry.oplog_index),
+        after.last().map(|entry| entry.oplog_index),
+        "the stale revert wrote an oplog entry"
+    );
+
+    Ok(())
+}
+
 /// Runs `add_after_release` on a `BackgroundWork` agent, whose result arrives while its
 /// background work waits for a promise, and resolves a count-based revert of that invocation.
 /// With `settle_first`, the test completes the promise and waits for the invocation's

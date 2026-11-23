@@ -1354,9 +1354,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// A count-based revert (`number_of_invocations`) applies only while the stopped oplog still
     /// cuts the last `number_of_invocations` invocations at the authorized `last_oplog_index`.
-    /// Only a later invocation changes the cut, and the revert is then rejected as stale. Entries
-    /// appended after the resolution without a new invocation keep the cut, such as the
-    /// settlement of the last invocation or another revert's entry; the revert then applies.
+    /// A later invocation changes the cut, and so does a revert that dropped one of the counted
+    /// invocations, because the count skips dropped regions; the revert is then rejected as
+    /// stale. Entries appended after the resolution that neither start nor drop an invocation keep
+    /// the cut, such as the settlement of the last invocation; the revert then applies. When the
+    /// last `Revert` of the stopped oplog already drops everything after `last_oplog_index` and no
+    /// invocation started after it, a revert to the same cut already applied, such as an earlier
+    /// dispatch of the same resolution (a repaired guest call or a retried request): it succeeds
+    /// without writing, and returns the snapshot names that the applied revert made unused, in
+    /// case that dispatch stopped before it deleted them.
     pub(in crate::worker) async fn append_revert(
         &self,
         last_oplog_index: OplogIndex,
@@ -1371,6 +1377,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .read_exact(OplogIndex::INITIAL, region_end.as_u64())
             .await?;
         if let Some(number_of_invocations) = number_of_invocations {
+            let applied_region = entries
+                .values()
+                .rev()
+                .find_map(|entry| match entry {
+                    OplogEntry::Revert { dropped_region, .. } => Some(
+                        (dropped_region.start == last_oplog_index.next())
+                            .then(|| dropped_region.clone()),
+                    ),
+                    OplogEntry::AgentInvocationStarted { .. } => Some(None),
+                    _ => None,
+                })
+                .flatten();
+            if let Some(applied_region) = applied_region {
+                let last_known_status = self.get_last_known_status().await;
+                return Ok(filesystem_snapshots::reverted_snapshot_names(
+                    &entries,
+                    &applied_region,
+                    &last_known_status.deleted_regions,
+                ));
+            }
             let stopped_cut = cut_point::cut_before_last_invocations(
                 |idx| {
                     std::future::ready(entries.get(&idx).cloned().ok_or_else(|| {

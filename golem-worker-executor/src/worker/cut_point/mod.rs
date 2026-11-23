@@ -169,8 +169,9 @@ impl Display for SpanningConstruct {
 
 /// The cut point that drops the last `number_of_invocations` invocations of an oplog whose last
 /// entry is at `last_index`: the index just before the `number_of_invocations`-th
-/// `AgentInvocationStarted`, counted back from `last_index`. `None` when the oplog holds fewer
-/// invocations. A failed `read` ends the walk with its error.
+/// `AgentInvocationStarted`, counted back from `last_index`. Invocations in the region that a
+/// `Revert` entry dropped are not counted: the walk continues before that region. `None` when the
+/// oplog holds fewer invocations. A failed `read` ends the walk with its error.
 pub async fn cut_before_last_invocations<Read, ReadFut, E>(
     read: Read,
     last_index: OplogIndex,
@@ -183,19 +184,21 @@ where
     let mut current = last_index;
     let mut found = 0;
     loop {
-        if matches!(
-            read(current).await?,
-            OplogEntry::AgentInvocationStarted { .. }
-        ) {
-            found += 1;
-            if found == number_of_invocations {
-                return Ok(Some(current.previous()));
+        let continue_before = match read(current).await? {
+            OplogEntry::AgentInvocationStarted { .. } => {
+                found += 1;
+                if found == number_of_invocations {
+                    return Ok(Some(current.previous()));
+                }
+                current
             }
-        }
-        if current == OplogIndex::INITIAL {
+            OplogEntry::Revert { dropped_region, .. } => dropped_region.start.min(current),
+            _ => current,
+        };
+        if continue_before == OplogIndex::INITIAL {
             return Ok(None);
         }
-        current = current.previous();
+        current = continue_before.previous();
     }
 }
 

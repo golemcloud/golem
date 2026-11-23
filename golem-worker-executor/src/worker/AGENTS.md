@@ -116,4 +116,7 @@ outcome; audit new paired constructs against that validation. A cut may fall ins
 invocation's drain, between its terminal and its `AgentInvocationSettled`; replay then reaches the
 replay tail with the anchor open and settles it live. A revert of the last N invocations is
 resolved to a cut before it stops the agent; after the stop, `append_revert` recomputes the cut
-from the stopped oplog and rejects the revert as stale unless it equals the authorized one.
+from the stopped oplog, skipping regions that earlier reverts dropped, and rejects the revert as
+stale unless it equals the authorized one. A repeated dispatch of a resolution that already
+applied (the last `Revert` drops everything after the cut, and no invocation started after it)
+succeeds without writing.

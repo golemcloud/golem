@@ -3633,8 +3633,13 @@ snapshot names of the dropped region that no live record outside it uses
 
 Guest `revert-agent` resolves a count-based target only after its call resolves as new work,
 before authorization and `Start`. The permission resource is the resolved oplog index, and the
-request records the resolved cut and observed target tip. Incomplete repair reuses that request
-rather than resolving the count against newer target history. Resolution failures use the same
+request records the resolved cut. Incomplete repair reuses that request rather than resolving
+the count against newer target history. The count skips the regions that earlier `Revert`
+entries dropped, both when the cut is resolved and when `append_revert` recomputes it from the
+stopped oplog; a revert whose recomputed cut differs from the resolved one is stale. A dispatch
+of a resolution that an earlier dispatch already applied (the last `Revert` drops everything
+after the resolved cut, and no invocation started after it) succeeds without writing, so a
+repaired or retried revert reports the revert it applied. Resolution failures use the same
 immutable rejected-call path as permission refusals: `Start.denial` freezes the error and `End`
 returns it. Recovery of either a completed failure or a rejected `Start` without `End` never
 resolves the target again or dispatches the revert.
