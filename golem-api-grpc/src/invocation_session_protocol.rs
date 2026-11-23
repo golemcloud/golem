@@ -425,6 +425,14 @@ impl InvocationSessionState {
             .map(|state| state.next_offset)
     }
 
+    /// The sequence of the next item an input stream discards after a consumer cancellation,
+    /// or `None` when the stream is unknown or does not discard items.
+    pub fn discarded_input_sequence(&self, stream_id: u64) -> Option<u64> {
+        self.inputs
+            .get(&stream_id)
+            .and_then(|state| state.discard_next_offset)
+    }
+
     pub fn all_inputs_terminal(&self) -> bool {
         self.inputs.values().all(|state| state.terminal)
     }

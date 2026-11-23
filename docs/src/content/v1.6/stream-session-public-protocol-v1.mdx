@@ -513,7 +513,10 @@ and sends no later ACK for the channel. A packed `u8` frame that contains an
 invalid byte is rejected whole; none of its bytes are delivered or
 acknowledged. The server silently ignores later item, end, and cancellation
 frames for the channel. The callee observes an ordinary end of input after the
-earlier items. An invalid item at any other sequence, and every framing,
+earlier items. After a consumer cancellation of the channel, an invalid item
+at the next discarded sequence only makes the server ignore that frame and the
+later frames for the channel; the client already has the consumer
+cancellation. An invalid item at any other sequence, and every framing,
 channel, sequence, or resource failure, remains fatal for the session. The
 reason is not durable: after a reconnect the channel reports only a terminal
 input high-water.

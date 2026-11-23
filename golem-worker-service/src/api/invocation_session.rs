@@ -2070,8 +2070,10 @@ async fn handle_private_responses<S>(
     // Without the client the ACKs of the earlier items are read but no longer published.
     // The executor accepts the cancellation of an input only after it has sent those ACKs,
     // and it reads further requests only while its responses are read, so the responses are
-    // read until they end, for a bounded time and independently of the closing session.
-    tokio::spawn(tokio::time::timeout(
+    // read until they end, for a bounded time. This runs on the response task, so a closing
+    // session waits for it like for any private session end, and a dropped session does not
+    // stop it.
+    let _ = tokio::time::timeout(
         CLIENT_GONE_DRAIN_TIMEOUT,
         cancel_invalid_items_without_client(
             responses,
@@ -2082,7 +2084,8 @@ async fn handle_private_responses<S>(
             token_key_id,
             attempt_id,
         ),
-    ));
+    )
+    .await;
 }
 
 /// Reads the private responses of a session without a client, applying them to the adapter
@@ -3028,6 +3031,11 @@ fn ended_after_invalid_item(state: &AdapterState, channel: u32) -> bool {
 /// durable source-unavailable producer cancellation that a client may also send. The callee
 /// cannot tell it apart from a complete input: it observes an ordinary end of input after the
 /// items it already received and may return a partial result.
+///
+/// When the consumer already cancelled the input, the executor discards its items, so an
+/// invalid item at the next discarded sequence only drops that frame and the frames after it.
+/// The client already has the consumer cancellation, and the executor gets no producer
+/// cancellation.
 fn end_input_after_invalid_item(
     state: &mut AdapterState,
     channel: u32,
@@ -3041,28 +3049,34 @@ fn end_input_after_invalid_item(
         _ => return Err(error),
     };
     let transport_id = state.channels.get(&channel).unwrap().transport_id;
-    match state.protocol_state.next_input_sequence(transport_id) {
-        Some(next) if next == frame_sequence => {}
-        Some(next) if frame_sequence > next => {
-            return Err(AdapterError::new(
-                PublicErrorCode::InputGap,
-                "input sequence has a gap",
-            ));
-        }
-        Some(_) => {
-            return Err(AdapterError::new(
-                PublicErrorCode::InputConflict,
-                "input retry conflicts with an earlier item",
-            ));
-        }
-        None => return Err(error),
+    let (next, discarded) = match state.protocol_state.next_input_sequence(transport_id) {
+        Some(next) => (next, false),
+        None => match state.protocol_state.discarded_input_sequence(transport_id) {
+            Some(next) => (next, true),
+            None => return Err(error),
+        },
+    };
+    if frame_sequence > next {
+        return Err(AdapterError::new(
+            PublicErrorCode::InputGap,
+            "input sequence has a gap",
+        ));
+    }
+    if frame_sequence < next {
+        return Err(AdapterError::new(
+            PublicErrorCode::InputConflict,
+            "input retry conflicts with an earlier item",
+        ));
     }
     state.channels.get_mut(&channel).unwrap().invalid_item = Some(InvalidInputItem {
         frame_sequence,
         item_sequence,
         message,
-        sent: false,
+        sent: discarded,
     });
+    if discarded {
+        return Ok(());
+    }
     if state.invalid_item_requests.is_none() {
         state.invalid_item_requests = state
             .client_requests
@@ -4705,6 +4719,149 @@ mod tests {
                 "the request stream stayed open ({case})"
             );
         }
+    }
+
+    /// After the consumer cancelled an input, the executor discards its items. An invalid item
+    /// at the next discarded sequence then drops that frame and the frames after it instead of
+    /// failing the session, and the executor gets no producer cancellation. An invalid item at
+    /// another sequence still reports the gap.
+    #[test]
+    async fn an_invalid_item_after_a_consumer_cancellation_is_dropped() {
+        let keyring = keyring();
+        let bindings = token_bindings(&AuthCtx::system());
+        let attempt = Uuid::new_v4();
+        let consumer_cancel = InvocationResponse {
+            response: Some(invocation_response::Response::StreamCancel(StreamCancel {
+                transport_stream_id: 7,
+                producer_sequence: 1,
+                role: StreamCancelRole::InputConsumer as i32,
+                reason: StreamCancelReason::ConsumerDrop as i32,
+                details: None,
+                durable_stream_id: Some(proto_uuid(107)),
+                epoch: 1,
+                durable_offset: durable_offset(6),
+            })),
+        };
+        for in_sequence in [true, false] {
+            let state = active_input_state_with_schema(restricted_u8());
+            translate_client_text(input_item(0, 11), &state)
+                .await
+                .unwrap();
+            admit_input(&state, false).await;
+            for response in [input_ack_for(7, 0, 5), consumer_cancel.clone()] {
+                translate_private_response(
+                    response,
+                    &state,
+                    &keyring,
+                    &bindings,
+                    keyring.active_key_id(),
+                    attempt,
+                )
+                .await
+                .unwrap();
+            }
+            if !in_sequence {
+                let Err(gap) = translate_client_text(input_item(2, 9), &state).await else {
+                    panic!("an invalid item past the discarded sequence must stay fatal")
+                };
+                assert_eq!(gap.code, PublicErrorCode::InputGap);
+                continue;
+            }
+            let translated = translate_client_text(input_item(1, 9), &state)
+                .await
+                .expect("an invalid discarded item must not fail the session");
+            assert!(translated.request.is_none());
+            // The frames after it are dropped too, so no discarded sequence is left out.
+            let later = translate_client_text(input_item(2, 12), &state)
+                .await
+                .unwrap();
+            assert!(later.request.is_none());
+            let mut state = state.lock().await;
+            assert!(
+                ready_invalid_item_cancels(&mut state).unwrap().is_empty(),
+                "a consumer-cancelled input gets no producer cancellation"
+            );
+            assert!(!has_unsent_invalid_item(&state));
+        }
+    }
+
+    /// A client that closes while an input ended after an invalid item waits for the ACKs of
+    /// its earlier items keeps the session pending, as any client close does, until the
+    /// executor has the cancellation and the private session ends.
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn a_client_close_with_an_invalid_item_waits_for_the_private_session() {
+        let state = active_input_state_with_schema(restricted_u8());
+        let budgets = SessionBudgets::new();
+        let (wire, received) = mpsc::channel::<std::io::Result<Message>>(CHANNEL_CAPACITY);
+        for item in [input_item(0, 11), input_item(1, 9)] {
+            wire.send(Ok(Message::text(encode_text(&item).unwrap())))
+                .await
+                .unwrap();
+        }
+        wire.send(Ok(Message::Close(None))).await.unwrap();
+        let (incoming, messages) = mpsc::channel(CHANNEL_CAPACITY);
+        read_websocket(
+            tokio_stream::wrappers::ReceiverStream::new(received),
+            incoming,
+            budgets.clone(),
+        )
+        .await
+        .unwrap();
+        let (requests, mut executor) = mpsc::channel(CHANNEL_CAPACITY);
+        let (responses, received_responses) = mpsc::channel(CHANNEL_CAPACITY);
+        let (sender, _outgoing) = mpsc::channel(CHANNEL_CAPACITY);
+        let outbound = Outbound {
+            sender,
+            budgets: budgets.clone(),
+        };
+        let keyring = Arc::new(keyring());
+        let session = run_accepted_session(
+            tokio_stream::wrappers::ReceiverStream::new(messages),
+            requests,
+            tokio_stream::wrappers::ReceiverStream::new(received_responses),
+            outbound,
+            state.clone(),
+            budgets,
+            keyring.clone(),
+            token_bindings(&AuthCtx::system()),
+            keyring.active_key_id().to_string(),
+            Uuid::new_v4(),
+        );
+        tokio::pin!(session);
+        let item = tokio::select! {
+            request = executor.recv() => request.unwrap().request.request.unwrap(),
+            _ = &mut session => panic!("the session ended before the executor read the input"),
+        };
+        let invocation_request::Request::InputItem(item) = item else {
+            panic!("expected an input item")
+        };
+        assert_eq!(item.sequence, 0);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(500), &mut session)
+                .await
+                .is_err(),
+            "the session ended while the cancellation still waited for an ACK"
+        );
+        responses.send(Ok(input_ack_for(7, 0, 5))).await.unwrap();
+        let cancel = tokio::select! {
+            request = executor.recv() => request.unwrap().request.request.unwrap(),
+            _ = &mut session => panic!("the session ended before the input cancellation"),
+        };
+        let invocation_request::Request::StreamCancel(cancel) = cancel else {
+            panic!("expected the producer cancellation")
+        };
+        assert_eq!(cancel.producer_sequence, 1);
+        let end = tokio::select! {
+            request = executor.recv() => request.is_none(),
+            _ = &mut session => panic!("the session ended before the request stream"),
+        };
+        assert!(end, "the request stream stayed open after the cancellation");
+        // The executor detaches and ends its responses; then the session ends.
+        drop(responses);
+        tokio::time::timeout(std::time::Duration::from_secs(2), &mut session)
+            .await
+            .expect("the session must end with the private session");
     }
 
     /// A routing miss is an `Internal` rejection whose carried error names a shard or a fence.
