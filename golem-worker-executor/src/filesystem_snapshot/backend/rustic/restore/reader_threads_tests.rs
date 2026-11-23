@@ -143,6 +143,7 @@ impl OverlapCountingStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl BlobStorageBackend for OverlapCountingStorage {
     async fn copy_between_at(
         &self,

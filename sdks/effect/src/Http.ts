@@ -454,7 +454,8 @@ export interface MountDef<MountVars extends string, WebhookVars extends string =
   readonly authRequired: boolean
   readonly cors: ReadonlyArray<string>
   readonly phantomAgent: boolean
-  readonly phantomId?: PhantomIdSpec
+  readonly agentIdBinding?: AgentIdSpec
+  readonly createRoute?: ReadonlyArray<PathSegment>
   readonly webhookSuffix: ReadonlyArray<PathSegment>
   readonly exposeFiles?: readonly FileExposure[]
   readonly fileResponseHeaders?: FileResponseHeaders
@@ -763,7 +764,11 @@ const runParse = <A>(eff: Effect.Effect<A, HttpRouteError>): A => {
  * @since 1.5.0
  * @category models
  */
-export interface MountOptions<W extends string = string, S extends PhantomIdSpec = PhantomIdSpec> {
+export interface MountOptions<
+  W extends string = string,
+  S extends AgentIdSpec = AgentIdSpec,
+  R extends string = string,
+> {
   /** Ordered live-file mappings for regular durable non-phantom agents. */
   readonly exposeFiles?: readonly FileExposure[]
   /** Response headers applied by the host when serving mounted files. */
@@ -774,7 +779,12 @@ export interface MountOptions<W extends string = string, S extends PhantomIdSpec
   readonly cors?: ReadonlyArray<string>
   /** Mark this agent as a phantom agent (one fresh instance per HTTP request). */
   readonly phantomAgent?: boolean
-  readonly phantomId?: S
+  readonly agentIdBinding?: S
+  /** Full exact POST path for creating an unkeyed agent on an ID mount. */
+  readonly createRoute?: ValidMountPath<R> &
+    (Exclude<PathVarsOf<R>, SystemVariableName> extends never
+      ? unknown
+      : Invalid<"create route permits only literals and system variables">)
   /**
    * Optional custom webhook suffix path. Parsed with the same rules as
    * the mount path (no query, no catch-all). Validated at the type
@@ -787,40 +797,31 @@ export interface MountOptions<W extends string = string, S extends PhantomIdSpec
 }
 
 /**
- * Explicit phantom UUID selection; optional omission selects the original.
+ * Required exact agent ID selection, independent of constructor input.
  * @since 1.6.0
  * @category models
  */
-export type PhantomIdSpec<N extends string = string> =
-  | { readonly source: "path"; readonly name: N; readonly optional: boolean }
-  | { readonly source: "query"; readonly name: N; readonly optional: boolean }
+export type AgentIdSpec<N extends string = string> =
+  | { readonly source: "path"; readonly name: N }
+  | { readonly source: "query"; readonly name: N }
 
 /**
- * Select an exact phantom UUID scoped to this agent's constructor.
+ * Select an existing agent by its required path or query ID.
  * @since 1.6.0
  * @category constructors
  */
-export const phantomId = {
-  path: <const N extends string>(name: N, options?: { readonly optional?: boolean }) =>
-    ({
-      source: "path",
-      name,
-      optional: options?.optional === undefined ? false : options.optional,
-    }) as const,
-  query: <const N extends string>(name: N, options?: { readonly optional?: boolean }) =>
-    ({
-      source: "query",
-      name,
-      optional: options?.optional === undefined ? false : options.optional,
-    }) as const,
+export const agentId = {
+  path: <const N extends string>(name: N) => ({ source: "path", name }) as const,
+  query: <const N extends string>(name: N) => ({ source: "query", name }) as const,
 }
 
-type PhantomPathName<S> = S extends { readonly source: "path"; readonly name: infer N } ? N : never
+type AgentIdPathName<S> = S extends { readonly source: "path"; readonly name: infer N } ? N : never
 
 /**
  * Declare an HTTP mount for an agent. The path may include `{var}` and
- * `{agent-type}` / `{agent-version}` segments; every `{var}` must
- * correspond to a constructor parameter on the agent.
+ * `{agent-type}` / `{agent-version}` segments. Key mounts bind each
+ * constructor parameter from a `{var}`. ID mounts bind only the required
+ * agent ID and do not bind constructor input from the URL.
  *
  * The optional `opts.webhookSuffix` is parsed with the same rules as
  * the mount path (no query, no catch-all). Its `{var}` names are
@@ -867,22 +868,36 @@ type PhantomPathName<S> = S extends { readonly source: "path"; readonly name: in
  * @since 1.5.0
  * @category constructors
  */
-export const mount: <
-  const Path extends string,
-  const W extends string = string,
-  const S extends PhantomIdSpec = never,
->(
-  path: ValidMountPath<Path>,
-  opts?: MountOptions<W, S> &
-    (string extends Path
-      ? unknown
-      : Exclude<PhantomPathName<S>, Exclude<PathVarsOf<Path>, SystemVariableName>> extends never
+export const mount: {
+  <
+    const Path extends string,
+    const W extends string = string,
+    const S extends AgentIdSpec = AgentIdSpec,
+    const R extends string = string,
+  >(
+    path: ValidMountPath<Path>,
+    opts: MountOptions<W, S, R> & {
+      readonly agentIdBinding: S
+      readonly phantomAgent?: false
+    } & (string extends Path
         ? unknown
-        : Invalid<"phantom path selector must name a mount capture">),
-) => MountDef<
-  Exclude<PathVarsOf<Path>, SystemVariableName | PhantomPathName<S>>,
-  Exclude<PathVarsOf<W>, SystemVariableName>
-> = ((path: string, opts?: MountOptions) => {
+        : Exclude<AgentIdPathName<S>, Exclude<PathVarsOf<Path>, SystemVariableName>> extends never
+          ? Exclude<PathVarsOf<Path>, SystemVariableName | AgentIdPathName<S>> extends never
+            ? unknown
+            : Invalid<"ID mounts cannot bind constructor captures">
+          : Invalid<"agent ID path binding must name a mount capture">),
+  ): MountDef<
+    Exclude<PathVarsOf<Path>, SystemVariableName | AgentIdPathName<S>>,
+    Exclude<PathVarsOf<W>, SystemVariableName>
+  > & { readonly agentIdBinding: S }
+  <const Path extends string, const W extends string = string>(
+    path: ValidMountPath<Path>,
+    opts?: MountOptions<W, never> & { readonly createRoute?: never },
+  ): MountDef<
+    Exclude<PathVarsOf<Path>, SystemVariableName>,
+    Exclude<PathVarsOf<W>, SystemVariableName>
+  >
+} = ((path: string, opts?: MountOptions) => {
   const segments = runParse(parseMountPath(path))
   const webhookSuffix = opts?.webhookSuffix ? runParse(parseMountPath(opts.webhookSuffix)) : []
   return withPipe({
@@ -890,7 +905,9 @@ export const mount: <
     authRequired: opts?.auth ?? false,
     cors: opts?.cors ?? [],
     phantomAgent: opts?.phantomAgent ?? false,
-    phantomId: opts?.phantomId,
+    agentIdBinding: opts?.agentIdBinding,
+    createRoute:
+      opts?.createRoute !== undefined ? runParse(parseMountPath(opts.createRoute)) : undefined,
     webhookSuffix,
     exposeFiles: opts?.exposeFiles?.map((mapping) => ({ ...mapping })),
     fileResponseHeaders: opts?.fileResponseHeaders ? { ...opts.fileResponseHeaders } : undefined,
@@ -1369,8 +1386,8 @@ export const withHeaders =
  */
 export const withPhantomAgent =
   (phantom: boolean = true) =>
-  <V extends string, W extends string>(m: MountDef<V, W>): MountDef<V, W> =>
-    withPipe({ ...m, phantomAgent: phantom }) as unknown as MountDef<V, W>
+  <T extends MountDef<string, string>>(m: T): T =>
+    withPipe({ ...m, phantomAgent: phantom }) as unknown as T
 
 /**
  * Override the webhook-suffix path on a mount.
@@ -1407,13 +1424,14 @@ export const withPhantomAgent =
  */
 export const withWebhookSuffix =
   <const Suffix extends string>(suffix: ValidMountPath<Suffix>) =>
-  <V extends string>(
-    m: MountDef<V, string>,
-  ): MountDef<V, Exclude<PathVarsOf<Suffix>, SystemVariableName>> =>
+  <V extends string, T extends MountDef<V, string>>(
+    m: MountDef<V, string> & T,
+  ): MountDef<V, Exclude<PathVarsOf<Suffix>, SystemVariableName>> & Pick<T, "agentIdBinding"> =>
     withPipe({
       ...m,
       webhookSuffix: runParse(parseMountPath(suffix as unknown as string)),
-    }) as unknown as MountDef<V, Exclude<PathVarsOf<Suffix>, SystemVariableName>>
+    }) as unknown as MountDef<V, Exclude<PathVarsOf<Suffix>, SystemVariableName>> &
+      Pick<T, "agentIdBinding">
 
 // ---------------------------------------------------------------------------
 // Compilation: MountDef / EndpointDef → WIT records
@@ -1445,12 +1463,13 @@ export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.Ht
   pathPrefix: mountDef.pathPrefix.map(segmentToWit),
   authDetails: mountDef.authRequired ? { required: true } : undefined,
   phantomAgent: mountDef.phantomAgent,
-  phantomIdBinding: mountDef.phantomId
+  agentIdBinding: mountDef.agentIdBinding
     ? {
-        tag: mountDef.phantomId.source,
-        val: { name: mountDef.phantomId.name, optional: mountDef.phantomId.optional },
+        tag: mountDef.agentIdBinding.source,
+        val: { name: mountDef.agentIdBinding.name },
       }
     : undefined,
+  createRoute: mountDef.createRoute?.map(segmentToWit),
   corsOptions: { allowedPatterns: [...mountDef.cors] },
   webhookSuffix: mountDef.webhookSuffix.map(segmentToWit),
   staticBindings: [],
@@ -1546,7 +1565,8 @@ export const compileToolMount = (mount: MountDef<string, string>): ToolCommon.To
     mount.authRequired ||
     mount.cors.length ||
     mount.phantomAgent ||
-    mount.phantomId ||
+    mount.agentIdBinding ||
+    mount.createRoute !== undefined ||
     mount.webhookSuffix.length ||
     mount.exposeFiles?.length ||
     mount.fileResponseHeaders
@@ -1628,6 +1648,8 @@ export interface MethodHttpInput {
   readonly queryBindableParams: ReadonlySet<string>
   /** Top-level stream inputs classified as DurableStreams resource slots by the host. */
   readonly streamParams: ReadonlySet<string>
+  /** Whether the compiled method input or output contains a stream. */
+  readonly usesStreams: boolean
 }
 
 /**
@@ -1869,27 +1891,36 @@ const validateMount = (
   Effect.gen(function* () {
     const mountDef = input.mount!
     const ctx = `agent '${input.agentName}' mount`
-    const selector = mountDef.phantomId
+    const selector = mountDef.agentIdBinding
+    if (
+      mountDef.createRoute !== undefined &&
+      (!selector ||
+        mountDef.createRoute.some((s) => s._tag !== "Literal" && s._tag !== "SystemVar"))
+    ) {
+      return yield* Effect.fail(
+        new HttpRouteError(
+          `${ctx}: create route requires an ID mount and only literal/system segments`,
+        ),
+      )
+    }
     if (selector) {
-      if (typeof selector.optional !== "boolean") {
-        return yield* Effect.fail(
-          new HttpRouteError(`${ctx}: phantom selector optionality must be a boolean`),
-        )
-      }
       if (
         !selector.name ||
-        mountDef.exposeFiles?.length ||
+        (selector.source !== "path" && selector.source !== "query") ||
+        mountDef.phantomAgent ||
         (selector.source === "path" &&
-          (input.constructorParamNames.includes(selector.name) ||
-            mountDef.pathPrefix.filter((s) => s._tag === "PathVar" && s.name === selector.name)
-              .length !== 1))
+          mountDef.pathPrefix.filter((s) => s._tag === "PathVar" && s.name === selector.name)
+            .length !== 1)
       ) {
         return yield* Effect.fail(
-          new HttpRouteError(`${ctx}: invalid phantom selector ownership or file exposure`),
+          new HttpRouteError(`${ctx}: invalid agent ID binding ownership or phantomAgent`),
         )
       }
       for (const m of input.methods) {
         for (const ep of m.endpoints) {
+          const durableStreams =
+            ep.mode === "durableStreams" ||
+            (ep.mode === undefined && (ep.durableStreams !== undefined || m.usesStreams))
           if (
             (selector.source === "path" &&
               ep.pathSuffix.some(
@@ -1897,11 +1928,22 @@ const validateMount = (
               )) ||
             (selector.source === "query" &&
               (ep.queryVars.some((q) => q.queryParam === selector.name) ||
-                (ep.durableStreams && ["offset", "cursor", "live"].includes(selector.name))))
+                (isBodylessVerb(ep.verb) &&
+                  Object.keys(m.params).some(
+                    (name) =>
+                      name === selector.name &&
+                      !ep.pathSuffix.some(
+                        (s) => (s._tag === "PathVar" || s._tag === "RestVar") && s.name === name,
+                      ) &&
+                      !ep.queryVars.some((q) => q.varName === name) &&
+                      !ep.headerVars.some((h) => h.varName === name) &&
+                      !m.streamParams.has(name),
+                  )) ||
+                (durableStreams && ["offset", "cursor", "live"].includes(selector.name))))
           ) {
             return yield* Effect.fail(
               new HttpRouteError(
-                `${ctx}: phantom selector conflicts with an endpoint binding or durable-stream control`,
+                `${ctx}: agent ID binding conflicts with an endpoint binding or durable-stream control`,
               ),
             )
           }
@@ -1924,6 +1966,11 @@ const validateMount = (
       }
       mountVars.add(s.name)
       if (selector?.source === "path" && selector.name === s.name) continue
+      if (selector) {
+        return yield* Effect.fail(
+          new HttpRouteError(`${ctx}: ID mounts cannot bind constructor path variable '${s.name}'`),
+        )
+      }
       if (!input.constructorParamNames.includes(s.name)) {
         return yield* Effect.fail(
           new HttpRouteError(
@@ -1947,7 +1994,7 @@ const validateMount = (
       }
     }
     // Every constructor param must be covered by a mount path variable.
-    for (const cp of input.constructorParamNames) {
+    for (const cp of selector ? [] : input.constructorParamNames) {
       if (!mountVars.has(cp)) {
         return yield* Effect.fail(
           new HttpRouteError(

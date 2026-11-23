@@ -309,6 +309,7 @@ impl ReplicaEventStore {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl EventStore for ReplicaEventStore {
     async fn store_event(
         &self,

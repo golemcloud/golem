@@ -18,7 +18,6 @@ use super::{
     ProcessOplogEntriesRequest, TypedAgentConfigEntry, UsesAllDeps, Worker, WorkerCtx,
     WorkerExecutorError, WorkerExecutorImpl, extract_caller, extract_owned_agent_id,
 };
-use golem_common::model::caller::Caller;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -33,7 +32,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let caller = extract_caller(&request.caller)?;
+        extract_caller(&request.caller)?;
 
         let plugin_priority: PluginPriority = PluginPriority(request.plugin_priority);
 
@@ -41,7 +40,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             plugin_priority,
-            caller,
             request
                 .expected_fingerprint
                 .map(|fingerprint| golem_common::model::AgentFingerprint(fingerprint.into())),
@@ -58,7 +56,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let caller = extract_caller(&request.caller)?;
+        extract_caller(&request.caller)?;
 
         let plugin_priority = PluginPriority(request.plugin_priority);
 
@@ -66,7 +64,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             plugin_priority,
-            caller,
             request
                 .expected_fingerprint
                 .map(|fingerprint| golem_common::model::AgentFingerprint(fingerprint.into())),
@@ -156,6 +153,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(WorkerExecutorError::invalid_request)?;
 
         let first_entry_index = OplogIndex::from_u64(request.first_entry_index);
+        let caller = extract_caller(&request.caller)?;
 
         Worker::enqueue_oplog_processor(
             self,
@@ -169,8 +167,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 metadata,
                 first_entry_index,
                 entries,
-                // Replaced with the processor agent when the batch is enqueued.
-                caller: Caller::anonymous(),
+                caller,
             },
         )
         .await

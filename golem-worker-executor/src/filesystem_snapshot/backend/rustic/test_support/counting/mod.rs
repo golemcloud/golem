@@ -132,6 +132,7 @@ impl Debug for CountingBlobStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl BlobStorageBackend for CountingBlobStorage {
     async fn get_raw_at(
         &self,

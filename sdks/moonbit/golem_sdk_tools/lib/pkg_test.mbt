@@ -46,3 +46,19 @@ test "update_pkg_link installs the default world's exports" {
   assert_true(updated.contains("discover-tool-middlewares"))
   assert_true(updated.contains("pkgtype(kind: \"foreign_library\")"))
 }
+
+///|
+test "update_pkg_link supports both backends without GC heap settings" {
+  let source = "import {\n  \"example/user\",\n}\npkgtype(kind: \"foreign_library\")\noptions(\n)"
+  let exports = ["cabi_realloc:cabi_realloc", "discover:example#discover"]
+  let updated = @lib.update_pkg_link(source, exports)
+  assert_true(updated.contains("\"wasm-gc\": {"))
+  assert_true(updated.contains("\"wasm\": {"))
+  let gc = updated.split("\"wasm-gc\": {").collect()[1].to_owned()
+  assert_false(gc.contains("heap-start-address"))
+  assert_true(updated.contains("\"heap-start-address\": 16"))
+  assert_true(gc.contains("\"export-memory-name\": \"memory\""))
+  assert_eq(@lib.parse_pkg_exports(updated), exports)
+  assert_true(updated.contains("\"example/user\""))
+  assert_eq(@lib.update_pkg_link(updated, exports), updated)
+}

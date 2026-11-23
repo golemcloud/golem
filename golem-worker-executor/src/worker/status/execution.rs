@@ -1,4 +1,5 @@
 use super::*;
+use golem_common::model::InvocationId;
 
 type LatestWorkerStatus = (
     AgentStatus,
@@ -6,14 +7,19 @@ type LatestWorkerStatus = (
     HashMap<OplogIndex, RetryPolicyState>,
     HashMap<OplogIndex, Timestamp>,
     Option<RetryConfig>,
+    Option<InvocationId>,
 );
 
+/// Folds `entries` into the agent's execution status. An invocation whose result awaits
+/// settlement keeps the agent running until its `AgentInvocationSettled`; the last element of
+/// the result is that invocation (`AgentStatusRecord::settling_invocation`).
 pub(super) fn calculate_latest_worker_status(
     mut current_status: AgentStatus,
     mut last_error_kind: Option<OplogErrorKind>,
     mut current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
     mut current_retry_at: HashMap<OplogIndex, Timestamp>,
     current_retry_policy: Option<RetryConfig>,
+    mut settling_invocation: Option<InvocationId>,
     default_retry_policy: &RetryConfig,
     skipped_regions: &DeletedRegions,
     deleted_regions: &DeletedRegions,
@@ -60,6 +66,7 @@ pub(super) fn calculate_latest_worker_status(
         if !deleted_regions.is_in_deleted_region(*idx)
             && let OplogEntry::Error {
                 kind,
+                invocation_id,
                 error,
                 retry_from,
                 retry_policy_state,
@@ -67,13 +74,16 @@ pub(super) fn calculate_latest_worker_status(
             } = entry
         {
             last_error_kind = Some(*kind);
+            // A rejection names the invocation it rejects. A rejection that names no invocation
+            // is an ordinary trap of the agent, after the invocation's recorded result.
             if *kind == OplogErrorKind::Invocation
+                && invocation_id.is_some()
                 && matches!(
                     error,
                     AgentError::InvalidRequest(_) | AgentError::PermissionDenied(_)
                 )
             {
-                current_status = AgentStatus::Idle;
+                current_status = idle_unless_settling(settling_invocation);
                 last_error_kind = None;
                 current_retry_state.clear();
                 current_retry_at.clear();
@@ -124,9 +134,31 @@ pub(super) fn calculate_latest_worker_status(
                     current_retry_at.clear();
                 }
             }
-            OplogEntry::AgentInvocationFinished { .. }
-            | OplogEntry::AgentInvocationFailed { .. } => {
-                current_status = AgentStatus::Idle;
+            OplogEntry::AgentInvocationFinished {
+                invocation_id,
+                awaits_settlement,
+                ..
+            }
+            | OplogEntry::AgentInvocationFailed {
+                invocation_id,
+                awaits_settlement,
+                ..
+            } => {
+                if *awaits_settlement {
+                    settling_invocation = Some(*invocation_id);
+                }
+                current_status = idle_unless_settling(settling_invocation);
+                if !unresolved_recovery {
+                    last_error_kind = None;
+                    current_retry_state.clear();
+                    current_retry_at.clear();
+                }
+            }
+            OplogEntry::AgentInvocationSettled { invocation_id, .. } => {
+                if settling_invocation == Some(*invocation_id) {
+                    settling_invocation = None;
+                }
+                current_status = idle_unless_settling(settling_invocation);
                 if !unresolved_recovery {
                     last_error_kind = None;
                     current_retry_state.clear();
@@ -220,7 +252,7 @@ pub(super) fn calculate_latest_worker_status(
                     && last_error_kind == Some(OplogErrorKind::Recovery)
                 {
                     if matches!(current_status, AgentStatus::Retrying | AgentStatus::Failed) {
-                        current_status = AgentStatus::Idle;
+                        current_status = idle_unless_settling(settling_invocation);
                     }
                     last_error_kind = None;
                 }
@@ -248,7 +280,18 @@ pub(super) fn calculate_latest_worker_status(
         current_retry_state,
         current_retry_at,
         current_retry_policy,
+        settling_invocation,
     )
+}
+
+/// The status of an agent that has no running invocation: `Running` while the background work
+/// of an invocation whose result awaits settlement drains, `Idle` otherwise.
+fn idle_unless_settling(settling_invocation: Option<InvocationId>) -> AgentStatus {
+    if settling_invocation.is_some() {
+        AgentStatus::Running
+    } else {
+        AgentStatus::Idle
+    }
 }
 
 pub(super) fn is_worker_error_retriable(

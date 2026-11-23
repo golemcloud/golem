@@ -2,14 +2,30 @@
 extern "wasm" fn set_host_mode(mode : Int32) = "golem:test" "set-durable-stream-host-mode"
 
 ///|
-#owned(value)
-extern "wasm" fn string_pointer(value : String) -> Int32 =
-  #|(func (param i32) (result i32) local.get 0)
+fn string_pointer(value : String) -> Int32 {
+  let ptr = @gen.mbt_ffi_cabi_realloc(0, 0, 2, value.length() * 2)
+  for i in 0..<value.length() {
+    store16(ptr + i * 2, value[i].to_int())
+  }
+  ptr
+}
 
 ///|
-#owned(value)
-extern "wasm" fn bytes_pointer(value : Bytes) -> Int32 =
-  #|(func (param i32) (result i32) local.get 0)
+fn bytes_pointer(value : Bytes) -> Int32 {
+  let ptr = @gen.mbt_ffi_cabi_realloc(0, 0, 1, value.length())
+  for i in 0..<value.length() {
+    store8(ptr + i, value[i].to_int())
+  }
+  ptr
+}
+
+///|
+extern "wasm" fn store16(ptr : Int32, value : Int32) =
+  #|(func (param i32 i32) local.get 0 local.get 1 i32.store16)
+
+///|
+extern "wasm" fn store8(ptr : Int32, value : Int32) =
+  #|(func (param i32 i32) local.get 0 local.get 1 i32.store8)
 
 ///|
 extern "wasm" fn reply_string(pointer : Int32, length : Int32) = "golem:test" "durable-stream-reply-string"

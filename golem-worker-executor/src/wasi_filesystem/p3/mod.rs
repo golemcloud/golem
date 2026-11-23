@@ -28,6 +28,7 @@ use crate::durable_host::p3::{
     observe_function_call_store, reserve_invocation_id_before_await,
 };
 use crate::durable_host::tail_work::TailActivity;
+use crate::durable_host::with_import_access;
 use crate::durable_host::{
     CallReplayOutcome, DurabilityHost, DurableCallSession, LiveAuthorizationPermit, NotCancellable,
 };
@@ -246,7 +247,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let result_interrupt = filesystem_interrupt::<Ctx, U>(accessor);
-        let future = accessor.with(|mut store| {
+        let future = with_import_access(accessor, |mut store| {
             let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                 .tail_work_tracker()
                 .activity();
@@ -329,7 +330,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let result_interrupt = filesystem_interrupt::<Ctx, U>(accessor);
-        let future = accessor.with(|mut store| {
+        let future = with_import_access(accessor, |mut store| {
             let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                 .tail_work_tracker()
                 .activity();

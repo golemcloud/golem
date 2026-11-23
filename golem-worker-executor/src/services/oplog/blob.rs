@@ -95,6 +95,7 @@ impl BlobOplogArchiveService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchiveService for BlobOplogArchiveService {
     async fn open(
         &self,
@@ -514,6 +515,7 @@ impl BlobOplogArchive {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for BlobOplogArchive {
     async fn read_source(
         &self,

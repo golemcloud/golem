@@ -27,7 +27,7 @@ use golem_common::model::application::ApplicationId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::ResourceDefinitionId;
 use std::sync::Arc;
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc, watch};
 
 /// Manages registry change event broadcasting. Delivery is at-least-once;
 /// subscribers must deduplicate by event_id.
@@ -37,6 +37,13 @@ pub trait RegistryChangeNotifier: Send + Sync {
 
     /// Get a new broadcast receiver for subscribing to live events.
     fn subscribe(&self) -> broadcast::Receiver<RegistryChangeEvent>;
+
+    /// Get a receiver that changes whenever the notifier may have missed events that the journal
+    /// no longer holds. Subscribers that keep state derived from events must reset it. The
+    /// default receiver never changes: its sender is already closed.
+    fn subscribe_resyncs(&self) -> watch::Receiver<u64> {
+        watch::channel(0).1
+    }
 
     /// Start any background tasks needed by this implementation (e.g., PgListener
     /// or local signal processing worker).
@@ -58,6 +65,10 @@ where
 
     fn subscribe(&self) -> broadcast::Receiver<RegistryChangeEvent> {
         (**self).subscribe()
+    }
+
+    fn subscribe_resyncs(&self) -> watch::Receiver<u64> {
+        (**self).subscribe_resyncs()
     }
 
     fn start_background_tasks(
@@ -160,8 +171,14 @@ impl RegistryChangeNotifier for SqliteRegistryChangeNotifier {
 /// Postgres-backed notifier that uses LISTEN/NOTIFY for cross-node propagation.
 /// Background listener tasks fetch outbox events and broadcast them internally.
 /// External signal calls are ignored for Postgres.
+///
+/// Notifications sent while the listener connection is down are lost, so the listener replays
+/// the outbox from its cursor after every reconnect. When the outbox no longer holds every
+/// event after the cursor, the notifier signals a resync before it broadcasts the replayed
+/// events.
 pub struct PostgresRegistryChangeNotifier {
     sender: broadcast::Sender<RegistryChangeEvent>,
+    resyncs: Arc<watch::Sender<u64>>,
     repo: Arc<dyn RegistryChangeRepo>,
     connect_url: String,
 }
@@ -183,10 +200,78 @@ impl PostgresRegistryChangeNotifier {
         );
         Self {
             sender,
+            resyncs: Arc::new(watch::channel(0).0),
             repo,
             connect_url,
         }
     }
+}
+
+/// Broadcasts the outbox events after `last_processed_event_id` and advances it. Signals a
+/// resync first when the outbox has no event directly after the cursor although newer events
+/// exist. When the first read is empty but the latest event id is past the cursor, it reads the
+/// events again, so events that committed between the two reads are broadcast; the cursor moves
+/// to the latest id without broadcasting only when the outbox no longer holds any event after
+/// the cursor.
+///
+/// Event writers take the shared transaction advisory lock before they insert, so events commit
+/// in event id order. A transaction that allocates an event id and then rolls back still leaves
+/// a gap in the sequence, which this check cannot tell apart from a lost event. The resync is
+/// therefore conservative: it can clear a cache that was still valid, trading reloads for
+/// recovery without a retention high-watermark. A loss that this check does not detect is
+/// bounded by the cache's maximum age.
+///
+/// After a lost connection (`reconnected`), an outbox with no event after the cursor cannot
+/// show that nothing was missed: retention cleanup may have removed the events of the outage,
+/// and with them every newer event id. The notifier then signals a resync too.
+async fn catch_up(
+    repo: &dyn RegistryChangeRepo,
+    sender: &broadcast::Sender<RegistryChangeEvent>,
+    resyncs: &watch::Sender<u64>,
+    last_processed_event_id: &mut ChangeEventId,
+    reconnected: bool,
+) -> golem_service_base::repo::RepoResult<()> {
+    let mut events = repo.get_events_since(*last_processed_event_id).await?;
+    let first_available = match events.first() {
+        Some(event) => Some(event.event_id()),
+        None => match repo
+            .get_latest_event_id()
+            .await?
+            .filter(|latest| *latest > *last_processed_event_id)
+        {
+            None => None,
+            Some(latest) => {
+                // Events may have committed after the first read. Fetch again after reading the
+                // latest id: an event at or below it is then either returned or gone.
+                events = repo.get_events_since(*last_processed_event_id).await?;
+                Some(events.first().map_or(latest, |event| event.event_id()))
+            }
+        },
+    };
+    if let Some(first_available) = first_available
+        && first_available.0 > last_processed_event_id.0 + 1
+    {
+        tracing::info!(
+            last_processed_event_id = last_processed_event_id.0,
+            first_available_event_id = first_available.0,
+            "Registry change journal has a gap after the cursor, signalling resync"
+        );
+        resyncs.send_modify(|generation| *generation += 1);
+        if events.is_empty() {
+            *last_processed_event_id = first_available;
+        }
+    } else if reconnected && events.is_empty() {
+        tracing::info!(
+            last_processed_event_id = last_processed_event_id.0,
+            "Registry change journal has no event after the cursor after a reconnect, signalling resync"
+        );
+        resyncs.send_modify(|generation| *generation += 1);
+    }
+    for event in events {
+        *last_processed_event_id = event.event_id();
+        let _ = sender.send(event);
+    }
+    Ok(())
 }
 
 impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
@@ -198,6 +283,10 @@ impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
         self.sender.subscribe()
     }
 
+    fn subscribe_resyncs(&self) -> watch::Receiver<u64> {
+        self.resyncs.subscribe()
+    }
+
     fn start_background_tasks(
         &self,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
@@ -205,9 +294,11 @@ impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
         let connect_url = self.connect_url.clone();
         let repo = self.repo.clone();
         let sender = self.sender.clone();
+        let resyncs = self.resyncs.clone();
 
         join_set.spawn(async move {
             let mut last_processed_event_id = ChangeEventId(0);
+            let mut connected_before = false;
             let mut backoff = std::time::Duration::from_millis(100);
             let max_backoff = std::time::Duration::from_secs(30);
 
@@ -228,38 +319,60 @@ impl RegistryChangeNotifier for PostgresRegistryChangeNotifier {
 
                         // Catch up on any events that were written while we were disconnected
                         // or before this listener was started.
-                        match repo.get_events_since(last_processed_event_id).await {
-                            Ok(events) => {
-                                for event in events {
-                                    last_processed_event_id = event.event_id();
-                                    let _ = sender.send(event);
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to catch up on events after connect: {e}, reconnecting"
-                                );
-                                tokio::time::sleep(backoff).await;
-                                backoff = (backoff * 2).min(max_backoff);
-                                continue;
-                            }
+                        if let Err(e) = catch_up(
+                            repo.as_ref(),
+                            &sender,
+                            &resyncs,
+                            &mut last_processed_event_id,
+                            connected_before,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                "Failed to catch up on events after connect: {e}, reconnecting"
+                            );
+                            tokio::time::sleep(backoff).await;
+                            backoff = (backoff * 2).min(max_backoff);
+                            continue;
                         }
+                        connected_before = true;
 
                         loop {
-                            match listener.recv().await {
-                                Ok(_notification) => {
-                                    match repo.get_events_since(last_processed_event_id).await {
-                                        Ok(events) => {
-                                            for event in events {
-                                                last_processed_event_id = event.event_id();
-                                                let _ = sender.send(event);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "Failed to fetch events after NOTIFY: {e}"
-                                            );
-                                        }
+                            // `try_recv` returns `Ok(None)` once it has replaced a lost
+                            // connection and listens again. Notifications sent in between are
+                            // lost, so the outbox is replayed at once instead of at the next
+                            // notification, which may never come.
+                            match listener.try_recv().await {
+                                Ok(Some(_notification)) => {
+                                    if let Err(e) = catch_up(
+                                        repo.as_ref(),
+                                        &sender,
+                                        &resyncs,
+                                        &mut last_processed_event_id,
+                                        false,
+                                    )
+                                    .await
+                                    {
+                                        tracing::warn!("Failed to fetch events after NOTIFY: {e}");
+                                    }
+                                }
+                                Ok(None) => {
+                                    tracing::info!(
+                                        "PgListener reconnected on registry_change, replaying events"
+                                    );
+                                    if let Err(e) = catch_up(
+                                        repo.as_ref(),
+                                        &sender,
+                                        &resyncs,
+                                        &mut last_processed_event_id,
+                                        true,
+                                    )
+                                    .await
+                                    {
+                                        tracing::warn!(
+                                            "Failed to replay events after reconnect: {e}, reconnecting"
+                                        );
+                                        break;
                                     }
                                 }
                                 Err(e) => {
@@ -296,7 +409,13 @@ enum ReplayError {
     RepoError(String),
 }
 
-fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvalidationEvent {
+/// Maps a journal event to its invalidation stream event. `AccountChanged` currently has no
+/// invalidation stream payload: it invalidates only caches inside the registry, so it maps to
+/// `None`. This is the present boundary, not a rule against propagating account lifecycle
+/// changes to other services.
+fn to_registry_invalidation_event(
+    event: &RegistryChangeEvent,
+) -> Option<RegistryInvalidationEvent> {
     let (event_id, payload) = match event {
         RegistryChangeEvent::DeploymentChanged {
             event_id,
@@ -419,11 +538,12 @@ fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvali
                 card_ids: card_ids.iter().copied().map(Into::into).collect(),
             }),
         ),
+        RegistryChangeEvent::AccountChanged { .. } => return None,
     };
-    RegistryInvalidationEvent {
+    Some(RegistryInvalidationEvent {
         event_id: event_id.0 as u64,
         payload: Some(payload),
-    }
+    })
 }
 
 async fn replay_from_cursor(
@@ -466,10 +586,8 @@ async fn replay_from_cursor(
             }
             for event in &events {
                 cursor = event.event_id();
-                if tx
-                    .send(Ok(to_registry_invalidation_event(event)))
-                    .await
-                    .is_err()
+                if let Some(event) = to_registry_invalidation_event(event)
+                    && tx.send(Ok(event)).await.is_err()
                 {
                     return Err(ReplayError::Disconnected);
                 }
@@ -532,10 +650,8 @@ pub fn subscribe_registry_invalidations(
                 Ok(event) => {
                     if event.event_id() > cursor {
                         cursor = event.event_id();
-                        if tx
-                            .send(Ok(to_registry_invalidation_event(&event)))
-                            .await
-                            .is_err()
+                        if let Some(event) = to_registry_invalidation_event(&event)
+                            && tx.send(Ok(event)).await.is_err()
                         {
                             break;
                         }
@@ -668,11 +784,58 @@ mod tests {
         );
     }
 
+    #[test]
+    async fn test_catch_up_broadcasts_events_committed_between_reads() {
+        let repo = MockRegistryChangeRepo::new();
+        for id in 1..=10 {
+            repo.push(make_deployment_change_event(id));
+        }
+        // Events 11 and 12 commit after the first fetch and before the latest id read.
+        *repo.commit_before_latest_event_id.lock().unwrap() = vec![
+            make_deployment_change_event(11),
+            make_deployment_change_event(12),
+        ];
+        let (sender, mut rx) = broadcast::channel(16);
+        let resyncs = watch::channel(0u64).0;
+        let mut cursor = ChangeEventId(10);
+
+        catch_up(&repo, &sender, &resyncs, &mut cursor, false)
+            .await
+            .unwrap();
+
+        let mut delivered = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            delivered.push(event.event_id().0);
+        }
+        assert_eq!(delivered, vec![11, 12]);
+        assert_eq!(cursor, ChangeEventId(12));
+        assert_eq!(*resyncs.borrow(), 0);
+    }
+
+    #[test]
+    async fn test_catch_up_skips_to_latest_only_when_events_are_gone() {
+        let repo = MockRegistryChangeRepo::new();
+        // Retention removed everything after the cursor; 12 is the latest id the journal reports.
+        repo.set_latest_event_id_override(ChangeEventId(12));
+        let (sender, mut rx) = broadcast::channel(16);
+        let resyncs = watch::channel(0u64).0;
+        let mut cursor = ChangeEventId(10);
+
+        catch_up(&repo, &sender, &resyncs, &mut cursor, false)
+            .await
+            .unwrap();
+
+        assert!(rx.try_recv().is_err());
+        assert_eq!(cursor, ChangeEventId(12));
+        assert_eq!(*resyncs.borrow(), 1);
+    }
+
     // ── Mock repo for subscribe_registry_invalidations tests ──
 
     struct MockRegistryChangeRepo {
         events: std::sync::Mutex<Vec<RegistryChangeEvent>>,
         latest_event_id_override: std::sync::Mutex<Option<ChangeEventId>>,
+        commit_before_latest_event_id: std::sync::Mutex<Vec<RegistryChangeEvent>>,
         block_next_get_events_since: std::sync::Mutex<Option<Arc<BlockingGetEventsSince>>>,
         get_events_since_call_count: std::sync::atomic::AtomicUsize,
         get_events_since_called: tokio::sync::Notify,
@@ -709,6 +872,7 @@ mod tests {
             Self {
                 events: std::sync::Mutex::new(Vec::new()),
                 latest_event_id_override: std::sync::Mutex::new(None),
+                commit_before_latest_event_id: std::sync::Mutex::new(Vec::new()),
                 block_next_get_events_since: std::sync::Mutex::new(None),
                 get_events_since_call_count: std::sync::atomic::AtomicUsize::new(0),
                 get_events_since_called: tokio::sync::Notify::new(),
@@ -745,6 +909,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl RegistryChangeRepo for MockRegistryChangeRepo {
         async fn get_events_since(
             &self,
@@ -776,6 +941,9 @@ mod tests {
         async fn get_latest_event_id(
             &self,
         ) -> golem_service_base::repo::RepoResult<Option<ChangeEventId>> {
+            let committed =
+                std::mem::take(&mut *self.commit_before_latest_event_id.lock().unwrap());
+            self.events.lock().unwrap().extend(committed);
             if let Some(id) = *self.latest_event_id_override.lock().unwrap() {
                 return Ok(Some(id));
             }
@@ -983,6 +1151,120 @@ mod tests {
             ev.payload
         );
         assert_eq!(ev.event_id, 100);
+        join_set.abort_all();
+    }
+
+    fn make_account_changed_event(id: i64) -> RegistryChangeEvent {
+        RegistryChangeEvent::AccountChanged {
+            event_id: ChangeEventId(id),
+            account_id: Uuid::new_v4(),
+        }
+    }
+
+    async fn next_event_ids(
+        stream: &mut tokio_stream::wrappers::ReceiverStream<
+            Result<RegistryInvalidationEvent, tonic::Status>,
+        >,
+        count: usize,
+    ) -> Vec<u64> {
+        use tokio_stream::StreamExt;
+        let mut ids = Vec::new();
+        for _ in 0..count {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+                .await
+                .expect("timeout")
+                .expect("stream ended")
+                .expect("error");
+            assert!(
+                !matches!(event.payload, Some(Payload::CursorExpired(_))),
+                "unexpected CursorExpired at {}",
+                event.event_id
+            );
+            ids.push(event.event_id);
+        }
+        ids
+    }
+
+    async fn assert_no_more_events(
+        stream: &mut tokio_stream::wrappers::ReceiverStream<
+            Result<RegistryInvalidationEvent, tonic::Status>,
+        >,
+    ) {
+        use tokio_stream::StreamExt;
+        let next = tokio::time::timeout(std::time::Duration::from_millis(150), stream.next()).await;
+        assert!(next.is_err(), "unexpected event: {next:?}");
+    }
+
+    #[test]
+    async fn test_subscribe_replay_skips_account_changed_without_cursor_expiry() {
+        let repo = Arc::new(MockRegistryChangeRepo::new());
+        repo.push(make_deployment_change_event(1));
+        repo.push(make_account_changed_event(2));
+        repo.push(make_account_changed_event(3));
+        repo.push(make_deployment_change_event(4));
+        repo.push(make_account_changed_event(5));
+
+        let notifier = SqliteRegistryChangeNotifier::new(16, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
+        let mut stream = subscribe_registry_invalidations(repo.clone(), &notifier, Some(1));
+
+        assert_eq!(next_event_ids(&mut stream, 1).await, vec![4]);
+        assert_no_more_events(&mut stream).await;
+
+        // The cursor moved past the trailing AccountChanged event: the next live event
+        // follows directly, without replaying 4 again and without a cursor expiry.
+        repo.push(make_deployment_change_event(6));
+        notifier.signal_new_events_available();
+        assert_eq!(next_event_ids(&mut stream, 1).await, vec![6]);
+        join_set.abort_all();
+    }
+
+    #[test]
+    async fn test_subscribe_live_skips_account_changed() {
+        let repo = Arc::new(MockRegistryChangeRepo::new());
+        let notifier = SqliteRegistryChangeNotifier::new(16, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
+        let mut stream = subscribe_registry_invalidations(repo.clone(), &notifier, None);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        repo.push(make_account_changed_event(1));
+        repo.push(make_deployment_change_event(2));
+        repo.push(make_account_changed_event(3));
+        notifier.signal_new_events_available();
+        assert_eq!(next_event_ids(&mut stream, 1).await, vec![2]);
+        assert_no_more_events(&mut stream).await;
+
+        repo.push(make_deployment_change_event(4));
+        notifier.signal_new_events_available();
+        assert_eq!(next_event_ids(&mut stream, 1).await, vec![4]);
+        join_set.abort_all();
+    }
+
+    #[test]
+    async fn test_subscribe_lag_recovery_skips_account_changed() {
+        let repo = Arc::new(MockRegistryChangeRepo::new());
+        let notifier = SqliteRegistryChangeNotifier::new(2, repo.clone());
+        let mut join_set = tokio::task::JoinSet::new();
+        notifier.start_background_tasks(&mut join_set);
+        let mut stream = subscribe_registry_invalidations(repo.clone(), &notifier, None);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // One burst of mixed events overflows the capacity-2 channel.
+        for i in 1..=8 {
+            if i % 2 == 0 {
+                repo.push(make_account_changed_event(i));
+            } else {
+                repo.push(make_deployment_change_event(i));
+            }
+        }
+        notifier.signal_new_events_available();
+
+        let mut ids = next_event_ids(&mut stream, 4).await;
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 3, 5, 7]);
+        assert_no_more_events(&mut stream).await;
         join_set.abort_all();
     }
 

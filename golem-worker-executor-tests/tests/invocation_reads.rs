@@ -76,7 +76,8 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
-        input: data_value!(1u64).into_parts().1,
+        input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: callers::agent(
             owner.agent_id,

@@ -50,6 +50,37 @@ fn assert_json_content_type(response: &reqwest::Response) {
     );
 }
 
+fn assert_no_invocation_receipt(response: &reqwest::Response) {
+    for name in ["Golem-Invocation-Id", "Golem-Environment-Id"] {
+        assert!(!response.headers().contains_key(name), "unexpected {name}");
+    }
+}
+
+async fn assert_invocation_receipt(
+    agent: &http_test_context::HttpTestContext,
+    response: &reqwest::Response,
+) -> anyhow::Result<golem_common::model::invocation_id::OwnedInvocationId> {
+    use golem_client::api::InvocationClient;
+    use golem_test_framework::config::TestDependencies;
+
+    let id = response.headers()["Golem-Invocation-Id"].to_str()?;
+    assert_eq!(
+        response.headers()["Golem-Environment-Id"],
+        agent.env_id.to_string()
+    );
+    let parsed = id.parse().map_err(anyhow::Error::msg)?;
+    let client = agent
+        .user
+        .deps
+        .worker_service()
+        .invocation_http_client(&agent.user.token)
+        .await;
+    let receipt = client.get_invocation(&agent.env_id.0, id).await?;
+    assert_eq!(receipt.summary.invocation_id, id);
+    assert_eq!(receipt.summary.environment_id, agent.env_id.0);
+    Ok(parsed)
+}
+
 async fn assert_query_bindings(agent: &http_test_context::HttpTestContext) -> anyhow::Result<()> {
     use pretty_assertions::assert_eq;
     use reqwest::{Method, StatusCode};

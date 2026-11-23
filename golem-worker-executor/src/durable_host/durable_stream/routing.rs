@@ -66,6 +66,7 @@ impl RoutedAttachedStreamSegmentSource {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl AttachedStreamSegmentSource for RoutedAttachedStreamSegmentSource {
     async fn journal_lag_events(
         &self,
@@ -200,6 +201,7 @@ impl RoutedStreamAttachmentControl {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentControl for RoutedStreamAttachmentControl {
     async fn prepare_attachment(
         &self,

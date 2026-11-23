@@ -105,10 +105,14 @@ pub enum DeployValidationError {
         tool_name: ToolName,
         error: String,
     },
-    #[error("MCP deployment {mcp_deployment_domain} exports duplicate tool name {name}")]
+    #[error(
+        "MCP deployment {mcp_deployment_domain}: {first} and {second} both project to the MCP tool name `{name}`"
+    )]
     McpDeploymentToolNameCollision {
         mcp_deployment_domain: Domain,
         name: String,
+        first: String,
+        second: String,
     },
     #[error(
         "Method {agent_method} of agent {agent_type} used by http api at {method} {domain}/{path} is invalid: {error}"

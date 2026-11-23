@@ -1,0 +1,13 @@
+import {
+  "moonbitlang/core/encoding/utf16",
+}
+
+supported_targets = "wasm-gc"
+
+// BEGIN generated backend
+options(
+  targets: {
+    "runtime.mbt": ["wasm-gc"],
+  },
+)
+// END generated backend

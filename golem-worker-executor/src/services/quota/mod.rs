@@ -256,6 +256,7 @@ impl LazyQuotaService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl QuotaService for LazyQuotaService {
     async fn initialize(&self, endpoint: ExecutorEndpoint) {
         let make_inner = self
@@ -1012,6 +1013,7 @@ impl GrpcQuotaService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl QuotaService for GrpcQuotaService {
     async fn acquire(
         &self,
@@ -1168,6 +1170,7 @@ impl QuotaService for GrpcQuotaService {
 pub struct UnlimitedQuotaService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl QuotaService for UnlimitedQuotaService {
     async fn acquire(
         &self,

@@ -23,10 +23,16 @@ import {
 import {
   "golemcloud/golem_sdk/internal/permission_card" @card,
   "golemcloud/golem_sdk/internal/test_support",
+  "golemcloud/golem_sdk/gen",
+  "moonbitlang/core/encoding/utf16",
 } for "wbtest"
 
 // Test host buffers use the same allocator as the generated bindings.
 
 warnings = "-44"
 
-supported_targets = "+wasm"
+supported_targets = "+wasm+wasm-gc"
+
+options(
+  link: { "wasm-gc": { "export-memory-name": "memory" } },
+)

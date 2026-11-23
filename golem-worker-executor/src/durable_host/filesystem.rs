@@ -14,7 +14,6 @@
 
 use super::*;
 
-#[async_trait]
 impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
     async fn get_file_system_node(
         &self,
