@@ -692,6 +692,42 @@ mod tests {
         fn middle(&self) -> RefinedDispatcherParentSubtree;
     }
 
+    #[tool_definition]
+    trait StandaloneProjectionShapes {
+        #[arg(region = "global", aliases = ["area", "zone"], max_length = 6)]
+        fn standalone_projection_shapes(&self, region: String);
+
+        #[arg(config = "option", repeatable = "repeated")]
+        #[arg(maybe = "positional", max_length = 3)]
+        #[arg(label = "option", optional_scalar, max_length = 5)]
+        #[arg(verbose = "flag", kind = "count-flag", max = 3)]
+        #[arg(color = "flag", negatable = true, default = true)]
+        #[arg(value = "option", required = true)]
+        #[command(aliases = ["r"])]
+        fn run(
+            &self,
+            config: BTreeMap<String, String>,
+            maybe: Option<String>,
+            label: Option<String>,
+            verbose: u32,
+            color: bool,
+            value: RequiredMaybeString,
+        );
+
+        #[arg(items, max_length = 2)]
+        fn collect(&self, items: Vec<String>, region: String);
+
+        #[arg(place = "option", aliases = ["zone"], max_length = 1)]
+        #[arg(count = "option", required = false, max = 9)]
+        fn recursive(
+            &self,
+            place: String,
+            node: RecursiveNode,
+            other: Option<RecursiveNode>,
+            count: u32,
+        );
+    }
+
     fn published_input_schema(
         descriptor: golem_rust::agentic::WireToolDescriptorFn,
         command_path: &[String],
@@ -709,7 +745,8 @@ mod tests {
     }
 
     #[test]
-    fn wire_client_projection_matches_native_command_inputs() {
+    async fn wire_client_projection_matches_native_command_inputs() {
+        use golem_rust::agentic::DirectInputValue;
         use golem_rust::schema::tool::Tool;
         use golem_rust::schema::validation::subtyping::is_equivalent_cross_graph;
 
@@ -789,6 +826,134 @@ mod tests {
                     .is_err()
             );
         }
+
+        // Subtree clients use the descriptor projection above. For standalone
+        // clients, encode through the generated builder to inspect its schema
+        // and exercise field lookup with the published argument aliases.
+        macro_rules! check_builder {
+            ($descriptor:ident, $builder:ident, [$($path:expr),*], $($name:literal => $value:expr),* $(,)?) => {{
+                let path = [$($path.to_string()),*];
+                let expected = published_input_schema($descriptor, &path);
+                let input = encode_with_schema(
+                    &[$(DirectInputValue::new($name, vec![], None, $value)),*],
+                    $builder,
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{}: {error}", stringify!($builder)));
+                assert!(
+                    is_equivalent_cross_graph(input.graph(), &input.graph().root, &expected, &expected.root),
+                    "{} at {path:?}", stringify!($builder),
+                );
+                assert!(input_is_valid(&input), "{} at {path:?}", stringify!($builder));
+            }};
+        }
+
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_RefinedClientArgs,
+            __golem_wire_input_schema_for_RefinedClientArgs_slug,
+            ["slug"],
+            "label" => Some("tiny".to_string()),
+            "tags" => vec!["tag".to_string()],
+            "name" => "golem".to_string(),
+        );
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_RefinedClientArgs,
+            __golem_wire_input_schema_for_RefinedClientArgs_limit,
+            ["limit"],
+            "count" => 2u32,
+        );
+        for (command, builder) in [
+            (
+                "first",
+                __golem_wire_input_schema_for_RefinedDispatcherGlobals_first as fn() -> _,
+            ),
+            (
+                "second",
+                __golem_wire_input_schema_for_RefinedDispatcherGlobals_second,
+            ),
+        ] {
+            check_builder!(
+                __golem_standalone_wire_tool_descriptor_for_RefinedDispatcherGlobals,
+                builder,
+                [command],
+                "verbose" => true,
+                "label" => "tiny".to_string(),
+                "zone" => "outside".to_string(),
+                "area" => "europe".to_string(),
+            );
+        }
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_RefinedDispatcherGlobals,
+            __golem_wire_input_schema_for_RefinedDispatcherGlobals_third,
+            ["third"],
+            "item" => "payload".to_string(),
+            "verbose" => true,
+            "label" => "tiny".to_string(),
+            "zone" => "outside".to_string(),
+            "area" => "europe".to_string(),
+        );
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_Grep,
+            __golem_wire_input_schema_for_Grep_grep,
+            [],
+            "files" => vec!["file".to_string()],
+            "case-sensitive" => false,
+            "pattern" => "regex".to_string(),
+        );
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_RefinedMiddlewareArgs,
+            __golem_wire_input_schema_for_RefinedMiddlewareArgs_slug,
+            ["slug"],
+            "label" => None::<String>,
+            "tags" => vec!["tag".to_string()],
+            "name" => "golem".to_string(),
+        );
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_RefinedMiddlewareArgs,
+            __golem_wire_input_schema_for_RefinedMiddlewareArgs_limit,
+            ["limit"],
+            "count" => 2u32,
+        );
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_RefinedMiddlewareArgs,
+            __golem_wire_input_schema_for_RefinedMiddlewareArgs_read,
+            ["read"],
+            "input" => std::path::PathBuf::from("module.wasm"),
+        );
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_StandaloneProjectionShapes,
+            __golem_wire_input_schema_for_StandaloneProjectionShapes_standalone_projection_shapes,
+            [],
+            "area" => "europe".to_string(),
+        );
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_StandaloneProjectionShapes,
+            __golem_wire_input_schema_for_StandaloneProjectionShapes_run,
+            ["r"],
+            "area" => "europe".to_string(),
+            "config" => BTreeMap::from([("key".to_string(), "value".to_string())]),
+            "maybe" => Some("abc".to_string()),
+            "label" => None::<String>,
+            "verbose" => 2u32,
+            "color" => false,
+            "value" => Some("value".to_string()),
+        );
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_StandaloneProjectionShapes,
+            __golem_wire_input_schema_for_StandaloneProjectionShapes_collect,
+            ["collect"],
+            "items" => vec!["ab".to_string(), "cd".to_string()],
+            "zone" => "europe".to_string(),
+        );
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_StandaloneProjectionShapes,
+            __golem_wire_input_schema_for_StandaloneProjectionShapes_recursive,
+            ["recursive"],
+            "area" => "europe".to_string(),
+            "node" => RecursiveNode { next: Some(Box::new(RecursiveNode { next: None })) },
+            "other" => None::<RecursiveNode>,
+            "count" => 7u32,
+        );
     }
 
     async fn encode_with_descriptor(
