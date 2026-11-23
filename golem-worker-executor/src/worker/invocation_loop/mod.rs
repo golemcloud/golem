@@ -53,7 +53,7 @@ use crate::worker::{
     StartupFailure, UnloadReason, UnloadRequest, Worker, WorkerCommand, WorkerDeletionHook,
     WorkerTrace,
 };
-use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
+use crate::workerctx::{PublicWorkerIo, ResultRecordedAt, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
 use futures::FutureExt;
 use futures::channel::oneshot::{self, Sender};

@@ -61,7 +61,12 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for LoopRecorder<Ctx> {
                     };
                     let recorded = store
                         .data_mut()
-                        .on_agent_invocation_success(display_name, *consumed_fuel, &mut output)
+                        .on_agent_invocation_success(
+                            display_name,
+                            *consumed_fuel,
+                            &mut output,
+                            ResultRecordedAt::ExportReturn,
+                        )
                         .await;
                     let ok = recorded.is_ok();
                     self.outcome = Some(LoopRecorded::Succeeded(recorded));
@@ -73,6 +78,7 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for LoopRecorder<Ctx> {
                         display_name,
                         error.clone(),
                         self.uses_streams,
+                        ResultRecordedAt::ExportReturn,
                     )
                     .await;
                     let ok = recorded.is_ok();
@@ -440,6 +446,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     &display_name,
                     error,
                     self.uses_streams,
+                    ResultRecordedAt::Settlement,
                 )
                 .await;
                 self.agent_method_failure_recorded(
@@ -590,7 +597,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let recorded = self
             .store
             .data_mut()
-            .on_agent_invocation_success(&full_function_name, consumed_fuel, &mut output)
+            .on_agent_invocation_success(
+                &full_function_name,
+                consumed_fuel,
+                &mut output,
+                ResultRecordedAt::Settlement,
+            )
             .await;
         self.agent_invocation_recorded(full_function_name, idempotency_key, kind, recorded)
             .await

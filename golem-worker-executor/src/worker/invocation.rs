@@ -1506,15 +1506,7 @@ async fn record_at_return_and_drain<Ctx: WorkerCtx>(
             return unrecorded_at_return(store, Ok(failure));
         }
     }
-    store
-        .data_mut()
-        .durable_ctx_mut()
-        .set_recording_result_at_return(true);
     let recorded = recorder.record(store, display_name, &result).await;
-    store
-        .data_mut()
-        .durable_ctx_mut()
-        .set_recording_result_at_return(false);
     if !recorded {
         return unrecorded_at_return(store, Ok(result));
     }

@@ -56,7 +56,12 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for ReplayRecorder {
                     };
                     let recorded = store
                         .data_mut()
-                        .on_agent_invocation_success(display_name, *consumed_fuel, &mut output)
+                        .on_agent_invocation_success(
+                            display_name,
+                            *consumed_fuel,
+                            &mut output,
+                            ResultRecordedAt::ExportReturn,
+                        )
                         .await;
                     let ok = recorded.is_ok();
                     self.outcome = Some(ReplayRecorded::Succeeded(recorded));
@@ -68,6 +73,7 @@ impl<Ctx: WorkerCtx> ReturnRecorder<Ctx> for ReplayRecorder {
                         display_name,
                         error.clone(),
                         self.uses_streams,
+                        ResultRecordedAt::ExportReturn,
                     )
                     .await
                     .map_err(|error| match error {
@@ -372,6 +378,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             &full_function_name,
                                             consumed_fuel,
                                             &mut output,
+                                            ResultRecordedAt::Settlement,
                                         )
                                         .await
                                 {
@@ -405,7 +412,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 if let Err(
                                     crate::worker::MethodFailureSettlementError::Invocation(error)
                                     | crate::worker::MethodFailureSettlementError::Recovery(error)
-                                ) = Self::on_agent_method_failure(store, &full_function_name, error, uses_streams).await {
+                                ) = Self::on_agent_method_failure(store, &full_function_name, error, uses_streams, ResultRecordedAt::Settlement).await {
                                     break Err(error);
                                 }
                                 number_of_replayed_functions += 1;

@@ -132,11 +132,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.replayed_invocation_terminal.take()
     }
 
-    /// Marks that the result recorded now is recorded at the export's return.
-    pub(crate) fn set_recording_result_at_return(&mut self, recording: bool) {
-        self.state.recording_result_at_return = recording;
-    }
-
     /// Marks that the loop's invocation recorded its result at the export's return. A later
     /// failure of the invocation's background work is then an ordinary trap of the agent: it
     /// neither replaces nor publishes the recorded result.
@@ -250,13 +245,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         error: AgentError,
         uses_streams: bool,
+        recorded_at: ResultRecordedAt,
     ) -> Result<(), crate::worker::MethodFailureSettlementError> {
         use crate::worker::MethodFailureSettlementError;
 
         let mut store = store.as_context_mut();
         store
             .data_mut()
-            .record_agent_method_failure(full_function_name, error.clone())
+            .record_agent_method_failure(full_function_name, error.clone(), recorded_at)
             .await
             .map_err(MethodFailureSettlementError::Invocation)?;
         if !store.data().durable_ctx().is_live() {
@@ -1274,6 +1270,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         full_function_name: &str,
         error: AgentError,
+        recorded_at: ResultRecordedAt,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.durability_is_suppressed() {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -1285,7 +1282,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         // An invocation that records its result at the export's return checks its custom durable
         // scopes, disposes its producers and releases its retained `Start`s when its background
         // work drained (`on_agent_invocation_settled`).
-        let at_return = self.state.recording_result_at_return;
+        let at_return = recorded_at == ResultRecordedAt::ExportReturn;
         let invocation = self.invocation_key();
         if !at_return {
             self.close_custom_durability_state(invocation)?;
@@ -1404,11 +1401,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         full_function_name: &str,
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
+        recorded_at: ResultRecordedAt,
     ) -> Result<(), WorkerExecutorError> {
         // An invocation that records its result at the export's return disposes its producers,
         // checks its custom durable scopes and releases its retained `Start`s when its background
         // work drained (`on_agent_invocation_settled`).
-        let at_return = self.state.recording_result_at_return;
+        let at_return = recorded_at == ResultRecordedAt::ExportReturn;
         let mut is_live = self.state.is_live();
         if is_live && !self.state.snapshotting_mode && !at_return {
             tool::durability::finish_producer_disposals(self).await?;

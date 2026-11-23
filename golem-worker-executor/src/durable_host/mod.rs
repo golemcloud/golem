@@ -239,7 +239,8 @@ use crate::worker::status::{StatusError, calculate_last_known_status_with_checkp
 use crate::worker::{InvocationFailureDecision, RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
-    InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
+    InvocationManagement, PublicWorkerIo, ResultRecordedAt, StatusManagement, UpdateManagement,
+    WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -1297,11 +1298,6 @@ struct PrivateDurableWorkerState {
     /// The terminal of the invocation the loop replays, which replay consumed when the export
     /// returned. The result reader of the invocation takes it.
     replayed_invocation_terminal: Option<Result<(OplogIndex, OplogEntry), WorkerExecutorError>>,
-
-    /// Whether the result the loop records now is recorded at the export's return, before the
-    /// background work of the invocation drains. The end of the drain then disposes the
-    /// producers, checks the custom durable scopes and releases the retained `Start`s.
-    recording_result_at_return: bool,
 
     /// Whether the loop's invocation recorded its result at the export's return, so that a
     /// failure of its background work is no longer the outcome of the invocation.

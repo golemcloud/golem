@@ -645,7 +645,6 @@ impl PrivateDurableWorkerState {
             tail_work_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             open_invocation_anchor: None,
             replayed_invocation_terminal: None,
-            recording_result_at_return: false,
             result_recorded_at_return: false,
             dropped_call_events,
             dropped_call_event_backlog: VecDeque::new(),
