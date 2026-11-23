@@ -337,6 +337,7 @@ impl WorkerService {
 /// failure to read the result, such as an unavailable executor, and is not the outcome.
 fn recorded_failure(error: &WorkerServiceError) -> Option<InvocationFailure> {
     match error {
+        WorkerServiceError::AcceptedInvocation { source, .. } => recorded_failure(source),
         WorkerServiceError::GolemError(
             WorkerExecutorError::InvocationFailed { .. }
             | WorkerExecutorError::PreviousInvocationFailed { .. }
