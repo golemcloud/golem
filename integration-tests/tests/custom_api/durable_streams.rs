@@ -2210,7 +2210,9 @@ async fn websocket_and_http_sessions_have_isolated_identities(
             selector: Box::new(InvocationSelector {
                 agent_type: "DurableStreamAgent".into(),
                 application: agent.application_name.clone(),
-                constructor_parameters: native_constructor_id(format!("ds3-{session}")),
+                target: golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                    constructor_parameters: native_constructor_id(format!("ds3-{session}")),
+                },
                 environment: agent.environment_name.clone(),
                 method: "echo".into(),
             }),

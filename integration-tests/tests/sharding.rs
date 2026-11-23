@@ -1896,9 +1896,10 @@ mod tests {
         async fn stored_owning_epoch(pool: &sqlx::PgPool, agent_id: &OwnedAgentId) -> Option<i64> {
             sqlx::query_scalar(
                 "SELECT epoch FROM golem_worker_executor_indexed.indexed_key_epoch \
-             WHERE namespace = 'durable-worker-oplog' AND key = $1",
+             WHERE namespace = 'durable-worker-oplog' AND env = $1 AND agent = $2",
             )
-            .bind(agent_id.storage_key())
+            .bind(agent_id.environment_id.0)
+            .bind(agent_id.agent_id.as_uuid())
             .fetch_optional(pool)
             .await
             .expect("Failed to read indexed_key_epoch")

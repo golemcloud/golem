@@ -4995,7 +4995,7 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
- "desert_rust",
+ "desert_rust 0.1.11",
  "futures",
  "golem-api-grpc",
  "golem-common",
