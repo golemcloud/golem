@@ -209,7 +209,10 @@ impl PostgresRegistryChangeNotifier {
 
 /// Broadcasts the outbox events after `last_processed_event_id` and advances it. Signals a
 /// resync first when the outbox has no event directly after the cursor although newer events
-/// exist.
+/// exist. When the first read is empty but the latest event id is past the cursor, it reads the
+/// events again, so events that committed between the two reads are broadcast; the cursor moves
+/// to the latest id without broadcasting only when the outbox no longer holds any event after
+/// the cursor.
 ///
 /// Event writers take the shared transaction advisory lock before they insert, so events commit
 /// in event id order. A transaction that allocates an event id and then rolls back still leaves
@@ -228,13 +231,22 @@ async fn catch_up(
     last_processed_event_id: &mut ChangeEventId,
     reconnected: bool,
 ) -> golem_service_base::repo::RepoResult<()> {
-    let events = repo.get_events_since(*last_processed_event_id).await?;
+    let mut events = repo.get_events_since(*last_processed_event_id).await?;
     let first_available = match events.first() {
         Some(event) => Some(event.event_id()),
-        None => repo
+        None => match repo
             .get_latest_event_id()
             .await?
-            .filter(|latest| *latest > *last_processed_event_id),
+            .filter(|latest| *latest > *last_processed_event_id)
+        {
+            None => None,
+            Some(latest) => {
+                // Events may have committed after the first read. Fetch again after reading the
+                // latest id: an event at or below it is then either returned or gone.
+                events = repo.get_events_since(*last_processed_event_id).await?;
+                Some(events.first().map_or(latest, |event| event.event_id()))
+            }
+        },
     };
     if let Some(first_available) = first_available
         && first_available.0 > last_processed_event_id.0 + 1
@@ -772,11 +784,58 @@ mod tests {
         );
     }
 
+    #[test]
+    async fn test_catch_up_broadcasts_events_committed_between_reads() {
+        let repo = MockRegistryChangeRepo::new();
+        for id in 1..=10 {
+            repo.push(make_deployment_change_event(id));
+        }
+        // Events 11 and 12 commit after the first fetch and before the latest id read.
+        *repo.commit_before_latest_event_id.lock().unwrap() = vec![
+            make_deployment_change_event(11),
+            make_deployment_change_event(12),
+        ];
+        let (sender, mut rx) = broadcast::channel(16);
+        let resyncs = watch::channel(0u64).0;
+        let mut cursor = ChangeEventId(10);
+
+        catch_up(&repo, &sender, &resyncs, &mut cursor, false)
+            .await
+            .unwrap();
+
+        let mut delivered = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            delivered.push(event.event_id().0);
+        }
+        assert_eq!(delivered, vec![11, 12]);
+        assert_eq!(cursor, ChangeEventId(12));
+        assert_eq!(*resyncs.borrow(), 0);
+    }
+
+    #[test]
+    async fn test_catch_up_skips_to_latest_only_when_events_are_gone() {
+        let repo = MockRegistryChangeRepo::new();
+        // Retention removed everything after the cursor; 12 is the latest id the journal reports.
+        repo.set_latest_event_id_override(ChangeEventId(12));
+        let (sender, mut rx) = broadcast::channel(16);
+        let resyncs = watch::channel(0u64).0;
+        let mut cursor = ChangeEventId(10);
+
+        catch_up(&repo, &sender, &resyncs, &mut cursor, false)
+            .await
+            .unwrap();
+
+        assert!(rx.try_recv().is_err());
+        assert_eq!(cursor, ChangeEventId(12));
+        assert_eq!(*resyncs.borrow(), 1);
+    }
+
     // ── Mock repo for subscribe_registry_invalidations tests ──
 
     struct MockRegistryChangeRepo {
         events: std::sync::Mutex<Vec<RegistryChangeEvent>>,
         latest_event_id_override: std::sync::Mutex<Option<ChangeEventId>>,
+        commit_before_latest_event_id: std::sync::Mutex<Vec<RegistryChangeEvent>>,
         block_next_get_events_since: std::sync::Mutex<Option<Arc<BlockingGetEventsSince>>>,
         get_events_since_call_count: std::sync::atomic::AtomicUsize,
         get_events_since_called: tokio::sync::Notify,
@@ -813,6 +872,7 @@ mod tests {
             Self {
                 events: std::sync::Mutex::new(Vec::new()),
                 latest_event_id_override: std::sync::Mutex::new(None),
+                commit_before_latest_event_id: std::sync::Mutex::new(Vec::new()),
                 block_next_get_events_since: std::sync::Mutex::new(None),
                 get_events_since_call_count: std::sync::atomic::AtomicUsize::new(0),
                 get_events_since_called: tokio::sync::Notify::new(),
@@ -880,6 +940,9 @@ mod tests {
         async fn get_latest_event_id(
             &self,
         ) -> golem_service_base::repo::RepoResult<Option<ChangeEventId>> {
+            let committed =
+                std::mem::take(&mut *self.commit_before_latest_event_id.lock().unwrap());
+            self.events.lock().unwrap().extend(committed);
             if let Some(id) = *self.latest_event_id_override.lock().unwrap() {
                 return Ok(Some(id));
             }
