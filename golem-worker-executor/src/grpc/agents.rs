@@ -23,7 +23,7 @@ use super::{
 use crate::services::{HasAgentTypesService, HasComponentService};
 use crate::worker::{CancelInvocationOutcome, CreateIntent};
 use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey, ScheduleId};
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, Principal};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
 use std::sync::Arc;
@@ -380,9 +380,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "schedule cancellation requires an authenticated internal caller",
                 ));
             }
-            let owner: AgentId = scheduled
-                .owner_agent_id
-                .ok_or_else(|| WorkerExecutorError::invalid_request("owner_agent_id not found"))?
+            let canceller: Principal = scheduled
+                .canceller
+                .ok_or_else(|| WorkerExecutorError::invalid_request("canceller not found"))?
                 .try_into()
                 .map_err(WorkerExecutorError::invalid_request)?;
             let schedule_id = ScheduleId {
@@ -415,7 +415,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Err(error) => return Err(error),
             };
             return worker
-                .cancel_scheduled_invocation(idempotency_key, schedule_id, &owner)
+                .cancel_scheduled_invocation(idempotency_key, schedule_id, &canceller)
                 .await;
         }
 
