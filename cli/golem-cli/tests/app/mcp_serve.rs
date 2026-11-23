@@ -1469,7 +1469,10 @@ async fn all_agent_ids(ctx: &TestContext, args: &[&str]) -> Vec<String> {
 #[test]
 #[timeout("10 minutes")]
 async fn one_agent_list_page_scans_only_the_agent_types_of_its_page_calls() {
-    let ctx = one_call_pages_context(true).await;
+    let mut ctx = one_call_pages_context(true).await;
+    let router = ctx.env_mut()["GOLEM_BUILTIN_LOCAL_URL"].clone();
+    let proxy = super::oplog_export::RecordingProxy::start(router).await;
+    ctx.add_env_var("GOLEM_BUILTIN_LOCAL_URL", proxy.url.clone());
 
     // No agent matches, so only the page call limit cuts the pages: one agent type each.
     let pages = agent_list_pages(&ctx, &["--filter", "key == none"]).await;
@@ -1497,8 +1500,16 @@ async fn one_agent_list_page_scans_only_the_agent_types_of_its_page_calls() {
     }
     assert_eq!(pages.len(), later.len() + 1, "{pages:?}");
 
-    // Without a filter, each page holds the agents of one agent type, in type order.
+    // Without a filter, each page holds the agents of one agent type, in type order. Its one page
+    // call also gives the recorded component of its agents: no page makes a listing call per agent.
+    proxy.take();
     let pages = agent_list_pages(&ctx, &[]).await;
+    let listing_calls = proxy
+        .take()
+        .into_iter()
+        .filter(|request| request.starts_with("POST ") && request.contains("/agents/find"))
+        .count();
+    assert_eq!(listing_calls, pages.len(), "{pages:?}");
     let mut paged = Vec::new();
     for page in &pages {
         let agents = page_agents(page);

@@ -24366,7 +24366,7 @@ components:
             $ref: '#/components/schemas/AgentMetadataDto'
         cursor:
           $ref: '#/components/schemas/ScanCursor'
-        page_scan:
+        pageScan:
           $ref: '#/components/schemas/PageScanGrant'
       required:
       - workers
