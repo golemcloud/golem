@@ -830,7 +830,6 @@ pub(crate) fn fold_invocation_result_entries(
                     requests.settling = Some(SettlingInvocation {
                         key: *invocation_id,
                         result: result.clone(),
-                        background_failed: false,
                     });
                 }
                 observe_result(invocation_id, result);
@@ -939,17 +938,13 @@ fn observe_background_failure(
     }
     if let Some(settling) = &mut requests.settling
         && settling.result.end == InvocationEnd::Completed
-        && !settling.background_failed
     {
-        settling.background_failed = true;
-        observe_result(
-            &settling.key,
-            InvocationResultPosition {
-                end: InvocationEnd::BackgroundFailed { failure },
-                changed_at,
-                ..settling.result.clone()
-            },
-        );
+        settling.result = InvocationResultPosition {
+            end: InvocationEnd::BackgroundFailed { failure },
+            changed_at,
+            ..settling.result.clone()
+        };
+        observe_result(&settling.key, settling.result.clone());
     }
 }
 

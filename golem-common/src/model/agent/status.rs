@@ -340,11 +340,9 @@ impl InvocationResultPosition {
 #[desert(evolution())]
 pub struct SettlingInvocation {
     pub key: InvocationId,
-    /// The position of the recorded result.
+    /// The position of the invocation's result: the recorded result, or
+    /// [`InvocationEnd::BackgroundFailed`] after the agent gave up during the background work.
     pub result: InvocationResultPosition,
-    /// Set when the agent gave up during the background work, so the result became
-    /// [`InvocationEnd::BackgroundFailed`]. The first give-up stays the failure.
-    pub background_failed: bool,
 }
 
 /// The accepted request of an invocation that has no result yet.

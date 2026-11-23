@@ -2463,7 +2463,7 @@ fn a_give_up_while_a_result_settles_is_its_background_failure() {
             requests
                 .settling
                 .as_ref()
-                .is_some_and(|settling| settling.background_failed)
+                .is_some_and(|settling| settling.result.end == background_failed(3))
         );
         // A later settlement of the invocation keeps the background failure.
         assert_eq!(
@@ -5737,7 +5737,6 @@ impl TestCaseBuilder {
                             .position(&idempotency_key)
                             .expect("the result was just inserted")
                             .clone(),
-                        background_failed: false,
                     });
                     status.status = AgentStatus::Running;
                 } else {
