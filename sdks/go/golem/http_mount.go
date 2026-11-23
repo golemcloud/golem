@@ -45,9 +45,9 @@ import (
 // Mount declares that an agent's methods are reachable over HTTP under a common
 // path prefix. Set it on [Spec.HTTP].
 //
-// The prefix's {var} segments bind the agent's constructor (Id) fields, so the
-// platform can tell which instance a request addresses — every Id field must
-// appear as a {var}. Segments may also be literals or the system tokens
+// Without AgentID, the prefix's {var} segments bind every constructor (Id)
+// field. With AgentID, only the ID selects the instance; constructor fields
+// are not URL bindings. Segments may also be literals or the system tokens
 // {agent-type} / {agent-version}; a catch-all {*rest} belongs to an endpoint,
 // not to the mount.
 type Mount struct {
@@ -60,53 +60,50 @@ type Mount struct {
 	// PhantomAgent provisions a fresh instance per request instead of routing to
 	// a persistent one.
 	PhantomAgent bool
-	// PhantomID selects an existing phantom by the UUID in a path capture or a
-	// query parameter: PhantomIDQuery("instance").Optional(). The zero value
-	// declares no selector.
-	PhantomID PhantomSelector
+	// AgentID selects an existing agent by its required ID in a path capture or
+	// query parameter. The zero value selects by constructor fields instead.
+	AgentID AgentIDBinding
+	// CreateRoute declares an exact POST path for creating an agent. It is a
+	// full path, not a mount suffix, and requires AgentID. Only literals and
+	// {agent-type} / {agent-version} are allowed. Empty means no create route.
+	CreateRoute string
 	// WebhookSuffix is an optional, literal-only path suffix advertised for
 	// webhooks.
 	WebhookSuffix string
 	// ExposeFiles serves files from the agent's own filesystem under the mount,
-	// in order. Only a durable, non-phantom agent whose Id fields are all
-	// captured by the mount path may expose files.
+	// in order. Only a durable, non-phantom agent selected by AgentID or by
+	// fully captured constructor fields may expose files.
 	ExposeFiles []FileMapping
 	// FileResponseHeaders are added to every response ExposeFiles serves.
 	FileResponseHeaders []FileResponseHeader
 }
 
-// PhantomSelector names where a request carries the phantom UUID that selects
-// an existing instance of the agent. Build one with [PhantomIDPath] or
-// [PhantomIDQuery].
-type PhantomSelector struct {
-	source   phantomSource
-	name     string
-	optional bool
+// AgentIDBinding names where a request carries the required agent ID. Build
+// one with [AgentIDPath] or [AgentIDQuery].
+type AgentIDBinding struct {
+	source agentIDSource
+	name   string
 }
 
-type phantomSource uint8
+type agentIDSource uint8
 
 const (
-	phantomNone phantomSource = iota
-	phantomPath
-	phantomQuery
+	agentIDNone agentIDSource = iota
+	agentIDPath
+	agentIDQuery
 )
 
-// PhantomIDPath selects the phantom by the mount path capture {name}. The
-// capture belongs to the selector, not to the agent's Id.
-func PhantomIDPath(name string) PhantomSelector {
-	return PhantomSelector{source: phantomPath, name: name}
+// AgentIDPath selects the agent by the required mount path capture {name}.
+func AgentIDPath(name string) AgentIDBinding {
+	return AgentIDBinding{source: agentIDPath, name: name}
 }
 
-// PhantomIDQuery selects the phantom by the query parameter name.
-func PhantomIDQuery(name string) PhantomSelector {
-	return PhantomSelector{source: phantomQuery, name: name}
+// AgentIDQuery selects the agent by the required query parameter name.
+func AgentIDQuery(name string) AgentIDBinding {
+	return AgentIDBinding{source: agentIDQuery, name: name}
 }
 
-// Optional lets a request omit the UUID, which then selects the original agent.
-func (s PhantomSelector) Optional() PhantomSelector { s.optional = true; return s }
-
-func (s PhantomSelector) declared() bool { return s.source != phantomNone }
+func (s AgentIDBinding) declared() bool { return s.source != agentIDNone }
 
 // Endpoint is one HTTP route for a method: a verb plus a path suffix (appended
 // to the agent's mount prefix) and how request data binds to the method's input
@@ -245,7 +242,7 @@ func someHTTPString(value string) witTypes.Option[string] {
 
 // ToolDeclaration compiles a path-only mount for the tool authoring package.
 func (mount Mount) ToolDeclaration() (toolCommon.ToolHttpMount, error) {
-	if mount.Auth || len(mount.CORS) != 0 || mount.PhantomAgent || mount.PhantomID.declared() || mount.WebhookSuffix != "" || len(mount.ExposeFiles) != 0 || len(mount.FileResponseHeaders) != 0 {
+	if mount.Auth || len(mount.CORS) != 0 || mount.PhantomAgent || mount.AgentID.declared() || mount.CreateRoute != "" || mount.WebhookSuffix != "" || len(mount.ExposeFiles) != 0 || len(mount.FileResponseHeaders) != 0 {
 		return toolCommon.ToolHttpMount{}, fmt.Errorf("tool mounts declare only a path; admission belongs to the export")
 	}
 	decl, err := Prefix(mount.Path).ToolDeclaration()
@@ -544,13 +541,13 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 	}
 
 	idNames := fieldNameSet(e.idFields)
-	selector, serrs := compilePhantomSelector(e, mp, idNames)
+	selector, serrs := compileAgentIDBinding(e, mp)
 	for _, se := range serrs {
 		rec("", "%s", se)
 	}
 	pathSelector := ""
-	if e.mount.PhantomID.source == phantomPath {
-		pathSelector = e.mount.PhantomID.name
+	if e.mount.AgentID.source == agentIDPath {
+		pathSelector = e.mount.AgentID.name
 	}
 	mountVars := map[string]bool{}
 	for _, s := range mp.segs {
@@ -562,6 +559,10 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 			continue
 		}
 		if s.kind == varSeg {
+			if e.mount.AgentID.declared() {
+				rec("", "HTTP mount AgentID cannot be combined with constructor or other path binding {%s}", s.value)
+				continue
+			}
 			mountVars[s.value] = true
 			if !idNames[s.value] {
 				rec("", "HTTP mount path variable {%s} is not a constructor (Id) field", s.value)
@@ -569,9 +570,26 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		}
 	}
 	for _, f := range e.idFields {
-		if !mountVars[f.Name] {
+		if !e.mount.AgentID.declared() && !mountVars[f.Name] {
 			rec("", "HTTP mount path does not bind Id field %q; every constructor field must appear as a {var}", f.Name)
 		}
+	}
+
+	createRoute := witTypes.None[[]common.PathSegment]()
+	if e.mount.CreateRoute != "" {
+		if !e.mount.AgentID.declared() {
+			rec("", "HTTP CreateRoute requires AgentID")
+		}
+		cp, cerrs := parsePath(e.mount.CreateRoute, false)
+		for _, ce := range cerrs {
+			rec("", "HTTP create route %q: %s", e.mount.CreateRoute, ce)
+		}
+		for _, s := range cp.segs {
+			if s.kind != literalSeg && s.kind != sysSeg {
+				rec("", "HTTP create route allows only literal and system segments, got {%s}", s.value)
+			}
+		}
+		createRoute = witTypes.Some(witSegments(cp.segs))
 	}
 
 	webhook := []common.PathSegment{}
@@ -603,12 +621,13 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 	}
 
 	mount := common.HttpMountDetails{
-		PathPrefix:       witSegments(mp.segs),
-		AuthDetails:      witTypes.Some(common.AuthDetails{Required: e.mount.Auth}),
-		PhantomAgent:     e.mount.PhantomAgent,
-		PhantomIdBinding: selector,
-		CorsOptions:      common.CorsOptions{AllowedPatterns: e.mount.CORS},
-		WebhookSuffix:    webhook,
+		PathPrefix:     witSegments(mp.segs),
+		AuthDetails:    witTypes.Some(common.AuthDetails{Required: e.mount.Auth}),
+		PhantomAgent:   e.mount.PhantomAgent,
+		AgentIdBinding: selector,
+		CreateRoute:    createRoute,
+		CorsOptions:    common.CorsOptions{AllowedPatterns: e.mount.CORS},
+		WebhookSuffix:  webhook,
 
 		StaticBindings:        []coreHTTP.FileMapping{},
 		FilesystemBindings:    files,
@@ -621,12 +640,13 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		m := e.methods[name]
 		inNames := fieldNameSet(m.inFields)
 		inTypes := fieldTypeMap(m.inFields)
+		slots := methodStreamSlots(m.inFields, m.outType)
 		for _, ep := range m.endpoints {
-			det, eerrs := validateAndCompileEndpoint(ep, inNames, inTypes, mountVars, methodStreamSlots(m.inFields, m.outType))
+			det, eerrs := validateAndCompileEndpoint(ep, inNames, inTypes, mountVars, slots)
 			for _, ee := range eerrs {
 				rec(name, "%s", ee)
 			}
-			if conflict := phantomSelectorConflict(e.mount.PhantomID, det); conflict != "" {
+			if conflict := agentIDBindingConflict(e.mount.AgentID, det, inNames, slots); conflict != "" {
 				rec(name, "%s %q: %s", ep.method, ep.path, conflict)
 			}
 			endpoints[name] = append(endpoints[name], det)
@@ -636,26 +656,25 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 	return witTypes.Some(mount), endpoints, errs
 }
 
-// compilePhantomSelector checks the mount's phantom selector against the
-// agent's mode, file exposure and Id fields, and compiles it to WIT.
-func compilePhantomSelector(e *agentEntry, mp parsedPath, idNames map[string]bool) (witTypes.Option[common.PhantomIdBinding], []string) {
-	sel := e.mount.PhantomID
+// compileAgentIDBinding validates exclusive, durable ID selection.
+func compileAgentIDBinding(e *agentEntry, mp parsedPath) (witTypes.Option[common.AgentIdBinding], []string) {
+	sel := e.mount.AgentID
 	if !sel.declared() {
-		return witTypes.None[common.PhantomIdBinding](), nil
+		return witTypes.None[common.AgentIdBinding](), nil
 	}
 	var errs []string
 	if sel.name == "" {
-		errs = append(errs, "phantom selector must have a nonempty name")
+		errs = append(errs, "AgentID binding must have a nonempty name")
 	}
 	if e.mode != common.AgentModeDurable {
-		errs = append(errs, "phantom selector requires a durable agent")
+		errs = append(errs, "AgentID binding requires a durable agent")
 	}
-	if len(e.mount.ExposeFiles) > 0 {
-		errs = append(errs, "phantom selector cannot be combined with ExposeFiles")
+	if e.mount.PhantomAgent {
+		errs = append(errs, "AgentID binding cannot be combined with PhantomAgent")
 	}
-	details := common.PhantomIdBindingDetails{Name: sel.name, Optional: sel.optional}
-	if sel.source == phantomQuery {
-		return witTypes.Some(common.MakePhantomIdBindingQuery(details)), errs
+	details := common.AgentIdBindingDetails{Name: sel.name}
+	if sel.source == agentIDQuery {
+		return witTypes.Some(common.MakeAgentIdBindingQuery(details)), errs
 	}
 	captures := 0
 	for _, s := range mp.segs {
@@ -663,19 +682,19 @@ func compilePhantomSelector(e *agentEntry, mp parsedPath, idNames map[string]boo
 			captures++
 		}
 	}
-	if idNames[sel.name] || captures != 1 {
-		errs = append(errs, fmt.Sprintf("phantom path selector {%s} must name exactly one mount capture, not a constructor (Id) field", sel.name))
+	if captures != 1 {
+		errs = append(errs, fmt.Sprintf("AgentID path binding {%s} must name exactly one mount capture", sel.name))
 	}
-	return witTypes.Some(common.MakePhantomIdBindingPath(details)), errs
+	return witTypes.Some(common.MakeAgentIdBindingPath(details)), errs
 }
 
-// phantomSelectorConflict reports an endpoint binding or Durable Streams control
-// that uses the selector's name.
-func phantomSelectorConflict(sel PhantomSelector, det common.HttpEndpointDetails) string {
+// agentIDBindingConflict reports an endpoint binding or Durable Streams control
+// that uses the ID binding's name, including implicit query inputs.
+func agentIDBindingConflict(sel AgentIDBinding, det common.HttpEndpointDetails, inNames map[string]bool, slots streamSlots) string {
 	if !sel.declared() {
 		return ""
 	}
-	if sel.source == phantomPath {
+	if sel.source == agentIDPath {
 		for _, seg := range det.PathSuffix {
 			if seg.Tag() != common.PathSegmentSegment {
 				continue
@@ -683,18 +702,40 @@ func phantomSelectorConflict(sel PhantomSelector, det common.HttpEndpointDetails
 			shared := seg.Segment()
 			if (shared.Tag() == coreHTTP.PathSegmentPathVariable && shared.PathVariable().VariableName == sel.name) ||
 				(shared.Tag() == coreHTTP.PathSegmentRemainingPathVariable && shared.RemainingPathVariable().VariableName == sel.name) {
-				return fmt.Sprintf("path variable {%s} is the mount's phantom selector", sel.name)
+				return fmt.Sprintf("path variable {%s} is the mount's AgentID binding", sel.name)
 			}
 		}
 		return ""
 	}
 	for _, q := range det.QueryVars {
 		if q.QueryParamName == sel.name {
-			return fmt.Sprintf("query parameter %q is the mount's phantom selector", sel.name)
+			return fmt.Sprintf("query parameter %q is the mount's AgentID binding", sel.name)
 		}
 	}
-	if det.DurableStreams.IsSome() && slices.Contains([]string{"offset", "cursor", "live"}, sel.name) {
-		return fmt.Sprintf("phantom selector %q collides with a Durable Streams control parameter", sel.name)
+	_, stream := slots.inputs[sel.name]
+	if isBodyless(verbName(det.HttpMethod)) && inNames[sel.name] && !stream {
+		bound := false
+		for _, h := range det.HeaderVars {
+			bound = bound || h.VariableName == sel.name
+		}
+		for _, q := range det.QueryVars {
+			bound = bound || q.VariableName == sel.name
+		}
+		for _, s := range det.PathSuffix {
+			if s.Tag() == common.PathSegmentSegment {
+				p := s.Segment()
+				bound = bound || (p.Tag() == coreHTTP.PathSegmentPathVariable && p.PathVariable().VariableName == sel.name) ||
+					(p.Tag() == coreHTTP.PathSegmentRemainingPathVariable && p.RemainingPathVariable().VariableName == sel.name)
+			}
+		}
+		if !bound {
+			return fmt.Sprintf("implicit query input %q is the mount's AgentID binding", sel.name)
+		}
+	}
+	durableStreams := det.Mode.IsSome() && det.Mode.Some() == coreHTTP.HttpRouteModeDurableStreams ||
+		det.Mode.IsNone() && (slots.any() || det.DurableStreams.IsSome())
+	if durableStreams && slices.Contains([]string{"offset", "cursor", "live"}, sel.name) {
+		return fmt.Sprintf("AgentID binding %q collides with a Durable Streams control parameter", sel.name)
 	}
 	return ""
 }

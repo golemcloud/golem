@@ -64,16 +64,19 @@ pub fn transform_exports(exports : Array[String]) -> Array[String] {
 fn generate_link_block_lines(exports : Array[String]) -> Array[String] {
   let lines : Array[String] = []
   lines.push("  link: {")
-  lines.push("    \"wasm\": {")
-  lines.push("      \"export-memory-name\": \"memory\",")
-  lines.push("      \"exports\": [")
-  for i, entry in exports {
-    let comma = if i < exports.length() - 1 { "," } else { "," }
-    lines.push("        \"\{entry}\"\{comma}")
+  for target in ["wasm", "wasm-gc"] {
+    lines.push("    \"\{target}\": {")
+    lines.push("      \"export-memory-name\": \"memory\",")
+    lines.push("      \"exports\": [")
+    for entry in exports {
+      lines.push("        \"\{entry}\",")
+    }
+    lines.push("      ],")
+    if target == "wasm" {
+      lines.push("      \"heap-start-address\": 16,")
+    }
+    lines.push("    },")
   }
-  lines.push("      ],")
-  lines.push("      \"heap-start-address\": 16,")
-  lines.push("    },")
   lines.push("  },")
   lines
 }

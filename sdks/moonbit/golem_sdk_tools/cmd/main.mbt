@@ -612,7 +612,9 @@ fn run_reexports(sdk_path : String, target_dir : String) -> Unit raise {
   entries.sort_by((left, right) => left.compare(right))
   let fns : Array[@lib.FnSignature] = []
   for entry in entries {
-    if entry.has_suffix(".mbt") {
+    // Both backend implementations expose the same canonical ABI signatures.
+    // Read the wasm implementation once, not its GC-specific copy as well.
+    if entry.has_suffix(".mbt") && !entry.has_suffix("_gc.mbt") {
       let content = @fs.read_file_to_string("\{gen_dir}/\{entry}")
       let file_fns = @lib.parse_mbt_source(content)
       for fn_ in file_fns {

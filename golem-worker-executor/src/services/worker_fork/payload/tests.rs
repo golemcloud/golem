@@ -203,6 +203,7 @@ async fn visits_every_stream_payload_and_snapshot_update() {
                 filesystem_snapshot: None,
             },
             None,
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         ),
     ];
     for entry in &mut entries {

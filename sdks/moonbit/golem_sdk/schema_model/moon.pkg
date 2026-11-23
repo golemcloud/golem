@@ -12,4 +12,4 @@ import {
   "moonbitlang/core/encoding/utf8",
 } for "test"
 
-supported_targets = "+wasm"
+supported_targets = "+wasm+wasm-gc"

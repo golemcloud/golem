@@ -285,6 +285,7 @@ impl DurableStreamStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentControl for DurableStreamStore {
     #[tracing::instrument(
         name = "durable_stream.attachment.prepare",

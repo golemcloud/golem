@@ -66,6 +66,7 @@ impl InMemoryKeyValueStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl KeyValueStorage for InMemoryKeyValueStorage {
     async fn set(
         &self,

@@ -423,6 +423,7 @@ impl<Repo: AccountUsageRepo> LoggedAccountUsageRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
     async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
         self.repo
@@ -1194,6 +1195,7 @@ impl DbAccountUsageRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
     async fn get_with_active_overrides_at(
         &self,
@@ -2172,6 +2174,7 @@ trait AccountUsageRepoInternal: AccountUsageRepo {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;

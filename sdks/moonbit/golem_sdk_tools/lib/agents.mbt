@@ -82,7 +82,8 @@ pub(all) struct HttpMountInfo {
   path : String
   auth : Bool?
   phantom : Bool
-  phantom_id_binding : PhantomIdBindingInfo?
+  agent_id_binding : AgentIdBindingInfo?
+  create_route : String?
   cors : Array[String]
   webhook_suffix : String?
   router : Bool
@@ -93,9 +94,9 @@ pub(all) struct HttpMountInfo {
 } derive(Debug, Eq)
 
 ///|
-pub(all) enum PhantomIdBindingInfo {
-  Path(String, Bool)
-  Query(String, Bool)
+pub(all) enum AgentIdBindingInfo {
+  Path(String)
+  Query(String)
 } derive(Debug, Eq)
 
 ///|
@@ -913,54 +914,67 @@ fn extract_mount_phantom(attrs : @list.List[@attribute.Attribute]) -> Bool {
 }
 
 ///|
-fn extract_mount_phantom_id(
+fn extract_mount_agent_id(
   attrs : @list.List[@attribute.Attribute],
-) -> PhantomIdBindingInfo? raise AgentParseError {
-  let mut result : PhantomIdBindingInfo? = None
+) -> AgentIdBindingInfo? raise AgentParseError {
+  let mut result : AgentIdBindingInfo? = None
   for attr in attrs {
-    if attr.raw == "#derive.mount_phantom_id" ||
-      attr.raw.has_prefix("#derive.mount_phantom_id(") {
+    if attr.raw == "#derive.mount_agent_id" ||
+      attr.raw.has_prefix("#derive.mount_agent_id(") {
       if result is Some(_) {
-        http_fail("duplicate mount_phantom_id declaration")
+        http_fail("duplicate mount_agent_id declaration")
       }
       match attr.parsed {
-        Some(Apply({ qual: Some("derive"), name: "mount_phantom_id", }, props)) => {
+        Some(Apply({ qual: Some("derive"), name: "mount_agent_id", }, props)) => {
           let mut source : (String, String)? = None
-          let mut optional = false
-          let seen : Array[String] = []
           for prop in props {
             match prop {
               Labeled(key, String(name)) if key == "path" || key == "query" => {
                 if source is Some(_) || name.is_empty() {
-                  http_fail(
-                    "declare exactly one nonempty phantom selector source",
-                  )
+                  http_fail("declare exactly one nonempty agent ID source")
                 }
                 source = Some((key, name))
               }
-              Labeled("optional", Bool(value)) => {
-                if seen.contains("optional") {
-                  http_fail("duplicate phantom selector optional flag")
-                }
-                seen.push("optional")
-                optional = value
-              }
               _ =>
                 http_fail(
-                  "mount_phantom_id requires path/query = string and optional = bool",
+                  "mount_agent_id requires exactly one path/query = string",
                 )
             }
           }
           result = match source {
-            Some(("path", name)) => Some(Path(name, optional))
-            Some((_, name)) => Some(Query(name, optional))
+            Some(("path", name)) => Some(Path(name))
+            Some((_, name)) => Some(Query(name))
             None => {
-              http_fail("declare exactly one phantom selector source")
+              http_fail("declare exactly one agent ID source")
               None
             }
           }
         }
-        _ => http_fail("invalid mount_phantom_id declaration")
+        _ => http_fail("invalid mount_agent_id declaration")
+      }
+    }
+  }
+  result
+}
+
+///|
+fn extract_mount_create(
+  attrs : @list.List[@attribute.Attribute],
+) -> String? raise AgentParseError {
+  let mut result : String? = None
+  for attr in attrs {
+    if attr.raw == "#derive.mount_create" ||
+      attr.raw.has_prefix("#derive.mount_create(") {
+      if result is Some(_) {
+        http_fail("duplicate mount_create declaration")
+      }
+      match attr.parsed {
+        Some(Apply({ qual: Some("derive"), name: "mount_create", }, props)) =>
+          match props.to_array() {
+            [Expr(String(path))] => result = Some(path)
+            _ => http_fail("mount_create requires one full path string")
+          }
+        _ => http_fail("invalid mount_create declaration")
       }
     }
   }
@@ -1561,7 +1575,8 @@ pub fn parse_agents(
                 path,
                 auth: extract_mount_auth(type_decl.attrs),
                 phantom: extract_mount_phantom(type_decl.attrs),
-                phantom_id_binding: extract_mount_phantom_id(type_decl.attrs),
+                agent_id_binding: extract_mount_agent_id(type_decl.attrs),
+                create_route: extract_mount_create(type_decl.attrs),
                 cors: extract_mount_cors(type_decl.attrs),
                 webhook_suffix: extract_mount_webhook(type_decl.attrs),
                 router,
@@ -1952,6 +1967,9 @@ pub fn parse_agents(
       }
     }
   }
-  validate_http_routes(agents)
+  let value_types = Map::from_array(
+    parse_value_types(files).map(value_type => (value_type.name, value_type)),
+  )
+  validate_http_routes(agents, value_types~)
   agents
 }

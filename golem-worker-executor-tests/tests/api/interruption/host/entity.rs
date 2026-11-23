@@ -229,9 +229,11 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                     init,
                     &metadata,
                     &ResolvedOwnerContext::Agent(Box::new(parsed.clone())),
+                    None,
                 )?,
                 store,
                 instance,
+                None,
                 None,
             )
             .await?;
@@ -250,7 +252,8 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             let method = AgentInvocation::AgentMethod {
                 idempotency_key: method_key,
                 method_name: "tcp_collect_p3".to_string(),
-                input: data_value!(entity_port).value().clone(),
+                allow_streams: false,
+                input: data_value!(entity_port).value().clone().try_into().unwrap(),
                 invocation_context: InvocationContextStack::fresh(),
                 caller,
                 scope_card: None,
@@ -260,9 +263,11 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                     method,
                     &metadata,
                     &ResolvedOwnerContext::Agent(Box::new(parsed.clone())),
+                    None,
                 )?,
                 store,
                 instance,
+                None,
                 None,
             )
             .await

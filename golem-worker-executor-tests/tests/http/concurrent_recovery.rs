@@ -989,6 +989,164 @@ async fn retained_upload_reader_reconstructs_after_delivery_in_later_invocation(
     Ok(())
 }
 
+/// The `Start`s that a store task of one invocation records while a later invocation drives it.
+/// They carry the invocation id of the spawning invocation, and their `driver` names the
+/// driving one.
+fn driven_starts(
+    oplog: &[PublicOplogEntryWithIndex],
+    spawner: OplogIndex,
+    driver_started: OplogIndex,
+) -> Vec<(OplogIndex, Option<OplogIndex>)> {
+    oplog
+        .iter()
+        .filter(|entry| entry.oplog_index > driver_started)
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.invocation_id.is_some_and(|id| id.anchor == spawner) =>
+            {
+                Some((entry.oplog_index, start.driver))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+#[test_r::timeout("3m")]
+async fn retained_upload_reader_records_the_consuming_invocation_as_driver(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let posted = requests.clone();
+    let http_server = spawn(async move {
+        let router = Router::new().route(
+            "/",
+            post(move |body: Bytes| {
+                posted.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    assert_eq!(body.as_ref(), b"test-body");
+                    "uploaded"
+                }
+            }),
+        );
+        axum::serve(listener, router).await.unwrap();
+    });
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_key!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+
+    let retained = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "retain_response_after_cancelling_recipient_completion",
+            data_value!(true),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(retained, "200 uploaded;retained-response");
+    let released = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "release_retained_response",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(released, "released-response");
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let started: Vec<OplogIndex> = oplog
+        .iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .map(|entry| entry.oplog_index)
+        .collect();
+    let (retaining, releasing) = (started[started.len() - 2], started[started.len() - 1]);
+    let driven = driven_starts(&oplog, retaining, releasing);
+    assert!(
+        !driven.is_empty(),
+        "a store task of the retaining invocation records a Start while the releasing one drives it"
+    );
+    assert!(
+        driven.iter().all(|(_, driver)| *driver == Some(releasing)),
+        "every Start a resumed store task records names its driving invocation: {driven:?}"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    let recorded_end = oplog.last().expect("the oplog is not empty").oplog_index;
+
+    drop(executor);
+    http_server.abort();
+    let _ = http_server.await;
+    let executor = start(deps, &context).await?;
+    let stored = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "stored_full_response",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(stored, "released-response");
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "reconstruction must not resend the completed upload"
+    );
+    // Replay claims every driven `Start` for the invocation that drives the replayed task and
+    // fails on another recorded driver (`a_claim_driven_by_another_invocation_is_a_divergence`),
+    // so the fresh invocation runs only after the recorded drivers validated.
+    let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let appended: Vec<_> = replayed
+        .iter()
+        .filter(|entry| entry.oplog_index > recorded_end)
+        .collect();
+    assert!(
+        appended
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))),
+        "the fresh invocation finishes after the replay of the driven Starts"
+    );
+    assert!(
+        appended
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "replay records no failure: {appended:?}"
+    );
+    assert_eq!(
+        driven_starts(&replayed, retaining, recorded_end),
+        vec![],
+        "replay records no driven Start again"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn post_writer_get_crash_before_headers_drains_before_send_resolution(

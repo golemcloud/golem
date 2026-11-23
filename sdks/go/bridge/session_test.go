@@ -391,7 +391,12 @@ func TestStreamsFlowBothWays(t *testing.T) {
 			t.Errorf("target = %#v, want %#v", selector["target"], wantTarget)
 		}
 		refs := provisionalRefs(t, start)
-		accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+		accept(c, start, "queued")
+		c.send("invocationReady", map[string]any{
+			"attemptId": start.m["attemptId"], "idempotencyKey": start.m["idempotencyKey"],
+			"agentId": testAgentID, "sessionToken": "sess",
+			"mappings": []map[string]any{inputMapping(1, refs[0], "in", 0, false)},
+		})
 		got = consumeInput(c, 1)
 		streamResult(c, 2, "out", u32StreamGraph)
 		outputItem(c, 2, 0, "c0", 10)

@@ -66,6 +66,12 @@ fn outgoing_caller_table() {
             with_immediate(a.clone()),
         ),
         (
+            "an update of another agent that A requests for U",
+            entry_by_user(),
+            CallingCode::Agent(a.clone()),
+            with_immediate(a.clone()),
+        ),
+        (
             "a tool called by A for U",
             with_immediate(a.clone()),
             CallingCode::Tool(tool("report")),

@@ -93,6 +93,7 @@ impl DefaultKeyValueService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl KeyValueService for DefaultKeyValueService {
     async fn delete(
         &self,

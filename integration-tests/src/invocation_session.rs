@@ -231,6 +231,21 @@ impl SessionCheckpoint {
                     .context("no request timing")?
                     .accepted = Some(now);
             }
+            invocation_response::Response::Ready(ready) => {
+                let accepted = self
+                    .acceptance
+                    .as_ref()
+                    .context("readiness before acceptance")?;
+                ensure!(
+                    ready.agent_id == accepted.agent_id
+                        && ready.idempotency_key == accepted.idempotency_key
+                        && ready.attachment_id == accepted.attachment_id
+                        && ready.epoch == accepted.epoch,
+                    "readiness changed session identity"
+                );
+                self.remember_mappings(&ready.stream_mappings)?;
+                self.acceptance = Some(ready.clone());
+            }
             invocation_response::Response::Result(result) => {
                 self.remember_mappings(&result.new_stream_mappings)?;
                 self.result = Some(result.clone());

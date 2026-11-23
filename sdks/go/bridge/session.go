@@ -122,13 +122,14 @@ type session struct {
 	tokenChannels map[string]uint32
 	cursors       map[string]string
 
-	attempt       string
-	descriptor    []byte
-	accepted      bool
-	everAccepted  bool
-	sessionToken  string
-	acceptedOwner AgentID
-	acceptedKey   string
+	attempt        string
+	descriptor     []byte
+	accepted       bool
+	executionReady bool
+	everAccepted   bool
+	sessionToken   string
+	acceptedOwner  AgentID
+	acceptedKey    string
 	// nextDelay is the delay the next connection attempt waits after a
 	// connection that did not stay up.
 	nextDelay time.Duration
@@ -296,6 +297,7 @@ func (s *session) prepareResume() error {
 		"sessionToken":  s.sessionToken,
 	})
 	s.accepted = false
+	s.executionReady = false
 	return err
 }
 
@@ -853,11 +855,11 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 		return err
 	}
 	switch kind {
-	case "invocationAccepted":
+	case "invocationAccepted", "invocationReady":
 		if err := m.members(kind, []string{"attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"}); err != nil {
 			return err
 		}
-		return s.accept(c, m)
+		return s.accept(c, m, kind == "invocationReady")
 	case "invocationRejected":
 		if err := m.members(kind, []string{"code", "message", "retryable"}, "attemptId", "stderr"); err != nil {
 			return err
@@ -912,7 +914,7 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 	return protocolErrorf("unknown message type %q", kind)
 }
 
-func (s *session) accept(c *sessionConn, m message) error {
+func (s *session) accept(c *sessionConn, m message, ready bool) error {
 	attempt, err := m.str("attemptId")
 	if err != nil {
 		return err
@@ -942,8 +944,11 @@ func (s *session) accept(c *sessionConn, m message) error {
 	if s.conn != c {
 		return nil
 	}
-	if s.accepted {
+	if s.accepted && !ready {
 		return protocolErrorf("duplicate invocation acceptance")
+	}
+	if ready && (!s.accepted || s.executionReady) {
+		return protocolErrorf("unexpected invocation readiness")
 	}
 	if attempt != s.attempt {
 		return protocolErrorf("the acceptance does not match the pending operation")
@@ -951,13 +956,21 @@ func (s *session) accept(c *sessionConn, m message) error {
 	if s.everAccepted && (s.acceptedOwner != acceptedOwner || s.acceptedKey != key) {
 		return protocolErrorf("accepted invocation identity changed")
 	}
-	if err := s.install(mappings, true); err != nil {
+	if ready && len(s.byToken) == 0 {
+		for ref := range s.byProvisional {
+			if !slices.ContainsFunc(mappings, func(mp mapping) bool { return mp.provisional == ref }) {
+				return protocolErrorf("readiness omitted a stream argument")
+			}
+		}
+	}
+	if err := s.install(mappings, ready || len(mappings) != 0); err != nil {
 		return err
 	}
 	s.sessionToken = token
 	s.acceptedOwner = acceptedOwner
 	s.acceptedKey = key
 	s.accepted = true
+	s.executionReady = ready || len(mappings) != 0
 	c.acceptedAt = time.Now()
 	s.everAccepted = true
 	return nil

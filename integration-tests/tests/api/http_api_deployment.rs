@@ -33,6 +33,88 @@ use test_r::{inherit_test_dep, test};
 inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
+#[test_r::timeout("180s")]
+async fn registry_rejects_raw_id_mount_metadata_and_implicit_query_collision(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    use golem_client::api::RegistryServiceUpdateComponentError;
+    use golem_common::model::component::ComponentUpdate;
+    use golem_common::schema::{InputSchema, NamedField, SchemaType};
+
+    let user = deps.user().await?.with_auto_deploy(false);
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_rust_release")
+        .name("golem-it:agent-sdk-rust")
+        .store()
+        .await?;
+    let client = deps.registry_service().client(&user.token).await;
+    for invalid in ["phantom", "implicit-query"] {
+        let mut agents = component
+            .metadata
+            .agent_types
+            .iter()
+            .map(|registered| registered.declaration.clone())
+            .collect::<Vec<_>>();
+        let agent = agents
+            .iter_mut()
+            .find(|agent| agent.type_name.0 == "SelectedQueryAgent")
+            .unwrap();
+        if invalid == "phantom" {
+            agent.http_mount.as_mut().unwrap().phantom_agent = true;
+        } else {
+            let state = agent
+                .methods
+                .iter_mut()
+                .find(|method| method.name == "state")
+                .unwrap();
+            state.input_schema = InputSchema::parameters([NamedField::user_supplied(
+                "instance",
+                SchemaType::string(),
+            )]);
+        }
+        let error = client
+            .update_component(
+                &component.id.0,
+                &ComponentUpdate {
+                    current_revision: component.revision,
+                    package_metadata: None,
+                    config_schema: None,
+                    component_provision_config: None,
+                    agent_types: Some(agents),
+                    agent_type_provision_config_updates: None,
+                    tools: None,
+                    tool_middlewares: None,
+                    tool_middleware_provision_config_updates: None,
+                    tool_deployment_config_updates: None,
+                    allow_incompatible_config: false,
+                },
+                None::<Vec<u8>>,
+                None::<Vec<u8>>,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                golem_client::Error::Item(RegistryServiceUpdateComponentError::Error400(_))
+            ),
+            "{invalid}: {error:?}"
+        );
+        let diagnostic = format!("{error:?}");
+        assert!(
+            diagnostic.contains(if invalid == "phantom" {
+                "ID binding cannot be combined with phantomAgent"
+            } else {
+                "query selector conflicts with an application query parameter"
+            }),
+            "{diagnostic}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn create_http_api_deployment_for_nonexitant_domain(
     deps: &EnvBasedTestDependencies,
