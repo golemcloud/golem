@@ -151,7 +151,8 @@ fn matrix_core_inspect(
       }),
     )
   }
-  let principal = context.caller().immediate.to_string()
+  let caller = context.caller()
+  let principal = caller.original.to_string() + "|" + caller.immediate.to_string()
   let weighted_size = request.dimensions.width.to_int64() *
     request.dimensions.height.to_int64() *
     multiplier +

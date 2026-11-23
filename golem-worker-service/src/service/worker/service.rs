@@ -832,21 +832,15 @@ impl WorkerService {
             return Ok(());
         }
         let denied = || WorkerServiceError::AgentAccessDenied(agent_id.agent_id);
-        // The registry reports a missing environment to every caller alike, so its agents are
-        // not found without telling anyone whether one of them existed.
-        match self
-            .agent_types
+        self.agent_types
             .authorize_environment(agent_id.environment_id, auth_ctx)
             .await
-        {
-            Ok(()) => {}
-            Err(RegistryServiceError::NotFound(_)) => return Ok(()),
-            Err(
+            .map_err(|error| match error {
                 RegistryServiceError::Unauthorized(_)
-                | RegistryServiceError::CouldNotAuthenticate(_),
-            ) => return Err(denied()),
-            Err(other) => return Err(other.into()),
-        }
+                | RegistryServiceError::NotFound(_)
+                | RegistryServiceError::CouldNotAuthenticate(_) => denied(),
+                other => other.into(),
+            })?;
         let Some(tagged) = self
             .agent_types
             .tagged(agent_id.environment_id, agent_id.agent_id)
@@ -1992,13 +1986,14 @@ impl WorkerService {
             .await
     }
 
-    /// Internal token control uses the recorded scheduling caller, not operator permission.
+    /// Internal token control uses the recorded scheduling caller, not operator permission: the
+    /// target cancels only when `canceller` is the immediate caller recorded for the call.
     pub async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
         key: &golem_common::model::InvocationId,
         receipt: ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: AuthCtx,
     ) -> WorkerResult<bool> {
         if !matches!(&auth, AuthCtx::System | AuthCtx::Agent(_)) {
@@ -2015,9 +2010,9 @@ impl WorkerService {
                 auth,
                 Some(
                     golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
-                        owner_agent_id: Some((*owner).into()),
                         schedule_id: Some(receipt.id.into()),
                         target_environment_id: Some(target.environment_id.into()),
+                        canceller: Some(canceller.clone().into()),
                     },
                 ),
                 None,
@@ -7884,12 +7879,40 @@ mod tests {
 
     #[test]
     async fn trusted_resume_preserves_the_pinned_caller() {
+        use golem_common::model::caller::{
+            AgentPrincipal, Claims, Pair, TokenProvenance, UserPrincipal,
+        };
+
+        // A user's call that an agent made on the user's behalf, with a token: both roles and the
+        // token must reach the executor as recorded, the claims byte for byte.
+        let claims = r#"{"sub":"user-1", "nested":{"list":[1,2.50,{"deep":null}]},"n":1e3}"#;
+        let pinned = Caller {
+            original: Principal::User(UserPrincipal {
+                pair: Pair::new("https://idp.example/", "user-1"),
+                claims: Claims::from_json(claims.to_string()).unwrap(),
+                authenticated_at: "2026-01-02T03:04:05.678Z".parse().unwrap(),
+            }),
+            immediate: Principal::Agent(AgentPrincipal::of_agent(
+                "https://golem.example".to_string(),
+                AgentId::from_parts(7, 0xc0),
+                golem_common::model::AgentFingerprint(Uuid::from_u128(0xf1)),
+                AgentTypeName("Relay".to_string()),
+                EnvironmentId(Uuid::from_u128(0xe0)),
+            )),
+            tokens: vec![TokenProvenance {
+                id: Uuid::from_u128(0x70c1),
+                maker: Some(golem_common::model::caller::PrincipalRef::new(Pair::new(
+                    "https://golem.example",
+                    "account:1",
+                ))),
+            }],
+        };
         let harness = RestHarness::new(AgentMode::Durable);
         harness
             .worker_client
             .set_metadata_component_revision(harness.component_revision);
         let mut resume = harness.public_resume();
-        let pinned_caller = Some(Default::default());
+        let pinned_caller = Some(pinned.clone().into());
         resume.caller = pinned_caller.clone();
 
         let _responses = harness
@@ -7900,6 +7923,12 @@ mod tests {
 
         let (_, routed) = harness.worker_client.invocation_session_resume();
         assert_eq!(routed.caller, pinned_caller);
+        let routed = Caller::try_from(routed.caller.unwrap()).unwrap();
+        assert_eq!(routed, pinned);
+        match &routed.original {
+            Principal::User(user) => assert_eq!(user.claims.as_json(), claims),
+            other => panic!("the original caller is not the user: {other:?}"),
+        }
     }
 
     #[test]
@@ -9410,6 +9439,7 @@ mod tests {
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: Default::default(),
                 source: registered.registration.source.clone(),
+                shell: false,
             };
             let mut effective_definition = definition.clone();
             effective_definition.commands.nodes[0].doc.summary = summary.into();

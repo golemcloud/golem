@@ -15,7 +15,7 @@ condition = { env_not_set = ["MAIN_VALIDATION_BUILD_JOBS"] }
 
 [tasks.main-validation]
 description = "Validate the selected main source on a dedicated Linux executor"
-env = { GOLEM_CLI_TEST_BIN_PROFILE = "dev-release-ci", TEST_R_REPORT_OPTS = "--format ctrf --logfile ${MAIN_VALIDATION_REPORT_DIR}/ctrf.json --retry-failed 2", TEST_R_FLAKY_OPTS = "", MAIN_VALIDATION_RECOVERY_GROUP = "4" }
+env = { GOLEM_CLI_TEST_BIN_PROFILE = "dev-release-ci", TEST_R_COMMAND = "bun .github/main-validation/progress.ts test-r", TEST_R_REPORT_OPTS = "--format ctrf --logfile ${MAIN_VALIDATION_REPORT_DIR}/ctrf.json --retry-failed 2", TEST_R_FLAKY_OPTS = "", MAIN_VALIDATION_RECOVERY_GROUP = "4" }
 run_task = { name = ["main-validation-prepare", "main-validation-parallel", "main-validation-exclusive", "main-validation-result"] }
 
 [tasks.main-validation-parallel]
@@ -48,11 +48,30 @@ for branch in ${branches}
     rm ${MAIN_VALIDATION_REPORT_DIR}/${branch}.status
     mkdir ${temporary}/${branch}
 end
-# A runner without local metadata and bounded test retries must not fall back to Cargo.
-help = exec cargo-test-r run --help
-supports_metadata = contains ${help.stdout} --binaries-metadata
-if not ${supports_metadata}
-    trigger_error "Install cargo-test-r with local binaries metadata support before main validation"
+# Refuse an older runner rather than silently falling back to Cargo.
+help = exec --fail-on-error cargo-test-r run --help
+features = array --selection --events --deadline --no-fail-fast --expect-digest --binary-id
+for feature in ${features}
+    supported = contains ${help.stdout} ${feature}
+    if not ${supported}
+        trigger_error "Install cargo-test-r with the required Main validation features"
+    end
+end
+commands = array list snapshot verify exec inspect-events
+for command in ${commands}
+    help = exec --fail-on-error cargo-test-r ${command} --help
+    features = array --deadline --kill-grace
+    if eq ${command} list
+        features = array --deadline --kill-grace --cargo-metadata --expect-count --output
+    elif eq ${command} inspect-events
+        features = array --events --invocation-id --report-format
+    end
+    for feature in ${features}
+        supported = contains ${help.stdout} ${feature}
+        if not ${supported}
+            trigger_error "Install cargo-test-r with the required Main validation features"
+        end
+    end
 end
 tasks = split ${MAIN_VALIDATION_TASKS} " "
 failed = set 0
@@ -165,17 +184,38 @@ run_task = "js-guest-tests"
 private = true
 script_runner = "@duckscript"
 script = '''
-rm ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
-rm ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json.manifest.json
+rm ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.digest
+rm ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.json
+rm ${MAIN_VALIDATION_REPORT_DIR}/executor-executables.sha256
 exec --fail-on-error cargo build --profile dev-ci --tests -p golem-worker-executor -p golem-worker-executor-tests -p golem-common -p golem-size-analysis
 metadata = exec --fail-on-error cargo nextest list --cargo-profile dev-ci --tests -p golem-worker-executor -p golem-worker-executor-tests -p golem-common -p golem-size-analysis --list-type binaries-only --message-format json
+assert_eq ${metadata.code} 0 "Executor metadata production failed: ${metadata.stderr}"
 echo ${metadata.stderr}
 writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-binaries.json ${metadata.stdout}
 temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
 cycle = basename ${temporary}
 snapshot = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/frozen-${cycle}
+mkdir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation
 writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt ${snapshot}
-exec --fail-on-error bun .github/main-validation/freeze-binaries.ts --metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-binaries.json --destination ${snapshot} --output ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
+selection = exec cargo-test-r list --binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-binaries.json --deadline 10m --kill-grace 10s
+assert_eq ${selection.code} 0 "Executor selection failed: ${selection.stderr}"
+writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-selection.json ${selection.stdout}
+exec --fail-on-error cargo-test-r snapshot --selection ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-selection.json --out ${snapshot} --deadline 10m --kill-grace 10s
+exec --fail-on-error chmod 0755 ${snapshot} ${snapshot}/bin
+digest = sha256sum ${snapshot}/selection.json
+exec --fail-on-error cargo-test-r verify --selection ${snapshot}/selection.json --expect-digest sha256:${digest} --deadline 10m --kill-grace 10s
+# Retain native evidence after the final join removes the copied executables.
+cp ${snapshot}/selection.json ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.json
+# Lima re-attests libraries in the guest, but must reuse these exact host bytes.
+binaries = glob_array ${snapshot}/bin/*
+checksums = set ""
+for binary in ${binaries}
+    checksum = exec --fail-on-error timeout --kill-after=10s 10m sha256sum -- ${binary}
+    assert_eq ${checksum.code} 0 "Executor transfer checksum failed: ${checksum.stderr}"
+    checksums = concat ${checksums} ${checksum.stdout}
+end
+writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-executables.sha256 ${checksums}
+writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.digest sha256:${digest}
 '''
 
 [tasks.main-validation-service-native]
@@ -238,7 +278,9 @@ if not ${admitted}
 end
 temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
 set_env TMPDIR ${temporary}/worker
-set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json"
+snapshot = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt
+digest = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.digest
+set_env TEST_R_BUILD_OPTS "--selection ${snapshot}/selection.json --expect-digest ${digest}"
 failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
 for group in ${groups}
@@ -416,7 +458,9 @@ run_task = "main-validation-check-tasks"
 private = true
 script_runner = "@duckscript"
 script = '''
-set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json"
+snapshot = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt
+digest = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.digest
+set_env TEST_R_BUILD_OPTS "--selection ${snapshot}/selection.json --expect-digest ${digest}"
 exec --fail-on-error cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|ensure-builtin-artifacts)$" worker-executor-tests-latency
 '''
 
@@ -618,18 +662,21 @@ exec --fail-on-error sbt -batch "++3.8.2; integrationTests/test"
 private = true
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error bun .github/main-validation/freeze-binaries.ts --verify ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
+snapshot = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt
+digest = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.digest
+exec --fail-on-error cargo-test-r verify --selection ${snapshot}/selection.json --expect-digest ${digest} --deadline 10m --kill-grace 10s
 exec --fail-on-error integration-tests/scripts/managed-filesystem/run-loopback-xfs.sh --self-test-initial-file-wasm
-metadata = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/xfs-binaries.json
 runner = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/cargo-test-r
-cp ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json ${metadata}
 installed_runner = exec --fail-on-error which cargo-test-r
+assert_eq ${installed_runner.code} 0 "cargo-test-r is required for XFS reuse"
 installed_runner = trim ${installed_runner.stdout}
 cp ${installed_runner} ${runner}
 set_env GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES 1
 set_env GOLEM_MANAGED_XFS_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
 set_env GOLEM_MANAGED_XFS_CARGO_TEST_R ${runner}
-set_env GOLEM_MANAGED_XFS_BINARIES_METADATA ${metadata}
+set_env GOLEM_MANAGED_XFS_SELECTION ${snapshot}/selection.json
+set_env GOLEM_MANAGED_XFS_SELECTION_DIGEST ${digest}
+set_env GOLEM_MANAGED_XFS_EXECUTABLE_CHECKSUMS ${MAIN_VALIDATION_REPORT_DIR}/executor-executables.sha256
 code = exec --get-exit-code integration-tests/scripts/managed-filesystem/run-lima.sh
 cleanup = exec --get-exit-code limactl delete --force golem-managed-xfs-v1
 if not eq ${code} 0
@@ -654,16 +701,14 @@ env = { RUST_MIN_STACK = "33554432" }
 script_runner = "@duckscript"
 script = '''
 mkdir ${MAIN_VALIDATION_REPORT_DIR}
-build = exec --fail-on-error cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib --no-run --message-format=json-render-diagnostics
+build = exec cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib --no-run --message-format=json-render-diagnostics
+assert_eq ${build.code} 0 "Native APFS compilation failed: ${build.stderr}"
 writefile ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-messages.jsonl ${build.stdout}
-exec --fail-on-error bun test ./.github/main-validation/select-test-executables.test.ts
-selection = exec --fail-on-error bun .github/main-validation/select-test-executables.ts ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-messages.jsonl ${CARGO_MAKE_WORKING_DIRECTORY} lib
-line = trim ${selection.stdout}
-fields = split ${line} "\t"
-kind = array_get ${fields} 0
-if not eq ${kind} lib
-    trigger_error "Expected exactly one native APFS library executable"
-end
-executable = array_get ${fields} 1
+metadata = exec cargo metadata --locked --no-deps --format-version 1
+assert_eq ${metadata.code} 0 "Native APFS metadata production failed: ${metadata.stderr}"
+writefile ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-metadata.json ${metadata.stdout}
+selection = exec cargo-test-r list --cargo-messages ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-messages.jsonl --cargo-metadata ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-metadata.json --package golem-worker-executor --binary-id golem-worker-executor --expect-count 1 --output executable-path --deadline 10m --kill-grace 10s
+assert_eq ${selection.code} 0 "Native APFS selection failed: ${selection.stderr}"
+executable = trim ${selection.stdout}
 exec --fail-on-error bash integration-tests/scripts/apfs/run-native-tests.sh ${executable} :tag:native_apfs --include-ignored --test-threads 1 --report-time --format ctrf --logfile ${MAIN_VALIDATION_REPORT_DIR}/ctrf-apfs.json
 '''

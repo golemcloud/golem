@@ -2174,7 +2174,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     expected_fingerprint: expected_fingerprint.map(|fingerprint| fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     caller: Some(Caller::anonymous().into()),
-                    scheduled,
+                    scheduled: scheduled.clone(),
                 }))
             },
             |response| match response.into_inner() {

@@ -4079,17 +4079,35 @@ fn oplog_export_key() -> crate::oplog_export::obfuscator::TokenKey {
     crate::oplog_export::obfuscator::TokenKey::from_bytes([42; 32])
 }
 
+/// The own agent of the generated exports: the agent of the sample `Create` entry.
+fn oplog_export_own_agent() -> crate::oplog_export::obfuscator::OwnAgent {
+    crate::oplog_export::obfuscator::OwnAgent {
+        agent_id: golem_common::model::AgentId::from_parts(7, 1),
+        agent_type: Some(golem_common::model::agent::AgentTypeName(
+            "GeneratedAgent".to_string(),
+        )),
+    }
+}
+
 fn arb_agent_oplog_export_header() -> OutputDocumentStrategy {
-    use crate::oplog_export::obfuscator::{ObfuscationContext, agent_reference};
+    use crate::oplog_export::obfuscator::{ObfuscationContext, OwnAgent, own_agent_reference};
     serialized_output(
-        (arb_keep_flags(), any::<bool>(), "[A-Za-z0-9-]{1,24}").prop_map(
-            |(keep, filtered, name)| {
+        (
+            arb_keep_flags(),
+            any::<bool>(),
+            "[A-Za-z0-9-]{1,24}",
+            proptest::option::of("[A-Za-z][A-Za-z0-9-]{0,23}"),
+        )
+            .prop_map(|(keep, filtered, name, agent_type)| {
                 let key = oplog_export_key();
-                let ctx = ObfuscationContext::new(&key, keep);
                 let h = name
                     .bytes()
                     .fold(0u128, |h, b| (h << 8 | u128::from(b)) % (1 << 90));
-                let agent_id = golem_common::model::AgentId::from_parts(7, h);
+                let own_agent = OwnAgent {
+                    agent_id: golem_common::model::AgentId::from_parts(7, h),
+                    agent_type: agent_type.map(golem_common::model::agent::AgentTypeName),
+                };
+                let ctx = ObfuscationContext::new(&key, keep, own_agent);
                 crate::model::agent::oplog_export_view::AgentOplogExportHeaderView(
                     crate::oplog_export::model::OplogExportHeader {
                         obfuscate: true,
@@ -4097,13 +4115,12 @@ fn arb_agent_oplog_export_header() -> OutputDocumentStrategy {
                         keep_shape: keep.shape,
                         keep_error_text: keep.error_text,
                         filtered,
-                        root: agent_reference(&ctx, &agent_id),
+                        root: own_agent_reference(&ctx),
                         cli_version: "1.0.0".to_string(),
                         generated_at: "2026-01-01T00:00:00+00:00".to_string(),
                     },
                 )
-            },
-        ),
+            }),
     )
 }
 
@@ -4124,7 +4141,7 @@ fn arb_agent_oplog_export_entry() -> OutputDocumentStrategy {
     )
         .prop_map(|(index, attribution, entry, keep, start_function)| {
             let key = oplog_export_key();
-            let ctx = ObfuscationContext::new(&key, keep);
+            let ctx = ObfuscationContext::new(&key, keep, oplog_export_own_agent());
             let entry = PublicOplogEntryWithIndex {
                 oplog_index: golem_common::model::OplogIndex::from_u64(index + 1),
                 attribution,
@@ -4142,7 +4159,7 @@ fn arb_agent_oplog_export_entry() -> OutputDocumentStrategy {
     )
         .prop_map(|(index, attribution, entry_type, size, keep, too_large)| {
             let key = oplog_export_key();
-            let ctx = ObfuscationContext::new(&key, keep);
+            let ctx = ObfuscationContext::new(&key, keep, oplog_export_own_agent());
             let omitted = OmittedOplogEntry {
                 oplog_index: golem_common::model::OplogIndex::from_u64(index + 1),
                 attribution,
@@ -5981,12 +5998,29 @@ fn arb_new_app_result() -> OutputDocumentStrategy {
 }
 
 fn arb_package_digest() -> OutputDocumentStrategy {
-    serialized_output(any::<[u8; 32]>().prop_map(|bytes| {
-        use sha2::{Digest, Sha256};
-        crate::package::PackageDigest {
-            digest: format!("sha256:{:x}", Sha256::digest(bytes)),
-        }
-    }))
+    use crate::package::{ExportKind, OmittedExport, PackageDigest};
+    serialized_output(
+        (any::<[u8; 32]>(), any::<bool>()).prop_map(|(bytes, has_exports)| {
+            use sha2::{Digest, Sha256};
+            PackageDigest {
+                digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+                omitted_exports: if has_exports {
+                    vec![
+                        OmittedExport {
+                            kind: ExportKind::HttpApi,
+                            name: "api.example.com".into(),
+                        },
+                        OmittedExport {
+                            kind: ExportKind::Mcp,
+                            name: "mcp.example.com".into(),
+                        },
+                    ]
+                } else {
+                    vec![]
+                },
+            }
+        }),
+    )
 }
 
 fn arb_template_list_result() -> OutputDocumentStrategy {
