@@ -89,7 +89,7 @@ impl PublicCaller {
 }
 
 /// The public form of one principal, with the details that Golem verified for it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(
     feature = "full",
@@ -103,15 +103,6 @@ pub enum PublicPrincipal {
     Tool(PublicToolPrincipal),
     Anonymous(Empty),
 }
-
-// Read without a buffer, so the claims of a user keep their exact JSON text. See `raw_json`.
-crate::deserialize_internally_tagged!(PublicPrincipal, "kind", {
-    "user" => User,
-    "account" => Account,
-    "agent" => Agent,
-    "tool" => Tool,
-    "anonymous" => Anonymous,
-});
 
 impl PublicPrincipal {
     pub fn new(principal: &Principal, claims: ClaimVisibility) -> Self {

@@ -2187,7 +2187,8 @@ fn request_entries_keep_their_operation_outside_the_payload() {
         },
         AgentInvocationPayload::AgentMethod {
             method_name: "a-removed-method".to_string(),
-            input: SchemaValue::Record { fields: vec![] },
+            input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
+            allow_streams: false,
             caller: caller.clone(),
             scope_card: None,
         },
@@ -3019,7 +3020,10 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
             method_name: "test".to_string(),
         }),
         payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-            input: SchemaValue::Record { fields: Vec::new() },
+            input: SchemaValue::Record { fields: Vec::new() }
+                .try_into()
+                .unwrap(),
+            allow_streams: false,
             caller: caller.clone(),
             scope_card: None,
         })),
@@ -4091,8 +4095,6 @@ fn public_entry_shows_the_original_claims_text_everywhere() {
             json.contains(&expected),
             "the JSON must hold {expected}, but it is {json}"
         );
-        let decoded: PublicClaims = serde_json::from_str(&claims_text).unwrap();
-        assert_eq!(decoded.as_json(), claims_text);
 
         // Protobuf, with a real encode and decode in between.
         let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
@@ -4153,6 +4155,63 @@ fn protobuf_refuses_claims_text_that_is_not_a_json_object() {
         bad.claims = Some(text.to_string());
         assert!(PublicUserPrincipal::try_from(bad).is_err(), "{text}");
     }
+}
+
+/// A container that holds the value in a buffer before it reads it, as a derived tagged or
+/// untagged enum does, reads the claims as a JSON object.
+#[test]
+fn public_claims_are_read_through_a_buffer() {
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(untagged)]
+    enum Buffered {
+        User { claims: PublicClaims },
+    }
+
+    let Buffered::User { claims } =
+        serde_json::from_str(r#"{"claims":{"sub":"bob","groups":["a","b"],"level":3}}"#).unwrap();
+    assert_eq!(
+        claims.to_value().unwrap(),
+        serde_json::json!({"sub": "bob", "groups": ["a", "b"], "level": 3})
+    );
+}
+
+/// Two claim sets are equal when they are the same JSON object: the order of the members and the
+/// spelling of a number do not count. So an entry is equal to its own JSON round trip, also when
+/// the reader writes the claims in another spelling.
+#[test]
+fn public_claims_are_equal_as_json_objects() {
+    let claims = |text: &str| PublicClaims::from_json(text.to_string()).unwrap();
+    let recorded = claims(r#"{"sub":"bob","n":1e3,"nested":{"list":[1,2.50],"flag":true}}"#);
+    assert_eq!(
+        recorded,
+        claims(r#"{"nested":{"flag":true,"list":[1,2.5]},"n":1000.0,"sub":"bob"}"#)
+    );
+    assert_ne!(
+        recorded,
+        claims(r#"{"sub":"bob","n":1e3,"nested":{"list":[1,2.51],"flag":true}}"#)
+    );
+    assert_ne!(recorded, claims(r#"{"sub":"bob"}"#));
+    // The order of the items of an array counts.
+    assert_ne!(claims(r#"{"list":[1,2]}"#), claims(r#"{"list":[2,1]}"#));
+
+    // A claim set that a JSON value cannot hold is equal only to the same text.
+    let beyond = claims(r#"{"sub":"bob","n":1e400}"#);
+    assert_eq!(beyond, claims(r#"{"sub":"bob","n":1e400}"#));
+    assert_ne!(beyond, claims(r#"{"n":1e400,"sub":"bob"}"#));
+
+    // An entry is equal to what a reader gets from its JSON text.
+    let user = Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", "user-1"),
+        claims: Claims::from_json(r#"{"sub":"bob","n":1e3,"list":[1,2.50]}"#.to_string()).unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    let entry = started_entry_with_caller(PublicCaller::new(
+        &Caller::entry(user),
+        ClaimVisibility::Shown,
+    ));
+    let read: PublicOplogEntry =
+        serde_json::from_str(&serde_json::to_string(&entry).unwrap()).unwrap();
+    assert_eq!(read, entry);
 }
 
 /// Claims on the wire must be one JSON object.

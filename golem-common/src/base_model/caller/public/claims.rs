@@ -19,15 +19,14 @@ use serde_json::value::RawValue;
 /// The verified claims of a user, as the public form shows them: one JSON object, kept as the
 /// exact text that Golem received.
 ///
-/// The text is never parsed into a `serde_json::Value`. A `Value` rounds numbers, fails on
-/// numbers that no `f64` holds, and stops at a nesting depth of 128. Write this type with
-/// `serde_json::to_string` or `to_writer`. `serde_json::to_value` parses the text again and so
-/// loses these exact bytes, or fails.
+/// The server keeps this text from the executor to the REST response, so the public form shows
+/// an object for every claim set that Golem accepted, also for one that a `serde_json::Value`
+/// cannot hold (a number beyond the `f64` range, or a nesting depth above 128). Write this type
+/// with `serde_json::to_string` or `to_writer` to keep the text. `serde_json::to_value` parses
+/// the text, with the normal number handling of JSON, and fails for such a claim set.
 ///
-/// A `serde_json` reader keeps the exact text. A reader must give the JSON text: a `serde_json`
-/// reader or a `serde_json::Value`. A container that buffers the value first, such as a derived
-/// internally tagged enum, cannot, and the read fails. The tagged enums of the public oplog and
-/// of the public caller read their values without a buffer for this reason (see `raw_json`).
+/// A reader of the public form gets the claims as a JSON object, with the normal number handling
+/// of JSON: it parses the object, so a number that no `f64` holds exactly is rounded.
 #[derive(Debug, Clone)]
 pub struct PublicClaims(Box<RawValue>);
 
@@ -74,9 +73,18 @@ impl From<&Claims> for PublicClaims {
     }
 }
 
+/// Two claim sets are equal when they are the same JSON object: the order of the members and the
+/// spelling of a number do not count. So a public caller is equal to what a reader gets from its
+/// JSON text. A claim set that a `serde_json::Value` cannot hold is equal only to the same text.
 impl PartialEq for PublicClaims {
     fn eq(&self, other: &Self) -> bool {
-        self.as_json() == other.as_json()
+        if self.as_json() == other.as_json() {
+            return true;
+        }
+        match (self.to_value(), other.to_value()) {
+            (Ok(this), Ok(that)) => this == that,
+            _ => false,
+        }
     }
 }
 
@@ -96,8 +104,9 @@ impl Serialize for PublicClaims {
 
 impl<'de> Deserialize<'de> for PublicClaims {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = crate::base_model::raw_json::raw_value(deserializer)?;
-        Self::from_raw(raw).map_err(serde::de::Error::custom)
+        // Any reader can give a JSON object, also the buffer of a derived tagged enum.
+        let object = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        Self::from_value(&serde_json::Value::Object(object)).map_err(serde::de::Error::custom)
     }
 }
 

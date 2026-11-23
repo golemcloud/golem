@@ -55,27 +55,12 @@ pub struct AgentOplogEntryView {
 /// The entry of an `agent.oplog` document: the full oplog entry, or the description of an entry
 /// that the oplog page omitted because it is too large, when `--omit-payloads` is set or the
 /// full entry could not be read.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 #[allow(clippy::large_enum_variant)]
 pub enum AgentOplogEntryContent {
     Full(PublicOplogEntry),
     Omitted(OmittedOplogEntryContent),
-}
-
-// Read without a buffer, so the claims of the callers keep their exact JSON text. The `type`
-// member tells the two forms apart: an omitted entry has the type `Omitted`, and no oplog entry
-// has that type.
-impl<'de> Deserialize<'de> for AgentOplogEntryContent {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use golem_common::base_model::raw_json::{parse, raw_value, tag_of};
-        let raw = raw_value(deserializer)?;
-        if tag_of::<D::Error>(&raw, "type")? == "Omitted" {
-            parse::<_, D::Error>(&raw).map(Self::Omitted)
-        } else {
-            parse::<_, D::Error>(&raw).map(Self::Full)
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,11 +126,9 @@ fn serialize_oplog_documents<S: serde::Serializer>(
     use serde::ser::{Error, SerializeSeq};
     let mut documents = serializer.serialize_seq(Some(entries.len()))?;
     for entry in entries {
-        // The document keeps each raw JSON value of the entry, such as the claims of a caller,
-        // whatever serializer writes the page.
-        let document = crate::model::cli_output::to_marked_structured_output_value(entry.clone())
+        let document = crate::model::cli_output::to_structured_output_value(entry.clone())
             .map_err(S::Error::custom)?;
-        documents.serialize_element(&crate::model::cli_output::WithRawJson(&document))?;
+        documents.serialize_element(&document)?;
     }
     documents.end()
 }
@@ -1578,6 +1561,80 @@ fn render_snapshot_data_lines(pad: &str, snapshot: &PublicSnapshotData) -> Vec<S
                 ));
             }
             lines
+        }
+    }
+}
+
+/// Test support for the output surfaces of the oplog: the text and structured output, the MCP
+/// tool, the HTML export and the live viewer.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::{AgentOplogEntryContent, AgentOplogEntryView};
+    use golem_common::model::caller::{
+        Pair, PublicCaller, PublicClaims, PublicPrincipal, PublicUserPrincipal,
+    };
+    use golem_common::model::card::{PublicInvocationWalletPin, WalletVersionToken};
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
+    use golem_common::model::oplog::{
+        AgentMethodInvocationParameters, PublicAgentInvocation, PublicOplogEntry,
+        PublicOplogEntryAttribution,
+    };
+    use golem_common::model::{InvocationId, Timestamp};
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+
+    /// The claims of [`entry_of_a_signed_in_user`], as the identity provider gave them.
+    pub(crate) const CLAIMS: &str =
+        r#"{"sub":"bob","email":"bob@mail.example","groups":["dev","ops"],"level":3}"#;
+
+    /// The JSON pointer of the claims of the original caller in an `agent.oplog` document.
+    pub(crate) const CLAIMS_POINTER: &str = "/entry/invocation/caller/original/claims";
+
+    /// A method invocation at index 2 that the user `bob` started. The entry holds the claims of
+    /// the user only when the reader asked for them (`with_claims`), as the server gives it.
+    pub(crate) fn entry_of_a_signed_in_user(with_claims: bool) -> AgentOplogEntryView {
+        entry_of_a_user_with(with_claims.then_some(CLAIMS))
+    }
+
+    /// The entry of [`entry_of_a_signed_in_user`], with `claims` as the claims of the user.
+    pub(crate) fn entry_of_a_user_with(claims: Option<&str>) -> AgentOplogEntryView {
+        let bob = PublicPrincipal::User(PublicUserPrincipal {
+            pair: Pair::new("http://test-idp.com", "bob"),
+            authenticated_at: Timestamp::from(0),
+            claims: claims.map(|claims| PublicClaims::from_json(claims.to_string()).unwrap()),
+        });
+        let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+            timestamp: Timestamp::from(0),
+            invocation: PublicAgentInvocation::AgentMethodInvocation(
+                AgentMethodInvocationParameters {
+                    invocation_id: InvocationId(uuid::Uuid::from_u128(2)),
+                    method_name: "increment".to_string(),
+                    function_input: TypedSchemaValue::new(
+                        SchemaGraph::anonymous(SchemaType::string()),
+                        SchemaValue::String("input".to_string()),
+                    ),
+                    trace_id: TraceId::generate(),
+                    trace_states: vec![],
+                    invocation_context: vec![],
+                    caller: PublicCaller {
+                        original: bob.clone(),
+                        immediate: bob,
+                        tokens: vec![],
+                    },
+                },
+            ),
+            wallet_pin: PublicInvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 1,
+                },
+                scope_card_id: None,
+            },
+        });
+        AgentOplogEntryView {
+            index: 2,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
         }
     }
 }

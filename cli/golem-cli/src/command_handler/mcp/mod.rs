@@ -1993,26 +1993,6 @@ mod tests {
         };
         assert!(page);
         assert_eq!(max_count, Some(50));
-    }
-
-    /// A management tool gives its result as a JSON value, and a JSON value cannot hold every
-    /// claim set: it rounds long numbers. So the oplog tool cannot ask for the claims. The CLI
-    /// and REST show them, because they write the recorded text.
-    #[test]
-    fn agent_oplog_tool_cannot_ask_for_the_claims() {
-        let properties = &tool("agent_oplog").tool.input_schema["properties"];
-        assert!(
-            properties.get("show_claims").is_none(),
-            "agent_oplog offers `show_claims`"
-        );
-        assert!(
-            argv(
-                "agent_oplog",
-                json!({"agent_id": "A(\"a\")", "show_claims": true})
-            )
-            .is_err(),
-            "agent_oplog takes `show_claims`"
-        );
 
         for name in ["agent_oplog", "agent_list"] {
             assert!(
@@ -2024,6 +2004,64 @@ mod tests {
         assert_eq!(max_count["maximum"], 50);
         let refused = argv("agent_list", json!({"max_count": 51})).unwrap_err();
         assert!(refused.contains("at most 50"), "{refused}");
+    }
+
+    /// The oplog tool shows the verified claims of the users among the callers only on request,
+    /// as `agent oplog --show-claims` does. In the result, the claims are a JSON object.
+    #[test]
+    fn agent_oplog_tool_shows_the_claims_only_on_request() {
+        use crate::command_handler::log::render_command_output_document;
+        use crate::model::agent::oplog::AgentOplogPageView;
+        use crate::model::agent::oplog::test_support::{
+            CLAIMS, CLAIMS_POINTER, entry_of_a_signed_in_user,
+        };
+        use crate::model::format::Format;
+
+        let oplog = tool("agent_oplog");
+        assert_eq!(
+            oplog.tool.input_schema["properties"]["show_claims"]["type"],
+            "boolean"
+        );
+
+        // The argument becomes the flag of the command, and it is off when the call leaves it out.
+        let show_claims = |arguments: Value| {
+            let crate::command::GolemCliSubcommand::Agent {
+                subcommand: crate::command::worker::AgentSubcommand::Oplog { show_claims, .. },
+            } = parse(argv("agent_oplog", arguments).unwrap()).subcommand
+            else {
+                panic!("not agent oplog");
+            };
+            show_claims
+        };
+        assert!(show_claims(
+            json!({"agent_id": "A(\"a\")", "show_claims": true})
+        ));
+        assert!(!show_claims(json!({"agent_id": "A(\"a\")"})));
+        assert!(!show_claims(
+            json!({"agent_id": "A(\"a\")", "show_claims": false})
+        ));
+
+        // The result of the tool is the page that the command prints.
+        let result_of = |with_claims: bool| {
+            let page = render_command_output_document(
+                Format::Json,
+                false,
+                AgentOplogPageView {
+                    entries: vec![entry_of_a_signed_in_user(with_claims)],
+                    cursor: None,
+                },
+            )
+            .unwrap();
+            success(&oplog, format!("{page}\n").as_bytes())
+                .structured_content
+                .expect("the tool gives a structured result")
+        };
+        let claims_pointer = format!("/entries/0{CLAIMS_POINTER}");
+        let shown = result_of(true);
+        let claims = shown.pointer(&claims_pointer).expect("the claims");
+        assert!(claims.is_object(), "{claims}");
+        assert_eq!(claims, &serde_json::from_str::<Value>(CLAIMS).unwrap());
+        assert!(result_of(false).pointer(&claims_pointer).is_none());
     }
 
     #[test]

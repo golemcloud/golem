@@ -1251,31 +1251,56 @@ mod interruption_tests {
         // a started command.
         let made = ssh(&ctx, &[QUEUED, "-c", "true"], "").await;
         assert_output(&made, 0, "", "");
+        let (address, mut arrived, stop, server) = builtin_bash::checkpoint_server().await;
         let cli = BlockingCli::new(&ctx);
-        let busy = tokio::task::spawn_blocking(move || {
-            cli.run(&[
-                "--yes", "tool", "invoke", "--agent", QUEUED, "bash", "--", "run", "--", "sleep 20",
-            ])
-        });
+        let runtime = tokio::runtime::Handle::current();
         ctx.cli_interactive(["ssh", QUEUED], move |session| {
             session.set_expect_timeout(Some(Duration::from_secs(120)));
             answer_cursor_query(session)?;
             session.expect_str(MARKER)?;
-            // The other call has started when this command is sent.
-            std::thread::sleep(Duration::from_secs(5));
+            // Settle the session's fetch of command names before holding the agent busy.
+            enter(session, "true")?;
+            answer_cursor_query(session)?;
+            session.expect_str(MARKER)?;
+            let mut busy = runtime.spawn_blocking(move || {
+                let script = format!("fixture checkpoint /ssh-stop-queued {address}");
+                cli.run(&[
+                    "--yes", "tool", "invoke", "--agent", QUEUED, "bash", "--", "run", "--",
+                    &script,
+                ])
+            });
+            let checkpoint = runtime.block_on(async {
+                tokio::select! {
+                    arrival = builtin_bash::next_arrival(&mut arrived) => Ok(arrival),
+                    result = &mut busy => {
+                        let output = result??;
+                        anyhow::bail!("the competing call finished before reaching its checkpoint: {output}")
+                    }
+                }
+            })?;
             enter(session, "printf 'ne%s\\n' ver")?;
             session.expect_str("Ctrl+C to stop\x1b[K")?;
             session.send("\u{3}")?;
             session.set_expect_timeout(Some(Duration::from_secs(3)));
             session.expect_str("Cancelled before it started.")?;
+            checkpoint
+                .release
+                .send(())
+                .expect("the competing call's checkpoint request was abandoned");
             session.set_expect_timeout(Some(Duration::from_secs(120)));
             answer_cursor_query(session)?;
             session.expect_str("[130]")?;
             enter(session, "exit")?;
-            session.expect_eof()
+            session.expect_eof()?;
+            runtime.block_on(async {
+                tokio::time::timeout(Duration::from_secs(120), busy).await
+                    .expect("the competing call did not finish after its checkpoint was released")
+            })??;
+            Ok(())
         })
         .await;
-        busy.await.unwrap().unwrap();
+        stop.send(()).unwrap();
+        server.await.unwrap();
 
         // The end of the input does not stop a command: only a cancelled input does.
         let output = tokio::time::timeout(

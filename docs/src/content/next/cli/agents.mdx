@@ -181,7 +181,7 @@ golem agent oplog --from 100 'CounterAgent("my-counter")'
 
 Oplog entries are indexed from 1, and the first entry is always a **create** entry that defines the initial state of the agent.
 
-Each invocation entry shows its caller in three lines: `original caller:` is the principal that started the chain of calls, `immediate caller:` is the principal that made this call, and `tokens:` lists the tokens that the call carried. The verified claims of a signed-in user are hidden by default. Add `--show-claims` to show them, in a `claims:` line under the user. In the JSON, YAML and TOON formats, `claims` is an object, and each number in it is written as Golem recorded it. The server shows the claims only to a reader who may read the oplog. `--show-claims` cannot be combined with `--obfuscate`, because an obfuscated export never shows claims. It also cannot be combined with `--html` or `--serve`: the browser viewer never shows claims, because a browser reads each number as a JavaScript number, which cannot hold every claim value.
+Each invocation entry shows its caller in three lines: `original caller:` is the principal that started the chain of calls, `immediate caller:` is the principal that made this call, and `tokens:` lists the tokens that the call carried. The verified claims of a signed-in user are hidden by default. Add `--show-claims` to show them, in a `claims:` line under the user. In the JSON, YAML and TOON formats, `claims` is an object. The server shows the claims only to a reader who may read the oplog. `--show-claims` cannot be combined with `--obfuscate`, because an obfuscated export never shows claims.
 
 ### Viewing the oplog in a browser
 

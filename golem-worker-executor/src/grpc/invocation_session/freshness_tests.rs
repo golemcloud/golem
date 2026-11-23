@@ -13,16 +13,12 @@
 // limitations under the License.
 
 use super::{
-    AcceptanceRace, TransportStreamId, build_durable_streaming_request,
+    AcceptanceRace, TransportStreamId, build_durable_streaming_request, capture_method_input,
     decode_invocation_freshness_disposition, decode_invocation_input, effective_session_identity,
     is_attachment_termination, pre_acceptance_rejection_reason, race_invocation_acceptance,
     require_expected_callee_fingerprint,
 };
 use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
-use crate::durable_host::stream_session::{
-    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
-    encode_recursive_stream_value_with_schema, remap_recursive_stream_references,
-};
 use futures::future;
 use golem_api_grpc::proto::golem::account::PlanId;
 use golem_api_grpc::proto::golem::auth::{AuthCtx, AuthEffectiveSurface, UserAuthCtx, auth_ctx};
@@ -45,6 +41,10 @@ use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
     OutputSchema,
+};
+use golem_common::schema::streaming::{
+    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
+    encode_recursive_stream_value_with_schema, remap_recursive_stream_references,
 };
 use golem_schema::Empty;
 use golem_schema::proto::golem::common::Uuid;
@@ -378,6 +378,21 @@ fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
     let callee = AgentId::from_parts(7, 1);
     let idempotency_key = golem_common::model::InvocationId::from(uuid::Uuid::from_u128(901));
     let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(3));
+    let input = SchemaValue::Record {
+        fields: vec![
+            SchemaValue::Map {
+                entries: vec![(
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(
+                        101,
+                    ))),
+                    SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(
+                        7,
+                    ))),
+                )],
+            },
+            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(55))),
+        ],
+    };
     let request = InvocationStart {
         target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
             target: Some(
@@ -389,26 +404,19 @@ fn builder_fixture() -> (InvocationStart, ComponentMetadata, AgentInvocation) {
         environment_id: Some(environment_id.into()),
         attempt_id: Some(uuid::Uuid::new_v4().into()),
         expected_callee_fingerprint: Some(fingerprint.0.into()),
+        input: Some(
+            golem_common::schema::streaming::encode_recursive_stream_value(&input, |stream, _| {
+                stream.with_host_endpoint::<TransportStreamId, _>(|id| id.0)
+            })
+            .unwrap(),
+        ),
         ..Default::default()
     };
     let invocation = AgentInvocation::AgentMethod {
         idempotency_key,
         method_name: "run".to_string(),
-        input: SchemaValue::Record {
-            fields: vec![
-                SchemaValue::Map {
-                    entries: vec![(
-                        SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
-                            TransportStreamId(101),
-                        )),
-                        SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
-                            TransportStreamId(7),
-                        )),
-                    )],
-                },
-                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(TransportStreamId(55))),
-            ],
-        },
+        input: capture_method_input(&request).unwrap(),
+        allow_streams: true,
         invocation_context: InvocationContextStack::fresh(),
         caller: Caller::anonymous(),
         scope_card: None,

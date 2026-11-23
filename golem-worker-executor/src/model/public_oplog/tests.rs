@@ -2635,6 +2635,87 @@ async fn open_test_oplog(
     (oplog_service, owned_agent_id, oplog)
 }
 
+#[test]
+async fn pending_and_started_methods_expose_original_input_without_component_metadata() {
+    use golem_common::model::agent::{AgentMethodInput, JsonMethodInput, PublicMethodInput};
+    use golem_common::model::caller::Caller;
+    use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::{AgentInvocationPayload, InvocationId};
+    use golem_common::schema::FromSchema;
+
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("original-input").await;
+    let key = InvocationId(Uuid::new_v4());
+    let context = InvocationContextStack::fresh();
+    let input = JsonMethodInput::capture(br#"{"rejected":1e400,"signedZero":-0.0}"#).unwrap();
+    let (operation, payload) = AgentInvocationPayload::AgentMethod {
+        method_name: "removed_method".into(),
+        allow_streams: false,
+        input: AgentMethodInput::PublicJson(input.clone()),
+        caller: Caller::anonymous(),
+        scope_card: None,
+    }
+    .into_stored();
+    let payload = oplog.upload_payload(&payload).await.unwrap();
+    let pending = OplogEntry::pending_agent_invocation(
+        None,
+        key,
+        Box::new(operation.clone()),
+        payload.clone(),
+        context.trace_id.clone(),
+        context.trace_states.clone(),
+        context.to_oplog_data(),
+    );
+    let started = OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::now_utc(),
+        invocation_id: key,
+        operation: Box::new(operation),
+        payload,
+        trace_id: context.trace_id.clone(),
+        trace_states: context.trace_states.clone(),
+        invocation_context: context.to_oplog_data(),
+        wallet_pin: Box::new(InvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: [0; 32],
+                generation: 0,
+            },
+            pinned_card_ids: Vec::new(),
+            scope_card_id: None,
+        }),
+    };
+    for entry in [pending, started] {
+        let public = PublicOplogEntry::from_oplog_entry(
+            OplogIndex::INITIAL,
+            entry,
+            oplog_service.clone(),
+            Arc::new(PanicComponentService),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .unwrap();
+        let invocation = match public {
+            PublicOplogEntry::PendingAgentInvocation(params) => params.invocation,
+            PublicOplogEntry::AgentInvocationStarted(params) => params.invocation,
+            _ => panic!("expected a method invocation"),
+        };
+        let PublicAgentInvocation::AgentMethodInvocation(method) = invocation else {
+            panic!("expected original method input")
+        };
+        let PublicMethodInput::PublicJson(raw) =
+            PublicMethodInput::from_value(method.function_input.value()).unwrap()
+        else {
+            panic!("expected captured JSON")
+        };
+        assert_eq!(raw, input.as_str());
+    }
+}
+
 fn log_entry(message_size: usize) -> OplogEntry {
     OplogEntry::Log {
         timestamp: Timestamp::now_utc(),
@@ -3356,7 +3437,10 @@ fn invocation_payloads_with_caller(
     vec![
         AgentInvocationPayload::AgentMethod {
             method_name: "run".to_string(),
-            input: SchemaValue::Record { fields: Vec::new() },
+            input: SchemaValue::Record { fields: Vec::new() }
+                .try_into()
+                .unwrap(),
+            allow_streams: false,
             caller: caller.clone(),
             scope_card: None,
         },
@@ -3851,7 +3935,10 @@ async fn the_public_enrich_request_holds_no_raw_entries() {
     );
     let (operation, stored) = AgentInvocationPayload::AgentMethod {
         method_name: "run".to_string(),
-        input: SchemaValue::Record { fields: Vec::new() },
+        input: SchemaValue::Record { fields: Vec::new() }
+            .try_into()
+            .unwrap(),
+        allow_streams: false,
         caller: bob,
         scope_card: None,
     }

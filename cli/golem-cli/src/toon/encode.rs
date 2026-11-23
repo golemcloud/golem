@@ -15,7 +15,7 @@
 //! TOON encoder (spec v3.3, default options: comma delimiter, 2-space indent,
 //! no key folding).
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::fmt;
 
 /// Maximum nesting depth, to protect against stack overflow (also on 2 MiB
@@ -57,51 +57,13 @@ pub fn encode<T: serde::Serialize>(value: &T) -> Result<String, ToonEncodeError>
     encode_value(&value)
 }
 
-/// A value for the encoder. It is a JSON value, but an object keeps the order of its members, and
-/// a number is the text that the encoder writes.
-///
-/// `From<&serde_json::Value>` gives each number its canonical form (§2). A caller that has the
-/// exact text of a number, which a `serde_json::Value` cannot always hold, builds the value itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToonValue {
-    Null,
-    Bool(bool),
-    Number(String),
-    String(String),
-    Array(Vec<ToonValue>),
-    Object(Vec<(String, ToonValue)>),
-}
-
-impl From<&Value> for ToonValue {
-    fn from(value: &Value) -> Self {
-        match value {
-            Value::Null => Self::Null,
-            Value::Bool(value) => Self::Bool(*value),
-            Value::Number(number) => Self::Number(canonical_number(number)),
-            Value::String(string) => Self::String(string.clone()),
-            Value::Array(items) => Self::Array(items.iter().map(Self::from).collect()),
-            Value::Object(members) => Self::Object(
-                members
-                    .iter()
-                    .map(|(key, value)| (key.clone(), Self::from(value)))
-                    .collect(),
-            ),
-        }
-    }
-}
-
 /// Encode a JSON value to TOON.
 pub fn encode_value(value: &Value) -> Result<String, ToonEncodeError> {
-    encode_toon_value(&ToonValue::from(value))
-}
-
-/// Encode a [`ToonValue`] to TOON.
-pub fn encode_toon_value(value: &ToonValue) -> Result<String, ToonEncodeError> {
     let mut out = String::new();
     match value {
         // An empty object at the root yields an empty document
-        ToonValue::Object(map) => write_object_fields(&mut out, map, 0, 0)?,
-        ToonValue::Array(arr) => {
+        Value::Object(map) => write_object_fields(&mut out, map, 0, 0)?,
+        Value::Array(arr) => {
             if arr.is_empty() {
                 // Empty root array
                 out.push_str("[]");
@@ -131,7 +93,7 @@ fn write_indent(out: &mut String, levels: usize) {
 /// Writes the fields of an object, one line per field, each line at `indent`.
 fn write_object_fields(
     out: &mut String,
-    map: &[(String, ToonValue)],
+    map: &Map<String, Value>,
     indent: usize,
     depth: usize,
 ) -> Result<(), ToonEncodeError> {
@@ -152,12 +114,12 @@ fn write_object_fields(
 fn write_field(
     out: &mut String,
     key: &str,
-    value: &ToonValue,
+    value: &Value,
     indent: usize,
     depth: usize,
 ) -> Result<(), ToonEncodeError> {
     match value {
-        ToonValue::Object(map) => {
+        Value::Object(map) => {
             write_key(out, key);
             out.push(':');
             if !map.is_empty() {
@@ -165,7 +127,7 @@ fn write_field(
                 write_object_fields(out, map, indent + 1, depth + 1)?;
             }
         }
-        ToonValue::Array(arr) => {
+        Value::Array(arr) => {
             if arr.is_empty() {
                 // Empty array in object field position
                 write_key(out, key);
@@ -191,7 +153,7 @@ fn write_field(
 fn write_array(
     out: &mut String,
     key: Option<&str>,
-    arr: &[ToonValue],
+    arr: &[Value],
     indent: usize,
     depth: usize,
     tabular_allowed: bool,
@@ -204,17 +166,12 @@ fn write_array(
         for row in arr {
             out.push('\n');
             write_indent(out, indent + 1);
-            let ToonValue::Object(row) = row else {
-                unreachable!("tabular rows are objects")
-            };
+            let row = row.as_object().expect("tabular rows are objects");
             for (i, field) in fields.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
-                write_primitive(
-                    out,
-                    member(row, field).expect("tabular rows have all fields"),
-                );
+                write_primitive(out, row.get(*field).expect("tabular rows have all fields"));
             }
         }
     } else if arr.iter().all(is_primitive) {
@@ -243,17 +200,17 @@ fn write_array(
 /// hyphen line (`indent`); fields of object items are at `indent + 1`.
 fn write_list_item(
     out: &mut String,
-    item: &ToonValue,
+    item: &Value,
     indent: usize,
     depth: usize,
 ) -> Result<(), ToonEncodeError> {
     check_depth(depth)?;
     match item {
-        ToonValue::Object(map) if map.is_empty() => {
+        Value::Object(map) if map.is_empty() => {
             // Empty object list item: a single "-"
             out.push('-');
         }
-        ToonValue::Object(map) => {
+        Value::Object(map) => {
             // First field on the hyphen line, remaining fields at indent + 1
             out.push_str("- ");
             for (i, (key, value)) in map.iter().enumerate() {
@@ -264,7 +221,7 @@ fn write_list_item(
                 write_field(out, key, value, indent + 1, depth)?;
             }
         }
-        ToonValue::Array(arr) => {
+        Value::Array(arr) => {
             if arr.is_empty() {
                 // Empty inner array list item
                 out.push_str("- [0]:");
@@ -284,30 +241,18 @@ fn write_list_item(
 /// Returns the tabular field list when the array qualifies for tabular form
 /// (§9.3): all elements are objects with at least one key, the same key set,
 /// and primitive-only values.
-fn tabular_fields(arr: &[ToonValue]) -> Option<Vec<&str>> {
-    let ToonValue::Object(first) = arr.first()? else {
-        return None;
-    };
+fn tabular_fields(arr: &[Value]) -> Option<Vec<&str>> {
+    let first = arr.first()?.as_object()?;
     if first.is_empty() {
         return None;
     }
-    let fields: Vec<&str> = first.iter().map(|(key, _)| key.as_str()).collect();
-    // A member name that an object holds more than once has no single column.
-    if fields
-        .iter()
-        .enumerate()
-        .any(|(i, field)| fields[..i].contains(field))
-    {
-        return None;
-    }
+    let fields: Vec<&str> = first.keys().map(String::as_str).collect();
 
     for value in arr {
-        let ToonValue::Object(object) = value else {
-            return None;
-        };
+        let object = value.as_object()?;
         if object.len() != fields.len()
-            || !fields.iter().all(|field| member(object, field).is_some())
-            || !object.iter().all(|(_, value)| is_primitive(value))
+            || !fields.iter().all(|field| object.contains_key(*field))
+            || !object.values().all(is_primitive)
         {
             return None;
         }
@@ -315,16 +260,8 @@ fn tabular_fields(arr: &[ToonValue]) -> Option<Vec<&str>> {
     Some(fields)
 }
 
-/// The value of the first member with this name.
-fn member<'a>(object: &'a [(String, ToonValue)], name: &str) -> Option<&'a ToonValue> {
-    object
-        .iter()
-        .find(|(key, _)| key == name)
-        .map(|(_, value)| value)
-}
-
-fn is_primitive(value: &ToonValue) -> bool {
-    !matches!(value, ToonValue::Array(_) | ToonValue::Object(_))
+fn is_primitive(value: &Value) -> bool {
+    !matches!(value, Value::Array(_) | Value::Object(_))
 }
 
 /// Writes `key?[N]{fields?}:`.
@@ -348,20 +285,20 @@ fn write_array_header(out: &mut String, key: Option<&str>, len: usize, fields: O
     out.push(':');
 }
 
-fn write_primitive(out: &mut String, value: &ToonValue) {
+fn write_primitive(out: &mut String, value: &Value) {
     match value {
-        ToonValue::Null => out.push_str("null"),
-        ToonValue::Bool(true) => out.push_str("true"),
-        ToonValue::Bool(false) => out.push_str("false"),
-        ToonValue::Number(number) => out.push_str(number),
-        ToonValue::String(string) => {
+        Value::Null => out.push_str("null"),
+        Value::Bool(true) => out.push_str("true"),
+        Value::Bool(false) => out.push_str("false"),
+        Value::Number(number) => write_number(out, number),
+        Value::String(string) => {
             if needs_quoting(string) {
                 write_quoted(out, string);
             } else {
                 out.push_str(string);
             }
         }
-        ToonValue::Array(_) | ToonValue::Object(_) => {
+        Value::Array(_) | Value::Object(_) => {
             unreachable!("write_primitive called with a non-primitive value")
         }
     }
@@ -369,24 +306,24 @@ fn write_primitive(out: &mut String, value: &ToonValue) {
 
 /// Canonical number formatting (§2): plain decimal form without exponent for
 /// zero and `1e-6 <= |n| < 1e21`, lowercase exponent notation otherwise.
-fn canonical_number(number: &serde_json::Number) -> String {
+fn write_number(out: &mut String, number: &serde_json::Number) {
     if let Some(i) = number.as_i64() {
-        i.to_string()
+        out.push_str(&i.to_string());
     } else if let Some(u) = number.as_u64() {
-        u.to_string()
+        out.push_str(&u.to_string());
     } else {
         let f = number.as_f64().expect("serde_json numbers are i64/u64/f64");
         if f == 0.0 {
             // Covers -0.0, which must be normalized to 0
-            "0".to_string()
+            out.push('0');
         } else {
             let abs = f.abs();
             if (1e-6..1e21).contains(&abs) {
                 // `Display` never emits exponents, drops the trailing `.0` of
                 // integral floats and emits the shortest round-tripping digits
-                format!("{f}")
+                out.push_str(&format!("{f}"));
             } else {
-                format!("{f:e}")
+                out.push_str(&format!("{f:e}"));
             }
         }
     }

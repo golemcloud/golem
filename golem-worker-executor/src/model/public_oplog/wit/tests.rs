@@ -513,7 +513,10 @@ fn wit_projection_preserves_invocation_wallet_pins() {
             method_name: "test".to_string(),
         }),
         payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-            input: SchemaValue::Record { fields: Vec::new() },
+            input: SchemaValue::Record { fields: Vec::new() }
+                .try_into()
+                .unwrap(),
+            allow_streams: false,
             caller: crate::test_callers::sample_caller(),
             scope_card: None,
         })),

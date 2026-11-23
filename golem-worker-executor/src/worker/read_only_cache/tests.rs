@@ -47,6 +47,41 @@ fn rev(n: u64) -> ComponentRevision {
     ComponentRevision::new(n).unwrap()
 }
 
+#[test]
+fn cache_observations_expire_when_execution_selects_another_revision() {
+    let context = ReadOnlyContext {
+        method_name: "get".to_string(),
+        input: SchemaValue::Record { fields: Vec::new() },
+        caller: Caller::anonymous(),
+        cfg: ReadOnlyConfig {
+            cache_policy: CachePolicy::UntilWrite(Empty {}),
+        },
+        component_revision: rev(1),
+        cacheable: true,
+    };
+    for selected_revision in [Some(rev(1)), Some(rev(2)), None] {
+        let entry = build_read_only_cache_entry(
+            &context,
+            AgentInvocationOutput {
+                result: golem_common::model::AgentInvocationResult::AgentMethod {
+                    output: SchemaValue::U32(37),
+                },
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: selected_revision,
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+            },
+        );
+        assert_eq!(
+            entry.is_expired(Instant::now()),
+            selected_revision != Some(rev(1))
+        );
+    }
+}
+
 fn read_only_method(name: &str, ro: Option<ReadOnlyConfig>) -> AgentMethodSchema {
     AgentMethodSchema {
         name: name.to_string(),
@@ -474,7 +509,8 @@ fn classify_unknown_metadata_is_unknown_assume_mutating() {
     let m = AgentInvocation::AgentMethod {
         idempotency_key: InvocationId(Uuid::from_u128(2)),
         method_name: "m".into(),
-        input: tuple(vec![]),
+        allow_streams: false,
+        input: tuple(vec![]).try_into().unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller: Caller::anonymous(),
         scope_card: None,

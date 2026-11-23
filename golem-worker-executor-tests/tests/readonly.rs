@@ -23,7 +23,6 @@ use crate::Tracing;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::schema::SchemaValue;
-use golem_common::schema::schema_type::SchemaType;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
 use golem_worker_executor::worker::EvictionClass;
@@ -790,8 +789,8 @@ async fn t6_two_callers_never_share_a_cached_result(
 // ---------------------------------------------------------------------------
 
 /// `get_count_for(ctx: InvocationContext) -> u64` declares no parameter besides the context, which
-/// is not part of its signature, so the recorded input is an empty record. The public oplog's
-/// `function_input` must describe an empty record too, keeping schema and value arities aligned.
+/// is not part of its signature, so its original request contains an empty record. The public
+/// oplog preserves that request without injecting the execution context into it.
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
@@ -833,16 +832,18 @@ async fn t6b_caller_method_public_oplog_input_is_well_formed(
     let function_input = method_invocation_input(&entries, "get_count_for")
         .expect("expected an AgentMethodInvocation oplog entry for get_count_for");
 
-    assert_well_formed_record(&function_input);
+    golem_common::schema::validation::value::validate_value(
+        function_input.graph(),
+        function_input.root_type(),
+        function_input.value(),
+    )
+    .unwrap();
 
     // `get_count_for` declares no parameter, so the input is an empty record.
-    let SchemaType::Record { fields, .. } = function_input.root_type() else {
-        panic!("expected record root, got {:?}", function_input.root_type());
-    };
-    assert!(
-        fields.is_empty(),
-        "the context must not be part of the public oplog input, got fields {:?}",
-        fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>()
+    assert_eq!(
+        golem_test_framework::dsl::original_native_method_input(&function_input)?,
+        data_value!().into_parts().1,
+        "the context must not be part of the public oplog input"
     );
 
     Ok(())
@@ -864,24 +865,6 @@ fn method_invocation_input(
         },
         _ => None,
     })
-}
-
-/// Assert a typed schema value is a well-formed record: its root record schema
-/// arity matches its value record arity.
-fn assert_well_formed_record(typed: &golem_common::schema::TypedSchemaValue) {
-    let SchemaType::Record { fields, .. } = typed.root_type() else {
-        panic!("expected record root, got {:?}", typed.root_type());
-    };
-    let SchemaValue::Record { fields: values } = typed.value() else {
-        panic!("expected record value, got {:?}", typed.value());
-    };
-    assert_eq!(
-        fields.len(),
-        values.len(),
-        "public oplog typed value is malformed: schema arity {} != value arity {}",
-        fields.len(),
-        values.len()
-    );
 }
 
 /// Polls until `method` as `caller` is served from the per-caller

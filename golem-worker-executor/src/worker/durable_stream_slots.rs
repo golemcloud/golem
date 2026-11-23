@@ -44,7 +44,7 @@ use prost::Message;
 pub struct CreateStreamSessionResult {
     pub session: String,
     pub replayed: bool,
-    pub component_revision: ComponentRevision,
+    pub component_revision: Option<ComponentRevision>,
     pub invocation_key: InvocationId,
     pub expiry_policy: StreamSessionExpiryPolicy,
     pub expiry_deadline_millis: Option<u64>,
@@ -102,6 +102,7 @@ pub struct ReadStreamSlotRequest {
 pub enum StreamSlotReadAdmission {
     TouchingOriginGet,
     Head,
+    WaitReady,
     Continuation(InvocationId),
 }
 
@@ -123,7 +124,8 @@ pub struct ReadStreamSlotResult {
     pub next_offset: Option<StreamOffset>,
     pub closed: bool,
     pub cancelled: bool,
-    pub element_schema: SchemaGraph,
+    pub element_schema: Option<SchemaGraph>,
+    pub queued: bool,
     pub content_type: &'static str,
     pub up_to_date: bool,
     pub head_offset: Option<StreamOffset>,
@@ -224,6 +226,7 @@ struct Slot {
     writable: bool,
     bytes: bool,
     source: SlotSource,
+    queued: bool,
 }
 
 pub(crate) struct ExportForkSlot {
@@ -414,18 +417,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         expired_at_millis: u64,
     ) -> Result<(), AdmittedTouchError> {
         let content_key = self.stream_session_content_key(&invocation_key).await?;
-        let Some(prepared) = self.prepared_stream_session(&content_key).await? else {
-            return Err(WorkerExecutorError::runtime(
-                "expiring durable stream session has no Prepared record",
-            )
-            .into());
-        };
+        let prepared = self.prepared_stream_session(&content_key).await?;
         let session_reference = StreamRegistrationInvocation::Local(content_key);
         let streams = StreamSession::open(
             owner.clone(),
             self.oplog.clone(),
             session_reference.clone(),
-            prepared.stream_mappings.iter().cloned(),
+            prepared
+                .iter()
+                .flat_map(|prepared| prepared.stream_mappings.iter().cloned()),
         )
         .await
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
@@ -809,6 +809,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         else {
             return Ok(None);
         };
+        self.clone().wait_method_session_ready(session_key).await?;
         let producer = self.durable_stream_producer().await?;
         let Some(slot) = producer
             .with_metadata_activity(self.resolve_stream_slot(
@@ -868,56 +869,38 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }))
     }
 
-    /// Resolves the pinned revision for a stream-slot session before transport decoding.
-    pub async fn stream_session_revision(
-        &self,
-        key: &InvocationId,
-    ) -> Result<ComponentRevision, WorkerExecutorError> {
-        let producer = self.durable_stream_producer().await?;
-        let pinned = producer
-            .with_metadata_activity(self.prepared_stream_session(key))
-            .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
-        if pinned.is_none() && self.agent_mode() != AgentMode::Ephemeral {
-            Self::ensure_not_failed(
-                &self.deps,
-                &self.owned_agent_id,
-                self.agent_mode(),
-                self.get_last_known_status().await.as_ref(),
-            )
-            .await?;
-        }
-        Ok(match pinned {
-            Some(prepared) => prepared.attempt.invocation.target_component_revision,
-            None => self.get_last_known_status().await.component_revision,
-        })
-    }
-
-    /// Accepts a fully domain-built streaming invocation and returns its stable session identity.
+    /// Commits the original invocation and route claim without selecting an execution schema.
     pub async fn create_stream_session(
         self: &Arc<Self>,
-        mut request: DurableStreamingInvocationRequest,
+        invocation: AgentInvocation,
+        mut acceptance: golem_common::model::durable_stream::StreamSessionAcceptance,
+        attempt_id: AttemptId,
         admission: StreamSessionCreationAdmission,
     ) -> Result<CreateStreamSessionResult, WorkerExecutorError> {
-        if request.attempt.session_key.idempotency_key != admission.invocation_key {
+        if invocation.idempotency_key() != Some(&admission.invocation_key) {
             return Err(WorkerExecutorError::runtime(
                 "stream session admission key does not match the invocation",
             ));
         }
-        request.public_session_id = admission.public_session_id.clone();
-        request.expiry_policy = admission.expiry_policy;
-        request.expiry_deadline_millis = admission.expiry_deadline_millis;
-        let component_revision = request.attempt.invocation.target_component_revision;
+        acceptance.public_session_id = admission.public_session_id.clone();
+        acceptance.route_scope = Some(admission.route_scope.clone());
+        acceptance.expiry_policy = admission.expiry_policy;
+        acceptance.expiry_deadline_millis = admission.expiry_deadline_millis;
         let public_session_id = admission.public_session_id.clone();
         let invocation_key = admission.invocation_key;
         let expiry_policy = admission.expiry_policy;
         let expiry_deadline_millis = admission.expiry_deadline_millis;
-        let acceptance = self
-            .accept_durable_stream_slot_invocation(request, admission)
+        let (committed, _) = tokio::sync::oneshot::channel();
+        let (_, replayed) = self
+            .accept_queued_method(invocation, acceptance, attempt_id, committed)
             .await?;
+        let component_revision = self
+            .prepared_stream_session(&invocation_key)
+            .await?
+            .map(|prepared| prepared.attempt.invocation.target_component_revision);
         Ok(CreateStreamSessionResult {
             session: public_session_id,
-            replayed: acceptance.replayed,
+            replayed,
             component_revision,
             invocation_key,
             expiry_policy,
@@ -963,7 +946,37 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None => status.clone(),
         };
         let Some(prepared_index) = content_status.first_prepared else {
-            return Ok(None);
+            let Some(golem_common::model::agent::AgentInvocationPayload::AgentMethod {
+                method_name,
+                ..
+            }) = self.accepted_invocation_payload(session_key).await?
+            else {
+                return Ok(None);
+            };
+            if expected_method.is_some_and(|expected| expected != method_name) {
+                return Ok(None);
+            }
+            if let LookupResult::Complete(Err(error)) =
+                self.try_lookup_invocation_result(session_key).await?
+            {
+                return Err(error);
+            }
+            return Ok(Some(Slot {
+                session: StreamRegistrationInvocation::Local(*session_key).qualify(
+                    self.owned_agent_id.environment_id,
+                    &self.owned_agent_id.agent_id,
+                    self.initial_worker_metadata.fingerprint,
+                ),
+                name: name.to_owned(),
+                slots: Vec::new(),
+                graph: SchemaGraph::empty(),
+                writable: false,
+                bytes: false,
+                source: SlotSource::Pending {
+                    finished: status.expired,
+                },
+                queued: true,
+            }));
         };
         let StreamSessionRecord::Prepared(prepared) =
             self.read_stream_session_record(prepared_index).await?
@@ -1129,6 +1142,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             writable: schema.writable,
             bytes,
             source,
+            queued: false,
         }))
     }
 
@@ -1287,7 +1301,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
         }
         let binding = match &request.admission {
-            StreamSlotReadAdmission::TouchingOriginGet | StreamSlotReadAdmission::Head => {
+            StreamSlotReadAdmission::TouchingOriginGet
+            | StreamSlotReadAdmission::Head
+            | StreamSlotReadAdmission::WaitReady => {
                 let Some(binding) = self
                     .resolve_public_stream_session_binding(&request.route_scope, &request.session)
                     .await?
@@ -1313,6 +1329,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
         };
+        if matches!(request.admission, StreamSlotReadAdmission::WaitReady) {
+            self.clone()
+                .wait_method_session_ready(binding.invocation_key)
+                .await?;
+        }
         let Some(mut slot) = producer
             .with_metadata_activity(self.resolve_stream_slot_by_key(
                 &binding.invocation_key,
@@ -1369,8 +1390,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             next_offset: after,
             closed: false,
             cancelled: false,
-            element_schema: slot.graph,
-            content_type: if slot.bytes {
+            element_schema: (!slot.queued).then_some(slot.graph),
+            queued: slot.queued,
+            content_type: if slot.queued {
+                ""
+            } else if slot.bytes {
                 "application/octet-stream"
             } else {
                 "application/json"
@@ -1552,7 +1576,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let expected_invocation_key = session_key;
         let content_key = self.stream_session_content_key(&session_key).await?;
         let Some(prepared) = self.prepared_stream_session(&content_key).await? else {
-            return Ok(ExportStreamControlResult::NotFound);
+            let Some(golem_common::model::agent::AgentInvocationPayload::AgentMethod {
+                method_name,
+                ..
+            }) = self.accepted_invocation_payload(&session_key).await?
+            else {
+                return Ok(ExportStreamControlResult::NotFound);
+            };
+            if request.slot.is_some() || method_name != request.expected_method {
+                return Ok(ExportStreamControlResult::NotFound);
+            }
+            let status = self
+                .durable_stream_session_status(&session_key)
+                .await?
+                .ok_or_else(|| WorkerExecutorError::runtime("queued session status missing"))?;
+            let streams = self
+                .queued_method_session(
+                    session_key,
+                    status.attachment_epoch.unwrap_or_default(),
+                    status.attachment_attempt_id.ok_or_else(|| {
+                        WorkerExecutorError::runtime("queued session attempt missing")
+                    })?,
+                )
+                .await?;
+            streams
+                .cancel_session_streams()
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+            self.cancel_invocation(session_key).await?;
+            return Ok(ExportStreamControlResult::Applied);
         };
         if !matches!(&prepared.attempt.invocation.target,
             PersistedInvocationTarget::AgentMethod { method_name } if *method_name == request.expected_method)

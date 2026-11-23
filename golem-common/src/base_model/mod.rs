@@ -56,7 +56,6 @@ pub mod plan;
 pub mod plan_dimension;
 pub mod plugin_registration;
 pub mod quota;
-pub mod raw_json;
 pub mod regions;
 pub mod reports;
 pub mod retry_policy;
