@@ -7564,7 +7564,7 @@
         {
           "type": "object",
           "required": ["kind", "pair", "authenticatedAt"],
-          "properties": { "kind": { "const": "user" }, "pair": { "$ref": "#/definitions/Pair" }, "authenticatedAt": { "type": "string" }, "claims": { "type": "string", "description": "The claims as JSON text, exactly as Golem recorded them." } },
+          "properties": { "kind": { "const": "user" }, "pair": { "$ref": "#/definitions/Pair" }, "authenticatedAt": { "type": "string" }, "claims": { "type": "object" } },
           "additionalProperties": false
         },
         {

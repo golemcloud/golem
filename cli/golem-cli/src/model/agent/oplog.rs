@@ -140,9 +140,11 @@ fn serialize_oplog_documents<S: serde::Serializer>(
     use serde::ser::{Error, SerializeSeq};
     let mut documents = serializer.serialize_seq(Some(entries.len()))?;
     for entry in entries {
-        let document = crate::model::cli_output::to_structured_output_value(entry.clone())
+        // The document keeps each raw JSON value of the entry, such as the claims of a caller,
+        // whatever serializer writes the page.
+        let document = crate::model::cli_output::to_marked_structured_output_value(entry.clone())
             .map_err(S::Error::custom)?;
-        documents.serialize_element(&document)?;
+        documents.serialize_element(&crate::model::cli_output::WithRawJson(&document))?;
     }
     documents.end()
 }

@@ -12,31 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! A serializer that writes each raw JSON value (`serde_json::value::RawValue`) as a string that
-//! holds its exact text, and gives everything else to the serializer that it wraps.
+//! A serializer that keeps each raw JSON value (`serde_json::value::RawValue`) as its exact text,
+//! and gives everything else to the serializer that it wraps.
 //!
 //! The CLI makes a `serde_json::Value` of its structured output before it prints JSON, YAML or
 //! TOON. A `Value` cannot hold every raw JSON value: the conversion parses the text again, so it
 //! rounds a number that no `f64` holds exactly, refuses a number beyond the `f64` range, and
-//! refuses nesting deeper than 128. A string holds the exact text, and every format prints a
-//! string as it is.
+//! refuses nesting deeper than 128. So this serializer writes a raw JSON value as a marked
+//! string, [`RAW_JSON_MARK`] and then the text. The renderer of each format finds the marked
+//! strings and writes the JSON value that the text holds, with every number as it is in the text.
 
 use serde::Serialize;
 use serde::ser::{self, Error as _, Serializer};
+use std::sync::LazyLock;
 
 /// The struct name with which `serde_json` marks a raw JSON value when it serializes one.
 const RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
 
-/// Wraps a serializer. A raw JSON value becomes a string with its exact text; every other value
-/// goes to the wrapped serializer, and so do the values inside it.
-pub struct RawJsonAsText<S>(pub S);
+/// The start of a marked string. It has a random part that is new in each process, so no data
+/// that the CLI reads can hold it, and a string of an oplog entry cannot pass as raw JSON.
+static RAW_JSON_MARK: LazyLock<String> =
+    LazyLock::new(|| format!("golem-raw-json:{}:", uuid::Uuid::new_v4().simple()));
 
-/// A value whose parts also go through [`RawJsonAsText`].
+/// The raw JSON text of a marked string, or `None` for every other string.
+pub fn marked_raw_json(string: &str) -> Option<&str> {
+    string.strip_prefix(RAW_JSON_MARK.as_str())
+}
+
+/// Wraps a serializer. A raw JSON value becomes a marked string with its exact text; every other
+/// value goes to the wrapped serializer, and so do the values inside it.
+pub struct RawJsonMarker<S>(pub S);
+
+/// A value whose parts also go through [`RawJsonMarker`].
 struct Wrapped<'a, T: ?Sized>(&'a T);
 
 impl<T: Serialize + ?Sized> Serialize for Wrapped<'_, T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.0.serialize(RawJsonAsText(serializer))
+        self.0.serialize(RawJsonMarker(serializer))
     }
 }
 
@@ -49,7 +61,7 @@ pub enum StructOrRawText<S: Serializer> {
     RawText { serializer: S, text: Option<String> },
 }
 
-impl<S: Serializer> Serializer for RawJsonAsText<S> {
+impl<S: Serializer> Serializer for RawJsonMarker<S> {
     type Ok = S::Ok;
     type Error = S::Error;
     type SerializeSeq = Compound<S::SerializeSeq>;
@@ -373,10 +385,99 @@ impl<S: Serializer> ser::SerializeStruct for StructOrRawText<S> {
             Self::RawText {
                 serializer,
                 text: Some(text),
-            } => serializer.serialize_str(&text),
+            } => serializer.serialize_str(&format!("{}{text}", *RAW_JSON_MARK)),
             Self::RawText { text: None, .. } => {
                 Err(S::Error::custom("a raw JSON value has no text"))
             }
+        }
+    }
+}
+
+/// Replaces each marked string of `value` with a token, and returns each token with its raw JSON
+/// text. A renderer prints the value in the normal way and then puts the JSON value of each text
+/// in the place of its token. The tokens hold a random part, so no other text of the output is
+/// equal to one.
+pub fn take_raw_json(value: &mut serde_json::Value) -> Vec<(String, String)> {
+    fn take(value: &mut serde_json::Value, prefix: &str, taken: &mut Vec<(String, String)>) {
+        match value {
+            serde_json::Value::String(string) => {
+                if let Some(raw) = marked_raw_json(string) {
+                    // The `z` ends the token: no token is the start of another one.
+                    let token = format!("{prefix}{}z", taken.len());
+                    taken.push((token.clone(), raw.to_string()));
+                    *string = token;
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    take(item, prefix, taken);
+                }
+            }
+            serde_json::Value::Object(members) => {
+                for (_, member) in members.iter_mut() {
+                    take(member, prefix, taken);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let prefix = format!("golem-raw-json-{}-", uuid::Uuid::new_v4().simple());
+    let mut taken = Vec::new();
+    take(value, &prefix, &mut taken);
+    taken
+}
+
+/// Replaces each marked string of `value` with the `serde_json::Value` of its raw JSON text.
+///
+/// A `Value` cannot hold every raw JSON value: it rounds a number that no `f64` holds exactly,
+/// and this fails for a number beyond the `f64` range and for nesting deeper than 128. The
+/// renderers do not use this form.
+pub fn expand_raw_json(value: &mut serde_json::Value) -> serde_json::Result<()> {
+    match value {
+        serde_json::Value::String(string) => {
+            if let Some(raw) = marked_raw_json(string) {
+                *value = serde_json::from_str(raw)?;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                expand_raw_json(item)?;
+            }
+        }
+        serde_json::Value::Object(members) => {
+            for (_, member) in members.iter_mut() {
+                expand_raw_json(member)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// A structured output value that serializes each marked string as the raw JSON value it holds.
+/// So a document inside another document keeps its raw JSON values, whatever serializer writes
+/// the outer document.
+pub struct WithRawJson<'a>(pub &'a serde_json::Value);
+
+impl Serialize for WithRawJson<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0 {
+            serde_json::Value::String(string) => match marked_raw_json(string) {
+                Some(raw) => serde_json::value::RawValue::from_string(raw.to_string())
+                    .map_err(S::Error::custom)?
+                    .serialize(serializer),
+                None => serializer.serialize_str(string),
+            },
+            serde_json::Value::Array(items) => {
+                serializer.collect_seq(items.iter().map(WithRawJson))
+            }
+            serde_json::Value::Object(members) => serializer.collect_map(
+                members
+                    .iter()
+                    .map(|(name, member)| (name, WithRawJson(member))),
+            ),
+            other => other.serialize(serializer),
         }
     }
 }

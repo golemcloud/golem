@@ -2079,16 +2079,14 @@ fn oplog_page_entry_keeps_the_exact_claims_text_of_its_callers() {
     }
 }
 
-/// Every structured format prints the claims of a caller as a string that holds their exact JSON
-/// text: a number that no `f64` holds, a number beyond the `f64` range, the order of the members,
-/// and a nesting depth that a `serde_json::Value` refuses. The test renders the documents that
-/// `agent oplog --show-claims` and `agent oplog --show-claims --page` print, and reads each
-/// format back.
+/// Every structured format prints the claims of a caller as an object, with each number as it is
+/// in the recorded text and the members in their order: a number that no `f64` holds, a number
+/// beyond the `f64` range, and a nesting depth that a `serde_json::Value` refuses. The test
+/// renders the documents that `agent oplog --show-claims` and `agent oplog --show-claims --page`
+/// print, and compares each format with text that is written here by hand.
 #[test]
-fn every_structured_format_prints_the_exact_claims_text() {
-    use crate::command_handler::log::{
-        TOON_FRAME_END, TOON_FRAME_START, render_command_output_document,
-    };
+fn every_structured_format_prints_the_claims_as_a_lossless_object() {
+    use crate::command_handler::log::render_command_output_document;
     use crate::model::agent::oplog::{
         AgentOplogEntryContent, AgentOplogEntryView, AgentOplogPageView,
     };
@@ -2110,37 +2108,20 @@ fn every_structured_format_prints_the_exact_claims_text() {
         }
     }
 
-    /// The value of every `claims` member in a document.
-    fn claims_members(value: &Value, found: &mut Vec<Value>) {
-        match value {
-            Value::Object(members) => {
-                for (key, member) in members {
-                    if key == "claims" {
-                        found.push(member.clone());
-                    } else {
-                        claims_members(member, found);
-                    }
-                }
-            }
-            Value::Array(items) => items.iter().for_each(|item| claims_members(item, found)),
-            _ => {}
-        }
-    }
-
-    fn read_back(format: Format, rendered: &str) -> Value {
-        match format {
-            Format::Json | Format::PrettyJson => serde_json::from_str(rendered).unwrap(),
-            Format::Yaml | Format::PrettyYaml => serde_yaml::from_str(rendered).unwrap(),
-            Format::Toon => crate::toon::decode::decode(
-                rendered
-                    .strip_prefix(TOON_FRAME_START)
-                    .and_then(|body| body.strip_suffix(TOON_FRAME_END))
-                    .expect("a TOON document has its frame")
-                    .trim_matches('\n'),
-            )
-            .unwrap(),
-            Format::Text => unreachable!("text is not a structured format"),
-        }
+    /// The lines of the block under the first line that is `name` alone, without the indentation
+    /// of the block.
+    fn block_under(rendered: &str, name: &str) -> Vec<String> {
+        let mut lines = rendered.lines();
+        let indent_of = |line: &str| line.len() - line.trim_start_matches(' ').len();
+        let indent = lines
+            .by_ref()
+            .find(|line| line.trim_start_matches(' ') == name)
+            .map(indent_of)
+            .unwrap_or_else(|| panic!("no `{name}` line in:\n{rendered}"));
+        lines
+            .take_while(|line| indent_of(line) > indent)
+            .map(|line| line[indent + 2..].to_string())
+            .collect()
     }
 
     let sample = sample_public_oplog_entries()
@@ -2148,17 +2129,46 @@ fn every_structured_format_prints_the_exact_claims_text() {
         .find(|entry| set_claims_of_original(&mut entry.clone(), "{}"))
         .expect("a sample entry whose caller is a user");
 
-    let claim_sets = [
-        r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
-        r#"{"sub":"bob","n":1e400}"#.to_string(),
-        r#"{"zeta":1,"alpha":2,"sub":"bob","score":0.12345678901234567890123}"#.to_string(),
-        format!(
-            r#"{{"sub":"bob","deep":{}1{}}}"#,
-            "[".repeat(130),
-            "]".repeat(130)
+    let deep = format!(
+        r#"{{"sub":"bob","deep":{}1{}}}"#,
+        "[".repeat(130),
+        "]".repeat(130)
+    );
+    // The claims as recorded, and the TOON lines of the same object.
+    let claim_sets: Vec<(String, Vec<String>)> = vec![
+        (
+            r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
+            vec![
+                "sub: bob".to_string(),
+                "n: 18446744073709551617".to_string(),
+            ],
         ),
+        (
+            r#"{"sub":"bob","n":1e400}"#.to_string(),
+            vec!["sub: bob".to_string(), "n: 1e400".to_string()],
+        ),
+        (
+            r#"{"zeta":1,"alpha":2,"sub":"bob","score":0.12345678901234567890123}"#.to_string(),
+            vec![
+                "zeta: 1".to_string(),
+                "alpha: 2".to_string(),
+                "sub: bob".to_string(),
+                "score: 0.12345678901234567890123".to_string(),
+            ],
+        ),
+        (deep, {
+            // The outermost array is the member. Each array inside it is a list item, one level
+            // deeper, and the innermost array holds only a number, so it is on one line.
+            let mut lines = vec!["sub: bob".to_string(), "deep[1]:".to_string()];
+            for level in 1..=128 {
+                lines.push(format!("{}- [1]:", "  ".repeat(level)));
+            }
+            lines.push(format!("{}- [1]: 1", "  ".repeat(129)));
+            lines
+        }),
     ];
-    for claims in &claim_sets {
+
+    for (claims, toon_lines) in &claim_sets {
         let mut entry = sample.clone();
         assert!(set_claims_of_original(&mut entry, claims));
         let view = AgentOplogEntryView {
@@ -2189,16 +2199,126 @@ fn every_structured_format_prints_the_exact_claims_text() {
             ] {
                 let rendered = rendered
                     .unwrap_or_else(|error| panic!("{command}, {format:?}, {claims}: {error}"));
-                let mut found = Vec::new();
-                claims_members(&read_back(format, &rendered), &mut found);
-                assert_eq!(
-                    found,
-                    vec![Value::String(claims.clone())],
-                    "{command}, {format:?}:\n{rendered}"
-                );
+                let context = format!("{command}, {format:?}:\n{rendered}");
+                match format {
+                    Format::Json | Format::PrettyJson => {
+                        // The document is valid JSON, and the `claims` member is the recorded
+                        // object. No string of these claim sets has white space in it.
+                        serde_json::from_str::<Box<serde_json::value::RawValue>>(&rendered)
+                            .unwrap_or_else(|error| panic!("{error}: {context}"));
+                        let tokens: String =
+                            rendered.chars().filter(|c| !c.is_whitespace()).collect();
+                        assert!(
+                            tokens.contains(&format!("\"claims\":{claims}")),
+                            "{context}"
+                        );
+                    }
+                    Format::Yaml | Format::PrettyYaml => {
+                        // A flow mapping on the line of the member, with a space after each
+                        // colon and comma. No string of these claim sets holds a colon or a comma.
+                        let flow = claims.replace(':', ": ").replace(',', ", ");
+                        assert!(rendered.contains(&format!("claims: {flow}\n")), "{context}");
+                    }
+                    Format::Toon => {
+                        assert_eq!(&block_under(&rendered, "claims:"), toon_lines, "{context}");
+                    }
+                    Format::Text => unreachable!("text is not a structured format"),
+                }
             }
         }
     }
+
+    let view_of = |claims: &str| {
+        let mut entry = sample.clone();
+        assert!(set_claims_of_original(&mut entry, claims));
+        AgentOplogEntryView {
+            index: 7,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        }
+    };
+
+    // The layout of the pretty JSON, for the first claim set.
+    let view = view_of(&claim_sets[0].0);
+    let pretty = render_command_output_document(Format::PrettyJson, false, view.clone()).unwrap();
+    assert_eq!(
+        block_under(&pretty, "\"claims\": {"),
+        ["\"sub\": \"bob\",", "\"n\": 18446744073709551617"],
+        "{pretty}"
+    );
+    // What a YAML parser reads, for the claim set whose numbers the `Value` of `serde_yaml` can
+    // hold.
+    let yaml =
+        render_command_output_document(Format::Yaml, false, view_of(&claim_sets[2].0)).unwrap();
+    let read: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+    let read_claims = &read["entry"]["invocation"]["caller"]["original"]["claims"];
+    let names: Vec<&str> = read_claims
+        .as_mapping()
+        .unwrap_or_else(|| panic!("the claims are not a mapping in:\n{yaml}"))
+        .keys()
+        .map(|name| name.as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["zeta", "alpha", "sub", "score"]);
+    assert_eq!(read_claims["sub"], "bob");
+
+    // The colors do not change the text.
+    for format in [Format::PrettyJson, Format::PrettyYaml] {
+        let plain = render_command_output_document(format, false, view.clone()).unwrap();
+        let colored = render_command_output_document(format, true, view.clone()).unwrap();
+        assert_eq!(
+            strip_ansi_escapes::strip_str(colored).trim_end(),
+            plain.trim_end(),
+            "{format:?}"
+        );
+    }
+}
+
+/// The `serde_json::Value` form of a structured output document holds the claims as an object. It
+/// is not what the CLI prints: a `Value` rounds a number that no `f64` holds exactly, and it
+/// cannot hold a number beyond the `f64` range.
+#[test]
+fn the_value_form_of_a_document_holds_the_claims_as_a_rounded_object() {
+    use crate::model::agent::oplog::{AgentOplogEntryContent, AgentOplogEntryView};
+    use golem_common::model::caller::{PublicClaims, PublicPrincipal};
+    use golem_common::model::oplog::{
+        PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryAttribution,
+    };
+
+    let view_with = |claims: &str| {
+        let mut entry = sample_public_oplog_entries()
+            .into_iter()
+            .find(|entry| {
+                matches!(
+                    entry,
+                    PublicOplogEntry::AgentInvocationStarted(params)
+                        if matches!(
+                            &params.invocation,
+                            PublicAgentInvocation::AgentMethodInvocation(invocation)
+                                if matches!(invocation.caller.original, PublicPrincipal::User(_))
+                        )
+                )
+            })
+            .expect("a sample entry whose caller is a user");
+        if let PublicOplogEntry::AgentInvocationStarted(params) = &mut entry
+            && let PublicAgentInvocation::AgentMethodInvocation(invocation) = &mut params.invocation
+            && let PublicPrincipal::User(user) = &mut invocation.caller.original
+        {
+            user.claims = Some(PublicClaims::from_json(claims.to_string()).unwrap());
+        }
+        AgentOplogEntryView {
+            index: 7,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        }
+    };
+
+    let value =
+        to_structured_output_value(view_with(r#"{"sub":"bob","n":18446744073709551617}"#)).unwrap();
+    let claims = &value["entry"]["invocation"]["caller"]["original"]["claims"];
+    assert_eq!(claims["sub"], "bob");
+    assert_eq!(claims["n"], json!(18446744073709551617f64));
+
+    assert!(to_structured_output_value(view_with(r#"{"sub":"bob","n":1e400}"#)).is_err());
 }
 
 #[test]

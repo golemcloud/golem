@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod raw_json_as_text;
+mod raw_json_marker;
+pub(crate) mod raw_json_text;
 
 use crate::model::masking::MaskingConfig;
+use crate::toon::ToonValue;
 use anyhow::{anyhow, bail};
-use raw_json_as_text::RawJsonAsText;
+use raw_json_marker::RawJsonMarker;
+pub(crate) use raw_json_marker::{WithRawJson, take_raw_json};
 use serde::Serialize;
 use serde::Serializer;
 use serde_json::{Map, Value};
@@ -245,13 +248,36 @@ pub fn to_structured_output_value<Output: StructuredOutput>(
     to_structured_output_value_masked(output, MaskingConfig::hide_secrets())
 }
 
+/// The structured output document of `output` as a `serde_json::Value`.
+///
+/// A raw JSON value of the output, such as the claims of a user, is the `Value` of its text. A
+/// `Value` cannot hold every raw JSON value: it rounds a number that no `f64` holds exactly, and
+/// this fails for a number beyond the `f64` range and for nesting deeper than 128. The CLI does
+/// not print this form: its renderers use [`to_marked_structured_output_value_masked`].
 pub fn to_structured_output_value_masked<Output: StructuredOutput>(
     output: Output,
     config: MaskingConfig,
 ) -> anyhow::Result<Value> {
-    // A raw JSON value, such as the claims of a user, becomes a string with its exact text: a
-    // `Value` cannot hold every raw JSON value, so the formats print that string.
-    let value = output.serialize_masked(RawJsonAsText(serde_json::value::Serializer), config)?;
+    let mut value = to_marked_structured_output_value_masked(output, config)?;
+    raw_json_marker::expand_raw_json(&mut value)?;
+    Ok(value)
+}
+
+pub(crate) fn to_marked_structured_output_value<Output: StructuredOutput>(
+    output: Output,
+) -> anyhow::Result<Value> {
+    to_marked_structured_output_value_masked(output, MaskingConfig::hide_secrets())
+}
+
+/// The structured output document of `output`, with each raw JSON value as a marked string that
+/// holds its exact text. Only a renderer reads this form: [`take_raw_json`] and
+/// [`marked_value_to_toon`] give it the texts, and [`WithRawJson`] puts a marked document inside
+/// another document.
+pub(crate) fn to_marked_structured_output_value_masked<Output: StructuredOutput>(
+    output: Output,
+    config: MaskingConfig,
+) -> anyhow::Result<Value> {
+    let value = output.serialize_masked(RawJsonMarker(serde_json::value::Serializer), config)?;
     let type_value = Value::String(Output::type_name());
 
     match value {
@@ -265,6 +291,30 @@ pub fn to_structured_output_value_masked<Output: StructuredOutput>(
             Ok(Value::Object(fields))
         }
     }
+}
+
+/// A marked structured output value as a value for the TOON encoder. Each marked string becomes
+/// the value of its raw JSON text, with the numbers and the member order of the text.
+pub(crate) fn marked_value_to_toon(value: &Value) -> anyhow::Result<ToonValue> {
+    Ok(match value {
+        Value::String(string) => match raw_json_marker::marked_raw_json(string) {
+            Some(raw) => raw_json_text::toon_value(raw)?,
+            None => ToonValue::from(value),
+        },
+        Value::Array(items) => ToonValue::Array(
+            items
+                .iter()
+                .map(marked_value_to_toon)
+                .collect::<anyhow::Result<_>>()?,
+        ),
+        Value::Object(members) => ToonValue::Object(
+            members
+                .iter()
+                .map(|(name, member)| Ok((name.clone(), marked_value_to_toon(member)?)))
+                .collect::<anyhow::Result<_>>()?,
+        ),
+        other => ToonValue::from(other),
+    })
 }
 
 fn with_structured_output_type<Output: StructuredOutput>(
