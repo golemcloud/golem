@@ -1,78 +1,164 @@
 # SDK validation uses the local toolchains and leaves build outputs in place for
 # downstream tests. Tool installation and CI artifact transport are not workloads.
 
-[tasks.validate-sdk-scala]
-description = "Validate and locally publish the Scala SDK"
+[tasks.prepare-sdk-scala]
+description = "Build the Scala guest and publish the SDK for downstream tests"
 dependencies = ["wit"]
+cwd = "sdks/scala"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error ./scripts/generate-agent-guest-wasm.sh
+exec --fail-on-error sbt -batch "set ThisBuild / packageDoc / publishArtifact := false" golemPublishLocal
+'''
+
+[tasks.validate-sdk-scala]
+description = "Validate the prepared Scala SDK"
+dependencies = ["prepare-sdk-scala"]
 script_runner = "@duckscript"
 script = '''
 root = pwd
 cd sdks/scala
-exec --fail-on-error ./scripts/generate-agent-guest-wasm.sh
-exec --fail-on-error git diff --exit-code wit/dts
-exec --fail-on-error sbt -mem 4096 "++3.8.2; modelJVM/test; modelJS/test; core/test; macros/test; codegen/test"
+failed = exec --get-exit-code git diff --exit-code wit/dts
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Scala SDK validation failed"
+end
+code = exec --get-exit-code sbt -mem 4096 "++3.8.2; modelJVM/test; modelJS/test; core/test; macros/test; codegen/test"
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Scala SDK validation failed"
+end
 cd ${root}
-cm_run_task check-sdk-scala-capability-fixtures
+code = exec --get-exit-code cargo make --disable-check-for-updates --allow-private check-sdk-scala-capability-fixtures
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Scala SDK validation failed"
+end
 cd ${root}/sdks/scala
-exec --fail-on-error sbt "++2.12.21!; sbtPlugin/compile"
-exec --fail-on-error ./scripts/test-build-plugins.sh
-exec --fail-on-error sbt -batch "set ThisBuild / packageDoc / publishArtifact := false" golemPublishLocal
+code = exec --get-exit-code sbt "++2.12.21!; sbtPlugin/compile"
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Scala SDK validation failed"
+end
+code = exec --get-exit-code ./scripts/test-build-plugins.sh
+failed = calc ${failed} + ${code}
+assert_eq ${failed} 0 "Scala SDK validation failed"
 '''
 
-[tasks.validate-sdk-ts]
-description = "Validate the TypeScript SDK, template, and packed HTTP contract"
+[tasks.prepare-sdk-ts]
+description = "Build the TypeScript SDK and guest template"
+dependencies = ["wit"]
 cwd = "sdks/ts"
 env = { NODE_OPTIONS = "--max-old-space-size=4096", NPM_CONFIG_AUDIT = "false" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error pnpm install
-exec --fail-on-error pnpm run lint
-exec --fail-on-error pnpm run format:check
 exec --fail-on-error pnpm run build
-exec --fail-on-error git diff --exit-code packages/golem-ts-sdk/types
 exec --fail-on-error pnpm run build-agent-template
-exec --fail-on-error pnpm --filter @golemcloud/golem-ts-sdk run check:package
-exec --fail-on-error pnpm run test
 '''
 
-[tasks.validate-sdk-effect]
-description = "Validate the Effect SDK, template, declarations, and package contracts"
+[tasks.validate-sdk-ts]
+description = "Check the prepared TypeScript SDK, collecting failures only on CI"
+dependencies = ["prepare-sdk-ts"]
+cwd = "sdks/ts"
+env = { NODE_OPTIONS = "--max-old-space-size=4096", NPM_CONFIG_AUDIT = "false" }
+script_runner = "@duckscript"
+script = '''
+failed = set 0
+checks = array lint format:check test
+for check in ${checks}
+    code = exec --get-exit-code pnpm run ${check}
+    failed = calc ${failed} + ${code}
+    if not eq ${CI} true
+        assert_eq ${failed} 0 "TypeScript SDK validation failed"
+    end
+end
+code = exec --get-exit-code git diff --exit-code packages/golem-ts-sdk/types
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "TypeScript SDK validation failed"
+end
+code = exec --get-exit-code pnpm --filter @golemcloud/golem-ts-sdk run check:package
+failed = calc ${failed} + ${code}
+assert_eq ${failed} 0 "TypeScript SDK validation failed"
+'''
+
+[tasks.prepare-sdk-effect]
+description = "Build the Effect SDK and guest template"
+dependencies = ["wit"]
 cwd = "sdks/effect"
 env = { NODE_OPTIONS = "--max-old-space-size=4096", NPM_CONFIG_AUDIT = "false" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error npm ci
-exec --fail-on-error npm run lint
-exec --fail-on-error npm run format:check
-exec --fail-on-error npm run typecheck
-exec --fail-on-error npm test
 exec --fail-on-error npm run build
 exec --fail-on-error npm run build-agent-template
-exec --fail-on-error npm run check:dts
-exec --fail-on-error npm run check:contracts
-exec --fail-on-error npm run check:artifacts
-exec --fail-on-error npm run check:package
 '''
 
-[tasks.validate-sdk-moonbit]
-description = "Validate MoonBit SDK bindings, packages, and tools"
+[tasks.validate-sdk-effect]
+description = "Check the prepared Effect SDK, collecting failures only on CI"
+dependencies = ["prepare-sdk-effect"]
+cwd = "sdks/effect"
+env = { NODE_OPTIONS = "--max-old-space-size=4096", NPM_CONFIG_AUDIT = "false" }
+script_runner = "@duckscript"
+script = '''
+failed = set 0
+checks = array lint format:check typecheck test check:dts check:contracts check:artifacts check:package
+for check in ${checks}
+    code = exec --get-exit-code npm run ${check}
+    failed = calc ${failed} + ${code}
+    if not eq ${CI} true
+        assert_eq ${failed} 0 "Effect SDK validation failed"
+    end
+end
+assert_eq ${failed} 0 "Effect SDK validation failed"
+'''
+
+[tasks.prepare-sdk-moonbit]
+description = "Prepare MoonBit dependencies and binding generation"
+dependencies = ["wit"]
 cwd = "sdks/moonbit"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error moon update
 cd golem_sdk
 exec --fail-on-error ./scripts/install-wit-bindgen.sh
-exec --fail-on-error ./scripts/check-generated-bindings.sh
+exec --fail-on-error ./scripts/regen-bindings.sh
+'''
+
+[tasks.validate-sdk-moonbit]
+description = "Validate prepared MoonBit bindings, packages, and tools"
+dependencies = ["prepare-sdk-moonbit"]
+cwd = "sdks/moonbit/golem_sdk"
+script_runner = "@duckscript"
+script = '''
+failed = exec --get-exit-code ./scripts/check-generated-bindings.sh
+if not eq ${CI} true
+    assert_eq ${failed} 0 "MoonBit SDK validation failed"
+end
 packages = exec find . -name moon.pkg -exec dirname {} ";"
 found = eq ${packages.code} 0
 if not ${found}
     trigger_error "Could not enumerate MoonBit SDK packages"
 end
-exec --fail-on-error --input "${packages.stdout}" xargs moon check --target wasm
-exec --fail-on-error ./scripts/run-sdk-tests.sh
+code = exec --get-exit-code --input "${packages.stdout}" xargs moon check --target wasm
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "MoonBit SDK validation failed"
+end
+code = exec --get-exit-code ./scripts/run-sdk-tests.sh
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "MoonBit SDK validation failed"
+end
 cd ../golem_sdk_tools
-exec --fail-on-error moon check cmd lib
-exec --fail-on-error moon test cmd lib
+code = exec --get-exit-code moon check cmd lib
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "MoonBit SDK validation failed"
+end
+code = exec --get-exit-code moon test cmd lib
+failed = calc ${failed} + ${code}
+assert_eq ${failed} 0 "MoonBit SDK validation failed"
 '''
 
 [tasks.validate-sdk-rust-check]
@@ -80,8 +166,15 @@ description = "Validate Rust SDK formatting, lint, test-target coverage, and ord
 cwd = "sdks/rust"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo fmt -- --check
-exec --fail-on-error cargo clippy -- -Dwarnings
+failed = exec --get-exit-code cargo fmt -- --check
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Rust SDK validation failed"
+end
+code = exec --get-exit-code cargo clippy -- -Dwarnings
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Rust SDK validation failed"
+end
 metadata = exec cargo metadata --no-deps --format-version 1
 metadata_ok = eq ${metadata.code} 0
 if not ${metadata_ok}
@@ -95,7 +188,7 @@ if not ${targets_ok}
     trigger_error "Could not parse Rust SDK test targets"
 end
 actual = trim ${targets.stdout}
-expected = set "agent,caller,http_router,reflection_recipe_compile,rich_tool_conformance,schema_reexport,tool,tool_canonical,ui"
+expected = set "agent,caller,config_conformance,http_router,reflection_recipe_compile,rich_tool_conformance,schema_reexport,tool,tool_canonical,ui"
 covered = eq ${actual} ${expected}
 if not ${covered}
     echo "Test targets of sdks/rust changed; update validate-sdk-rust-check:"
@@ -103,8 +196,14 @@ if not ${covered}
     echo "Actual: ${actual}"
     trigger_error "Rust SDK test target coverage changed"
 end
-exec --fail-on-error cargo test --all-features --lib --bins --test agent --test caller --test http_router --test rich_tool_conformance --test tool_canonical --test schema_reexport --test reflection_recipe_compile
-exec --fail-on-error cargo test --all-features --doc
+code = exec --get-exit-code cargo test --all-features --lib --bins --test agent --test caller --test config_conformance --test http_router --test rich_tool_conformance --test tool_canonical --test schema_reexport --test reflection_recipe_compile
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Rust SDK validation failed"
+end
+code = exec --get-exit-code cargo test --all-features --doc
+failed = calc ${failed} + ${code}
+assert_eq ${failed} 0 "Rust SDK validation failed"
 '''
 
 [tasks.validate-sdk-rust-tool]
@@ -125,21 +224,47 @@ dependencies = ["generate-sdk-go-bindings"]
 cwd = "sdks/go/golem"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error git diff --exit-code internal/wit
-exec --fail-on-error golangci-lint run
+failed = exec --get-exit-code git diff --exit-code internal/wit
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Go SDK validation failed"
+end
+code = exec --get-exit-code golangci-lint run
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Go SDK validation failed"
+end
 set_env GOOS wasip1
 set_env GOARCH wasm
-exec --fail-on-error go vet -unsafeptr=false -composites=false .
-exec --fail-on-error go build ./...
+code = exec --get-exit-code go vet -unsafeptr=false -composites=false .
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Go SDK validation failed"
+end
+code = exec --get-exit-code go build ./...
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Go SDK validation failed"
+end
 unset_env GOOS
 unset_env GOARCH
-exec --fail-on-error go test ./...
-cd ../core
-exec --fail-on-error golangci-lint run
-exec --fail-on-error go test ./...
-cd ../bridge
-exec --fail-on-error golangci-lint run
-exec --fail-on-error go test ./...
+modules = array . ../core ../bridge
+root = pwd
+for module in ${modules}
+    cd ${root}/${module}
+    if not eq ${module} .
+        code = exec --get-exit-code golangci-lint run
+        failed = calc ${failed} + ${code}
+        if not eq ${CI} true
+            assert_eq ${failed} 0 "Go SDK validation failed"
+        end
+    end
+    code = exec --get-exit-code go test ./...
+    failed = calc ${failed} + ${code}
+    if not eq ${CI} true
+        assert_eq ${failed} 0 "Go SDK validation failed"
+    end
+end
+assert_eq ${failed} 0 "Go SDK validation failed"
 '''
 
 [tasks.validate-skill-harness]
@@ -149,7 +274,16 @@ env = { NPM_CONFIG_AUDIT = "false" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error npm install
-exec --fail-on-error npm run build
-exec --fail-on-error npm run format:check
-exec --fail-on-error npm test
+failed = exec --get-exit-code npm run build
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Skill harness validation failed"
+end
+code = exec --get-exit-code npm run format:check
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Skill harness validation failed"
+end
+code = exec --get-exit-code npm test
+failed = calc ${failed} + ${code}
+assert_eq ${failed} 0 "Skill harness validation failed"
 '''

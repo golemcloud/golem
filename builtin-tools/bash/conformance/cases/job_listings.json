@@ -1,0 +1,36 @@
+{
+  "tier": "pr",
+  "description": "What `jobs` lists in command and process substitutions and in pipeline stages: the jobs' states\nwhen they started, as bash lists them there, so a throttle that counts running jobs ends.\n\nEach case name starts with `job listings: `.",
+  "cases": [
+    {
+      "name": "job listings: a finished job is not running in a substitution or a stage",
+      "script": "sleep 0.2 & sleep 1; echo \"r=[$(jobs -r)]\"; jobs -r | wc -l; n=$(jobs -rp | wc -l); echo n=$n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "job listings: a throttle on jobs -r",
+      "script": "for i in $(seq 10); do\n  while [ \"$(jobs -r | wc -l)\" -ge 4 ]; do sleep 0.1; done\n  sleep 0.3 &\ndone\nwait; echo done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "job listings: a throttle on jobs -p",
+      "script": "for i in $(seq 10); do\n  while [ \"$(jobs -p | wc -l)\" -ge 4 ]; do sleep 0.1; done\n  sleep 0.3 &\ndone\nwait; echo done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "job listings: a substitution lists the running jobs and the last one started",
+      "script": "sleep 0.1 & sleep 0.1 & sleep 1\necho \"c=[$(jobs)]\"; echo \"p=[$(jobs -p | wc -l)]\"; x=$(jobs | cat); echo \"x=[$x]\"\nf() { jobs; }; x=$(f); echo \"f=[$x]\"; cat <(jobs); jobs | cat; echo top; jobs; wait\nsleep 3 & sleep 0.1 & sleep 3 & sleep 0.1 & sleep 1\necho \"c=[$(jobs)]\"; echo \"p=[$(jobs -p | wc -l)] r=[$(jobs -r | wc -l)]\"; kill %1 %3; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "job listings: only a jobs stage lists the jobs of its shell",
+      "script": "sleep 0.1 & sleep 0.1 & sleep 1\nf() { jobs; }\necho fpipe:; f | cat; echo while:; echo | while read; do jobs; done; echo if:; if true; then jobs; fi | cat\necho group:; { jobs; } | cat; echo sub:; ( jobs ) | cat; echo x=$(echo | { jobs; })\necho first:; jobs | cat; echo last:; echo | jobs; wait",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

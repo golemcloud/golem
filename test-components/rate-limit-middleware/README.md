@@ -12,9 +12,10 @@ executor tests. The artifact suffix does not imply a published release.
 ## Tested contract
 
 Each fresh middleware instance calls a durable `RateLimitBackend` agent identified by
-`(policy, limit, windowMilliseconds)`. Different owners acting as the same authenticated principal
-share capacity within that configuration. Different principals and configurations have independent
-counters. Anonymous invocations share the `anonymous` key.
+`(policy, limit, windowMilliseconds)` and keyed on the original caller of the invocation. Different
+owners acting for the same authenticated original caller share capacity within that configuration.
+Different original callers and configurations have independent counters. Anonymous invocations share
+the `anonymous` key.
 
 The fixed windows align to Unix epoch boundaries. Exactly `limit` new logical invocations are
 admitted per window; subsequent calls return `resource-exhausted` before dispatch. Each invocation

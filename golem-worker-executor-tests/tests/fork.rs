@@ -13,9 +13,9 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_request, invocation_response,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CreateStreamSessionRequest, CreateWorkerRequest, ResumeWorkerRequest,
-    StreamSessionCreationIntent, create_worker_response, resume_worker_response,
-    worker_executor_client::WorkerExecutorClient,
+    CreateStreamSessionRequest, CreateWorkerRequest, ForkWorkerRequest, ResumeWorkerRequest,
+    StreamSessionCreationIntent, create_worker_response, fork_worker_response,
+    resume_worker_response, worker_executor_client::WorkerExecutorClient,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
@@ -195,6 +195,7 @@ pub(crate) async fn start_with_remote_streaming_rpc(
                         inner,
                         client: client.clone(),
                         component_owner_account_id: Some(account_id),
+                        fork_owner: None,
                         evidence: Some(evidence.clone()),
                         lose_response: Arc::new(AtomicBool::new(false)),
                         checkpoint: Arc::new(Mutex::new(None)),
@@ -228,6 +229,27 @@ async fn start_with_resume_checkpoint(
     checkpoint: Option<Arc<tokio::sync::Notify>>,
     overrides: TestExecutorOverrides,
 ) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_resume_checkpoint_and_fork_owner(
+        deps,
+        context,
+        lose_resume_response,
+        checkpoint,
+        overrides,
+        None,
+    )
+    .await
+}
+
+/// As `start_with_resume_checkpoint`; with a `fork_owner`, `fork-agent` reaches the test
+/// executor's `fork_worker` the way worker-service forwards it.
+async fn start_with_resume_checkpoint_and_fork_owner(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    lose_resume_response: bool,
+    checkpoint: Option<Arc<tokio::sync::Notify>>,
+    overrides: TestExecutorOverrides,
+    fork_owner: Option<AccountId>,
+) -> anyhow::Result<TestWorkerExecutor> {
     let client = Arc::new(Mutex::new(None));
     let target = client.clone();
     let lose_response = Arc::new(AtomicBool::new(lose_resume_response));
@@ -241,6 +263,7 @@ async fn start_with_resume_checkpoint(
                     inner,
                     client: target.clone(),
                     component_owner_account_id: None,
+                    fork_owner,
                     evidence: None,
                     lose_response: lose_response.clone(),
                     checkpoint: checkpoint.clone(),
@@ -297,11 +320,11 @@ impl Rpc for StreamingRemoteRpc {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -312,6 +335,7 @@ impl Rpc for StreamingRemoteRpc {
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
         self.inner
@@ -321,6 +345,7 @@ impl Rpc for StreamingRemoteRpc {
                 request_key,
                 invocation,
                 scheduled_at,
+                self_agent_id,
                 auth_ctx,
             )
             .await
@@ -495,6 +520,8 @@ struct LocalResumeProxy {
     inner: Arc<dyn WorkerProxy>,
     client: Arc<Mutex<Option<Client>>>,
     component_owner_account_id: Option<AccountId>,
+    /// The account that owns the components whose agents are forked on the test executor.
+    fork_owner: Option<AccountId>,
     evidence: Option<Arc<RemoteRpcEvidence>>,
     lose_response: Arc<AtomicBool>,
     checkpoint: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
@@ -515,6 +542,7 @@ pub(crate) fn remote_rpc_preparing_on(
             inner,
             client: Arc::new(Mutex::new(Some(executor.client.clone()))),
             component_owner_account_id: Some(component_owner_account_id),
+            fork_owner: None,
             evidence: None,
             lose_response: Arc::new(AtomicBool::new(false)),
             checkpoint: Arc::new(Mutex::new(None)),
@@ -870,9 +898,43 @@ impl WorkerProxy for LocalResumeProxy {
         caller: golem_common::model::caller::Caller,
         auth: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .fork_worker(source, target, cut, caller, auth)
-            .await
+        let Some(owner) = self.fork_owner else {
+            return self
+                .inner
+                .fork_worker(source, target, cut, caller, auth)
+                .await;
+        };
+        let mut client = self
+            .client
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("test executor connected");
+        let response = client
+            .fork_worker(ForkWorkerRequest {
+                component_owner_account_id: Some(owner.into()),
+                source_agent_id: Some(source.agent_id.into()),
+                target_agent_id: Some((*target).into()),
+                oplog_index_cutoff: (*cut).into(),
+                environment_id: Some(source.environment_id.into()),
+                auth_ctx: Some(auth.clone().into()),
+                caller: Some(caller.into()),
+                component_owner_account_email: String::new(),
+                expected_fingerprint: None,
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(fork_worker_response::Result::Success(_)) => Ok(()),
+            Some(fork_worker_response::Result::Failure(error)) => Err(
+                WorkerProxyError::InternalError(WorkerExecutorError::try_from(error).map_err(
+                    |error| WorkerProxyError::InternalError(WorkerExecutorError::runtime(error)),
+                )?),
+            ),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::runtime("missing fork result"),
+            )),
+        }
     }
 
     async fn revert(
@@ -911,11 +973,11 @@ impl WorkerProxy for LocalResumeProxy {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::agent::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -2380,17 +2442,21 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
     let source = agent_key!("GolemHostApi", "fork-crash");
     let source_id = executor.start_agent(&component.id, source.clone()).await?;
     let key = IdempotencyKey::fresh();
+    // The account that starts the forking invocation, also on its retry.
+    let account = callers::account(golem_common::model::account::AccountId::new());
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
         let source = source.clone();
         let key = key.clone();
+        let account = account.clone();
         async move {
             executor
-                .invoke_and_await_agent_with_key(
+                .invoke_and_await_agent_impl(
                     &component,
                     &source,
-                    &key,
+                    Some(&key),
+                    Some(account),
                     "self_fork_result",
                     data_value!(),
                 )
@@ -2425,10 +2491,11 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
 
     let executor = start_with_local_resume(deps, &context, false).await?;
     let result = executor
-        .invoke_and_await_agent_with_key(
+        .invoke_and_await_agent_impl(
             &component,
             &source,
-            &key,
+            Some(&key),
+            Some(account.clone()),
             "self_fork_result",
             data_value!(),
         )
@@ -2468,13 +2535,17 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
     let source_fingerprint = executor.get_worker_metadata(&source_id).await?.fingerprint;
     assert_eq!(
         child_requests[0].caller,
-        callers::agent_in(
-            source_id.agent_id,
-            source.agent_type.clone(),
-            source_fingerprint,
-            source_id.environment_id
-        ),
-        "the child records the forking agent, not the request that created the source"
+        golem_common::model::caller::Caller {
+            immediate: callers::agent_in(
+                source_id.agent_id,
+                source.agent_type.clone(),
+                source_fingerprint,
+                source_id.environment_id
+            )
+            .immediate,
+            ..account
+        },
+        "the child records the account that started the fork and the forking agent"
     );
     let result = executor
         .invoke_and_await_agent(&component, &source, "self_fork_result", data_value!())
@@ -2495,6 +2566,98 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
         fresh.len(),
         3,
         "a fresh logical call must create a distinct child"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn fork_agent_records_the_account_and_the_forking_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_resume_checkpoint_and_fork_owner(
+        deps,
+        &context,
+        false,
+        None,
+        TestExecutorOverrides::default(),
+        Some(context.account_id),
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let source = agent_key!("GolemHostApi", "fork-agent-source");
+    let source_id = executor.start_agent(&component.id, source.clone()).await?;
+    let cut = executor.stored_oplog(&source_id.agent_id).await.len() as u64;
+    // The account calls the guest function that calls `fork-agent` on the source agent.
+    let account = callers::account(golem_common::model::account::AccountId::new());
+    let result = executor
+        .invoke_and_await_agent_impl(
+            &component,
+            &source,
+            None,
+            Some(account.clone()),
+            "fork_agent_result",
+            data_value!(source_id.agent_id, cut),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(result, Ok(()));
+
+    // The fork gets a new agent ID, so the child is the other agent of the type.
+    let (cursor, agents) = executor
+        .get_workers_metadata(
+            &component.environment_id,
+            &AgentTypeName("GolemHostApi".to_string()),
+            None,
+            ScanCursor::default(),
+            100,
+            true,
+        )
+        .await?;
+    assert!(cursor.is_none());
+    assert_eq!(agents.len(), 2);
+    let child = agents
+        .iter()
+        .find(|agent| agent.agent_id != source_id.agent_id)
+        .unwrap()
+        .agent_id;
+    let child_requests = executor
+        .stored_oplog(&child)
+        .await
+        .into_iter()
+        .filter_map(|entry| match entry {
+            golem_common::model::oplog::OplogEntry::Create { parameters, .. } => {
+                Some(parameters.create_request)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(child_requests.len(), 1);
+    assert_eq!(
+        child_requests[0].kind,
+        golem_common::model::oplog::CreateRequestKind::Fork
+    );
+    let source_fingerprint = executor.get_worker_metadata(&source_id).await?.fingerprint;
+    assert_eq!(
+        child_requests[0].caller,
+        golem_common::model::caller::Caller {
+            immediate: callers::agent_in(
+                source_id.agent_id,
+                source.agent_type.clone(),
+                source_fingerprint,
+                source_id.environment_id
+            )
+            .immediate,
+            ..account
+        },
+        "the forked agent records the account as original caller and the forking agent as immediate"
     );
     Ok(())
 }

@@ -1,0 +1,760 @@
+{
+  "tier": "pr",
+  "description": "Scripts in the shapes coding agents actually run: file edits, searches, JSON, loops, cleanup.\n\nEach case is a small task as an agent would write it, so failures show up the way an agent would\nmeet them. Commands this shell does not have (awk, tar, ...) appear too: an agent will reach for\nthem, and the difference is worth seeing.",
+  "cases": [
+    {
+      "name": "agent: write a file with a heredoc",
+      "script": "cat > /tmp/config.toml <<'EOF'\n[server]\nport = 8080\nhost = \"${HOST}\"\nEOF\ncat /tmp/config.toml",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: write a file with an expanding heredoc",
+      "script": "name=demo; cat > /tmp/out.txt <<EOF\nproject: $name\nfiles: $(echo 3)\nEOF\ncat /tmp/out.txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: append lines to a file",
+      "script": "printf 'a\\n' >/tmp/f; echo b >> /tmp/f; printf '%s\\n' c d >>/tmp/f; cat /tmp/f; wc -l </tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: in-place sed edit",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; sed -i 's/hello/world/' src/main.rs && cat src/main.rs",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: in-place sed with backup",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; sed -i.bak 's/TODO/DONE/' src/lib.rs && cat src/lib.rs && cat src/lib.rs.bak | tail -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: sed delete and insert lines",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; sed -i '2d' src/main.rs; sed -i '1i // header' src/main.rs; cat src/main.rs",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: sed print a line range",
+      "script": "seq 1 20 >/tmp/n; sed -n '5,8p' /tmp/n; sed -n '$p' /tmp/n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: replace across files",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; grep -rl TODO . | sort | xargs sed -i 's/TODO/FIXME/'; grep -rn FIXME . | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: rename files in a loop",
+      "script": "cd /tmp && touch a.txt b.txt && for f in *.txt; do mv \"$f\" \"${f%.txt}.md\"; done; ls",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: create a directory tree",
+      "script": "mkdir -p /tmp/app/{src,tests,docs} && touch /tmp/app/src/{a,b}.rs && find /tmp/app | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: copy and remove trees",
+      "script": "mkdir -p /tmp/s/d && echo x >/tmp/s/d/f && cp -r /tmp/s /tmp/t && ls -R /tmp/t && rm -rf /tmp/s && ls /tmp",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: patch a file with diff output",
+      "script": "printf 'a\\nb\\nc\\n' >/tmp/old; printf 'a\\nB\\nc\\n' >/tmp/new; diff -u /tmp/old /tmp/new >/tmp/p.diff; cp /tmp/old /tmp/work; patch /tmp/work /tmp/p.diff && cat /tmp/work",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: patch from stdin with strip level",
+      "script": "mkdir -p /tmp/r/src && printf 'x\\n' >/tmp/r/src/f && cd /tmp/r && printf -- '--- a/src/f\\n+++ b/src/f\\n@@ -1 +1 @@\\n-x\\n+y\\n' | patch -p1 && cat src/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: grep recursively with line numbers",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; grep -rn 'TODO' . | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: grep for files only",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; grep -rl 'fn ' src | sort; grep -rL 'TODO' src | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: grep with include and exclude",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; grep -rn --include='*.rs' 'fn' . | sort; grep -rn --exclude-dir=src 'TODO' .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: grep count and quiet",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; grep -c fn src/lib.rs; if grep -q hello src/main.rs; then echo found; fi; grep -q nothing src/main.rs || echo absent",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: grep extended regex with capture via sed",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; grep -Eo 'fn [a-z]+' src/*.rs | sed 's/.*fn //' | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: find files by name",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; find . -name '*.rs' | sort; find . -type d | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: find and exec grep",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; find . -type f -name '*.rs' -exec grep -l 'pub' {} + | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: find newer and size",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; touch -d '2020-01-01' docs/README.md; find . -type f -newer docs/README.md | sort; find . -type f -size +0 | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: find and delete",
+      "script": "mkdir -p /tmp/c && touch /tmp/c/a.log /tmp/c/b.log /tmp/c/keep.txt && find /tmp/c -name '*.log' -delete && ls /tmp/c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: find with print0 and xargs -0",
+      "script": "mkdir -p '/tmp/sp' && touch '/tmp/sp/a b' /tmp/sp/c && find /tmp/sp -type f -print0 | sort -z | xargs -0 -n1 echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: count lines of code",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; find . -name '*.rs' -print0 | xargs -0 cat | wc -l; wc -l src/*.rs",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: word frequency",
+      "script": "printf 'b a c a b a\\n' | tr ' ' '\\n' | sort | uniq -c | sort -rn | head -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: jq select and project",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; jq -r '.items[] | select(.n > 2) | .name' data.json",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: jq with arguments",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; jq --arg k b --argjson min 2 '.items[] | select(.name == $k and .n >= $min)' data.json",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: jq build JSON",
+      "script": "jq -n --arg name demo --argjson n 3 '{name: $name, count: $n, tags: [\"x\", \"y\"]}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: jq modify and write back",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; jq '.items[0].n = 10' data.json >/tmp/d.json && mv /tmp/d.json data.json && jq -c '.items[0]' data.json",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: jq length keys and sort",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; jq '.items | length' data.json; jq -c '.items | sort_by(.n) | map(.name)' data.json; jq -r '.items[0] | keys[]' data.json",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: jq slurp lines",
+      "script": "printf '{\"a\":1}\\n{\"a\":2}\\n' | jq -s 'map(.a) | add'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: jq raw input to array",
+      "script": "printf 'x\\ny\\n' | jq -R . | jq -sc .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: jq exit status",
+      "script": "echo '{}' | jq -e '.missing' >/dev/null; echo status=$?; echo '{\"a\":1}' | jq -e .a; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: jq to CSV",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; jq -r '.items[] | [.name, .n] | @csv' data.json",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: cut columns from CSV",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; cut -d, -f1 people.csv | tail -n +2; cut -d, -f2 people.csv | tail -n +2 | sort -n | head -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: sort CSV by a numeric column",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; tail -n +2 people.csv | sort -t, -k2,2n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: read CSV in a loop",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; tail -n +2 people.csv | while IFS=, read -r name age; do printf '%-5s %3d\\n' \"$name\" \"$age\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: sum a column",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; total=0; while IFS=, read -r _ age; do total=$((total + age)); done < <(tail -n +2 people.csv) 2>/dev/null; echo \"$total\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: sum a column without process substitution",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; total=0; tail -n +2 people.csv | { while IFS=, read -r _ age; do total=$((total + age)); done; echo $total; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: awk one-liner",
+      "script": "mkdir -p /tmp/proj/src /tmp/proj/docs && cd /tmp/proj && printf 'fn main() {\\n    println!(\"hello\");\\n}\\n' >src/main.rs && printf 'pub fn add(a: i32, b: i32) -> i32 { a + b }\\n// TODO: sub\\n' >src/lib.rs && printf '# Title\\n\\nSome TODO here.\\n' >docs/README.md && printf 'name,age\\nann,31\\nbob,27\\ncid,45\\n' >people.csv && printf '{\"items\":[{\"name\":\"a\",\"n\":1},{\"name\":\"b\",\"n\":5},{\"name\":\"c\",\"n\":3}]}\\n' >data.json; awk -F, 'NR>1 {s+=$2} END {print s}' people.csv",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 127,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: line 1: awk: command not found\n"
+        },
+        "reason": "ignored (missing-commands): bash-tool has no such command"
+      }
+    },
+    {
+      "name": "agent: normalise line endings",
+      "script": "printf 'a\\r\\nb\\r\\n' >/tmp/w; tr -d '\\r' </tmp/w | od -c | head -n 1; sed 's/\\r$//' /tmp/w | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: uppercase and trim",
+      "script": "echo '  Hello World  ' | tr '[:lower:]' '[:upper:]' | sed 's/^ *//;s/ *$//'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: join lines with a comma",
+      "script": "printf 'a\\nb\\nc\\n' | paste -sd, -; printf 'a\\nb\\n' | tr '\\n' ',' | sed 's/,$//'; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: dedupe preserving order",
+      "script": "printf 'b\\na\\nb\\nc\\na\\n' | awk '!seen[$0]++' 2>/dev/null || printf 'b\\na\\nb\\nc\\na\\n' | cat -n | sort -uk2 | sort -n | cut -f2-",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: head and tail of output",
+      "script": "seq 1 100 | head -n 3; seq 1 100 | tail -n 2; seq 1 100 | head -n -97",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: number lines",
+      "script": "printf 'x\\n\\ny\\n' | nl -ba; printf 'x\\ny\\n' | cat -n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: show whitespace",
+      "script": "printf 'a\\tb \\n' | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: strip path components",
+      "script": "p=/a/b/file.tar.gz; echo \"${p##*/}\" \"${p%/*}\" \"${p%%.*}\" \"$(basename \"$p\" .gz)\" \"$(dirname \"$p\")\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: default and required variables",
+      "script": "name=${NAME:-anon}; echo $name; : \"${REQUIRED:?REQUIRED must be set}\" 2>/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: split a string into an array",
+      "script": "IFS=, read -ra parts <<< 'a,b,c d'; echo ${#parts[@]}; printf '[%s]' \"${parts[@]}\"; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: iterate an array with indices",
+      "script": "arr=(x y z); for i in \"${!arr[@]}\"; do echo \"$i=${arr[$i]}\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: associative counter",
+      "script": "declare -A count; for w in a b a c a; do count[$w]=$(( ${count[$w]:-0} + 1 )); done; for k in \"${!count[@]}\"; do echo \"$k ${count[$k]}\"; done | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: string contains and matches",
+      "script": "s=feature/login; [[ $s == feature/* ]] && echo branch; [[ $s =~ ^([a-z]+)/(.+)$ ]] && echo \"${BASH_REMATCH[2]}\"; case $s in *login*) echo login;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: lowercase and replace",
+      "script": "s='Hello World'; echo \"${s,,}\" \"${s// /_}\" \"${s^^}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: printf a table",
+      "script": "printf '%-6s|%5s\\n' name size; printf '%-6s|%5d\\n' a 10 bb 200",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: printf -v to build a string",
+      "script": "printf -v line '%s-%s' a b; echo \"$line\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: arithmetic counters",
+      "script": "i=0; for f in a b c; do ((i++)) || true; done; echo $i; n=$((i * 2 + 1)); echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: counter under set -e",
+      "script": "set -e; count=0; ((count++)); echo not-reached",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: let and compound arithmetic",
+      "script": "a=5; b=3; echo $(( a > b ? a : b )) $(( (a + b) / 2 )) $(( a % b ))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: strict mode script",
+      "script": "set -euo pipefail\nfiles=(a b)\nfor f in \"${files[@]}\"; do echo \"processing $f\"; done\necho done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: strict mode catches an unset variable",
+      "script": "set -euo pipefail; echo start; echo \"$undefined_var\"; echo not-reached",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: strict mode catches a failing pipeline",
+      "script": "set -euo pipefail; echo start; false | cat; echo not-reached",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: guard with an error message",
+      "script": "[ -f /tmp/missing ] || { echo 'missing input' >&2; exit 3; }; echo not-reached",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: check a command exists",
+      "script": "if command -v jq >/dev/null 2>&1; then echo have-jq; fi; command -v nosuchtool >/dev/null || echo no-tool",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: cleanup trap",
+      "script": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"; echo cleaned' EXIT; touch \"$tmp/f\"; echo working",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: temporary file round trip",
+      "script": "t=$(mktemp); echo payload >\"$t\"; cat \"$t\"; rm -f \"$t\"; [ -e \"$t\" ] || echo removed",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: retry loop",
+      "script": "n=0; until [ $n -ge 3 ]; do n=$((n+1)); [ $n -eq 3 ] && { echo \"ok after $n\"; break; }; sleep 0.01; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: argument parsing loop",
+      "script": "set -- --name demo -v --count=3 rest; while [ $# -gt 0 ]; do case $1 in --name) name=$2; shift 2;; --count=*) count=${1#*=}; shift;; -v) verbose=1; shift;; *) args+=(\"$1\"); shift;; esac; done; echo \"$name $count $verbose ${args[*]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: functions with local and return",
+      "script": "check() { local file=$1; [ -s \"$file\" ] && return 0; echo \"empty: $file\" >&2; return 1; }; echo x >/tmp/a; : >/tmp/b; check /tmp/a && echo a-ok; check /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: function returning a value by output",
+      "script": "slug() { local s=${1,,}; echo \"${s// /-}\"; }; v=$(slug 'Hello Big World'); echo \"$v\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: exit codes of pipelines",
+      "script": "false | true; echo \"${PIPESTATUS[@]}\"; set -o pipefail; false | true; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: conditional chains",
+      "script": "mkdir -p /tmp/x && cd /tmp/x && touch ok && ls && cd / && echo back || echo failed",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: while read from a file",
+      "script": "printf 'one\\ntwo\\nthree\\n' >/tmp/l; while IFS= read -r line; do echo \"<$line>\"; done </tmp/l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: while read without a trailing newline",
+      "script": "printf 'one\\ntwo' | while IFS= read -r line || [ -n \"$line\" ]; do echo \"<$line>\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: readarray lines",
+      "script": "printf 'a\\nb\\nc\\n' >/tmp/l; mapfile -t lines </tmp/l; echo ${#lines[@]} \"${lines[-1]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: parallel jobs and wait",
+      "script": "for i in 1 2 3; do (sleep 0.0$i; echo job$i >/tmp/j$i) & done; wait; cat /tmp/j1 /tmp/j2 /tmp/j3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: background job status",
+      "script": "(exit 3) & pid=$!; wait $pid; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: base64 round trip",
+      "script": "echo 'secret data' | base64 | tee /tmp/b64; base64 -d /tmp/b64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: checksum and verify",
+      "script": "echo data >/tmp/f; sha256sum /tmp/f >/tmp/sums; sha256sum -c /tmp/sums; echo tampered >/tmp/f; sha256sum -c /tmp/sums; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: hex dump",
+      "script": "printf 'AB\\n' | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: human readable sizes",
+      "script": "numfmt --to=iec 1048576 1536; numfmt --from=iec 2K",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: sequence formatting",
+      "script": "seq -w 8 10; seq -s, 1 5; seq 1 2 7",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: fixed dates",
+      "script": "TZ=UTC date -d @0 +%Y-%m-%dT%H:%M:%S; TZ=UTC date -d '2024-02-29 12:00' +%s; TZ=UTC date -u -d @86400 +%A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: file size and existence checks",
+      "script": "printf 'abc' >/tmp/f; wc -c </tmp/f; stat -c %s /tmp/f; [ -s /tmp/f ] && echo nonempty; [ -d /tmp ] && echo dir",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: realpath and readlink",
+      "script": "mkdir -p /tmp/r/d && ln -sf /tmp/r/d /tmp/r/link && cd /tmp/r && realpath link; readlink link; readlink -f ./link/../d",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 1,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "ln: failed to create symbolic link to '/tmp/r/d': links to absolute paths are unsupported in bash-tool; use a relative target\n"
+        },
+        "reason": "fixture (symlinks): links to absolute paths are refused, since WASI cannot create them"
+      }
+    },
+    {
+      "name": "agent: split and reassemble",
+      "script": "seq 1 10 >/tmp/n; split -l 4 /tmp/n /tmp/part.; ls /tmp/part.*; cat /tmp/part.* | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: compare files",
+      "script": "printf 'a\\nb\\n' >/tmp/1; printf 'a\\nc\\n' >/tmp/2; cmp -s /tmp/1 /tmp/2 || echo differ; diff /tmp/1 /tmp/2; echo status=$?; comm -12 /tmp/1 /tmp/2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: xargs with placeholders",
+      "script": "printf 'a\\nb\\n' | xargs -I{} echo 'item {} done'; printf '1 2 3 4\\n' | xargs -n 2 echo pair",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: tee to a file and stdout",
+      "script": "echo logged | tee /tmp/log | tr a-z A-Z; cat /tmp/log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: here string into a command",
+      "script": "grep -o '[0-9]\\+' <<< 'v1.22.3' | paste -sd. -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: command substitution in a condition",
+      "script": "if [ \"$(printf 'a\\nb\\n' | wc -l)\" -eq 2 ]; then echo two-lines; fi",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: nested command substitution",
+      "script": "echo \"dir: $(basename \"$(dirname /a/b/c)\")\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: environment for a single command",
+      "script": "FOO=bar env | grep '^FOO='; echo \"[${FOO-}]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: export for child shells",
+      "script": "export API_URL=http://localhost; bash -c 'echo $API_URL'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: source an env file",
+      "script": "printf 'export PORT=8080\\nNAME=\"my app\"\\n' >/tmp/.env; set -a; . /tmp/.env; set +a; bash -c 'echo \"$PORT $NAME\"'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: bash -c with arguments",
+      "script": "bash -c 'echo \"$0 got $# args: $*\"' runner a b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: sh -c in find exec",
+      "script": "mkdir -p /tmp/e && touch /tmp/e/x.txt /tmp/e/y.txt && find /tmp/e -name '*.txt' -exec sh -c 'echo \"${1##*/}\"' _ {} \\; | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: timeout",
+      "script": "timeout 5 echo fast; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: uname",
+      "script": "uname -s >/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: nproc",
+      "script": "nproc >/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: du and df",
+      "script": "mkdir -p /tmp/du && du -s /tmp/du >/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: tar",
+      "script": "mkdir -p /tmp/t && echo x >/tmp/t/f && tar -cf /tmp/t.tar -C /tmp t 2>/dev/null; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=127\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "ignored (missing-commands): bash-tool has no such command"
+      }
+    },
+    {
+      "name": "agent: gzip",
+      "script": "echo x | gzip | gzip -d; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=127\n"
+        },
+        "stderr": {
+          "text": "bash: line 1: gzip: command not found\nbash: line 1: gzip: command not found\n"
+        },
+        "reason": "ignored (missing-commands): bash-tool has no such command"
+      }
+    },
+    {
+      "name": "agent: tr squeeze and delete",
+      "script": "echo 'aaa   bbb' | tr -s ' '; echo 'a1b2c3' | tr -d '0-9'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: expr and factor",
+      "script": "expr 7 + 5; expr length hello; factor 84",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: date arithmetic",
+      "script": "TZ=UTC date -d '2024-01-31 +1 day' +%F",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: sort unique and reverse",
+      "script": "printf '3\\n1\\n2\\n3\\n' | sort -u; printf '3\\n1\\n2\\n' | sort -rn; printf 'b\\nA\\na\\n' | sort -f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: sort by multiple keys",
+      "script": "printf 'b 2\\na 2\\nc 1\\n' | sort -k2,2n -k1,1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: cut characters and fields",
+      "script": "echo 'abcdef' | cut -c2-4; echo 'a:b:c' | cut -d: -f2-; echo 'a b' | cut -d' ' -f2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: tail follow is refused or ends",
+      "script": "echo x >/tmp/f; tail -n 1 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: long pipeline",
+      "script": "seq 1 1000 | grep 7 | sed 's/7/seven/' | sort | uniq | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: loop over command output with spaces",
+      "script": "printf 'a b\\nc\\n' >/tmp/l; while read -r l; do echo \"[$l]\"; done </tmp/l; for w in $(cat /tmp/l); do echo \"<$w>\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: generate files from a template",
+      "script": "for n in 1 2; do sed \"s/NUM/$n/\" <<< 'file NUM' >/tmp/f$n; done; cat /tmp/f1 /tmp/f2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: check exit codes explicitly",
+      "script": "grep -q x /dev/null; rc=$?; if [ $rc -eq 1 ]; then echo no-match; elif [ $rc -gt 1 ]; then echo error; fi",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: write JSON with printf",
+      "script": "printf '{\"name\":\"%s\",\"n\":%d}\\n' demo 3 | jq -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: escape for JSON with jq",
+      "script": "msg='he said \"hi\"'; jq -n --arg m \"$msg\" '{msg: $m}' -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: process substitution",
+      "script": "diff <(printf 'a\\n') <(printf 'b\\n'); echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: stderr to a log and stdout to a pipe",
+      "script": "{ echo data; echo warn >&2; } 2>/tmp/err.log | tr a-z A-Z; cat /tmp/err.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "agent: silence everything",
+      "script": "ls /nonexistent >/dev/null 2>&1; echo status=$?; ls /nonexistent &>/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

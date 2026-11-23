@@ -142,23 +142,9 @@ struct RateLimitParameters {
 }
 
 fn principal_key(principal: &Principal) -> String {
-    match principal {
-        Principal::Oidc(principal) => format!(
-            "oidc:{}:{}:{}",
-            principal.issuer.len(),
-            principal.issuer,
-            principal.sub
-        ),
-        Principal::Agent(principal) => {
-            let uuid = &principal.agent_id.uuid;
-            format!("agent:{:016x}{:016x}", uuid.high_bits, uuid.low_bits)
-        }
-        Principal::GolemUser(principal) => {
-            let uuid = &principal.account_id.uuid;
-            format!("golem-user:{:016x}{:016x}", uuid.high_bits, uuid.low_bits)
-        }
-        Principal::Anonymous => "anonymous".to_string(),
-    }
+    principal
+        .principal_ref()
+        .map_or_else(|| "anonymous".to_string(), ToString::to_string)
 }
 
 #[universal_tool_middleware(
@@ -196,7 +182,7 @@ async fn persistent_rate_limit(
     );
     let admission = backend
         .admit(
-            principal_key(context.caller().immediate()),
+            principal_key(context.caller().original()),
             generate_idempotency_key().to_string(),
         )
         .await;

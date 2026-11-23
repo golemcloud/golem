@@ -491,21 +491,25 @@ async fn processor_committed_admission_survives_owner_retirement(
         .find_map(|entry| match entry {
             OplogEntry::PendingAgentInvocation {
                 invocation_id,
+                operation,
                 payload,
                 ..
-            } if invocation_id == &key => Some(payload.clone()),
+            } if invocation_id == &key => Some((operation.clone(), payload.clone())),
             _ => None,
         })
         .expect("the pending batch is in the oplog");
     // The payload is stored inline or externally: read it through the oplog service either way.
     use golem_worker_executor::services::HasOplogService;
     use golem_worker_executor::services::oplog::OplogServiceOps;
+    let (operation, payload) = payload;
     let recorded = seed
         .all()
         .oplog_service()
         .download_payload(&target_owned, AgentMode::Durable, payload)
         .await
-        .expect("the pending batch payload reads");
+        .expect("the pending batch payload reads")
+        .with_operation(*operation)
+        .expect("the pending batch payload matches its operation");
     let golem_common::model::AgentInvocationPayload::ProcessOplogEntries { caller, .. } = recorded
     else {
         panic!("the pending invocation is not an oplog batch");

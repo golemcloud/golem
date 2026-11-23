@@ -1,0 +1,200 @@
+{
+  "tier": "pr",
+  "description": "Compound commands, functions and conditionals.",
+  "cases": [
+    {
+      "name": "compound: if elif else",
+      "script": "for n in 1 2 3; do if [ $n = 1 ]; then echo one; elif [ $n = 2 ]; then echo two; else echo other; fi; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: if status of the last command",
+      "script": "if false; then :; fi; echo $?; if false; then :; else (exit 4); fi; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: case patterns",
+      "script": "for w in apple Banana 42 x.tar.gz \"\"; do case $w in a*) echo a;; [Bb]*) echo b;; [0-9]*) echo num;; *.tar.*|*.zip) echo archive;; \"\") echo empty;; esac; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: case fallthrough",
+      "script": "case a in a) echo one;& b) echo two;;& a) echo three;; *) echo four;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: case with quoted and variable patterns",
+      "script": "p=\"*\"; case x in \"$p\") echo literal;; $p) echo glob;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: case no match status",
+      "script": "case z in a) echo a;; esac; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: for over words and default",
+      "script": "for x in a \"b c\" d; do echo \"[$x]\"; done; set -- p q; for y; do echo $y; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: arithmetic for",
+      "script": "for ((i=0; i<3; i++)); do echo $i; done; for ((;;)); do echo once; break; done; for ((j=10; j>0; j-=4)); do echo $j; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: while and until",
+      "script": "i=0; while [ $i -lt 3 ]; do i=$((i+1)); done; echo $i; until [ $i -eq 0 ]; do i=$((i-1)); done; echo $i",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: until status",
+      "script": "until true; do :; done; echo status=$?; n=0; until (( n++ >= 2 )); do echo loop$n; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: loop status and output redirection",
+      "script": "for x in 1 2; do echo $x; done >/tmp/o; cat /tmp/o; while false; do :; done; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: select from stdin",
+      "script": "select v in alpha beta; do echo \"picked $v $REPLY\"; break; done <<< 2 2>/dev/null",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: select invalid choice",
+      "script": "printf \"9\\n1\\n\" | { select v in a b; do echo \"[$v] $REPLY\"; [ -n \"$v\" ] && break; done 2>/dev/null; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: negated pipelines",
+      "script": "! false; echo $?; ! true; echo $?; ! false | true; echo $?; if ! grep -q x <<< y; then echo absent; fi",
+      "tags": [
+        "compound.pipeline.negate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "compound: groups and subshells",
+      "script": "x=1; { x=2; }; echo $x; (x=3); echo $x; { echo a; echo b; } | wc -l; (cd /tmp; pwd); pwd",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: lists and short circuits",
+      "script": "true && echo a || echo b; false && echo c || echo d; false || false || echo e; true; false; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: cond string and pattern",
+      "script": "[[ abc == a* ]] && echo glob; [[ abc == \"a*\" ]] || echo literal; [[ -z \"\" && -n x ]] && echo both; [[ b > a ]] && echo gt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: cond regex and rematch",
+      "script": "[[ \"key=value\" =~ ^([a-z]+)=(.*)$ ]] && echo \"${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${#BASH_REMATCH[@]}\"; re=\"a+b\"; [[ aab =~ $re ]] && echo var-re; [[ aab =~ \"a+b\" ]] || echo quoted-literal",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: cond variable and file tests",
+      "script": "x=1; [[ -v x ]] && echo set; [[ -v nope ]] || echo unset; [[ -d /tmp && ! -e /nope ]] && echo files; a=(1); [[ -v a[0] ]] && echo elem",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: cond arithmetic comparison",
+      "script": "[[ 10 -gt 9 ]] && echo num; [[ 10 > 9 ]] || echo string-order; [[ 1+1 -eq 2 ]] && echo arith",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: cond nocasematch",
+      "script": "shopt -s nocasematch; [[ ABC == abc ]] && echo match; case HELLO in hello) echo case;; esac",
+      "tags": [
+        "option.nocasematch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "compound: function forms",
+      "script": "f() { echo f; }; function g { echo g; }; function h() { echo h; }; f; g; h; k() ( echo subshell-body ); k",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: function arguments and status",
+      "script": "f() { echo \"$# $1 ${2-none}\"; return 3; }; f a; echo $?; f \"x y\" z",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: recursion",
+      "script": "fact() { if (( $1 <= 1 )); then echo 1; else echo $(( $1 * $(fact $(( $1 - 1 ))) )); fi; }; fact 10; fib() { local n=$1; (( n < 2 )) && { echo $n; return; }; echo $(( $(fib $((n-1))) + $(fib $((n-2))) )); }; fib 12",
+      "tags": [
+        "compound.function.recursion"
+      ],
+      "options": {}
+    },
+    {
+      "name": "compound: function redefinition and unset",
+      "script": "f() { echo one; }; f; f() { echo two; }; f; unset -f f; type f 2>/dev/null || echo gone",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: function with redirections",
+      "script": "f() { echo body; echo err >&2; } >/tmp/out 2>&1; f; cat /tmp/out",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: FUNCNAME and LINENO",
+      "script": "outer() { inner; }; inner() { echo \"${FUNCNAME[0]} ${FUNCNAME[1]} ${#FUNCNAME[@]}\"; }; outer\necho line=$LINENO",
+      "tags": [
+        "param.callstack"
+      ],
+      "options": {}
+    },
+    {
+      "name": "compound: nested function definitions",
+      "script": "outer() { inner() { echo inner; }; }; inner 2>/dev/null || echo not-yet; outer; inner",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: here document in a loop",
+      "script": "for i in 1 2; do cat <<EOF\nitem $i\nEOF\ndone",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: pipeline into a loop keeps variables local",
+      "script": "n=0; printf \"a\\nb\\n\" | while read l; do n=$((n+1)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "compound: time keyword output is on stderr",
+      "script": "{ time true; } 2>/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

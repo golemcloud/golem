@@ -204,6 +204,53 @@ fn durable_stream_summary_from_wit(
     }
 }
 
+impl From<golem_common::model::InvocationRequestOperation>
+    for oplog::RawInvocationRequestOperation
+{
+    fn from(value: golem_common::model::InvocationRequestOperation) -> Self {
+        use golem_common::model::InvocationRequestOperation as Op;
+        match value {
+            Op::ManualUpdate { target_revision } => Self::ManualUpdate(target_revision.get()),
+            Op::AgentInitialization => Self::AgentInitialization,
+            Op::AgentMethod { method_name } => Self::AgentMethod(method_name),
+            Op::ExternalTool {
+                tool_name,
+                command_path,
+            } => Self::ExternalTool(oplog::RawExternalToolOperation {
+                tool_name: tool_name.into_inner(),
+                command_path,
+            }),
+            Op::LoadSnapshot => Self::LoadSnapshot,
+            Op::SaveSnapshot => Self::SaveSnapshot,
+            Op::ProcessOplogEntries => Self::ProcessOplogEntries,
+        }
+    }
+}
+
+impl TryFrom<oplog::RawInvocationRequestOperation>
+    for golem_common::model::InvocationRequestOperation
+{
+    type Error = String;
+
+    fn try_from(value: oplog::RawInvocationRequestOperation) -> Result<Self, String> {
+        use oplog::RawInvocationRequestOperation as Raw;
+        Ok(match value {
+            Raw::ManualUpdate(target_revision) => Self::ManualUpdate {
+                target_revision: target_revision.try_into()?,
+            },
+            Raw::AgentInitialization => Self::AgentInitialization,
+            Raw::AgentMethod(method_name) => Self::AgentMethod { method_name },
+            Raw::ExternalTool(tool) => Self::ExternalTool {
+                tool_name: tool.tool_name.try_into()?,
+                command_path: tool.command_path,
+            },
+            Raw::LoadSnapshot => Self::LoadSnapshot,
+            Raw::SaveSnapshot => Self::SaveSnapshot,
+            Raw::ProcessOplogEntries => Self::ProcessOplogEntries,
+        })
+    }
+}
+
 impl From<golem_common::model::oplog::HostStreamKind> for oplog::HostStreamKind {
     fn from(value: golem_common::model::oplog::HostStreamKind) -> Self {
         match value {
