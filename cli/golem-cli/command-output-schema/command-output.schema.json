@@ -2560,13 +2560,17 @@
     },
     "ReportAgentRef": {
       "type": "object",
-      "description": "A reference to an agent: one token over the agent ID text.",
+      "description": "A reference to an agent, in clear: the agent ID, and the agent type name only on the own reference of the exported agent.",
       "required": [
-        "token"
+        "agentId"
       ],
       "properties": {
-        "token": {
-          "$ref": "#/definitions/ReportToken"
+        "agentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agentType": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -2828,14 +2832,18 @@
           "type": "object",
           "required": [
             "kind",
-            "token"
+            "agentId"
           ],
           "properties": {
             "kind": {
               "const": "agent"
             },
-            "token": {
-              "$ref": "#/definitions/ReportToken"
+            "agentId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "agentType": {
+              "type": "string"
             }
           },
           "additionalProperties": false
