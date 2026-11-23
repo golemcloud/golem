@@ -6337,6 +6337,23 @@ async fn guest_oplog_search_stops_at_the_granted_window(
         executor.oplog_service_reads(&target.agent_id()),
         [window, window]
     );
+
+    // The oplog starts at index 1, so a read from 0 reads the same window as a read from 1, and
+    // the grant check of its batch covers exactly that window.
+    let from_zero = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "read_oplog_batch_size",
+            data_value!(target.agent_id(), 0u64),
+        )
+        .await?
+        .into_typed::<Result<Option<u64>, String>>()?;
+    assert_eq!(from_zero, Ok(Some(100)));
+    assert_eq!(
+        executor.oplog_service_reads(&target.agent_id()),
+        [window; 3]
+    );
     Ok(())
 }
 
