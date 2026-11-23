@@ -629,11 +629,48 @@ impl FailingCounter for FailingCounterImpl {
     }
 }
 
+#[agent_definition]
+trait ConstructorCalls {
+    async fn new(name: String, self_call: bool) -> Self;
+    fn increment(&mut self) -> u32;
+}
+
+struct ConstructorCallsImpl {
+    count: u32,
+}
+
+#[agent_implementation]
+impl ConstructorCalls for ConstructorCallsImpl {
+    async fn new(name: String, self_call: bool) -> Self {
+        let mut effect = CounterClient::upsert(format!("{name}-constructor-effect"));
+        assert_eq!(effect.increment().await, 1);
+        let mut this = ConstructorCallsClient::bind_self().expect("bind constructor owner");
+        if self_call {
+            this.increment().await;
+            panic!("constructor self-call unexpectedly returned");
+        }
+        this.schedule_increment(Datetime {
+            seconds: 0,
+            nanoseconds: 0,
+        })
+        .expect("schedule during construction");
+        let promise = golem_rust::create_promise();
+        println!("constructor-calls:promise:{}", promise.oplog_idx);
+        golem_rust::await_promise(&promise).await;
+        Self { count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+}
+
 mod constructor_probe {
     use golem_rust::agentic::{
         AgentInitiator, AgentInvocationResult, AgentParameterProbe, AgentParameterSchema,
-        BaseAgent, DirectAgentInput, ResolvedAgent, SnapshotData,
-        SnapshotRestoreContext, custom_error, invalid_input_error, invalid_method_error,
+        BaseAgent, DirectAgentInput, ResolvedAgent, SnapshotData, SnapshotRestoreContext,
+        custom_error, invalid_input_error, invalid_method_error,
     };
     use golem_rust::caller::InvocationContext;
     use golem_rust::golem_agentic::golem::agent::common::{

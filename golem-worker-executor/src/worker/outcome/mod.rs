@@ -107,7 +107,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn retained_initialization_key(&self) -> Result<InvocationId, WorkerExecutorError> {
-        let key = self.initialization_idempotency_key();
+        let key = InvocationId::constructor(self.initial_worker_metadata.fingerprint);
         if self.initial_worker_metadata.create_request.kind != CreateRequestKind::Fork {
             return Ok(key);
         }

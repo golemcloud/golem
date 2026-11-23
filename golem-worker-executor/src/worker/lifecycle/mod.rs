@@ -1072,7 +1072,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map_err(|refusal| self.refused_by(refusal))?;
         let decision = ephemeral_start_decision(
             &status,
-            &self.initialization_idempotency_key(),
+            &InvocationId::constructor(self.initial_worker_metadata.fingerprint),
             Timestamp::now_utc(),
         );
         if decision == EphemeralStart::Begin && !status.ephemeral_execution_begun {
@@ -1092,7 +1092,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let decision = ephemeral_start_decision(
             &status,
-            &self.initialization_idempotency_key(),
+            &InvocationId::constructor(self.initial_worker_metadata.fingerprint),
             Timestamp::now_utc(),
         );
         if decision == EphemeralStart::Begin {
@@ -1249,7 +1249,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         status: &AgentStatusRecord,
         idempotency_key: InvocationId,
     ) -> Result<Vec<InvocationId>, WorkerExecutorError> {
-        let initialization_key = self.initialization_idempotency_key();
+        let initialization_key =
+            InvocationId::constructor(self.initial_worker_metadata.fingerprint);
         let mut withdrawn = Vec::new();
         if self.agent_mode() == AgentMode::Ephemeral
             && !status.ephemeral_execution_begun

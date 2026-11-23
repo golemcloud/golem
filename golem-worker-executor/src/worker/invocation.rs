@@ -2181,10 +2181,13 @@ enum PreparedCall {
 }
 
 impl PreparedCall {
-    /// Whether the call is an invocation with an invocation ID. Agent initialization, snapshot
-    /// save and load, and oplog processing are not.
+    /// Whether the call is an invocation with an invocation ID. Snapshot save and load,
+    /// and oplog processing are not.
     fn has_invocation_id(&self) -> bool {
-        matches!(self, Self::Invoke { .. } | Self::ExternalTool { .. })
+        matches!(
+            self,
+            Self::Initialize { .. } | Self::Invoke { .. } | Self::ExternalTool { .. }
+        )
     }
 
     fn caller(&self) -> Option<golem_common::model::caller::Caller> {

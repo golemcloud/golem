@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use golem_common::model::caller::Caller;
-use uuid::Uuid;
 
 use golem_common::model::InvocationId;
 
@@ -953,14 +952,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .any(|pending| pending.is_due(now))
     }
 
-    /// Reserved constructor key, also used to recognize initialization before inspecting files.
-    /// Uses the request-key root namespace so constructor-derived child keys keep their identity.
-    pub(in crate::worker) fn initialization_idempotency_key(&self) -> InvocationId {
-        InvocationId(Uuid::new_v5(
-            &uuid::uuid!("9c19b15a-c83d-46f7-9bc3-ead7923733f4"),
-            format!("init-{}", self.agent_id()).as_bytes(),
-        ))
-    }
     /// Reads the `PendingAgentInvocation` oplog entry referenced by `pending` and reconstructs the
     /// full invocation, downloading its payload from external storage if needed. The status record
     /// only keeps a lightweight reference, so callers that need to execute the invocation hydrate
@@ -1414,7 +1405,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let status = self.state_actor.try_status().await?;
         if super::invocation_loop::ephemeral_inspection_may_start(
             &status,
-            &self.initialization_idempotency_key(),
+            &InvocationId::constructor(self.initial_worker_metadata.fingerprint),
             Timestamp::now_utc(),
         ) {
             Ok(())
