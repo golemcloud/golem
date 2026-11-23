@@ -1515,16 +1515,20 @@ async fn auto_update_on_idle_via_host_function(
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
 
-    // The agent that called `update-agent` requested the update, in both roles.
+    // The update has the caller of every call that an agent makes. The account that called the
+    // updating agent is the original requester, and the updating agent is the immediate one.
     let requesters = update_requesters(&user, &agent_id).await?;
     assert_eq!(requesters.len(), 2, "{requesters:?}");
     for requester in requesters {
-        let PublicPrincipal::Agent(agent) = &requester.original else {
-            panic!("expected the updating agent as the requester, got {requester:?}");
+        let PublicPrincipal::Account(account) = &requester.original else {
+            panic!("expected the account that called the updating agent, got {requester:?}");
+        };
+        assert_eq!(account.account_id, user.account_id);
+        let PublicPrincipal::Agent(agent) = &requester.immediate else {
+            panic!("expected the updating agent as the immediate requester, got {requester:?}");
         };
         assert_eq!(agent.agent_id, updater.agent_id);
         assert_eq!(agent.agent_type, "GolemHostApi");
-        assert_eq!(requester.immediate, requester.original);
         assert!(requester.tokens.is_empty());
     }
     Ok(())
