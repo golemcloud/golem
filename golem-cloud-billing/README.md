@@ -110,10 +110,11 @@ the billing account, the checkout route, the webhooks and the sweep call `GET /v
 ## Subscriptions
 
 A subscription of the Polar product `POLAR_PRODUCT_ID` and its orders move the Golem account
-between three plans. The Polar customer has the Golem account ID as its external ID.
+between three plans. The Polar customer has the Golem account ID as its external ID. The page and
+the deletion hold show the paid plan as Pro.
 
 The registry gives a new account its default plan (`initial_plans.default`). With
-`GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID`, the page offers Paid to an account on that plan too, and a
+`GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID`, the page offers Pro to an account on that plan too, and a
 subscription moves the account from it only to the paid plan. A trial, or a subscription that is
 never active, leaves the account on the default plan. After a subscription the account follows
 the table below, so its plan is free after the end and never goes back to the default plan.
@@ -572,7 +573,7 @@ until the cleanup has deleted the user of the deleted account (see
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | | GitHub OAuth app with the callback URL `<BETTER_AUTH_URL>/api/auth/callback/github`. |
 | `GOLEM_CLOUD_BILLING_REGISTRY_TOKEN` | | Registry token of the billing account, which has `view`, `set-plan` and `hold-deletion` on every account through a permission share (see [Subscriptions](#subscriptions)). |
 | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_PLAN_ID`, `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | | The plans that a subscription switches between (see [Subscriptions](#subscriptions)). |
-| `GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID` | | Optional. The default plan of the registry (`initial_plans.default`), if the page offers Paid to an account on it (see [Subscriptions](#subscriptions)). It must differ from the three plans above. |
+| `GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID` | | Optional. The default plan of the registry (`initial_plans.default`), if the page offers Pro to an account on it (see [Subscriptions](#subscriptions)). It must differ from the three plans above. |
 | `GOLEM_CLOUD_BILLING_PAID_<code>_PER_MONTH`, with `<code>` `USD`, `EUR` and `GBP` | | The monthly price of the paid plan in each currency, as a decimal number such as `20`: three variables. The page shows them next to the checkout (see [Currencies](#currencies)). Polar charges the fixed prices of the product, so these values must match the product. A change needs a restart, not a new image. |
 | `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_MILLION_GCU`, `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_GB_HOUR`, `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_DURABLE_GB_MONTH`, `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_EPHEMERAL_GB_MONTH`, with `<code>` `USD`, `EUR` and `GBP` | | The overage prices of the paid plan in each currency, as decimal numbers such as `0.045`: twelve variables. The paid plan shows the prices of the currency of the subscription next to the paid-overage switch (see [Currencies](#currencies)). Polar bills with the metered prices of the product, so these values must match the product. A change needs a restart, not a new image. |
 | `GOLEM_CLOUD_BILLING_PAST_DUE_GRACE` | `7 days` | How long an account keeps the paid plan after a payment of its subscription fails, as a duration such as `7 days` or `30 minutes` (see [Subscriptions](#subscriptions)). `0 seconds` turns the past-due grace off. Polar revokes the subscription after its last retry, 21 days after the failed payment, so a longer value has no effect. A test can use a short value, so that the past-due grace ends within the test. |

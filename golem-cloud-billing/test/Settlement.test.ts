@@ -221,11 +221,11 @@ describe("holdFor", () => {
       holdReasonText(["openCheckout"], "https://billing.golem.cloud", [checkout("open"), later], new Date(now))
 
     expect(text("2026-11-21T15:59:00Z")).toBe(
-      "Golem Cloud billing: A checkout for Paid from the billing page is open. Delete the account after November 21, 2026 at 4:00 PM UTC."
+      "Golem Cloud billing: A checkout for Pro from the billing page is open. Delete the account after November 21, 2026 at 4:00 PM UTC."
     )
     // The hold stays until Polar reports the checkout `expired`, also after that time.
     expect(text("2026-11-21T16:00:00Z")).toBe(
-      `Golem Cloud billing: A checkout for Paid from the billing page is past its expiry, and Polar has not closed it yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`
+      `Golem Cloud billing: A checkout for Pro from the billing page is past its expiry, and Polar has not closed it yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`
     )
   })
 
@@ -249,7 +249,7 @@ describe("holdFor", () => {
 
     expect(text).toContain("Polar has not closed it yet.")
     expect(text.length).toBeLessThanOrEqual(1000)
-    expect(text).toMatch(/^Golem Cloud billing: The account has a subscription to Paid\. Cancel it in Manage billing at https:\/\/billing\.golem\.cloud\. The subscription then runs to the end of the period\. Delete the account after the period ends\./)
+    expect(text).toMatch(/^Golem Cloud billing: The account has a subscription to Pro\. Cancel it in Manage billing at https:\/\/billing\.golem\.cloud\. The subscription then runs to the end of the period\. Delete the account after the period ends\./)
   })
 
   it("promises an invoice only for the overage of a billable subscription, and names a contact for the rest", () => {

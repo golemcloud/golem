@@ -34,7 +34,7 @@ export const overagePrices = {
 }
 /** A plan that an administrator gave the account; subscriptions do not change it. */
 export const internalPlanId = "c4e2a9b1-7d3f-4a6e-8b5c-1f0e9d2c3b4a"
-/** The plan that the registry gives a new account; a subscription moves the account to Paid. */
+/** The plan that the registry gives a new account; a subscription moves the account to the paid plan. */
 export const registryDefaultPlanId = "8d2f6b1e-4a7c-4e93-9b05-6c1d3e8f2a47"
 export const polarApiUrl = "https://sandbox-api.polar.test"
 export const polarWebToken = "polar_oat_web_token_for_the_tests"

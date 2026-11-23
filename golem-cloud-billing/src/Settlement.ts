@@ -364,9 +364,9 @@ export const holdReasonText = (
     ) + CHECKOUT_HOLD_MARGIN_MS
   const sentences: Record<HoldReason, () => string> = {
     subscription: () =>
-      `The account has a subscription to Paid. Cancel it in Manage billing at ${billingUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`,
+      `The account has a subscription to Pro. Cancel it in Manage billing at ${billingUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`,
     canceledSubscription: () =>
-      "The subscription to Paid is canceled and runs to the end of the period. Delete the account after the period ends.",
+      "The subscription to Pro is canceled and runs to the end of the period. Delete the account after the period ends.",
     unbilledUsage: () =>
       "The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid.",
     unsettledUsage: () =>
@@ -374,10 +374,10 @@ export const holdReasonText = (
     unpaidOverage: () => `An invoice for paid overage is not paid. Pay it on the billing page at ${billingUrl}.`,
     openCheckout: () =>
       openUntil > now.getTime()
-        ? `A checkout for Paid from the billing page is open. Delete the account after ${utcDateTime.format(openUntil)} UTC.`
-        : `A checkout for Paid from the billing page is past its expiry, and Polar has not closed it yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`,
+        ? `A checkout for Pro from the billing page is open. Delete the account after ${utcDateTime.format(openUntil)} UTC.`
+        : `A checkout for Pro from the billing page is past its expiry, and Polar has not closed it yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`,
     paidCheckout: () =>
-      `Polar has a payment for Paid, and Golem Cloud billing has not recorded its subscription yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`
+      `Polar has a payment for Pro, and Golem Cloud billing has not recorded its subscription yet. Try again in an hour. If the delete still fails, contact Golem Cloud at ${CONTACT_EMAIL}.`
   }
   return ["Golem Cloud billing:", ...reasons.map((reason) => sentences[reason]())].join(" ")
 }

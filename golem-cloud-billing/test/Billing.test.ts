@@ -313,7 +313,7 @@ describe("Polar billing", () => {
       expect(html).toContain("<h1>Default</h1>")
       expect(html).not.toContain(`action="/billing/checkout"`)
       expect(html).toContain(`action="/billing/portal"`)
-      expect(html).toContain("The last payment for Paid failed.")
+      expect(html).toContain("The last payment for Pro failed.")
     })
 
     it("refuses a checkout when the registry does not send the account", async () => {
@@ -365,7 +365,9 @@ describe("Polar billing", () => {
       const { jar } = await signedIn()
 
       expect(await page(jar)).toContain(`action="/billing/checkout"`)
-      expect(await page(jar, "/?checkout_id=polar_c_test")).toContain("Polar has your payment")
+      const returned = await page(jar, "/?checkout_id=polar_c_test")
+      expect(returned).toContain("Polar has your payment")
+      expect(returned).toContain("Your plan changes to Pro within one minute.")
     })
 
     it("links the stylesheet and the script with a hash of their content", async () => {
@@ -642,7 +644,7 @@ describe("Polar billing", () => {
       expect(change!.headers.get("authorization")).toBe(`Bearer ${registryBillingToken}`)
       expect(change!.body).toEqual({ currentRevision: 0, plan: paidPlanId })
       const html = await page(jar)
-      expect(html).toContain("<h1>Paid</h1>")
+      expect(html).toContain("<h1>Pro</h1>")
       expect(html).toContain("renews on December 4, 2026")
       expect(html).toContain(`action="/billing/portal"`)
     })
@@ -794,7 +796,7 @@ describe("Polar billing", () => {
       expect(stored.rows).toEqual([{ status: "paid" }])
     })
 
-    it("keeps Paid in the past-due grace when the payment of the price fails, then gives Free until the payment", async () => {
+    it("keeps Pro in the past-due grace when the payment of the price fails, then gives Free until the payment", async () => {
       const { jar, accountId } = await signedIn()
       const failedAt = new Date()
       const graceEnd = new Date(failedAt.getTime() + config.pastDueGraceMs)
@@ -806,7 +808,7 @@ describe("Polar billing", () => {
       expect(response.status).toBe(200)
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
       expect(await page(jar)).toContain(
-        `The last payment for Paid failed. Change the payment method in the Polar customer portal before ${longDateTime.format(graceEnd)} UTC.`
+        `The last payment for Pro failed. Change the payment method in the Polar customer portal before ${longDateTime.format(graceEnd)} UTC.`
       )
 
       await sweep(new Date(graceEnd.getTime() - MINUTE))
@@ -816,7 +818,7 @@ describe("Polar billing", () => {
       expect(upstreams.planOf(accountId).planId).toBe(freePlanId)
       const html = await page(jar)
       expect(html).toContain("<h1>Free</h1>")
-      expect(html).toContain("The last payment for Paid failed")
+      expect(html).toContain("The last payment for Pro failed")
       expect(html).not.toContain(`action="/billing/checkout"`)
 
       await deliver("order.paid", order(accountId, { ...priceOnly, ...paidLater }))
@@ -824,7 +826,7 @@ describe("Polar billing", () => {
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
     })
 
-    it("keeps Paid when Polar gets the payment in the past-due grace", async () => {
+    it("keeps Pro when Polar gets the payment in the past-due grace", async () => {
       const { jar, accountId } = await signedIn()
       const failedAt = new Date()
 
@@ -837,7 +839,7 @@ describe("Polar billing", () => {
 
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)
       expect(upstreams.planChanges()).toHaveLength(1)
-      expect(await page(jar)).not.toContain("The last payment for Paid failed")
+      expect(await page(jar)).not.toContain("The last payment for Pro failed")
     })
 
     it("suspends the account after the past-due grace when an order with overage is not paid, until the order is paid", async () => {
@@ -937,7 +939,7 @@ describe("Polar billing", () => {
       expect(upstreams.deletionHolds.has(accountId)).toBe(true)
     })
 
-    it("moves an account on the default plan to Paid with its subscription, and to Free after the end", async () => {
+    it("moves an account on the default plan to Pro with its subscription, and to Free after the end", async () => {
       const accountId = randomUUID()
       upstreams.planOf(accountId).planId = registryDefaultPlanId
 
@@ -1032,9 +1034,9 @@ describe("Polar billing", () => {
   })
 
   describe("deletion hold", () => {
-    const subscriptionHold = `Golem Cloud billing: The account has a subscription to Paid. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`
+    const subscriptionHold = `Golem Cloud billing: The account has a subscription to Pro. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`
     const canceledHold =
-      "Golem Cloud billing: The subscription to Paid is canceled and runs to the end of the period. Delete the account after the period ends."
+      "Golem Cloud billing: The subscription to Pro is canceled and runs to the end of the period. Delete the account after the period ends."
     const unbilledHold =
       "Golem Cloud billing: The account has paid overage that Polar has not billed yet. Polar bills it on the invoice at the end of the period. Delete the account after that invoice is paid."
     const unsettledHold =
@@ -1409,17 +1411,17 @@ describe("Polar billing", () => {
   })
 
   describe("checkout hold", () => {
-    const subscriptionHold = `Golem Cloud billing: The account has a subscription to Paid. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`
+    const subscriptionHold = `Golem Cloud billing: The account has a subscription to Pro. Cancel it in Manage billing at ${baseUrl}. The subscription then runs to the end of the period. Delete the account after the period ends.`
     const paidCheckoutHold =
-      "Golem Cloud billing: Polar has a payment for Paid, and Golem Cloud billing has not recorded its subscription yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
+      "Golem Cloud billing: Polar has a payment for Pro, and Golem Cloud billing has not recorded its subscription yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
     /**
      * The hold of an open checkout that expires at `expiresAt`: the job of Polar expires it every 15
      * minutes, and the sweep reads it every 5.
      */
     const openCheckoutHold = (expiresAt: Date) =>
-      `Golem Cloud billing: A checkout for Paid from the billing page is open. Delete the account after ${longDateTime.format(new Date(expiresAt.getTime() + 30 * MINUTE))} UTC.`
+      `Golem Cloud billing: A checkout for Pro from the billing page is open. Delete the account after ${longDateTime.format(new Date(expiresAt.getTime() + 30 * MINUTE))} UTC.`
     const lateCheckoutHold =
-      "Golem Cloud billing: A checkout for Paid from the billing page is past its expiry, and Polar has not closed it yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
+      "Golem Cloud billing: A checkout for Pro from the billing page is past its expiry, and Polar has not closed it yet. Try again in an hour. If the delete still fails, contact Golem Cloud at sales@golem.cloud."
 
     /** One run of the cleanup CronJob, with the database role and the Polar token of the cleanup. */
     const cleanup = () =>
@@ -1885,7 +1887,7 @@ describe("Polar billing", () => {
       expect(await page(jar)).not.toContain("Settle $")
     })
 
-    it("keeps an account that subscribed again suspended until it settles, and then gives it Paid", async () => {
+    it("keeps an account that subscribed again suspended until it settles, and then gives it Pro", async () => {
       const { jar, accountId } = await signedIn()
       await unpaidAfterEnd(accountId)
       await deliver(
@@ -1903,7 +1905,7 @@ describe("Polar billing", () => {
 
       const html = await page(jar)
       expect(html).toContain("Settle $3.45")
-      expect(html).toContain("When the account owes no paid overage, your plan is Paid")
+      expect(html).toContain("When the account owes no paid overage, your plan is Pro")
 
       await deliver("order.created", settlementOrder(accountId))
       expect(upstreams.planOf(accountId).planId).toBe(paidPlanId)

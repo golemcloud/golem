@@ -63,8 +63,8 @@ export interface BillingConfigShape {
   }
   /**
    * The plan that the registry gives a new account (`initial_plans.default`), if the page offers
-   * Paid to an account on it. A subscription moves an account on this plan only to Paid, so the
-   * account keeps it until it subscribes. Without it, the app treats the default plan like a plan
+   * Pro to an account on it. A subscription moves an account on this plan only to the paid plan, so
+   * the account keeps it until it subscribes. Without it, the app treats the default plan like a plan
    * that an administrator gave the account.
    */
   readonly defaultPlanId: string | undefined

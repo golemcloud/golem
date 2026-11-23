@@ -247,18 +247,18 @@ const renewal = (subscription: Subscription | undefined) => {
 }
 
 const pastDueNotice = (end: Date) =>
-  html`<p class="alert" role="alert">The last payment for Paid failed. Change the payment method in the Polar customer portal before ${longDateTime.format(end)} UTC. If Polar does not get the payment before then, your plan changes to Free. If the invoice also has paid overage, Golem stops the agents of this account until you pay it.</p>`
+  html`<p class="alert" role="alert">The last payment for Pro failed. Change the payment method in the Polar customer portal before ${longDateTime.format(end)} UTC. If Polar does not get the payment before then, your plan changes to Free. If the invoice also has paid overage, Golem stops the agents of this account until you pay it.</p>`
 
 const planHero = (options: SignedInPageOptions) => {
   if (options.checkoutPending) {
     return html`<span class="eyebrow">Your plan</span>
         <h1>Polar has your payment</h1>
-        <p class="lead">Your plan changes to Paid within one minute. Reload the page to see the change.</p>`
+        <p class="lead">Your plan changes to Pro within one minute. Reload the page to see the change.</p>`
   }
   switch (options.plan) {
     case "paid":
       return html`<span class="eyebrow">Your plan</span>
-        <h1>Paid</h1>
+        <h1>Pro</h1>
         ${options.pastDueGraceEnd === undefined ? renewal(options.subscription) : pastDueNotice(options.pastDueGraceEnd)}
         <div class="actions">
           ${portalForm("Manage billing")}
@@ -272,7 +272,7 @@ const planHero = (options: SignedInPageOptions) => {
       if (options.settlement !== undefined && canSettle(options.plan, options.settlement)) {
         return html`<span class="eyebrow">Your plan</span>
         <h1>Suspended</h1>
-        <p class="alert" role="alert">An invoice for paid overage is not paid, so Golem stopped the agents of this account. The subscription of the invoice has ended, and Polar does not try the payment again. Settle ${minorUnits(options.settlement.currency, options.settlement.amount)} here. This amount includes the tax of the invoice. When the account owes no paid overage, your plan is ${options.planAfterSettlement === "paid" ? "Paid" : "Free"}, and the agents can run again.</p>
+        <p class="alert" role="alert">An invoice for paid overage is not paid, so Golem stopped the agents of this account. The subscription of the invoice has ended, and Polar does not try the payment again. Settle ${minorUnits(options.settlement.currency, options.settlement.amount)} here. This amount includes the tax of the invoice. When the account owes no paid overage, your plan is ${options.planAfterSettlement === "paid" ? "Pro" : "Free"}, and the agents can run again.</p>
         <div class="actions">
           ${settleForm(options.settlement)}
           ${portalForm("Billing history")}
@@ -298,7 +298,7 @@ const planHero = (options: SignedInPageOptions) => {
       // On the free plan, `canCheckOut` refuses only an account with a `past_due` subscription.
       return html`<span class="eyebrow">Your plan</span>
         <h1>Free</h1>
-        <p class="alert" role="alert">The last payment for Paid failed, so your plan is Free. Change the payment method in the Polar customer portal. After the payment, your plan is Paid again.</p>
+        <p class="alert" role="alert">The last payment for Pro failed, so your plan is Free. Change the payment method in the Polar customer portal. After the payment, your plan is Pro again.</p>
         <div class="actions">
           ${portalForm("Manage billing")}
         </div>`
@@ -316,7 +316,7 @@ const planHero = (options: SignedInPageOptions) => {
       // On the default plan, `canCheckOut` refuses only an account with a `past_due` subscription.
       return html`<span class="eyebrow">Your plan</span>
         <h1>Default</h1>
-        <p class="alert" role="alert">The last payment for Paid failed. Change the payment method in the Polar customer portal. After the payment, your plan is Paid.</p>
+        <p class="alert" role="alert">The last payment for Pro failed. Change the payment method in the Polar customer portal. After the payment, your plan is Pro.</p>
         <div class="actions">
           ${portalForm("Manage billing")}
         </div>`
