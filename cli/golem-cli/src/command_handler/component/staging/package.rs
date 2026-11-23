@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::super::ComponentCommandHandler;
-use super::{ComponentStager, extract_local_component, resolve_ifs_entry, resolve_tool_ifs_entry};
+use super::{ComponentStager, extract_local_component, resolve_provision_file};
 use crate::app::context::ApplicationContext;
 use crate::command_handler::component::ifs::expand_package_files;
 use crate::model::app::{InitialComponentFile, ResolvedToolProvision};
@@ -140,7 +140,7 @@ impl ComponentCommandHandler {
                     let files = staged
                         .files
                         .iter()
-                        .map(|file| resolve_ifs_entry(file, &staged.files_source))
+                        .map(resolve_provision_file)
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     stage
                         .provision(&mut provision, &files)
@@ -389,7 +389,7 @@ impl PackageStage<'_> {
             .properties
             .files
             .iter()
-            .map(resolve_tool_ifs_entry)
+            .map(resolve_provision_file)
             .collect::<anyhow::Result<Vec<_>>>()?;
         self.provision(&mut provision, &files).await?;
         Ok(provision)

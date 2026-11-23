@@ -88,6 +88,9 @@ async fn installed_agent_calls_tools_as_the_installer() -> anyhow::Result<()> {
             templates: rust
         agents:
           InstalledPrincipalAgent:
+            files:
+              - sourcePath: ./instructions.txt
+                targetPath: /publisher.txt
             env:
               PACKAGE_MARKER: from-package
               INSTALLER_MARKER: from-publisher
@@ -96,6 +99,7 @@ async fn installed_agent_calls_tools_as_the_installer() -> anyhow::Result<()> {
     "#}
     );
     fs::write_str(ctx.cwd_path_join("golem.yaml"), &source)?;
+    fs::write_str(ctx.cwd_path_join("instructions.txt"), "publisher bytes")?;
     fs::write_str(
         ctx.cwd_path_join("src/counter_agent.rs"),
         indoc::indoc! {r#"
@@ -117,6 +121,8 @@ async fn installed_agent_calls_tools_as_the_installer() -> anyhow::Result<()> {
             async fn inspect(&self) -> String {
                 assert_eq!(std::env::var("PACKAGE_MARKER").as_deref(), Ok("from-package"));
                 assert_eq!(std::env::var("INSTALLER_MARKER").as_deref(), Ok("from-installer"));
+                assert_eq!(std::fs::read("/publisher.txt").unwrap(), b"publisher bytes");
+                assert_eq!(std::fs::read("/installer.txt").unwrap(), b"installer bytes");
                 PrincipalProbeClient::new().whoami().await.unwrap()
             }
         }
@@ -161,6 +167,7 @@ async fn installed_agent_calls_tools_as_the_installer() -> anyhow::Result<()> {
     ctx.cd("..");
     fs::create_dir_all(ctx.cwd_path_join("installer"))?;
     ctx.cd("installer");
+    fs::write_str(ctx.cwd_path_join("instructions.txt"), "installer bytes")?;
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         format!(
@@ -175,6 +182,9 @@ async fn installed_agent_calls_tools_as_the_installer() -> anyhow::Result<()> {
             agents:
               InstalledPrincipalAgent:
                 package: installed-agent
+                files:
+                  - sourcePath: ./instructions.txt
+                    targetPath: /installer.txt
                 env:
                   INSTALLER_MARKER: from-installer
                 tools:
