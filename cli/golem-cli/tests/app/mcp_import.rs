@@ -2059,28 +2059,13 @@ async fn mcp_response(client: &reqwest::Client, url: &str, method: &str, params:
         .send()
         .await
         .unwrap();
-    let session = initialize
-        .headers()
-        .get("mcp-session-id")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
     assert!(initialize.status().is_success());
+    assert!(!initialize.headers().contains_key("mcp-session-id"));
     parse_mcp_sse(&initialize.text().await.unwrap());
-    let initialized = client
-        .post(url)
-        .header("Accept", "application/json, text/event-stream")
-        .header("mcp-session-id", &session)
-        .json(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
-        .send()
-        .await
-        .unwrap();
-    assert!(initialized.status().is_success());
     let response = client
         .post(url)
         .header("Accept", "application/json, text/event-stream")
-        .header("mcp-session-id", session)
+        .header("MCP-Protocol-Version", "2025-03-26")
         .json(&json!({"jsonrpc":"2.0","id":2,"method":method,"params":params}))
         .send()
         .await
