@@ -519,7 +519,9 @@ later frames for the channel; the client already has the consumer
 cancellation. An invalid item at any other sequence, and every framing,
 channel, sequence, or resource failure, remains fatal for the session. The
 reason is not durable: after a reconnect the channel reports only a terminal
-input high-water.
+input high-water. A client that resumes after the connection was lost cannot
+tell an input that was cut at an invalid item from a complete one, so it can
+report a successful result that the callee computed from the earlier items only.
 
 ### 6.8 `attachmentRevoked`
 
