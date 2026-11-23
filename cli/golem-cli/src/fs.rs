@@ -446,47 +446,64 @@ fn split_glob_at_literal_prefix(path: &Path) -> anyhow::Result<(PathBuf, String)
 }
 
 #[cfg(not(windows))]
-fn normalize_for_comparison_impl(path: &Path) -> PathBuf {
-    normalize_path_lexically(path)
-}
+mod platform {
+    use super::{Path, PathBuf, normalize_path_lexically};
 
-#[cfg(windows)]
-fn normalize_for_comparison_impl(path: &Path) -> PathBuf {
-    let raw = path.as_os_str().to_string_lossy();
-
-    let normalized = if let Some(stripped) = raw.strip_prefix(r"\\?\UNC\") {
-        PathBuf::from(format!(r"\\{}", stripped))
-    } else if let Some(stripped) = raw.strip_prefix(r"\\?\") {
-        PathBuf::from(stripped)
-    } else {
-        path.to_path_buf()
-    };
-
-    normalize_windows_drive_letter_case(normalize_path_lexically(&normalized))
-}
-
-#[cfg(windows)]
-fn normalize_windows_drive_letter_case(path: PathBuf) -> PathBuf {
-    let raw = path.as_os_str().to_string_lossy();
-    if raw.len() < 2 {
-        return path;
+    pub(super) fn normalize_for_comparison_impl(path: &Path) -> PathBuf {
+        normalize_path_lexically(path)
     }
 
-    let mut chars = raw.chars();
-    let Some(first_char) = chars.next() else {
-        return path;
-    };
+    pub(super) fn normalize_str_path_as_unix(path: &str) -> String {
+        path.to_string()
+    }
+}
 
-    if chars.next() != Some(':') || !first_char.is_ascii_alphabetic() {
-        return path;
+use platform::{normalize_for_comparison_impl, normalize_str_path_as_unix};
+
+#[cfg(windows)]
+mod platform {
+    use super::{Path, PathBuf, normalize_path_lexically};
+
+    pub(super) fn normalize_str_path_as_unix(path: &str) -> String {
+        path.replace('\\', "/")
     }
 
-    let mut normalized = String::with_capacity(raw.len());
-    normalized.push(first_char.to_ascii_uppercase());
-    normalized.push(':');
-    normalized.extend(chars);
+    pub(super) fn normalize_for_comparison_impl(path: &Path) -> PathBuf {
+        let raw = path.as_os_str().to_string_lossy();
 
-    PathBuf::from(normalized)
+        let normalized = if let Some(stripped) = raw.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{}", stripped))
+        } else if let Some(stripped) = raw.strip_prefix(r"\\?\") {
+            PathBuf::from(stripped)
+        } else {
+            path.to_path_buf()
+        };
+
+        normalize_windows_drive_letter_case(normalize_path_lexically(&normalized))
+    }
+
+    fn normalize_windows_drive_letter_case(path: PathBuf) -> PathBuf {
+        let raw = path.as_os_str().to_string_lossy();
+        if raw.len() < 2 {
+            return path;
+        }
+
+        let mut chars = raw.chars();
+        let Some(first_char) = chars.next() else {
+            return path;
+        };
+
+        if chars.next() != Some(':') || !first_char.is_ascii_alphabetic() {
+            return path;
+        }
+
+        let mut normalized = String::with_capacity(raw.len());
+        normalized.push(first_char.to_ascii_uppercase());
+        normalized.push(':');
+        normalized.extend(chars);
+
+        PathBuf::from(normalized)
+    }
 }
 
 pub fn compile_and_collect_globs(
@@ -640,16 +657,6 @@ fn read_tsconfig_include_patterns(path: &Path) -> Vec<String> {
     }
 }
 
-#[cfg(not(windows))]
-fn normalize_str_path_as_unix(path: &str) -> String {
-    path.to_string()
-}
-
-#[cfg(windows)]
-fn normalize_str_path_as_unix(path: &str) -> String {
-    path.replace('\\', "/")
-}
-
 pub fn delete_logged(context: &str, path: &Path) -> anyhow::Result<()> {
     if path.exists() {
         log_warn_action(
@@ -726,128 +733,134 @@ mod test {
         );
     }
 
-    #[test]
     #[cfg(not(windows))]
-    fn absolute_lexical_keeps_absolute_paths_and_normalizes_segments() {
-        let base_dir = PathBuf::from("base");
-        assert_eq!(
-            fs::absolute_lexical_path_from_base_dir(Path::new("/tmp/golem/./a/../b"), &base_dir),
-            PathBuf::from("/tmp/golem/b")
-        );
+    mod non_windows {
+        use super::*;
+        use pretty_assertions::assert_eq;
+        use test_r::test;
+
+        #[test]
+        fn absolute_lexical_keeps_absolute_paths_and_normalizes_segments() {
+            let base_dir = PathBuf::from("base");
+            assert_eq!(
+                fs::absolute_lexical_path_from_base_dir(
+                    Path::new("/tmp/golem/./a/../b"),
+                    &base_dir
+                ),
+                PathBuf::from("/tmp/golem/b")
+            );
+        }
+
+        #[test]
+        fn absolute_lexical_resolves_relative_paths_against_base_dir() {
+            let base_dir = PathBuf::from("/tmp/golem/work");
+            assert_eq!(
+                fs::absolute_lexical_path_from_base_dir(Path::new("../src/./main.rs"), &base_dir),
+                PathBuf::from("/tmp/golem/src/main.rs")
+            );
+        }
+
+        #[test]
+        fn path_eq_normalized_ignores_lexical_differences() {
+            assert!(fs::path_eq_normalized(
+                Path::new("/tmp/golem/./a/../b"),
+                Path::new("/tmp/golem/b")
+            ));
+        }
+
+        #[test]
+        fn path_starts_with_normalized_ignores_lexical_differences() {
+            assert!(fs::path_starts_with_normalized(
+                Path::new("/tmp/golem/work/./component/../src"),
+                Path::new("/tmp/golem/work/src")
+            ));
+        }
+
+        #[test]
+        fn normalize_path_lexically_handles_absolute_paths() {
+            assert_eq!(
+                fs::normalize_path_lexically(Path::new("/tmp/golem/./a/../b")),
+                PathBuf::from("/tmp/golem/b")
+            );
+        }
+
+        #[test]
+        fn resolve_absolute_globs_under_base_dir() {
+            let base_dir = PathBuf::from("/tmp/golem");
+
+            assert_eq!(
+                fs::split_absolute_glob(&base_dir, "/tmp/golem/dir/**/*.ts").unwrap(),
+                (base_dir.clone(), "dir/**/*.ts".to_string())
+            );
+        }
+
+        #[test]
+        fn resolve_absolute_globs_outside_base_dir() {
+            let base_dir = PathBuf::from("/tmp/golem");
+
+            // An absolute glob outside the base directory walks from its own literal prefix.
+            assert_eq!(
+                fs::split_absolute_glob(&base_dir, "/tmp/other/**/*.ts").unwrap(),
+                (PathBuf::from("/tmp/other"), "**/*.ts".to_string())
+            );
+        }
+
+        #[test]
+        fn resolve_absolute_literal_path_outside_base_dir() {
+            let base_dir = PathBuf::from("/tmp/golem");
+
+            // A fully literal absolute path outside the base directory (e.g. a redirected cargo
+            // target directory) walks from its parent directory.
+            assert_eq!(
+                fs::split_absolute_glob(
+                    &base_dir,
+                    "/var/cargo-target/wasm32-wasip2/release/foo.wasm"
+                )
+                .unwrap(),
+                (
+                    PathBuf::from("/var/cargo-target/wasm32-wasip2/release"),
+                    "foo.wasm".to_string()
+                )
+            );
+        }
     }
 
-    #[test]
-    #[cfg(not(windows))]
-    fn absolute_lexical_resolves_relative_paths_against_base_dir() {
-        let base_dir = PathBuf::from("/tmp/golem/work");
-        assert_eq!(
-            fs::absolute_lexical_path_from_base_dir(Path::new("../src/./main.rs"), &base_dir),
-            PathBuf::from("/tmp/golem/src/main.rs")
-        );
-    }
-
-    #[test]
-    #[cfg(not(windows))]
-    fn path_eq_normalized_ignores_lexical_differences() {
-        assert!(fs::path_eq_normalized(
-            Path::new("/tmp/golem/./a/../b"),
-            Path::new("/tmp/golem/b")
-        ));
-    }
-
-    #[test]
-    #[cfg(not(windows))]
-    fn path_starts_with_normalized_ignores_lexical_differences() {
-        assert!(fs::path_starts_with_normalized(
-            Path::new("/tmp/golem/work/./component/../src"),
-            Path::new("/tmp/golem/work/src")
-        ));
-    }
-
-    #[test]
-    #[cfg(not(windows))]
-    fn normalize_path_lexically_handles_absolute_paths() {
-        assert_eq!(
-            fs::normalize_path_lexically(Path::new("/tmp/golem/./a/../b")),
-            PathBuf::from("/tmp/golem/b")
-        );
-    }
-
-    #[test]
-    #[cfg(not(windows))]
-    fn resolve_absolute_globs_under_base_dir() {
-        let base_dir = PathBuf::from("/tmp/golem");
-
-        assert_eq!(
-            fs::split_absolute_glob(&base_dir, "/tmp/golem/dir/**/*.ts").unwrap(),
-            (base_dir.clone(), "dir/**/*.ts".to_string())
-        );
-    }
-
-    #[test]
-    #[cfg(not(windows))]
-    fn resolve_absolute_globs_outside_base_dir() {
-        let base_dir = PathBuf::from("/tmp/golem");
-
-        // An absolute glob outside the base directory walks from its own literal prefix.
-        assert_eq!(
-            fs::split_absolute_glob(&base_dir, "/tmp/other/**/*.ts").unwrap(),
-            (PathBuf::from("/tmp/other"), "**/*.ts".to_string())
-        );
-    }
-
-    #[test]
-    #[cfg(not(windows))]
-    fn resolve_absolute_literal_path_outside_base_dir() {
-        let base_dir = PathBuf::from("/tmp/golem");
-
-        // A fully literal absolute path outside the base directory (e.g. a redirected cargo
-        // target directory) walks from its parent directory.
-        assert_eq!(
-            fs::split_absolute_glob(
-                &base_dir,
-                "/var/cargo-target/wasm32-wasip2/release/foo.wasm"
-            )
-            .unwrap(),
-            (
-                PathBuf::from("/var/cargo-target/wasm32-wasip2/release"),
-                "foo.wasm".to_string()
-            )
-        );
-    }
-
-    #[test]
     #[cfg(windows)]
-    fn resolve_absolute_globs_under_base_dir_with_verbatim_prefix() {
-        let base_dir = PathBuf::from(r"C:\tmp\golem");
+    mod windows {
+        use super::*;
+        use pretty_assertions::assert_eq;
+        use test_r::test;
 
-        assert_eq!(
-            fs::split_absolute_glob(&base_dir, r"\\?\C:\tmp\golem\dir\**\*.ts").unwrap(),
-            (base_dir.clone(), r"dir\**\*.ts".to_string())
-        );
-    }
+        #[test]
+        fn resolve_absolute_globs_under_base_dir_with_verbatim_prefix() {
+            let base_dir = PathBuf::from(r"C:\tmp\golem");
 
-    #[test]
-    #[cfg(windows)]
-    fn normalize_for_comparison_handles_windows_verbatim_prefixes() {
-        assert!(fs::path_eq_normalized(
-            Path::new(r"C:\tmp\golem"),
-            Path::new(r"\\?\C:\tmp\golem")
-        ));
+            assert_eq!(
+                fs::split_absolute_glob(&base_dir, r"\\?\C:\tmp\golem\dir\**\*.ts").unwrap(),
+                (base_dir.clone(), r"dir\**\*.ts".to_string())
+            );
+        }
 
-        assert!(fs::path_eq_normalized(
-            Path::new(r"\\server\share\golem"),
-            Path::new(r"\\?\UNC\server\share\golem")
-        ));
-    }
+        #[test]
+        fn normalize_for_comparison_handles_windows_verbatim_prefixes() {
+            assert!(fs::path_eq_normalized(
+                Path::new(r"C:\tmp\golem"),
+                Path::new(r"\\?\C:\tmp\golem")
+            ));
 
-    #[test]
-    #[cfg(windows)]
-    fn normalize_for_comparison_normalizes_drive_letter_case() {
-        assert!(fs::path_eq_normalized(
-            Path::new(r"c:\tmp\golem"),
-            Path::new(r"C:\tmp\golem")
-        ));
+            assert!(fs::path_eq_normalized(
+                Path::new(r"\\server\share\golem"),
+                Path::new(r"\\?\UNC\server\share\golem")
+            ));
+        }
+
+        #[test]
+        fn normalize_for_comparison_normalizes_drive_letter_case() {
+            assert!(fs::path_eq_normalized(
+                Path::new(r"c:\tmp\golem"),
+                Path::new(r"C:\tmp\golem")
+            ));
+        }
     }
 
     #[test]

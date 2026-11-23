@@ -17,14 +17,11 @@
 //! A thread without privilege cannot raise its priority again after it lowers it. So the work runs
 //! on a new thread, with a rayon pool of its own, and both end with the work.
 
+use platform::lower_own_priority;
 use rayon::{ThreadPool, ThreadPoolBuildError, ThreadPoolBuilder};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, PoisonError};
 use tracing::warn;
-
-/// The nice value of the threads of a save or a prune.
-#[cfg(target_os = "linux")]
-pub(super) const LOW_PRIORITY: i32 = 19;
 
 /// How the store runs work at a low priority: the thread count of the rayon pool of the work, and
 /// the two steps that a test can replace.
@@ -130,35 +127,47 @@ fn build_pool(
         .build()
 }
 
-/// Gives the calling thread the nice value 19.
 #[cfg(target_os = "linux")]
-fn lower_own_priority() -> std::io::Result<()> {
-    // SAFETY: `gettid` has no preconditions.
-    let thread = unsafe { libc::gettid() };
-    let thread = libc::id_t::try_from(thread).map_err(std::io::Error::other)?;
-    // SAFETY: `setpriority` only reads its arguments.
-    let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, thread, LOW_PRIORITY) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
+mod platform {
+    use std::io;
+
+    /// The nice value of the threads of a save or a prune.
+    pub(super) const LOW_PRIORITY: i32 = 19;
+
+    /// Gives the calling thread the nice value 19.
+    pub(super) fn lower_own_priority() -> io::Result<()> {
+        // SAFETY: `gettid` has no preconditions.
+        let thread = unsafe { libc::gettid() };
+        let thread = libc::id_t::try_from(thread).map_err(io::Error::other)?;
+        // SAFETY: `setpriority` only reads its arguments.
+        let result = unsafe { libc::setpriority(libc::PRIO_PROCESS, thread, LOW_PRIORITY) };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    /// Gives the nice value of the calling thread.
+    #[cfg(test)]
+    pub(super) fn own_nice() -> i32 {
+        // SAFETY: `gettid` has no preconditions.
+        let thread = libc::id_t::try_from(unsafe { libc::gettid() }).unwrap();
+        // SAFETY: `getpriority` only reads its arguments.
+        unsafe { libc::getpriority(libc::PRIO_PROCESS, thread) }
     }
 }
 
-/// Keeps the priority of the calling thread on a platform other than Linux.
 #[cfg(not(target_os = "linux"))]
-fn lower_own_priority() -> std::io::Result<()> {
-    Ok(())
+mod platform {
+    /// Keeps the priority of the calling thread on a platform other than Linux.
+    pub(super) fn lower_own_priority() -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
-/// Gives the nice value of the calling thread.
-#[cfg(all(test, target_os = "linux"))]
-fn own_nice() -> i32 {
-    // SAFETY: `gettid` has no preconditions.
-    let thread = libc::id_t::try_from(unsafe { libc::gettid() }).unwrap();
-    // SAFETY: `getpriority` only reads its arguments.
-    unsafe { libc::getpriority(libc::PRIO_PROCESS, thread) }
-}
+#[cfg(test)]
+mod portable_tests;
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests;

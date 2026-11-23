@@ -147,6 +147,7 @@ impl<Repo: EnvironmentToolMiddlewareGrantRepo> LoggedEnvironmentToolMiddlewareGr
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: EnvironmentToolMiddlewareGrantRepo> EnvironmentToolMiddlewareGrantRepo
     for LoggedEnvironmentToolMiddlewareGrantRepo<Repo>
 {
@@ -383,6 +384,7 @@ impl GrantKind for ToolMiddlewareReleaseKind {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EnvironmentToolMiddlewareGrantRepo for DbEnvironmentToolMiddlewareGrantRepo<PostgresPool> {
     async fn create(
         &self,

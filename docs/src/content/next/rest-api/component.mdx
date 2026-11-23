@@ -1861,11 +1861,19 @@ The request body is encoded as multipart/form-data containing metadata and the W
           "required": true
         },
         "phantomAgent": true,
-        "phantomIdBinding": {
+        "agentIdBinding": {
           "type": "Path",
-          "name": "string",
-          "optional": true
+          "name": "string"
         },
+        "createRoute": [
+          {
+            "type": "Segment",
+            "value": {
+              "type": "Literal",
+              "value": "string"
+            }
+          }
+        ],
         "corsOptions": {
           "allowedPatterns": [
             "string"

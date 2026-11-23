@@ -520,6 +520,7 @@ struct FixedPages {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl IndexedStorage for FixedPages {
     async fn number_of_replicas(
         &self,
@@ -905,6 +906,7 @@ fn resident_set(agents: HashSet<AgentId>) -> ResidentSet {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for DirectAccess {
     async fn expire_durable_stream_session(
         &self,
@@ -2015,6 +2017,7 @@ struct Miscounting {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchiveService for Miscounting {
     async fn open(
         &self,
@@ -2110,6 +2113,7 @@ struct MiscountingArchive {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for MiscountingArchive {
     async fn read_source(
         &self,

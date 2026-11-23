@@ -63,6 +63,7 @@ pub struct OAuth2GithubClientDefault {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OAuth2GithubClient for OAuth2GithubClientDefault {
     async fn get_authorize_url(&self, state: &OAuth2WebflowStateId) -> String {
         Url::parse_with_params(

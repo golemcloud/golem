@@ -2437,28 +2437,31 @@ mod tests {
         assert_eq!(cp_symlink_target(&["-al", "/etc/passwd", "link"]), None);
     }
 
-    #[test]
     #[cfg(unix)]
-    // `tempfile` and `std::os::unix::fs::symlink` are native-only (see grep.rs's identical
-    // symlink tests for the same reasoning).
-    fn cp_preserving_a_symlink_checks_its_target() {
-        let dir = tempfile::tempdir().unwrap();
-        let relative = dir.path().join("relative");
-        std::os::unix::fs::symlink("../../etc", &relative).unwrap();
-        let absolute = dir.path().join("absolute");
-        std::os::unix::fs::symlink("/etc/passwd", &absolute).unwrap();
-        let relative = relative.to_str().unwrap();
-        let absolute = absolute.to_str().unwrap();
+    mod unix {
+        use super::cp_symlink_target;
+        use std::os::unix::fs::symlink;
 
-        // A relative preserved target is recreated as it is, however far it climbs.
-        assert_eq!(cp_symlink_target(&["-a", relative, "/a/dest"]), None);
-        // An absolute preserved target is refused.
-        assert_eq!(
-            cp_symlink_target(&["-P", absolute, "/a/b/c/dest"]).as_deref(),
-            Some("/etc/passwd")
-        );
-        // Without a preserve-links flag, `cp` follows the symlink and copies its contents
-        // instead of recreating it.
-        assert_eq!(cp_symlink_target(&["-f", absolute, "/a/dest"]), None);
+        #[test]
+        fn cp_preserving_a_symlink_checks_its_target() {
+            let dir = tempfile::tempdir().unwrap();
+            let relative = dir.path().join("relative");
+            symlink("../../etc", &relative).unwrap();
+            let absolute = dir.path().join("absolute");
+            symlink("/etc/passwd", &absolute).unwrap();
+            let relative = relative.to_str().unwrap();
+            let absolute = absolute.to_str().unwrap();
+
+            // A relative preserved target is recreated as it is, however far it climbs.
+            assert_eq!(cp_symlink_target(&["-a", relative, "/a/dest"]), None);
+            // An absolute preserved target is refused.
+            assert_eq!(
+                cp_symlink_target(&["-P", absolute, "/a/b/c/dest"]).as_deref(),
+                Some("/etc/passwd")
+            );
+            // Without a preserve-links flag, `cp` follows the symlink and copies its contents
+            // instead of recreating it.
+            assert_eq!(cp_symlink_target(&["-f", absolute, "/a/dest"]), None);
+        }
     }
 }

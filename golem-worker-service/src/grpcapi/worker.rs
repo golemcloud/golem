@@ -269,6 +269,7 @@ pub struct WorkerGrpcApi {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl GrpcWorkerService for WorkerGrpcApi {
     async fn launch_new_worker(
         &self,

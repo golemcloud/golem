@@ -225,13 +225,15 @@ func validTarget(target string, subtree bool) bool {
 }
 
 // validateFileOwner checks that an agent may expose its own files: it must be a
-// durable, non-phantom agent, and its identity must come entirely from the
-// mount path — each constructor field a scalar, captured exactly once — so a
-// request can name the one agent whose files it reads.
+// durable, non-phantom agent selected by ID or by scalar constructor fields
+// captured exactly once in the mount path.
 func validateFileOwner(e *agentEntry, mp parsedPath) []string {
 	var errs []string
 	if e.mode != common.AgentModeDurable || e.mount.PhantomAgent {
 		errs = append(errs, "ExposeFiles needs a durable, non-phantom agent: filesystem-owner")
+	}
+	if e.mount.AgentID.declared() {
+		return errs
 	}
 	captured := map[string]int{}
 	for _, s := range mp.segs {

@@ -318,6 +318,7 @@ impl RecordingStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl McpSessionStore for RecordingStore {
     async fn create(
         &self,
@@ -394,6 +395,7 @@ impl ClockStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl McpSessionStore for ClockStore {
     async fn create(
         &self,
@@ -539,6 +541,7 @@ impl ObservedEvents {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EventStore for ObservedEvents {
     async fn store_event(
         &self,

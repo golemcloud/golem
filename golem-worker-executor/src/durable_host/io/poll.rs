@@ -516,6 +516,7 @@ mod tests {
     struct Pending;
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl wasmtime_wasi::Pollable for Pending {
         async fn ready(&mut self) {
             pending::<()>().await

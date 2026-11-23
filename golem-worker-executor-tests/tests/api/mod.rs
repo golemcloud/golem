@@ -1060,8 +1060,9 @@ async fn reads_and_management_racing_each_deletion_stage_find_no_agent(
     _tracing: &Tracing,
     #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use crate::filesystem_inspection::{file_system_node_is_not_found, read_head};
-    use golem_common::model::filesystem::FileReadHead;
+    use crate::filesystem_inspection::{
+        assert_read_agent_not_found, file_system_node_is_not_found,
+    };
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -1121,15 +1122,11 @@ async fn reads_and_management_racing_each_deletion_stage_find_no_agent(
             let result = deleting.take().unwrap().await?;
             assert!(result.is_err(), "{name}: injected failure ignored");
         }
-        assert_eq!(
-            tokio::time::timeout(
-                Duration::from_secs(10),
-                read_head(&executor, &agent, "/a.txt")
-            )
-            .await??,
-            FileReadHead::Absent,
-            "{name}"
-        );
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            assert_read_agent_not_found(&executor, &agent, "/a.txt"),
+        )
+        .await??;
         assert!(
             file_system_node_is_not_found(&executor, &agent, "/").await?,
             "{name}"
@@ -1144,11 +1141,7 @@ async fn reads_and_management_racing_each_deletion_stage_find_no_agent(
             executor.get_worker_metadata_opt(&agent).await?.is_none(),
             "{name}: a read racing the delete recreated the agent"
         );
-        assert_eq!(
-            read_head(&executor, &agent, "/a.txt").await?,
-            FileReadHead::Absent,
-            "{name}"
-        );
+        assert_read_agent_not_found(&executor, &agent, "/a.txt").await?;
         assert!(
             executor.get_worker_metadata_opt(&agent).await?.is_none(),
             "{name}"
@@ -1169,9 +1162,8 @@ async fn reads_after_a_delete_failed_before_removing_state_keep_the_deletion_err
     _tracing: &Tracing,
     #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use crate::filesystem_inspection::{first_read_frame, read_head};
+    use crate::filesystem_inspection::{assert_read_agent_not_found, first_read_frame};
     use golem_api_grpc::proto::golem::workerexecutor::v1::get_file_contents_response;
-    use golem_common::model::filesystem::FileReadHead;
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -1213,10 +1205,7 @@ async fn reads_after_a_delete_failed_before_removing_state_keep_the_deletion_err
 
     executor.delete_worker(&agent).await?;
     assert!(executor.get_worker_metadata_opt(&agent).await?.is_none());
-    assert_eq!(
-        read_head(&executor, &agent, "/a.txt").await?,
-        FileReadHead::Absent
-    );
+    assert_read_agent_not_found(&executor, &agent, "/a.txt").await?;
     Ok(())
 }
 
@@ -1233,9 +1222,8 @@ async fn ephemeral_reads_after_a_delete_failed_before_removing_state_keep_the_de
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use crate::filesystem_inspection::{first_read_frame, read_head};
+    use crate::filesystem_inspection::{assert_read_agent_not_found, first_read_frame};
     use golem_api_grpc::proto::golem::workerexecutor::v1::get_file_contents_response;
-    use golem_common::model::filesystem::FileReadHead;
     use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
     use golem_worker_executor::storage::keyvalue::fault_injecting::{
         FaultInjectingKeyValueStorage, KeyValueStorageFaults,
@@ -1310,10 +1298,7 @@ async fn ephemeral_reads_after_a_delete_failed_before_removing_state_keep_the_de
 
     executor.delete_worker(&agent).await?;
     assert!(executor.get_worker_metadata_opt(&agent).await?.is_none());
-    assert_eq!(
-        read_head(&executor, &agent, "/a.txt").await?,
-        FileReadHead::Absent
-    );
+    assert_read_agent_not_found(&executor, &agent, "/a.txt").await?;
     Ok(())
 }
 
@@ -1328,11 +1313,12 @@ async fn reads_waiting_behind_guest_work_when_a_delete_starts_find_no_agent(
     _tracing: &Tracing,
     #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use crate::filesystem_inspection::{file_system_node_is_not_found, read_head};
+    use crate::filesystem_inspection::{
+        assert_read_agent_not_found, file_system_node_is_not_found,
+    };
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         GetAgentWalletRequest, get_agent_wallet_response,
     };
-    use golem_common::model::filesystem::FileReadHead;
     use golem_common::model::oplog::PublicAgentInvocation;
 
     let context = TestContext::new(last_unique_id);
@@ -1384,7 +1370,7 @@ async fn reads_waiting_behind_guest_work_when_a_delete_starts_find_no_agent(
     let read = tokio::spawn({
         let executor = executor.clone();
         let agent = agent.clone();
-        async move { read_head(&executor, &agent, "/a.txt").await }
+        async move { assert_read_agent_not_found(&executor, &agent, "/a.txt").await }
     });
     let listing = tokio::spawn({
         let executor = executor.clone();
@@ -1426,7 +1412,7 @@ async fn reads_waiting_behind_guest_work_when_a_delete_starts_find_no_agent(
 
     executor.delete_worker(&agent).await?;
 
-    assert_eq!(read.await??, FileReadHead::Absent);
+    read.await??;
     assert!(listing.await??);
     let wallet = wallet.await??.into_inner();
     let Some(get_agent_wallet_response::Result::Failure(error)) = wallet.result else {
@@ -6155,84 +6141,6 @@ async fn deletion_retry_joins_timed_out_cleanup_before_removing_storage(
     let first_result = hook.first_result.lock().unwrap().take().unwrap();
     let late_error = first_result.await.unwrap_err().to_string();
     assert!(late_error.contains("unload deadline"), "{late_error}");
-    Ok(())
-}
-
-#[cfg(unix)]
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn deletion_retry_preserves_actual_filesystem_failure_until_verified_cleanup(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let root = tempfile::tempdir()?;
-    let root_path = root.path().to_path_buf();
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(move |config| {
-                config.suspend.suspend_after = Duration::from_secs(3600);
-                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
-                    root: root_path.clone().into(),
-                };
-                config.filesystem_storage.cleanup_retry.max_attempts = 1;
-            })),
-            ..TestExecutorOverrides::default()
-        },
-    )
-    .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_counters)
-        .store()
-        .await?;
-    let agent = agent_key!("Counter", "delete-native-cleanup-failure");
-    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
-    executor
-        .invoke_and_await_agent(&component, &agent, "increment", data_value!())
-        .await?;
-    let owned = worker_id.clone();
-    let mut hook = DeletionStageHook::new(owned.clone(), None, None);
-    hook.cleanup_gate = true;
-    let hook = Arc::new(hook);
-    executor.set_worker_deletion_hook(hook.clone());
-    let first_executor = executor.clone();
-    let first_id = worker_id.clone();
-    let first = tokio::spawn(async move { first_executor.delete_worker(&first_id).await });
-    hook.cleanup_entered.acquire().await?.forget();
-    let type_path = root
-        .path()
-        .join(context.default_environment_id.to_string())
-        .join(format!("{:08x}", worker_id.agent_id.type_tag()));
-    let moved = type_path.with_extension("moved");
-    std::fs::rename(&type_path, &moved)?;
-    std::fs::write(&type_path, b"block directory traversal")?;
-    hook.cleanup_release.add_permits(1);
-    let first_error = first.await?.unwrap_err().to_string();
-    assert!(first_error.contains("Not a directory"), "{first_error}");
-    let retry_error = executor
-        .delete_worker(&worker_id)
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(retry_error.contains("Not a directory"), "{retry_error}");
-    assert!(executor.worker_is_cached(&owned).await);
-    executor.get_worker_metadata(&worker_id).await?;
-    assert_eq!(hook.calls(WorkerDeletionStage::DurableStateRemoved), 0);
-
-    std::fs::remove_file(&type_path)?;
-    std::fs::rename(&moved, &type_path)?;
-    executor.delete_worker(&worker_id).await?;
-    assert_eq!(hook.calls(WorkerDeletionStage::ExecutionFenced), 1);
-    assert_eq!(hook.calls(WorkerDeletionStage::BarriersClosed), 1);
-    assert_eq!(hook.calls(WorkerDeletionStage::RuntimeStopped), 3);
-    assert_eq!(hook.calls(WorkerDeletionStage::DurableStateRemoved), 1);
-    assert!(!executor.worker_is_cached(&owned).await);
-    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
     Ok(())
 }
 
@@ -13316,7 +13224,8 @@ async fn wallet_read_answered_before_a_deletion_gets_the_deletion_refusal(
 // An external-tool lookup that names an incarnation is answered by the existing-only guard for
 // that incarnation: the matching incarnation is looked up, another one is not found, and one whose
 // deletion is running gets the deletion's refusal, for a lookup and for a call, rather than an
-// answer from the deleting generation. A fresh owner cannot be named by a fingerprint.
+// answer from the deleting generation. A virtual receipt can be looked up without a fingerprint,
+// but that lookup never creates an owner. A fresh owner cannot be named by a fingerprint.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -13395,6 +13304,52 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
         unnamed.contains("VALIDATION")
             && unnamed.contains("requires its expected agent fingerprint"),
         "{unnamed}"
+    );
+
+    let virtual_owner = OwnedAgentId::new(
+        context.default_environment_id,
+        &AgentId::external_tool_owner(
+            context.default_environment_id,
+            component.id,
+            &IdempotencyKey::fresh(),
+        ),
+    );
+    assert!(
+        executor
+            .get_worker_metadata_opt(&virtual_owner)
+            .await?
+            .is_none()
+    );
+    let mut virtual_lookup = lookup(fingerprint);
+    virtual_lookup.target = Some(crate::agent::id_target(&virtual_owner));
+    virtual_lookup.expected_callee_fingerprint = None;
+    for _ in 0..2 {
+        let result = executor
+            .invoke_agent_session(virtual_lookup.clone())
+            .await?;
+        assert_eq!(
+            result.status,
+            Some(golem_api_grpc::proto::golem::worker::InvocationStatus::Unknown as i32)
+        );
+        assert!(
+            executor
+                .get_worker_metadata_opt(&virtual_owner)
+                .await?
+                .is_none()
+        );
+    }
+    virtual_lookup.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32;
+    let virtual_call = answer(executor.invoke_agent_session(virtual_lookup).await);
+    assert!(
+        virtual_call.contains("VALIDATION")
+            && virtual_call.contains("existing tool target must be a real agent"),
+        "{virtual_call}"
+    );
+    assert!(
+        executor
+            .get_worker_metadata_opt(&virtual_owner)
+            .await?
+            .is_none()
     );
 
     let owned = worker_id.clone();
@@ -13694,3 +13649,6 @@ async fn wallet_read_answered_before_an_executor_shutdown_is_retried_elsewhere(
     );
     Ok(())
 }
+
+#[cfg(unix)]
+mod unix;

@@ -12,22 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use cap_fs_ext::MetadataExt as _;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(in crate::filesystem::sandbox) enum NativeFileIdentity {
-    #[cfg(unix)]
-    Unix { device: u64, inode: u64 },
-    #[cfg(windows)]
-    Windows {
-        volume_serial_number: u32,
-        file_index: u64,
-    },
-    #[cfg(test)]
-    Scripted(String),
-}
+#[cfg(unix)]
+#[path = "unix.rs"]
+mod platform;
+#[cfg(windows)]
+#[path = "windows.rs"]
+mod platform;
+#[cfg(not(any(unix, windows)))]
+#[path = "other.rs"]
+mod platform;
+
+pub(in crate::filesystem::sandbox) use platform::{NativeFileIdentity, native_file_identity};
 
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub(crate) struct SandboxDirectoryId(pub(in crate::filesystem::sandbox) NativeFileIdentity);
@@ -44,29 +42,4 @@ pub(in crate::filesystem::sandbox) fn directory_identity(
 ) -> std::io::Result<SandboxDirectoryId> {
     let metadata = directory.dir_metadata()?;
     Ok(SandboxDirectoryId(native_file_identity(&metadata)?))
-}
-
-pub(in crate::filesystem::sandbox) fn native_file_identity(
-    metadata: &cap_std::fs::Metadata,
-) -> std::io::Result<NativeFileIdentity> {
-    #[cfg(unix)]
-    return Ok(NativeFileIdentity::Unix {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    });
-    #[cfg(windows)]
-    return Ok(NativeFileIdentity::Windows {
-        volume_serial_number: u32::try_from(metadata.dev()).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "native volume serial number does not fit its opaque identity",
-            )
-        })?,
-        file_index: metadata.ino(),
-    });
-    #[cfg(not(any(unix, windows)))]
-    return Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "native file identity is unavailable on this target",
-    ));
 }

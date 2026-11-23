@@ -56,6 +56,7 @@ impl NamespaceRoutedKeyValueStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
     async fn set(
         &self,

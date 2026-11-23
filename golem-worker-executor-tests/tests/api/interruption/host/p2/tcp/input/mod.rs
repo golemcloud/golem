@@ -22,7 +22,7 @@ use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting}
 
 macro_rules! pending_case {
     ($name:ident, $operation:ident, Storage, $mode:ident) => {
-        pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, $operation, Storage, $mode);
+        pending_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, $operation, Storage, $mode);
     };
     ($(#[$attr:meta])* $name:ident, $operation:ident, $resource:ident, $mode:ident) => {
         $(#[$attr])*
@@ -66,18 +66,49 @@ pending_case!(
     Compute,
     Ephemeral
 );
-pending_case!(
-    durable_p2_blocking_read_managed_xfs_storage_quota,
-    Read,
-    Storage,
-    Durable
-);
-pending_case!(
-    ephemeral_p2_blocking_read_managed_xfs_storage_quota,
-    Read,
-    Storage,
-    Ephemeral
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    pending_case!(
+        durable_p2_blocking_read_managed_xfs_storage_quota,
+        Read,
+        Storage,
+        Durable
+    );
+    pending_case!(
+        ephemeral_p2_blocking_read_managed_xfs_storage_quota,
+        Read,
+        Storage,
+        Ephemeral
+    );
+    pending_case!(
+        durable_p2_blocking_skip_managed_xfs_storage_quota,
+        Skip,
+        Storage,
+        Durable
+    );
+    pending_case!(
+        ephemeral_p2_blocking_skip_managed_xfs_storage_quota,
+        Skip,
+        Storage,
+        Ephemeral
+    );
+    pending_case!(
+        durable_p2_blocking_splice_managed_xfs_storage_quota,
+        Splice,
+        Storage,
+        Durable
+    );
+    pending_case!(
+        ephemeral_p2_blocking_splice_managed_xfs_storage_quota,
+        Splice,
+        Storage,
+        Ephemeral
+    );
+}
+
 pending_case!(durable_p2_blocking_skip_memory_quota, Skip, Memory, Durable);
 pending_case!(
     ephemeral_p2_blocking_skip_memory_quota,
@@ -97,18 +128,7 @@ pending_case!(
     Compute,
     Ephemeral
 );
-pending_case!(
-    durable_p2_blocking_skip_managed_xfs_storage_quota,
-    Skip,
-    Storage,
-    Durable
-);
-pending_case!(
-    ephemeral_p2_blocking_skip_managed_xfs_storage_quota,
-    Skip,
-    Storage,
-    Ephemeral
-);
+
 pending_case!(
     durable_p2_blocking_splice_memory_quota,
     Splice,
@@ -131,18 +151,6 @@ pending_case!(
     ephemeral_p2_blocking_splice_compute_quota_prepaid,
     Splice,
     Compute,
-    Ephemeral
-);
-pending_case!(
-    durable_p2_blocking_splice_managed_xfs_storage_quota,
-    Splice,
-    Storage,
-    Durable
-);
-pending_case!(
-    ephemeral_p2_blocking_splice_managed_xfs_storage_quota,
-    Splice,
-    Storage,
     Ephemeral
 );
 
