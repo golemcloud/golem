@@ -90,6 +90,8 @@ pub struct InvocationSessionState {
     accepted_agent_id: Option<AgentId>,
     accepted_revision: Option<u64>,
     accepted_epoch: Option<u64>,
+    queued_acceptance: Option<InvocationAccepted>,
+    deferred_input_mappings: bool,
     resume: bool,
     joined_origin_observer: bool,
     resume_cursors: HashMap<(u64, u64), Option<[u8; 24]>>,
@@ -115,6 +117,8 @@ impl Default for InvocationSessionState {
             accepted_agent_id: None,
             accepted_revision: None,
             accepted_epoch: None,
+            queued_acceptance: None,
+            deferred_input_mappings: false,
             resume: false,
             joined_origin_observer: false,
             resume_cursors: HashMap::new(),
@@ -175,6 +179,9 @@ impl InvocationSessionState {
     ) -> Result<(), String> {
         let message = match request.request.as_ref() {
             Some(invocation_request::Request::Start(start)) => {
+                if self.phase == SessionPhase::Initial {
+                    self.deferred_input_mappings = start.captured_method_input.is_some();
+                }
                 if start.external_tool.is_some() && start.input.is_some() {
                     return Err(
                         "external tool input must not use the agent-method input field".to_string(),
@@ -218,10 +225,21 @@ impl InvocationSessionState {
             .response
             .as_ref()
             .ok_or_else(|| "invocation response has no payload".to_string())?;
+        if self.queued_acceptance.is_some()
+            && !matches!(
+                response,
+                invocation_response::Response::Ready(_)
+                    | invocation_response::Response::Finished(_)
+                    | invocation_response::Response::AttachmentRevoked(_)
+            )
+        {
+            return Err("schema-dependent response received before readiness".into());
+        }
         if self.joined_origin_observer
             && !matches!(
                 response,
                 invocation_response::Response::Result(_)
+                    | invocation_response::Response::Ready(_)
                     | invocation_response::Response::Finished(_)
             )
         {
@@ -256,6 +274,28 @@ impl InvocationSessionState {
             }
             (SessionPhase::Active, invocation_response::Response::Accepted(_)) => {
                 Err("invocation response contains more than one acceptance".to_string())
+            }
+            (SessionPhase::Active, invocation_response::Response::Ready(ready)) => {
+                let pending = self
+                    .queued_acceptance
+                    .as_ref()
+                    .ok_or_else(|| "invocation readiness requires queued acceptance".to_string())?;
+                if pending.agent_id != ready.agent_id
+                    || pending.idempotency_key != ready.idempotency_key
+                    || pending.environment_id != ready.environment_id
+                    || pending.callee_fingerprint != ready.callee_fingerprint
+                    || pending.attachment_id != ready.attachment_id
+                    || pending.attempt_id != ready.attempt_id
+                    || pending.epoch != ready.epoch
+                    || pending.method_name != ready.method_name
+                    || ready.component_revision.is_none()
+                    || ready.joined_origin_observer != pending.joined_origin_observer
+                {
+                    return Err("invocation readiness changed its accepted identity".into());
+                }
+                self.accept(ready)?;
+                self.queued_acceptance = None;
+                Ok(())
             }
             (SessionPhase::Active, invocation_response::Response::Rejected(_)) => {
                 Err("invocation rejection may only appear before acceptance".to_string())
@@ -406,6 +446,9 @@ impl InvocationSessionState {
     ) -> Result<(), String> {
         if self.joined_origin_observer {
             return Err("an invocation observer cannot send stream controls".into());
+        }
+        if self.queued_acceptance.is_some() {
+            return Err("stream controls require execution readiness".into());
         }
         match (self.phase, message) {
             (
@@ -734,6 +777,20 @@ impl InvocationSessionState {
                         .to_string(),
                 );
             }
+            if accepted.component_revision.is_none() {
+                if !accepted.stream_mappings.is_empty()
+                    || !self.resume_cursors.is_empty()
+                    || accepted.tool_name.is_some()
+                {
+                    return Err("queued resume cannot contain stream mappings or cursors".into());
+                }
+                self.idempotency_key = Some(*invocation_key);
+                self.accepted_agent_id = Some(*agent_id);
+                self.accepted_epoch = Some(accepted.epoch);
+                self.queued_acceptance = Some(accepted.clone());
+                self.phase = SessionPhase::Active;
+                return Ok(());
+            }
             accepted.component_revision.ok_or_else(|| {
                 "durable invocation acceptance has no pinned component revision".to_string()
             })?;
@@ -876,10 +933,30 @@ impl InvocationSessionState {
                 &accepted.callee_fingerprint,
                 "durable invocation acceptance callee fingerprint",
             )?;
+            if accepted.component_revision.is_none() {
+                if !accepted.stream_mappings.is_empty() || self.expected_tool.is_some() {
+                    return Err("queued acceptance cannot publish schema-dependent mappings".into());
+                }
+                self.idempotency_key = Some(*invocation_key);
+                self.accepted_agent_id = Some(*agent_id);
+                self.accepted_epoch = Some(accepted.epoch);
+                self.joined_origin_observer = accepted.joined_origin_observer;
+                self.queued_acceptance = Some(accepted.clone());
+                self.phase = SessionPhase::Active;
+                return Ok(());
+            }
             accepted.component_revision.ok_or_else(|| {
                 "durable invocation acceptance has no pinned component revision".to_string()
             })?;
             validate_accepted_mappings(&accepted.stream_mappings)?;
+            if self.deferred_input_mappings {
+                for mapping in &accepted.stream_mappings {
+                    if mapping.role() == StreamMappingRole::Input {
+                        self.inputs.entry(mapping.transport_stream_id).or_default();
+                    }
+                }
+                self.deferred_input_mappings = false;
+            }
             let expected_inputs = self.inputs.keys().copied().collect::<HashSet<_>>();
             let mapped_inputs = accepted
                 .stream_mappings
@@ -948,6 +1025,12 @@ impl InvocationSessionState {
         self.accepted_revision = accepted.component_revision;
         self.accepted_epoch = durable_acceptance.then_some(accepted.epoch);
         self.joined_origin_observer = accepted.joined_origin_observer;
+        if accepted.component_revision.is_none()
+            && !self.allows_no_result
+            && self.expected_tool.is_none()
+        {
+            self.queued_acceptance = Some(accepted.clone());
+        }
         self.phase = SessionPhase::Active;
         Ok(())
     }
@@ -1533,7 +1616,7 @@ impl InvocationSessionState {
             Some(invocation_session_completion::Outcome::Success(_)) => {}
             None => return Err("invocation completion has no outcome".to_string()),
         }
-        if self.joined_origin_observer {
+        if self.joined_origin_observer || self.queued_acceptance.is_some() {
             self.phase = SessionPhase::Complete;
             return Ok(());
         }
@@ -2336,6 +2419,337 @@ mod tests {
             .map(|stream_id| mapping(*stream_id, StreamMappingRole::Input))
             .collect();
         acceptance
+    }
+
+    mod queued_completion_boundary {
+        use super::*;
+        use test_r::test;
+
+        #[test]
+        fn ready_restores_input_and_output_terminal_requirements() {
+            for carrier in ["native", "captured", "resume"] {
+                let mut state = InvocationSessionState::default();
+                let mut request = if carrier == "resume" {
+                    resume_attach(vec![])
+                } else {
+                    trusted_start(record(vec![stream(7)]))
+                };
+                if carrier == "captured" {
+                    let Some(invocation_request::Request::Start(start)) = request.request.as_mut()
+                    else {
+                        unreachable!()
+                    };
+                    start.input = None;
+                    start.captured_method_input = Some(vec![]);
+                }
+                state.validate_trusted_request(&request).unwrap();
+                let acceptance = if carrier == "resume" {
+                    resumed_acceptance(vec![])
+                } else {
+                    accepted()
+                };
+                let Some(invocation_response::Response::Accepted(mut queued)) = acceptance.response
+                else {
+                    unreachable!()
+                };
+                queued.component_revision = None;
+                state
+                    .validate_response(&response(invocation_response::Response::Accepted(
+                        queued.clone(),
+                    )))
+                    .unwrap();
+                assert!(state.validate_response(&result(scalar(1))).is_err());
+                queued.component_revision = Some(12);
+                queued.stream_mappings = vec![
+                    mapping(7, StreamMappingRole::Input),
+                    mapping(8, StreamMappingRole::Output),
+                ];
+                let epoch = queued.epoch;
+                state
+                    .validate_response(&response(invocation_response::Response::Ready(queued)))
+                    .unwrap();
+                assert!(
+                    state
+                        .validate_response(&failure(InvocationFailureKind::Execution))
+                        .is_err(),
+                    "{carrier}: Ready must end the queued terminal exemption"
+                );
+                let mut input_terminal = consumer_end(7, StreamDirection::Input, 0, true);
+                input_terminal.epoch = epoch;
+                state
+                    .validate_response(&response(invocation_response::Response::StreamEnd(
+                        input_terminal,
+                    )))
+                    .unwrap();
+                assert!(
+                    state
+                        .validate_response(&failure(InvocationFailureKind::Execution))
+                        .is_err(),
+                    "{carrier}: the output is still open"
+                );
+                let mut output_terminal = output_end(8, 0);
+                output_terminal.epoch = epoch;
+                state
+                    .validate_response(&response(invocation_response::Response::StreamEnd(
+                        output_terminal,
+                    )))
+                    .unwrap();
+                state
+                    .validate_response(&failure(InvocationFailureKind::Execution))
+                    .unwrap();
+                assert!(state.is_complete());
+            }
+        }
+
+        #[test]
+        fn queued_failure_still_validates_outcomes_and_closes_both_directions() {
+            for resumed in [false, true] {
+                for kind in [
+                    InvocationFailureKind::Execution,
+                    InvocationFailureKind::Protocol,
+                    InvocationFailureKind::Internal,
+                    InvocationFailureKind::Transport,
+                ] {
+                    let mut state = InvocationSessionState::default();
+                    let start = if resumed {
+                        resume_attach(vec![])
+                    } else {
+                        trusted_start(record(vec![stream(7)]))
+                    };
+                    state.validate_trusted_request(&start).unwrap();
+                    let acceptance = if resumed {
+                        resumed_acceptance(vec![])
+                    } else {
+                        accepted()
+                    };
+                    let Some(invocation_response::Response::Accepted(mut queued)) =
+                        acceptance.response
+                    else {
+                        unreachable!()
+                    };
+                    queued.component_revision = None;
+                    state
+                        .validate_response(&response(invocation_response::Response::Accepted(
+                            queued.clone(),
+                        )))
+                        .unwrap();
+                    let malformed = [
+                        response(invocation_response::Response::Finished(
+                            InvocationSessionCompletion { outcome: None },
+                        )),
+                        success(),
+                        failure(InvocationFailureKind::Unspecified),
+                        response(invocation_response::Response::Finished(
+                            InvocationSessionCompletion {
+                                outcome: Some(invocation_session_completion::Outcome::Failure(
+                                    InvocationFailure {
+                                        kind: InvocationFailureKind::Protocol as i32,
+                                        worker_error: Some(Default::default()),
+                                        ..Default::default()
+                                    },
+                                )),
+                            },
+                        )),
+                    ];
+                    for response in malformed {
+                        assert!(state.validate_response(&response).is_err());
+                        assert!(!state.is_complete());
+                    }
+                    state.validate_response(&failure(kind)).unwrap();
+                    assert!(state.is_complete());
+                    queued.component_revision = Some(12);
+                    assert!(
+                        state
+                            .validate_response(&response(invocation_response::Response::Ready(
+                                queued
+                            )))
+                            .is_err()
+                    );
+                    assert!(state.validate_response(&failure(kind)).is_err());
+                    assert!(
+                        state
+                            .validate_trusted_request(&trusted_request(
+                                invocation_request::Request::StreamEnd(input_end(7, 0))
+                            ))
+                            .is_err()
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn ready_does_not_exempt_unacknowledged_input_terminals() {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_trusted_request(&trusted_start(record(vec![stream(7)])))
+                .unwrap();
+            let Some(invocation_response::Response::Accepted(mut queued)) = accepted().response
+            else {
+                unreachable!()
+            };
+            queued.component_revision = None;
+            state
+                .validate_response(&response(invocation_response::Response::Accepted(
+                    queued.clone(),
+                )))
+                .unwrap();
+            queued.component_revision = Some(12);
+            queued.stream_mappings = vec![mapping(7, StreamMappingRole::Input)];
+            state
+                .validate_response(&response(invocation_response::Response::Ready(queued)))
+                .unwrap();
+            state
+                .validate_trusted_request(&trusted_request(invocation_request::Request::StreamEnd(
+                    input_end(7, 0),
+                )))
+                .unwrap();
+            assert!(
+                state
+                    .validate_response(&failure(InvocationFailureKind::Execution))
+                    .is_err()
+            );
+            state
+                .validate_response(&input_ack(7, 0, durable_offset(1)))
+                .unwrap();
+            state
+                .validate_response(&failure(InvocationFailureKind::Execution))
+                .unwrap();
+            assert!(state.is_complete());
+        }
+    }
+
+    #[test]
+    fn queued_acceptance_requires_readiness_without_changing_identity() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&trusted_start(record(vec![stream(7)])))
+            .unwrap();
+        let mut queued = accepted();
+        let Some(invocation_response::Response::Accepted(value)) = queued.response.as_mut() else {
+            unreachable!()
+        };
+        value.component_revision = None;
+        state.validate_response(&queued).unwrap();
+        assert!(state.validate_response(&result(record(vec![]))).is_err());
+
+        let Some(invocation_response::Response::Accepted(mut ready)) =
+            accepted_with_inputs(&[7]).response
+        else {
+            unreachable!()
+        };
+        ready.epoch = 2;
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::Ready(
+                    ready.clone()
+                )))
+                .is_err()
+        );
+        ready.epoch = 1;
+        state
+            .validate_response(&response(invocation_response::Response::Ready(
+                ready.clone(),
+            )))
+            .unwrap();
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::Ready(ready)))
+                .is_err()
+        );
+        state.validate_response(&result(record(vec![]))).unwrap();
+    }
+
+    #[test]
+    fn queued_native_input_can_fail_before_preparation() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&trusted_start(record(vec![stream(7)])))
+            .unwrap();
+        let mut acceptance = accepted();
+        let Some(invocation_response::Response::Accepted(queued)) = acceptance.response.as_mut()
+        else {
+            unreachable!()
+        };
+        queued.component_revision = None;
+        state.validate_response(&acceptance).unwrap();
+
+        // No bindings exist yet, so the input cannot be ended or cancelled.
+        assert!(
+            state
+                .validate_trusted_request(&trusted_request(invocation_request::Request::StreamEnd(
+                    input_end(7, 0),
+                )))
+                .is_err()
+        );
+        // A selected Store can reject the method before publishing Ready.
+        state
+            .validate_response(&failure(InvocationFailureKind::Execution))
+            .expect("an accepted invocation must publish its pre-preparation execution failure");
+        assert!(state.is_complete());
+    }
+
+    #[test]
+    fn queued_scalar_input_can_fail_before_preparation() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&trusted_start(record(vec![])))
+            .unwrap();
+        let mut acceptance = accepted();
+        let Some(invocation_response::Response::Accepted(queued)) = acceptance.response.as_mut()
+        else {
+            unreachable!()
+        };
+        queued.component_revision = None;
+        state.validate_response(&acceptance).unwrap();
+        state
+            .validate_response(&failure(InvocationFailureKind::Execution))
+            .unwrap();
+        assert!(state.is_complete());
+    }
+
+    #[test]
+    fn queued_observers_receive_readiness_or_the_retained_failure() {
+        for fails_before_preparation in [false, true] {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_trusted_request(&trusted_start(record(vec![stream(7)])))
+                .unwrap();
+            let mut acceptance = accepted();
+            let Some(invocation_response::Response::Accepted(queued)) =
+                acceptance.response.as_mut()
+            else {
+                unreachable!()
+            };
+            queued.component_revision = None;
+            queued.joined_origin_observer = true;
+            queued.attachment_id = None;
+            queued.attempt_id = None;
+            queued.epoch = 0;
+            state.validate_response(&acceptance).unwrap();
+            assert!(state.validate_response(&success()).is_err());
+            if !fails_before_preparation {
+                let Some(invocation_response::Response::Accepted(mut ready)) = acceptance.response
+                else {
+                    unreachable!()
+                };
+                ready.component_revision = Some(2);
+                ready.stream_mappings = vec![mapping(7, StreamMappingRole::Input)];
+                state
+                    .validate_response(&response(invocation_response::Response::Ready(ready)))
+                    .unwrap();
+            }
+            assert!(
+                state
+                    .validate_trusted_request(&trusted_request(
+                        invocation_request::Request::StreamEnd(input_end(7, 0))
+                    ))
+                    .is_err()
+            );
+            state
+                .validate_response(&failure(InvocationFailureKind::Execution))
+                .unwrap();
+            assert!(state.is_complete());
+        }
     }
 
     #[test]
