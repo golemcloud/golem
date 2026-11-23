@@ -66,8 +66,8 @@ brackets, and nested map forms return `400` naming the input. Original schema co
 also apply to collection elements and map keys and values.
 
 In 2.0, typed agent endpoints reject unknown query keys with a named `400`, including on
-body methods and cache hits. Declared phantom selectors and applicable DurableStreams
-read controls remain recognized. File routes still ignore query strings and raw handlers
+body methods and cache hits. The query name of a declared agent ID binding and applicable
+DurableStreams read controls remain recognized. File routes still ignore query strings and raw handlers
 receive them unchanged. Stream resource slots are not inferred query inputs; inference
 uses the declared endpoint verb, not expanded DurableStreams resource verbs.
 

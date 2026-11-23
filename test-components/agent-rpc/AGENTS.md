@@ -228,7 +228,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-recurring-task-ts` | Recurring (cron-like) tasks via self-scheduling |
 | `golem-wait-for-external-input-ts` | Waiting for external input using Golem promises (human-in-the-loop) |
 | `golem-add-webhook-ts` | Creating and awaiting webhooks for webhook-driven external APIs |
-| `golem-multi-instance-agent-ts` | Creating multiple agent instances with phantom agents |
+| `golem-multi-instance-agent-ts` | Creating multiple agents with the same constructor parameters as agents without a key |
 | `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-ts` | Exposing an agent over HTTP with mount paths and endpoints |
 | `golem-http-params-ts` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -252,7 +252,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-profiles-and-environments` | CLI profiles, app environments, and component presets |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
-| `golem-create-agent-instance-ts` | Creating a new agent instance with `golem agent new` |
+| `golem-create-agent-instance-ts` | Creating a new agent instance with `golem agent create` or `golem agent upsert` |
 | `golem-invoke-agent-ts` | Invoking a Golem agent method from the CLI |
 | `golem-trigger-agent-ts` | Triggering a fire-and-forget invocation from the CLI |
 | `golem-schedule-agent-ts` | Scheduling a future invocation from the CLI |
@@ -278,17 +278,17 @@ This is a **Golem Application** — a distributed computing project. TypeScript 
 Key concepts:
 - **Component**: A deployable unit built from your TypeScript sources, defining one or more agent types
 - **Agent type**: Declared with `defineAgent({ ... })` and given behaviour with `.implement({ ... })` from `@golemcloud/golem-ts-sdk`
-- **Agent (worker)**: A running instance of an agent type, identified by its `id` record values, with persistent state
+- **Agent (worker)**: A running instance of an agent type, identified by its agent ID (a UUID), with persistent state
 
 The SDK is schema-driven: method inputs and return values are described with [Standard Schema](https://standardschema.dev/) values. **Zod** is used throughout these examples; **Valibot** and **ArkType** also work (any Standard Schema vendor). There are no classes and no decorators.
 
 ## Agent Fundamentals
 
-- Every agent is uniquely identified by its **`id` record values** — two agents with the same id values are the same agent. The id fields are the constructor parameters.
+- Every agent is identified by its **agent ID**. A keyed agent also has a **key**: the agent type and its `id` record values (the constructor parameters). There is at most one keyed agent per key, and `upsert` returns it. An agent created without a key is reachable only by its ID.
 - Agents are **durable by default** — state persists across invocations, failures, and restarts.
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no locks needed.
 - Agents can **spawn / call other agents** via **RPC** (see Calling Other Agents).
-- An agent is created implicitly on first invocation — no separate creation step needed.
+- A keyed agent is created implicitly by `upsert` or by the first invocation by key — no separate creation step needed.
 - **Futures cannot outlive invocations** — every `Promise` started during an invocation must be `await`ed before the handler returns; do not store unresolved promises in state to poll them from a later invocation.
 
 ## Durability & Automatic Retries
@@ -374,7 +374,7 @@ s.result(okSchema, errSchema)    // a typed result<ok, err> return (see Typed Er
 
 ## State
 
-State lives entirely in the object returned by `init()` and is read/written through `this` in the handlers — there are no class fields. `init` receives an `InitContext` (`{ id, caller, phantomId, config }`); handlers receive the decoded input and an `InvocationContext` (`(input, ctx) => ...`, with the caller in `ctx.caller`), and their `this` also carries SDK helpers `getId()`, `getPhantomId()`, and `config`.
+State lives entirely in the object returned by `init()` and is read/written through `this` in the handlers — there are no class fields. `init` receives an `InitContext` (`{ id, principal, config }`); handlers' `this` also carries SDK helpers `getId()` (the agent's `AgentId`), `getPrincipal()`, and `config`.
 
 ```typescript
 export const HttpAgentImpl = HttpAgent.implement({
@@ -447,13 +447,13 @@ Config values are provisioned via `golem.yaml` (`env`/`envDefaults`/`secretDefau
 
 ## Calling Other Agents (RPC)
 
-Every agent definition exposes a `.client` factory. Use `.get(id)` for a durable agent, `.getPhantom(id, phantomId)` for a known phantom, or `.newPhantom(id)` to create a phantom and return `{ client, agentId, phantomId }`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
+Every agent definition exposes a `.client` factory. Use `.upsert(id)` for the keyed agent of the constructor parameters (created when it is missing), `await .create(id, { keyed, config, env })` to create a new agent (without `keyed`, it has no key and a new agent ID; with `keyed`, an existing keyed agent rejects with a `conflict` error), or `await .getById(agentId)` to address an existing agent by its ID (an unknown ID rejects with `not-found`). `await client.agentId()` returns a durable client's agent ID. An ephemeral agent offers only `.upsert(id)`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
 
 ```typescript
 import { Counter } from './counter-agent.js';
 
-const next = await Counter.client.get({ name: 'c1' }).add({ by: 5 });
-Counter.client.get({ name: 'c1' }).add.trigger({ by: 1 });   // fire-and-forget
+const next = await Counter.client.upsert({ name: 'c1' }).add({ by: 5 });
+Counter.client.upsert({ name: 'c1' }).add.trigger({ by: 1 });   // fire-and-forget
 ```
 
 ## Snapshotting

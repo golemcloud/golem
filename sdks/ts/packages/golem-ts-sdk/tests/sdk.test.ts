@@ -555,7 +555,6 @@ describe('defineAgent', () => {
         whoami(_input, ctx) {
           // Identity helpers are available on `this`; the caller is on `ctx`.
           const id = this.getId();
-          void this.getPhantomId();
           void ctx.caller;
           return id.value;
         },
