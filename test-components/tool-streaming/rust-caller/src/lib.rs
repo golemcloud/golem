@@ -5,7 +5,7 @@ use environment_probe_tool_guest_client::{
 };
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
-    AgentStream, Config, InputStream, InvocationContext, Principal, RpcError, Secret, ToolError,
+    AgentStream, Config, InputStream, InvocationContext, RpcError, Secret, ToolError,
     ToolInvocation, ToolInvocationOutput, pump_tool_stdin, spawn_local, tool_protocol_error,
 };
 use golem_rust::durability::{Durability, DurableFunctionType};
@@ -793,6 +793,7 @@ pub trait ToolStreamingCaller {
     async fn hold_completed_reconstruction_overlapping_custom(&self);
     async fn single_store_http_atomic_probe(&self);
     async fn principal_context(&self, context: InvocationContext) -> Vec<String>;
+    async fn run_bash(&self, script: String) -> String;
     async fn matrix_core_observation(&self) -> MatrixObservation;
 }
 
@@ -875,10 +876,6 @@ fn chunks(input: Vec<u8>, fragment_size: u32) -> Vec<Vec<u8>> {
         .chunks(fragment_size)
         .map(|chunk| chunk.to_vec())
         .collect()
-}
-
-fn principal_class(principal: &Principal) -> &'static str {
-    principal.kind().as_str()
 }
 
 fn evidence(
@@ -1443,7 +1440,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         capable: bool,
         gate: Option<golem_rust::PromiseId>,
     ) -> Vec<String> {
-        ToolStreamingCallerClient::get(target)
+        ToolStreamingCallerClient::upsert(target)
             .produce_tool_results(capable, gate)
             .await
             .collect()
@@ -5453,39 +5450,87 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn principal_context(&self, context: InvocationContext) -> Vec<String> {
-        let caller_class = principal_class(context.caller().immediate()).to_string();
+        let caller_text = format!(
+            "{}|{}",
+            context.caller().original(),
+            context.caller().immediate()
+        );
         let invocation = StreamingClient::default()
-            .run("nested-principal".to_string(), input_stream(Vec::new()))
+            .run("nested-caller".to_string(), input_stream(Vec::new()))
             .await
-            .expect("start nested principal tool");
+            .expect("start nested caller tool");
         let collected = invocation.collect().await;
-        let result = collected.result.expect("collect nested principal result");
+        let result = collected.result.expect("collect nested caller result");
         assert_eq!(result.bytes_read, 0);
         assert!(!result.output_closed);
         assert!(
             collected
                 .stderr
-                .expect("collect nested principal stderr")
+                .expect("collect nested caller stderr")
                 .is_none(),
-            "nested principal tool has no stderr"
+            "nested caller tool has no stderr"
         );
-        let provider_classes = String::from_utf8(
+        let provider_callers = String::from_utf8(
             collected
                 .stdout
-                .expect("collect nested principal stdout")
-                .expect("nested principal tool has stdout"),
+                .expect("collect nested caller stdout")
+                .expect("nested caller tool has stdout"),
         )
-        .expect("principal classes are UTF-8");
-        let (outer_class, nested_class) = provider_classes
-            .split_once(':')
-            .expect("provider returns outer and nested principal classes");
-        assert_eq!(outer_class, caller_class);
-        assert_eq!(nested_class, caller_class);
-        vec![
-            caller_class,
-            outer_class.to_string(),
-            nested_class.to_string(),
-        ]
+        .expect("caller texts are UTF-8");
+        let (outer, nested) = provider_callers
+            .split_once('\n')
+            .expect("provider returns its caller and the nested tool's caller");
+        vec![caller_text, outer.to_string(), nested.to_string()]
+    }
+
+    async fn run_bash(&self, script: String) -> String {
+        let input = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(
+                // The canonical input of `bash run`: the positional script, then the options.
+                [
+                    ("script", SchemaType::string()),
+                    ("cwd", SchemaType::string()),
+                    ("timeout", SchemaType::u32()),
+                ]
+                .into_iter()
+                .map(|(name, body)| golem_rust::schema::NamedFieldType {
+                    name: name.to_string(),
+                    body,
+                    metadata: Default::default(),
+                })
+                .collect(),
+            )),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String(script),
+                    SchemaValue::String(String::new()),
+                    SchemaValue::U32(60),
+                ],
+            },
+        );
+        let result = ToolRpc::create("bash")
+            .expect("bash tool RPC creation failed")
+            .invoke_and_await(
+                vec!["run".to_string()],
+                golem_rust::encode_typed_schema_value(&input).expect("encode bash wire input"),
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("bash result");
+        let value = decode_typed_schema_value_owned(result.result.expect("bash returns its output"))
+            .expect("decode bash output");
+        let SchemaValue::Record { fields } = value.value() else {
+            panic!("bash returns a record")
+        };
+        let [SchemaValue::String(stdout), SchemaValue::String(stderr), SchemaValue::U8(0), _] =
+            fields.as_slice()
+        else {
+            panic!("bash failed: {fields:?}")
+        };
+        assert!(stderr.is_empty(), "bash wrote to stderr: {stderr}");
+        stdout.clone()
     }
 
     async fn matrix_core_observation(&self) -> MatrixObservation {

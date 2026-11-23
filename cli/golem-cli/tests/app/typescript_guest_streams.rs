@@ -158,7 +158,7 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: Result<&str
           init: () => ({}),
           methods: {
             async run() {
-              const a = StreamProvider.get('a');
+              const a = StreamProvider.upsert('a');
               let count = 0;
               const local = () => AgentStream.from([{ label: 'local', count: 2 }]);
               for await (const item of await a.echo(local())) count += item.count;
@@ -186,16 +186,16 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: Result<&str
               return `${count}:${await a.status()}`;
             },
             async forwardUnread() {
-              const a = StreamProvider.get('forward-source');
-              const b = StreamProvider.get('forward-target');
+              const a = StreamProvider.upsert('forward-source');
+              const b = StreamProvider.upsert('forward-target');
               let count = 0;
               // Forward the received endpoint to a distinct remote agent without reading it.
               for await (const item of await b.echo(await a.produce())) count += item.count;
               return `${count}:${await b.status()}`;
             },
             async fatalProducer() {
-              const provider = StreamProvider.get('fatal');
-              const sibling = await StreamProvider.get('sibling').produce();
+              const provider = StreamProvider.upsert('fatal');
+              const sibling = await StreamProvider.upsert('sibling').produce();
               const stream = await provider.produceError();
               let prefix = 0;
               let declared = 0;
@@ -214,7 +214,7 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: Result<&str
               return `${prefix}:${declared}:${siblingCount}:${await provider.status()}`;
             },
             async recoverableItems() {
-              const provider = StreamProvider.get('recoverable');
+              const provider = StreamProvider.upsert('recoverable');
               const observed: string[] = [];
               for await (const value of await provider.results()) {
                 observed.push(value.tag === 'ok' ? `ok:${value.val}` : `err:${value.val}`);
@@ -231,7 +231,7 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: Result<&str
                 drained();
               })());
               let settled = false;
-              const pending = StreamProvider.get('pending').pending.abortable(controller.signal, input)
+              const pending = StreamProvider.upsert('pending').pending.abortable(controller.signal, input)
                 .then(() => { settled = true; return 'unexpected-completion'; }, (error) => {
                   settled = true;
                   if (error !== reason) throw error;
@@ -248,7 +248,7 @@ async fn native_stream_guest_bridge_e2e(method_name: &str, expected: Result<&str
               const outcome = await pending;
               if (outcome !== 'cancelled') throw new Error(outcome);
               // Cancellation does not promise immediate cleanup of the remote worker.
-              return `${outcome}:${await StreamProvider.get('after-cancel').status()}`;
+              return `${outcome}:${await StreamProvider.upsert('after-cancel').status()}`;
             },
           },
         });

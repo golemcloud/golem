@@ -16,7 +16,7 @@
 
 package golem.runtime.rpc
 
-import golem.Datetime
+import golem.{AgentId, Datetime}
 import golem.host.PermissionsApi.ScopeCard
 import golem.host.js.schema.JsSchemaValueTree
 
@@ -32,6 +32,14 @@ import scala.concurrent.Future
  * card for the host call and leaves it usable.
  */
 private[rpc] trait RpcInvoker {
+
+  /**
+   * The ID of the target agent. Fails with [[AgentRpcException]] when the host
+   * reports an `rpc-error`.
+   */
+  def agentId(): Future[AgentId] =
+    Future.failed(AgentRpcException(AgentRpcError.Unknown("unsupported", Some("agent ID is not supported"))))
+
   def invokeAndAwait(
     functionName: String,
     input: JsSchemaValueTree,

@@ -52,7 +52,7 @@ configure({
   environment: 'local'
 })
 
-const c1 = await CounterAgent.get('c1')
+const c1 = CounterAgent.upsert('c1')
 const value = await c1.increment()
 ```
 </Tabs.Tab>
@@ -68,7 +68,7 @@ configure({
 })
 
 const program = Effect.gen(function* () {
-  const c1 = yield* CounterAgent.get("c1")
+  const c1 = yield* CounterAgent.upsert("c1")
   return yield* c1.increment()
 })
 
@@ -80,7 +80,7 @@ const value = await Effect.runPromise(program)
 use counter_agent_client::{configure, CounterAgent, GolemServer};
 
 configure(GolemServer::Local, "bridgetest", "local");
-let c1 = CounterAgent::get("c1").await?;
+let c1 = CounterAgent::upsert("c1")?;
 let value = c1.increment().await?;
 ```
 </Tabs.Tab>
@@ -93,7 +93,7 @@ import scala.concurrent.Await
 import scala.concurrent.duration._
 
 CounterAgentClient.configure(GolemServer.Local, "bridgetest", "local")
-val c1 = Await.result(CounterAgentClient.get("c1"), 30.seconds)
+val c1 = CounterAgentClient.upsert("c1")
 val value = Await.result(c1.increment(), 30.seconds)
 ```
 </Tabs.Tab>
@@ -104,7 +104,7 @@ val value = Await.result(c1.increment(), 30.seconds)
 //   "counter-agent-client/runtime" @runtime
 async fn main {
   @client.CounterAgent::configure(@runtime.Local, "bridgetest", "local")
-  let c1 = @client.CounterAgent::get("c1")
+  let c1 = @client.CounterAgent::upsert("c1")
   let value = c1.increment()
   println(value)
 }
@@ -128,7 +128,7 @@ func run(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	c1, err := client.GetCounterAgent(client.CounterAgentID{Name: "c1"})
+	c1, err := client.UpsertCounterAgent(client.CounterAgentID{Name: "c1"})
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ import { agentStream } from '@golemcloud/golem-ts-bridge'
 import { MediaAgent, configure } from 'media-agent-client/media-agent-client.js'
 
 configure({ server: { type: 'local' }, application: 'media-app', environment: 'prod' })
-const agent = await MediaAgent.get('studio-a')
+const agent = MediaAgent.upsert('studio-a')
 
 async function* samples() {
   yield 1
@@ -190,7 +190,7 @@ configure({ server: { type: "local" }, application: "media-app", environment: "p
 
 const program = Effect.scoped(
   Effect.gen(function* () {
-    const agent = yield* MediaAgent.get("studio-a")
+    const agent = yield* MediaAgent.upsert("studio-a")
 
     yield* agent.upload(Stream.make(1, 2))
 
@@ -218,7 +218,7 @@ use golem_client::invocation_session::AgentStream;
 use media_agent_client::{configure, GolemServer, MediaAgent};
 
 configure(GolemServer::Local, "media-app", "prod");
-let agent = MediaAgent::get("studio-a").await?;
+let agent = MediaAgent::upsert("studio-a")?;
 
 // Input-only: AgentStream::input accepts a Stream<Item = Result<T, E>>.
 let samples = AgentStream::input(stream::iter([
@@ -251,7 +251,7 @@ import scala.concurrent.duration._
 
 implicit val ec: ExecutionContext = ExecutionContext.global
 MediaAgentClient.configure(GolemServer.Local, "media-app", "prod")
-val agent = Await.result(MediaAgentClient.get("studio-a"), 30.seconds)
+val agent = MediaAgentClient.upsert("studio-a")
 
 var samples = List(1.toByte, 2.toByte)
 val input = AgentStream.fromPull(() => Future.successful(samples match {
@@ -281,7 +281,7 @@ Await.result(mixedConsumer.cancel(), 30.seconds)
 //   "media-agent-client/runtime" @runtime
 async fn main {
   @client.MediaAgent::configure(@runtime.Local, "media-app", "prod")
-  let agent = @client.MediaAgent::get("studio-a")
+  let agent = @client.MediaAgent::upsert("studio-a")
   let mut samples = [1, 2]
   let input = @runtime.AgentStream::from_next(async fn() { samples.remove(0) })
   agent.upload(input) // Input-only; ownership moves into the invocation.
@@ -317,7 +317,7 @@ func run(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	agent, err := client.GetMediaAgent(client.MediaAgentID{Name: "studio-a"})
+	agent, err := client.UpsertMediaAgent(client.MediaAgentID{Name: "studio-a"})
 	if err != nil {
 		return err
 	}
@@ -435,4 +435,4 @@ Streaming calls also take an optional [reconnect window](#reconnect-window).
 
 The generated libraries define all custom data types used in parameters and return types of agent methods. This means you get full compile-time type checking and IDE autocompletion when interacting with agents from external applications.
 
-Bridge libraries follow the same conventions as agent-to-agent RPC, providing `get`, `getPhantom`, and `newPhantom` constructors for agent instances.
+Bridge libraries follow the same conventions as agent-to-agent RPC. `upsert` addresses the keyed agent of the constructor parameters; it does not contact the server, which creates the agent on the first invocation when it is missing. Durable agent types also have `create`, which creates an agent (the keyed agent with the `keyed` option, otherwise a new agent without a key), and `getById`, which addresses an existing agent by its agent ID. Every durable client returns the ID of its agent with `agentId`. The exact names follow each language's conventions, such as `get_by_id` in Rust and MoonBit, and `CreateCounterAgent` and `GetCounterAgentByID` in Go.

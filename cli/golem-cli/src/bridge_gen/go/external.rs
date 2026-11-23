@@ -719,53 +719,112 @@ impl GoBridgeGenerator {
         w.blank();
 
         let ephemeral = matches!(self.agent_type.mode, AgentMode::Ephemeral);
-        let constructor = if ephemeral {
-            w.doc(&format!(
-                "{} returns a client for {agent_name}, an ephemeral agent: every call\n\
-                 runs in a fresh instance with these constructor arguments, and reports\n\
-                 that instance's id with its result. Options select the server\n\
-                 (bridge.WithConfiguration, otherwise the one set with bridge.Configure)\n\
-                 and configuration overrides ({}).",
-                n.new_phantom,
-                external_config_option(n)
-            ));
-            &n.new_phantom
-        } else {
-            w.doc(&format!(
-                "{} returns a client for the {agent_name} instance identified by id. The\n\
-                 instance is created on first use. Options select the server\n\
-                 (bridge.WithConfiguration, otherwise the one set with bridge.Configure),\n\
-                 a phantom instance (bridge.WithPhantomID, bridge.WithNewPhantomID) and\n\
-                 configuration overrides ({}).",
-                n.get,
-                external_config_option(n)
-            ));
-            &n.get
+        let id_params = format!("encode{}(id)", n.id);
+        let checked = id_fields
+            .iter()
+            .any(|f| reaches_quantity(&self.agent_type.schema, &f.schema));
+        if checked {
+            w.import(SCHEMA_PKG);
+        }
+        let write_params = |w: &mut GoWriter| {
+            if checked {
+                write_checked_encode(&id_params, Some(&format!("{}{{}}", n.client)), w);
+                "params".to_string()
+            } else {
+                id_params.clone()
+            }
         };
+
+        w.doc(&format!(
+            "{} returns a client for the keyed {agent_name} agent of the constructor\n\
+             parameters id{}. It does not contact the server. Options select the server\n\
+             (bridge.WithConfiguration, otherwise the one set with bridge.Configure).",
+            n.upsert,
+            if ephemeral {
+                ": every call runs in a new one-shot instance, and reports that\n\
+                 instance's ID with its result"
+            } else {
+                ", which the server creates on the first call when it is missing"
+            }
+        ));
         w.line(format!(
             "func {}(id {}, opts ...bridge.AgentOption) ({}, error) {{",
-            constructor, n.id, n.client
+            n.upsert, n.id, n.client
         ));
         w.indent();
-        let id_params = format!("encode{}(id)", n.id);
-        let id_params = if id_fields
-            .iter()
-            .any(|f| reaches_quantity(&self.agent_type.schema, &f.schema))
-        {
-            w.import(SCHEMA_PKG);
-            write_checked_encode(&id_params, Some(&format!("{}{{}}", n.client)), &mut w);
-            "params".to_string()
-        } else {
-            id_params
-        };
+        let params = write_params(&mut w);
         w.line(format!(
-            "agent, err := bridge.NewAgent({}, {id_params}, opts...)",
+            "agent, err := bridge.Upsert({}, {params}, opts...)",
             go_string(agent_name),
         ));
         w.line(format!("return {}{{agent: agent}}, err", n.client));
         w.dedent();
         w.line("}");
         w.blank();
+
+        if !ephemeral {
+            w.import("context");
+            w.doc(&format!(
+                "{} creates a {agent_name} agent with the constructor parameters id, and\n\
+                 returns a client for it once its constructor has finished. Without\n\
+                 bridge.Keyed the new agent has a new ID and no key; a keyed create of an\n\
+                 existing key fails with an error that matches bridge.ErrConflict. Options\n\
+                 select the server (bridge.WithConfiguration), override configuration\n\
+                 ({}) and add environment variables (bridge.WithEnv).",
+                n.create,
+                external_config_option(n)
+            ));
+            w.line(format!(
+                "func {}(ctx context.Context, id {}, opts ...bridge.CreateOption) ({}, error) {{",
+                n.create, n.id, n.client
+            ));
+            w.indent();
+            let params = write_params(&mut w);
+            w.line(format!(
+                "agent, err := bridge.Create(ctx, {}, {params}, opts...)",
+                go_string(agent_name),
+            ));
+            w.line(format!("return {}{{agent: agent}}, err", n.client));
+            w.dedent();
+            w.line("}");
+            w.blank();
+
+            w.doc(&format!(
+                "{} returns a client for the existing {agent_name} agent with the ID. It\n\
+                 never creates the agent: an unknown ID, or the ID of an agent of another\n\
+                 type, is an error that matches bridge.ErrNotFound. Options select the\n\
+                 server (bridge.WithConfiguration).",
+                n.get_by_id
+            ));
+            w.line(format!(
+                "func {}(ctx context.Context, id bridge.AgentID, opts ...bridge.AgentOption) ({}, error) {{",
+                n.get_by_id, n.client
+            ));
+            w.indent();
+            w.line(format!(
+                "agent, err := bridge.GetByID(ctx, {}, id, opts...)",
+                go_string(agent_name),
+            ));
+            w.line(format!("return {}{{agent: agent}}, err", n.client));
+            w.dedent();
+            w.line("}");
+            w.blank();
+
+            w.doc(
+                "AgentID returns the ID of the client's agent. A client of the upsert form\n\
+                 asks the server the first time, and the server creates the agent when it\n\
+                 is missing.",
+            );
+            w.line(format!(
+                "func (c {}) AgentID(ctx context.Context) (bridge.AgentID, error) {{",
+                n.client
+            ));
+            w.indent();
+            w.line("return c.agent.AgentID(ctx)");
+            w.dedent();
+            w.line("}");
+            w.blank();
+        }
 
         w.doc("Agent is the underlying bridge agent: its type, id and resolved server.");
         w.line(format!("func (c {}) Agent() *bridge.Agent {{", n.client));
@@ -815,7 +874,9 @@ impl GoBridgeGenerator {
         w.doc(&format!(
             "{option} applies the set fields of cfg as configuration overrides."
         ));
-        w.line(format!("func {option}(cfg {config}) bridge.AgentOption {{"));
+        w.line(format!(
+            "func {option}(cfg {config}) bridge.CreateOption {{"
+        ));
         w.indent();
         w.line("var entries []bridge.TypedConfigEntry");
         for (decl, ident) in self.local_configs().iter().zip(self.config_field_idents()) {
@@ -1116,7 +1177,7 @@ fn external_config_option(n: &AgentNames) -> &str {
 }
 
 /// The three client methods each agent method produces. They share the
-/// client's method set with each other and with `Agent`, so a schema method
+/// client's method set with each other and with `Agent` and `AgentID`, so a schema method
 /// called `trigger-x` must not take the name of `x`'s trigger.
 struct ExternalMethodNames {
     call: Vec<String>,
@@ -1130,7 +1191,7 @@ impl ExternalMethodNames {
         let mut all = methods.to_vec();
         all.extend(methods.iter().map(|m| format!("Trigger{m}")));
         all.extend(methods.iter().map(|m| format!("Schedule{m}")));
-        let mut unique = unique_idents_with_reserved(all, &["Agent"]);
+        let mut unique = unique_idents_with_reserved(all, &["Agent", "AgentID"]);
         let schedule = unique.split_off(2 * count);
         let trigger = unique.split_off(count);
         Self {

@@ -42,8 +42,8 @@ use crate::model::oplog::payload::types::{
     SerializableDnsRecord, SerializableDnsRecordType, SerializableFileTimes,
     SerializableP3FileSystemError, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
     SerializableP3UdpDatagram, SerializableP3UdpEndpoint, SerializablePermissionCardLiveness,
-    SerializablePermissionError, SerializableSocketError, SerializableToolDiscoverySnapshot,
-    SerializableWebsocketError, SerializableWebsocketMessage,
+    SerializablePermissionError, SerializableSocketError, SerializableTcpStreamError,
+    SerializableToolDiscoverySnapshot, SerializableWebsocketError, SerializableWebsocketMessage,
     SerializableWebsocketReconstructionPolicy,
 };
 use crate::model::oplog::types::{
@@ -122,10 +122,6 @@ oplog_payload! {
         },
         GolemApiComponentSlug {
             component_slug: String
-        },
-        GolemApiComponentSlugAndAgentName {
-            component_slug: String,
-            agent_name: String
         },
         GolemApiForkAgent {
             source_agent_id: AgentId,
@@ -313,6 +309,14 @@ oplog_payload! {
         GolemRpcCreate {
             remote_agent_id: AgentId
         },
+        GolemRpcGetById {
+            remote_agent_id: AgentId,
+            agent_type_name: AgentTypeName
+        },
+        GolemRpcCreateAgent {
+            agent_type_name: crate::model::agent::AgentTypeName,
+            keyed: bool
+        },
         GolemRpcBindSelf {
             remote_agent_id: AgentId,
             target_environment_id: EnvironmentId,
@@ -400,6 +404,12 @@ oplog_payload! {
         P3SocketsBind {
             local_address: SerializableP3IpSocketAddress
         },
+        SocketsTcpBind {
+            local_address: SerializableP3IpSocketAddress
+        },
+        SocketsTcpConnect {
+            remote_address: SerializableP3IpSocketAddress
+        },
         SocketsUdpBind {
             local_address: SerializableP3IpSocketAddress
         },
@@ -421,7 +431,7 @@ oplog_payload! {
             has_stdin: bool,
         },
         GolemApiGetAgents {
-            component_id: ComponentId,
+            agent_type_name: AgentTypeName,
         },
         CliEnvironmentGetEnvironment {
             environment: Vec<(String, String)>
@@ -453,7 +463,7 @@ oplog_payload! {
             error: SerializableToolRpcError,
         },
         GolemAgentGetAgentTypeByAgentId {
-            agent_id: String
+            agent_id: AgentId
         },
         ToolAttachmentWrite { request: ToolAttachmentWriteRequest },
         ToolAttachmentEndpoint { attachment: ToolAttachmentId, operation_ordinal: u64 },
@@ -526,8 +536,8 @@ oplog_payload! {
         GolemAgentWebhookUrl {
             result: Result<String, String>
         },
-        GolemApiAgentId {
-            result: Result<Option<AgentId>, String>
+        GolemAgentLookupAgentId {
+            result: Result<Option<AgentId>, SerializableRpcError>
         },
         GolemApiAgentMetadata {
             result: Result<Option<AgentMetadataForGuests>, String>
@@ -539,7 +549,8 @@ oplog_payload! {
             result: Result<Option<ComponentId>, String>
         },
         GolemApiFork {
-            forked_phantom_id: Uuid,
+            /// The fork target. Absent when the fork was denied.
+            forked_agent_id: Option<AgentId>,
             result: Result<ForkResult, String>,
         },
         GolemApiIdempotencyKey {
@@ -561,7 +572,9 @@ oplog_payload! {
             result: Result<Vec<RegisteredAgentTypeSchema>, String>
         },
         GolemAgentAgentType {
-            result: Result<Option<RegisteredAgentTypeSchema>, String>
+            result: Result<Option<RegisteredAgentTypeSchema>, String>,
+            /// The type ID of the found agent type, which the IDs of its agents carry.
+            type_id: Option<crate::model::type_id::TypeId>
         },
         GolemRdbmsColumns {
             result: Result<Vec<SerializableDbColumn>, SerializableRdbmsError>
@@ -711,6 +724,14 @@ oplog_payload! {
             result: Result<AgentFingerprint, SerializableRpcError>,
             target_environment_id: EnvironmentId
         },
+        GolemRpcCreated {
+            result: Result<(AgentId, AgentFingerprint), SerializableRpcError>,
+            /// The deployed agent type that the live call looked up, so replay binds the client
+            /// to the same type without a registry lookup.
+            agent_type: Option<RegisteredAgentTypeSchema>,
+            type_id: Option<crate::model::type_id::TypeId>,
+            target_environment_id: EnvironmentId
+        },
         P3KeyvalueIncomingValueStream {
             contents: Vec<u8>
         },
@@ -814,6 +835,27 @@ oplog_payload! {
         },
         P3SocketsBind {
             result: Result<SerializableP3IpSocketAddress, SerializableP3SocketErrorCode>
+        },
+        SocketsTcpBind {
+            result: Result<SerializableP3IpSocketAddress, SerializableSocketError>
+        },
+        SocketsTcpStartConnect {
+            result: Result<(), SerializableSocketError>
+        },
+        SocketsTcpFinishConnect {
+            /// The local and remote addresses of the connection.
+            result: Result<(SerializableP3IpSocketAddress, SerializableP3IpSocketAddress), SerializableSocketError>
+        },
+        /// The bytes that a P2 TCP input stream read.
+        SocketsTcpStreamRead {
+            result: Result<Vec<u8>, SerializableTcpStreamError>
+        },
+        /// A byte count of a P2 TCP stream: the bytes skipped or written, or the write permit.
+        SocketsTcpStreamCount {
+            result: Result<u64, SerializableTcpStreamError>
+        },
+        SocketsTcpStreamFlush {
+            result: Result<(), SerializableTcpStreamError>
         },
         SocketsUdpBind {
             result: Result<SerializableP3IpSocketAddress, SerializableSocketError>
@@ -1071,7 +1113,6 @@ pub mod host_functions {
         (GolemApiForkWorker => "golem::api", "fork_worker", GolemApiForkAgent, GolemApiUnit, denied = denied::golem_api::unit),
         (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit, denied = denied::golem_api::unit),
         (GolemApiResolveComponentId => "golem::api", "resolve_component_id", GolemApiComponentSlug, GolemApiComponentId),
-        (GolemApiResolveAgentIdStrict => "golem::api", "resolve_agent_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId, denied = denied::golem_api::agent_id_not_found),
         (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork, denied = denied::golem_api::fork),
         (WebsocketClientConnect => "golem:websocket/client", "connect", WebsocketConnect, WebsocketConnectResponse),
         (WebsocketClientSend => "golem:websocket/client", "send", WebsocketSend, WebsocketSendResponse),
@@ -1085,7 +1126,9 @@ pub mod host_functions {
         (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
         (GolemApiRetryNextRetryDelay => "golem::api::retry", "next_retry_delay", GolemRetryNextDelay, GolemRetryNextDelay),
-        (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
+        (GolemRpcWasmRpcUpsert => "golem::rpc::wasm-rpc", "upsert", GolemRpcCreate, GolemRpcCreate),
+        (GolemRpcWasmRpcGetById => "golem::rpc::wasm-rpc", "get-by-id", GolemRpcGetById, GolemRpcCreated),
+        (GolemRpcWasmRpcCreate => "golem::rpc::wasm-rpc", "create", GolemRpcCreateAgent, GolemRpcCreated),
         (GolemRpcWasmRpcBindSelf => "golem::rpc::wasm-rpc", "bind-self", GolemRpcBindSelf, GolemRpcUnit),
         (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),
         (GolemContextStartSpan => "golem::api::context", "start-span", NoInput, GolemApiUnit),
@@ -1169,6 +1212,7 @@ pub mod host_functions {
         (McpToolCall => "golem::tool::mcp", "call", McpToolCall, McpToolCall),
         (McpToolPresence => "golem::tool::mcp", "presence", McpToolPresence, McpToolPresence),
         (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType),
+        (GolemAgentLookupAgentId => "golem::agent", "lookup_agent_id", GolemApiAgentId, GolemAgentLookupAgentId),
         (GolemToolCreateStdin => "golem::tool::host", "create-stdin", NoInput, ToolAttachmentCreated),
         (GolemToolCreateOutput => "golem::tool::host", "create-output", NoInput, ToolAttachmentCreated),
         (GolemToolStdinWrite => "golem::tool::host::tool-stdin-writer", "write", ToolAttachmentWrite, ToolAttachmentWrite),
@@ -1181,6 +1225,21 @@ pub mod host_functions {
         (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsUdpPermissionCheck => "sockets::udp::permissions", "check", SocketsUdpPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
+        (SocketsTcpStartBind => "sockets::tcp", "start_bind", SocketsTcpBind, SocketsTcpBind),
+        (SocketsTcpStartConnect => "sockets::tcp", "start_connect", SocketsTcpConnect, SocketsTcpStartConnect),
+        (SocketsTcpFinishConnect => "sockets::tcp", "finish_connect", NoInput, SocketsTcpFinishConnect),
+        (SocketsTcpInputStreamRead => "sockets::tcp::input_stream", "read", NoInput, SocketsTcpStreamRead),
+        (SocketsTcpInputStreamBlockingRead => "sockets::tcp::input_stream", "blocking_read", NoInput, SocketsTcpStreamRead),
+        (SocketsTcpInputStreamSkip => "sockets::tcp::input_stream", "skip", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpInputStreamBlockingSkip => "sockets::tcp::input_stream", "blocking_skip", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamCheckWrite => "sockets::tcp::output_stream", "check_write", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamWriteReady => "sockets::tcp::output_stream", "write_ready", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamWrite => "sockets::tcp::output_stream", "write", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamBlockingWriteAndFlush => "sockets::tcp::output_stream", "blocking_write_and_flush", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamWriteZeroes => "sockets::tcp::output_stream", "write_zeroes", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamBlockingWriteZeroesAndFlush => "sockets::tcp::output_stream", "blocking_write_zeroes_and_flush", NoInput, SocketsTcpStreamCount),
+        (SocketsTcpOutputStreamFlush => "sockets::tcp::output_stream", "flush", NoInput, SocketsTcpStreamFlush),
+        (SocketsTcpOutputStreamBlockingFlush => "sockets::tcp::output_stream", "blocking_flush", NoInput, SocketsTcpStreamFlush),
         (SocketsUdpStartBind => "sockets::udp", "start_bind", SocketsUdpBind, SocketsUdpBind),
         (SocketsUdpStream => "sockets::udp", "stream", SocketsUdpStream, SocketsUdpStream),
         (SocketsUdpReceive => "sockets::udp", "receive", SocketsUdpReceive, SocketsUdpReceive),

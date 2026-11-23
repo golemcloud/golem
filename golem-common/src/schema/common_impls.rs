@@ -78,6 +78,11 @@ impl_schema_for_uuid_newtype!(
     "agent-fingerprint"
 );
 impl_schema_for_uuid_newtype!(
+    crate::base_model::AgentId,
+    "golem_common.base_model.AgentId",
+    "agent-id"
+);
+impl_schema_for_uuid_newtype!(
     crate::base_model::InvocationId,
     "golem_common.base_model.InvocationId",
     "invocation-id"
@@ -167,7 +172,7 @@ impl IntoSchema for crate::base_model::PromiseId {
 
     fn to_value(&self) -> SchemaValue {
         PromiseIdSchema {
-            agent_id: self.agent_id.clone(),
+            agent_id: self.agent_id,
             fingerprint: self.fingerprint.0,
             oplog_idx: self.oplog_idx,
         }

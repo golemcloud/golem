@@ -71,8 +71,8 @@ async fn effect_stream_outcome_is_catchable_through_rpc() {
               init: () => Effect.succeed({}),
               methods: () => ({
                 run: () => Effect.gen(function* () {
-                  const producer = yield* Producer.client.get({ name: "failed" });
-                  const independent = yield* Producer.client.get({ name: "sibling" });
+                  const producer = yield* Producer.client.upsert({ name: "failed" });
+                  const independent = yield* Producer.client.upsert({ name: "sibling" });
                   const sibling = yield* independent.produce({ fail: false });
                   const failed = yield* producer.produce({ fail: true });
                   const prefix: number[] = [];
@@ -506,7 +506,8 @@ async fn effect_imported_mcp_client_projects_contract_and_runs_middleware() {
     );
     assert_eq!(
         *middleware_effects.lock().unwrap(),
-        vec!["/middleware/catalog-lookup/account"; 4]
+        // The middleware sees the calling agent as the immediate caller.
+        vec!["/middleware/catalog-lookup/agent"; 4]
     );
     upstream.abort();
     middleware_server.abort();

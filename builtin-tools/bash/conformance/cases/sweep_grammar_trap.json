@@ -1,0 +1,1318 @@
+{
+  "tier": "sweep",
+  "description": "Grammar sweep: traps (EXIT, ERR, DEBUG, RETURN and the catchable signals), their scoping,\nlisting and interaction with errexit, functions and subshells (see sweep_grammar_param.py).",
+  "cases": [
+    {
+      "name": "gram trap exit echo at end of script",
+      "script": "v=set; trap 'echo \"exit trap status=$?\"' EXIT; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit echo at exit 3",
+      "script": "v=set; trap 'echo \"exit trap status=$?\"' EXIT; echo body; exit 3",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit exit in handler at exit 3",
+      "script": "v=set; trap 'echo handler; exit 9' EXIT; echo body; exit 3",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit failing handler at exit 3",
+      "script": "v=set; trap 'echo handler; false' EXIT; echo body; exit 3",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit echo at failing last command",
+      "script": "v=set; trap 'echo \"exit trap status=$?\"' EXIT; echo body; false",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit reads a variable at failing last command",
+      "script": "v=set; trap 'echo \"v=$v\"' EXIT; echo body; false",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit echo at errexit",
+      "script": "v=set; trap 'echo \"exit trap status=$?\"' EXIT; set -e; echo body; false; echo not",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit echo at nounset",
+      "script": "v=set; trap 'echo \"exit trap status=$?\"' EXIT; set -u; echo body; echo $undefined_zz; echo not",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit echo at error operator",
+      "script": "v=set; trap 'echo \"exit trap status=$?\"' EXIT; echo body; : ${u_zz?gone}; echo not",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit reads a variable at error operator",
+      "script": "v=set; trap 'echo \"v=$v\"' EXIT; echo body; : ${u_zz?gone}; echo not",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit echo at exit in a function",
+      "script": "v=set; trap 'echo \"exit trap status=$?\"' EXIT; f() { exit 4; }; f",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit exit in handler at exit in a function",
+      "script": "v=set; trap 'echo handler; exit 9' EXIT; f() { exit 4; }; f",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit failing handler at exit in a function",
+      "script": "v=set; trap 'echo handler; false' EXIT; f() { exit 4; }; f",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit echo at kill TERM to self",
+      "script": "v=set; trap 'echo \"exit trap status=$?\"' EXIT; kill -TERM $$; echo after",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit reads a variable at kill TERM to self",
+      "script": "v=set; trap 'echo \"v=$v\"' EXIT; kill -TERM $$; echo after",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit echo at return at top level",
+      "script": "v=set; trap 'echo \"exit trap status=$?\"' EXIT; return 2; echo after",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit echo at exec builtin",
+      "script": "v=set; trap 'echo \"exit trap status=$?\"' EXIT; exec true",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit exit in handler at exec builtin",
+      "script": "v=set; trap 'echo handler; exit 9' EXIT; exec true",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit failing handler at exec builtin",
+      "script": "v=set; trap 'echo handler; false' EXIT; exec true",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit numeric zero",
+      "script": "trap 'echo zero' 0; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit SIGEXIT name",
+      "script": "trap 'echo sigexit' SIGEXIT; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit lower case name",
+      "script": "trap 'echo lower' exit; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit reset with dash",
+      "script": "trap 'echo never' EXIT; trap - EXIT; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit ignore with empty string",
+      "script": "trap '' EXIT; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit replaced",
+      "script": "trap 'echo first' EXIT; trap 'echo second' EXIT",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit in a subshell runs at subshell end",
+      "script": "( trap 'echo sub-exit' EXIT; echo in-sub ); echo after",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit not inherited by a subshell",
+      "script": "trap 'echo main-exit' EXIT; ( echo in-sub ); echo after",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit in a command substitution",
+      "script": "x=$(trap 'echo cs-exit' EXIT; echo in); echo \"[$x]\"",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit in a function stays global",
+      "script": "f() { trap 'echo from-f' EXIT; }; f; echo after-f",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit in a pipeline stage",
+      "script": "trap 'echo pipe-exit' EXIT | cat; echo after",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit handler output order",
+      "script": "trap 'echo handler' EXIT; echo body; echo err >&2",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit handler sees the exit status",
+      "script": "trap 'echo \"status=$?\"' EXIT; (exit 5); exit",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit handler changes status only with exit",
+      "script": "trap 'false' EXIT; true",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit handler with a here-document",
+      "script": "trap 'cat <<EOF\nfrom trap\nEOF' EXIT; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit handler defines and calls a function",
+      "script": "trap 'g() { echo g; }; g' EXIT; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit handler with multiple commands",
+      "script": "trap 'echo a; echo b' EXIT",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit handler with quotes",
+      "script": "trap \"echo 'single' \\\"double\\\"\" EXIT",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit handler expands late",
+      "script": "v=early; trap 'echo $v' EXIT; v=late",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit handler expands early with double quotes",
+      "script": "v=early; trap \"echo $v\" EXIT; v=late",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit handler invoking exit trap again",
+      "script": "trap 'echo once; exit 2' EXIT; exit 1",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit trap -p EXIT",
+      "script": "trap 'echo it'\\''s' EXIT; trap -p EXIT; trap - EXIT",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit trap -p all",
+      "script": "trap 'echo e' EXIT; trap 'echo r' RETURN; trap -p; trap - EXIT RETURN",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit trap with no arguments lists",
+      "script": "trap 'echo x' EXIT; trap; trap - EXIT",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit trap -p of an unset trap",
+      "script": "trap -p EXIT; echo \"status=$?\"",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit trap -p of an ignored signal",
+      "script": "trap '' TERM; trap -p TERM",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit trap -- form",
+      "script": "trap -- 'echo dashdash' EXIT",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit trap with one argument resets",
+      "script": "trap 'echo x' EXIT; trap EXIT; trap -p EXIT; echo status=$?",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit trap with a numeric first argument resets",
+      "script": "trap 'echo x' EXIT; trap 0; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit invalid signal name",
+      "script": "trap 'echo x' NOSUCH; echo status=$?",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit invalid signal number",
+      "script": "trap 'echo x' 999; echo status=$?",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit missing handler",
+      "script": "trap; echo status=$?; trap -x; echo status=$?",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit several signals at once",
+      "script": "trap 'echo multi' EXIT TERM; trap -p TERM; trap - TERM",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit exit trap and errexit inside handler",
+      "script": "set -e; trap 'false; echo still-in-handler' EXIT; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit exit trap after a syntax error in eval",
+      "script": "trap 'echo exit-trap' EXIT; eval 'if'; echo after",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit exit trap with set -u error in handler",
+      "script": "trap 'echo $undefined_zz; echo not' EXIT; set -u; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit exit trap and background job",
+      "script": "trap 'echo exit-trap' EXIT; { echo bg; } & wait",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap exit exit trap in a sourced file",
+      "script": "printf \"trap 'echo src-exit' EXIT\\n\" > /tmp/t.sh; . /tmp/t.sh; echo body",
+      "tags": [
+        "trap.exit"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at simple command",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; false; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at and list head",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; false && true; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at and list tail",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; true && false; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at or list",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; false || false; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at negated",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; ! true; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at if condition",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; if false; then :; fi; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at while condition",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; while false; do :; done; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at pipeline",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; true | false; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at subshell",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; (false); echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at group",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; { false; }; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at function",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; f; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at function with errtrace",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; set -E; f; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at command substitution",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; x=$(false); echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at command substitution with errtrace",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; set -E; x=$(false); echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at arithmetic",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; (( 0 )); echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at conditional",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; [[ -z x ]]; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at command not found",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; nosuchcmd_zz 2>/dev/null; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at failed redirect",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; echo > /tmp/no/x 2>/dev/null; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at return nonzero",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; g; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err at pipefail",
+      "script": "f() { false; echo in-f; }; g() { return 3; }; trap 'echo \"ERR status=$? line=$LINENO\"' ERR; set -o pipefail; false | true; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err with errexit",
+      "script": "set -e; trap 'echo err-trap' ERR; false; echo not",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err reset",
+      "script": "trap 'echo err' ERR; trap - ERR; false; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err not inherited by a function without -E",
+      "script": "trap 'echo err' ERR; f() { false; echo in-f; }; f; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err inherited with set -o errtrace",
+      "script": "set -o errtrace; trap 'echo err' ERR; f() { false; }; f",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err handler failing does not recurse",
+      "script": "trap 'echo err; false' ERR; false; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err BASH_COMMAND in handler",
+      "script": "trap 'echo \"cmd=$BASH_COMMAND\"' ERR; false",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err in a subshell",
+      "script": "trap 'echo err' ERR; ( false; echo in-sub )",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err set in a function",
+      "script": "f() { trap 'echo f-err' ERR; }; f; false; echo after",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err loop body",
+      "script": "trap 'echo err' ERR; for i in 1 2; do false; done",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err case body",
+      "script": "trap 'echo err' ERR; case x in x) false;; esac",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap err trap -p ERR",
+      "script": "trap 'echo e' ERR; trap -p ERR",
+      "tags": [
+        "trap.err"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug counts simple commands",
+      "script": "n=0; trap '((n++))' DEBUG; echo a; echo b; trap - DEBUG; echo \"n=$n\"",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug BASH_COMMAND",
+      "script": "trap 'echo \"> $BASH_COMMAND\"' DEBUG; echo one; x=2; trap - DEBUG",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug before compound commands",
+      "script": "trap 'echo \"> $BASH_COMMAND\"' DEBUG; for i in 1; do :; done; if true; then :; fi; trap - DEBUG",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug before arithmetic and conditional",
+      "script": "trap 'echo \"> $BASH_COMMAND\"' DEBUG; (( 1 )); [[ x ]]; trap - DEBUG",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug not inherited by functions",
+      "script": "f() { echo in-f; }; trap 'echo dbg' DEBUG; f; trap - DEBUG",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug inherited with functrace",
+      "script": "set -T; f() { echo in-f; }; trap 'echo \"dbg $BASH_COMMAND\"' DEBUG; f; trap - DEBUG",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug in a subshell",
+      "script": "trap 'echo dbg' DEBUG; ( echo sub ); trap - DEBUG",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug in a pipeline",
+      "script": "trap 'echo \"dbg $BASH_COMMAND\"' DEBUG; echo p | cat; trap - DEBUG",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug handler status",
+      "script": "trap 'false' DEBUG; echo still-runs; trap - DEBUG",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug LINENO in handler",
+      "script": "trap 'echo \"line $LINENO\"' DEBUG\necho a\necho b\ntrap - DEBUG",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug trap -p DEBUG",
+      "script": "trap 'echo d' DEBUG; trap -p DEBUG; trap - DEBUG",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug RETURN after a function",
+      "script": "trap 'echo \"return from ${FUNCNAME[0]-main}\"' RETURN; f() { echo in-f; }; f",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug RETURN not inherited without functrace",
+      "script": "f() { echo in-f; }; trap 'echo ret' RETURN; f; echo after",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug RETURN with functrace",
+      "script": "set -T; trap 'echo ret' RETURN; f() { echo in-f; }; f",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug RETURN after source",
+      "script": "echo 'echo sourced' > /tmp/r.sh; trap 'echo ret-src' RETURN; . /tmp/r.sh",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug RETURN status",
+      "script": "f() { trap 'echo \"ret $?\"' RETURN; return 4; }; f; echo \"after $?\"",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap debug RETURN set inside the function persists",
+      "script": "f() { trap 'echo ret-f' RETURN; }; g() { :; }; f; g; echo after",
+      "tags": [
+        "trap.debug-return"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught TERM via kill default",
+      "script": "trap 'echo \"caught TERM\"' TERM; kill $$; echo \"after status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal default TERM via kill default",
+      "script": "kill $$; echo not-reached",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal ignored TERM via kill default",
+      "script": "trap '' TERM; kill $$; echo \"survived status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught TERM via kill -s",
+      "script": "trap 'echo \"caught TERM\"' TERM; kill -s TERM $$; echo \"after status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal default TERM via kill -s",
+      "script": "kill -s TERM $$; echo not-reached",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal ignored TERM via kill -s",
+      "script": "trap '' TERM; kill -s TERM $$; echo \"survived status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught TERM via kill -SIG",
+      "script": "trap 'echo \"caught TERM\"' TERM; kill -TERM $$; echo \"after status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal default TERM via kill -SIG",
+      "script": "kill -TERM $$; echo not-reached",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal ignored TERM via kill -SIG",
+      "script": "trap '' TERM; kill -TERM $$; echo \"survived status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught TERM via kill -n",
+      "script": "trap 'echo \"caught TERM\"' TERM; kill -n 15 $$; echo \"after status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal default TERM via kill -n",
+      "script": "kill -n 15 $$; echo not-reached",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal ignored TERM via kill -n",
+      "script": "trap '' TERM; kill -n 15 $$; echo \"survived status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught INT via kill -s",
+      "script": "trap 'echo \"caught INT\"' INT; kill -s INT $$; echo \"after status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal default INT via kill -s",
+      "script": "kill -s INT $$; echo not-reached",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal ignored INT via kill -s",
+      "script": "trap '' INT; kill -s INT $$; echo \"survived status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught INT via kill -SIG",
+      "script": "trap 'echo \"caught INT\"' INT; kill -INT $$; echo \"after status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal default INT via kill -SIG",
+      "script": "kill -INT $$; echo not-reached",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal ignored INT via kill -SIG",
+      "script": "trap '' INT; kill -INT $$; echo \"survived status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught INT via kill -n",
+      "script": "trap 'echo \"caught INT\"' INT; kill -n 2 $$; echo \"after status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal default INT via kill -n",
+      "script": "kill -n 2 $$; echo not-reached",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal ignored INT via kill -n",
+      "script": "trap '' INT; kill -n 2 $$; echo \"survived status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught HUP via kill -s",
+      "script": "trap 'echo \"caught HUP\"' HUP; kill -s HUP $$; echo \"after status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal default HUP via kill -s",
+      "script": "kill -s HUP $$; echo not-reached",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal ignored HUP via kill -s",
+      "script": "trap '' HUP; kill -s HUP $$; echo \"survived status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught HUP via kill -SIG",
+      "script": "trap 'echo \"caught HUP\"' HUP; kill -HUP $$; echo \"after status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal default HUP via kill -SIG",
+      "script": "kill -HUP $$; echo not-reached",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal ignored HUP via kill -SIG",
+      "script": "trap '' HUP; kill -HUP $$; echo \"survived status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught HUP via kill -n",
+      "script": "trap 'echo \"caught HUP\"' HUP; kill -n 1 $$; echo \"after status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal default HUP via kill -n",
+      "script": "kill -n 1 $$; echo not-reached",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal ignored HUP via kill -n",
+      "script": "trap '' HUP; kill -n 1 $$; echo \"survived status=$?\"",
+      "tags": [
+        "trap.signal",
+        "jobs.kill"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal spec SIGTERM",
+      "script": "trap 'echo \"handler SIGTERM\"' SIGTERM; trap -p | while read -r l; do echo \"$l\"; done; trap - SIGTERM",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal spec 15",
+      "script": "trap 'echo \"handler 15\"' 15; trap -p | while read -r l; do echo \"$l\"; done; trap - 15",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal spec sigterm",
+      "script": "trap 'echo \"handler sigterm\"' sigterm; trap -p | while read -r l; do echo \"$l\"; done; trap - sigterm",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal spec SIGINT",
+      "script": "trap 'echo \"handler SIGINT\"' SIGINT; trap -p | while read -r l; do echo \"$l\"; done; trap - SIGINT",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal spec 2",
+      "script": "trap 'echo \"handler 2\"' 2; trap -p | while read -r l; do echo \"$l\"; done; trap - 2",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal spec 1",
+      "script": "trap 'echo \"handler 1\"' 1; trap -p | while read -r l; do echo \"$l\"; done; trap - 1",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal spec SIGHUP",
+      "script": "trap 'echo \"handler SIGHUP\"' SIGHUP; trap -p | while read -r l; do echo \"$l\"; done; trap - SIGHUP",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught in a subshell",
+      "script": "( trap 'echo sub-caught' TERM; kill -TERM $BASHPID; echo sub-after ); echo \"status=$?\"",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal default in a subshell",
+      "script": "( kill -TERM $BASHPID; echo not ); echo \"status=$?\"",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal handler exits",
+      "script": "trap 'echo bye; exit 7' TERM; kill $$; echo not",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal ignored inherited by a subshell",
+      "script": "trap '' TERM; ( kill -TERM $BASHPID; echo sub-survived ); echo \"status=$?\"",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal caught is reset in a subshell",
+      "script": "trap 'echo main' TERM; ( kill -TERM $BASHPID; echo not ); echo \"status=$?\"",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal trap -p in a subshell shows caught traps",
+      "script": "trap 'echo main' TERM; ( trap -p TERM ); trap - TERM",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal trap -p in a command substitution",
+      "script": "trap 'echo main' TERM; x=$(trap -p TERM); echo \"[$x]\"; trap - TERM",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal kill -0 self",
+      "script": "kill -0 $$; echo \"status=$?\"",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal kill with a bad signal",
+      "script": "kill -s NOSUCH $$; echo \"status=$?\"",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal kill with no arguments",
+      "script": "kill; echo \"status=$?\"",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal kill -l numbers",
+      "script": "kill -l 1 2 15 9; kill -l 130",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal kill a background job with TERM",
+      "script": "{ sleep 5 & p=$!; kill -TERM $p; wait $p; echo \"status=$?\"; } 2>/dev/null",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal kill a background job with a trap inside",
+      "script": "{ ( trap 'echo job-caught; exit 3' TERM; : > /tmp/ready; sleep 5 & wait ) & p=$!; until [[ -f /tmp/ready ]]; do sleep 0.01; done; kill -TERM $p; wait $p; echo \"status=$?\"; } 2>/dev/null",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "job-caught\nstatus=3\n"
+        },
+        "stderr": {
+          "text": "bash: stopped job (pid 3, hangup): sleep 5\n"
+        },
+        "reason": "fixture: a call ends with its jobs, so the sleep a subshell left running is stopped and reported when the call ends (README, background jobs), where bash leaves it running unreported"
+      }
+    },
+    {
+      "name": "gram trap signal signal and EXIT trap order",
+      "script": "trap 'echo exit-trap' EXIT; trap 'echo term-trap' TERM; kill $$; echo after",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal signal during a loop",
+      "script": "trap 'echo caught; stop=1' TERM; stop=0; for i in 1 2 3; do (( i == 2 )) && kill $$; (( stop )) && break; echo $i; done",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal USR1 trap",
+      "script": "trap 'echo usr1' USR1; kill -USR1 $$; echo after",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram trap signal CHLD trap",
+      "script": "trap 'echo chld' CHLD; true & wait; trap - CHLD; echo done",
+      "tags": [
+        "trap.signal"
+      ],
+      "options": {}
+    }
+  ]
+}

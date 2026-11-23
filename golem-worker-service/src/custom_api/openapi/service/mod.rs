@@ -15,15 +15,16 @@ use super::merge::{ProviderContribution, merge};
 use super::provider_document::{self, Category, DocumentError, PROVIDER_BYTE_LIMIT};
 use super::{OpenApiInputs, bounded_json};
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
-use crate::service::worker::WorkerService;
+use crate::service::worker::{AgentBinding, WorkerService};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt, stream};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
-use golem_common::model::agent::{AgentTarget, InvocationFreshnessDisposition, ParsedAgentKey};
+use golem_common::model::AgentInvocationResult;
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::caller::Caller;
+use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, AgentInvocationResult};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_service_base::custom_api::MountTarget;
 use golem_service_base::model::auth::AuthCtx;
@@ -95,7 +96,8 @@ impl From<DocumentError> for OpenApiError {
 }
 
 struct ProviderCall {
-    agent_id: AgentId,
+    component_id: ComponentId,
+    constructor: ParsedAgentKey,
     key: golem_common::model::InvocationRequestKey,
     method: String,
     environment_id: EnvironmentId,
@@ -114,22 +116,35 @@ impl ProviderInvoker for WorkerProviderInvoker {
         let input = SchemaValue::Record { fields: vec![] }
             .try_into()
             .map_err(|_| OpenApiError::new("provider-input"))?;
+        let (target, component, freshness_disposition) = self
+            .0
+            .bound_invocation_target(
+                call.component_id,
+                &call.constructor,
+                AgentBinding::Constructor,
+                &call.key,
+                &call.method,
+                &AuthCtx::System,
+            )
+            .await
+            .map_err(|_| OpenApiError::new("provider-invocation"))?;
         let output = self
             .0
-            .invoke_agent(
-                &AgentTarget::Current(call.agent_id.clone()),
+            .dispatch_agent_invocation(
+                &component,
+                &target,
                 Some(call.method.clone()),
                 Some(input),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
                 call.key.clone(),
                 None,
-                true,
-                InvocationFreshnessDisposition::KnownFresh,
+                freshness_disposition,
                 vec![],
+                call.environment_id,
+                component.account_id,
                 AuthCtx::System,
                 Caller::anonymous().into(),
-                Some(call.environment_id),
                 None,
                 None,
             )
@@ -247,23 +262,17 @@ fn prepare_call(route: &RichCompiledRoute) -> Result<ProviderCall, OpenApiError>
     let MountTarget::AgentMethod(provider) = mount.openapi_provider.as_ref().unwrap();
     let agent = &provider.agent;
     let key = golem_common::model::InvocationRequestKey::external(None, None);
-    let logical = ParsedAgentKey::try_new(
+    let constructor = ParsedAgentKey::try_new(
         agent.agent_type.clone(),
         TypedSchemaValue::new(
             agent.constructor_input.graph.clone(),
             SchemaValue::Record { fields: vec![] },
         ),
-        None,
     )
     .map_err(|_| OpenApiError::new("provider-input"))?;
-    let identity = logical
-        .with_ephemeral_invocation_phantom(&key.owner_key(&provider.method.method_name))
-        .map_err(|_| OpenApiError::new("provider-input"))?;
     Ok(ProviderCall {
-        agent_id: AgentId {
-            component_id: agent.component_id,
-            agent_id: identity.to_string(),
-        },
+        component_id: agent.component_id,
+        constructor,
         key,
         method: provider.method.method_name.clone(),
         environment_id: route.environment_id,

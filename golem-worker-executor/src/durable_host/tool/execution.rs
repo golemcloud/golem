@@ -846,10 +846,7 @@ mod finalization_tests {
                     vec![
                         anyhow!("cleanup failure"),
                         anyhow::Error::new(WorkerExecutorError::oplog_fenced(
-                            golem_common::model::AgentId {
-                                component_id: golem_common::model::component::ComponentId::new(),
-                                agent_id: "Agent(owner)".into(),
-                            },
+                            golem_common::model::AgentId::from_parts(7, 1),
                             1,
                             Some(2),
                         ))
@@ -1180,10 +1177,7 @@ mod finalization_tests {
             Some(operation.clone()),
             vec![
                 anyhow::Error::new(WorkerExecutorError::oplog_fenced(
-                    golem_common::model::AgentId {
-                        component_id: golem_common::model::component::ComponentId::new(),
-                        agent_id: "Agent(owner)".into(),
-                    },
+                    golem_common::model::AgentId::from_parts(7, 2),
                     1,
                     Some(2),
                 ))

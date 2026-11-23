@@ -204,21 +204,31 @@ pub const COMPLETION: &str = "Examples:
 
 // Agent commands -----------------------------------------------------------------------------------
 
-pub const AGENT_NEW: &str = "Examples:
-  # Create an instance of an agent with no parameters
-  golem-cli agent new 'MyAgent()'
+pub const AGENT_CREATE: &str = "Examples:
+  # Create a new agent without a key; prints its agent ID and fingerprint
+  golem-cli agent create 'MyAgent()'
 
-  # Create an instance with a string parameter (note the shell quoting)
-  golem-cli agent new 'ChatRoom(\"general\")'
+  # Create the keyed agent of a string parameter (note the shell quoting); fails when it exists
+  golem-cli agent create --keyed 'ChatRoom(\"general\")'
+
+  # Retry a create safely: the same idempotency key returns the same agent
+  golem-cli agent create -i create-42 'MyAgent()'
 
   # Provide environment variables visible to the agent
-  golem-cli agent new 'MyAgent(\"u-123\")' --env API_URL=https://api.example.com --env LOG_LEVEL=debug
+  golem-cli agent create 'MyAgent(\"u-123\")' --env API_URL=https://api.example.com --env LOG_LEVEL=debug
 
   # Provide configuration values declared by the agent
-  golem-cli agent new 'MyAgent()' --config max_retries=5 --config timeout_seconds=30
+  golem-cli agent create 'MyAgent()' --config max_retries=5 --config timeout_seconds=30
 
-  # Address an agent in a specific environment
-  golem-cli agent new 'staging/MyAgent(\"u-123\")'";
+  # Create the agent in a specific environment
+  golem-cli agent create 'staging/MyAgent(\"u-123\")'";
+
+pub const AGENT_UPSERT: &str = "Examples:
+  # Get the keyed agent of the parameters, and create it when it does not exist
+  golem-cli agent upsert 'ChatRoom(\"general\")'
+
+  # In a specific environment
+  golem-cli agent upsert 'staging/ChatRoom(\"general\")'";
 
 pub const AGENT_INVOKE: &str = "Examples:
   # Invoke a function with no arguments
@@ -275,7 +285,7 @@ pub const AGENT_LIST: &str = "Examples:
   golem-cli agent list --component-name my-component
 
   # Filter on metadata; multiple --filter flags are AND-combined
-  golem-cli agent list --filter 'status == Running' --filter 'name like %counter%'
+  golem-cli agent list --filter 'status == Running' --filter 'key like counter'
   golem-cli agent list --filter 'env.region == us-east'
 
   # Include ephemeral agents (or only ephemeral ones)
@@ -284,7 +294,7 @@ pub const AGENT_LIST: &str = "Examples:
 
   # Pagination
   golem-cli agent list --max-count 10
-  golem-cli agent list --max-count 10 --scan-cursor '<cursor-from-previous-output>'
+  golem-cli agent list CounterAgent --max-count 10 --scan-cursor '<cursor-from-previous-output>'
 
   # One page across all selected components; pass the page's `cursor` back for the next one
   golem-cli --format json agent list --page --max-count 10
@@ -382,12 +392,38 @@ pub const AGENT_REVERT: &str = "Examples:
 
   # The two flags are mutually exclusive";
 
-pub const AGENT_CANCEL_INVOCATION: &str = "Examples:
-  # Cancel a still-enqueued invocation by its idempotency key
-  golem-cli agent cancel-invocation 'CounterAgent(\"my-counter\")' my-key-123
+pub const INVOCATION_GET: &str = "Examples:
+  # Show an invocation by the idempotency key it was made with
+  golem-cli invocation get --agent 'CounterAgent(\"my-counter\")' --idempotency-key my-key-123
+
+  # Show an invocation by its ID, as printed by `invocation list`
+  golem-cli invocation get '<AGENT ID>.<UUID>'
+
+  # The same key used for two methods: choose one
+  golem-cli invocation get --agent 'CounterAgent(\"my-counter\")' --idempotency-key my-key-123 --method increment";
+
+pub const INVOCATION_LIST: &str = "Examples:
+  # List the invocations of an agent, newest change first
+  golem-cli invocation list --agent 'CounterAgent(\"my-counter\")'
+
+  # Only pending and scheduled invocations of one method
+  golem-cli invocation list --agent 'CounterAgent(\"my-counter\")' --operation increment --status pending --status scheduled
+
+  # Invocations that changed in a time range, 20 per page
+  golem-cli invocation list --agent 'CounterAgent(\"my-counter\")' --since 2026-01-01T00:00:00Z --until 2026-01-02T00:00:00Z --page-size 20
+
+  # The next page, with the cursor printed by the previous one
+  golem-cli invocation list --agent 'CounterAgent(\"my-counter\")' --cursor <CURSOR>";
+
+pub const INVOCATION_CANCEL: &str = "Examples:
+  # Cancel a still-pending invocation by its idempotency key
+  golem-cli invocation cancel --agent 'CounterAgent(\"my-counter\")' --idempotency-key my-key-123
 
   # Address an agent in a non-default environment
-  golem-cli agent cancel-invocation 'staging/CounterAgent(\"my-counter\")' my-key-123";
+  golem-cli invocation cancel --agent 'staging/CounterAgent(\"my-counter\")' --idempotency-key my-key-123
+
+  # Cancel by invocation ID
+  golem-cli invocation cancel '<component UUID>/CounterAgent(\"my-counter\").<UUID>'";
 
 pub const AGENT_FILES: &str = "Examples:
   # List the agent's root filesystem

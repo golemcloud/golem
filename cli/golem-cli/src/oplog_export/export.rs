@@ -17,19 +17,26 @@
 //! The export pins the root agent by the `instance_id` of its `Create` entry, renders the oplog
 //! page by page and checks the root again at the end, so a report never mixes two incarnations of
 //! an agent. Each page is written to the sink before the next read.
+//!
+//! A bounded report, [`export_oplog_range`], reads one closed range of the oplog within one scan
+//! allowance of the server, and builds the whole report in memory: it fails instead of returning
+//! a part of the range.
 
 use crate::oplog_export::model::{
     KEEP_SCALARS_WITHOUT_SHAPE_NOTE, OmittedEntryRef, OmittedReason, OplogExportCoverage,
-    OplogExportHeader, ReportAgentRef, ReportEntry, StartUnknownRef,
+    OplogExportHeader, OplogExportReport, OplogReportHeader, ReportAgentRef, ReportEntry,
+    StartUnknownRef,
 };
 use crate::oplog_export::obfuscator::{
-    KeepFlags, ObfuscationContext, TokenKey, agent_reference, render_entry, render_omitted,
+    KeepFlags, ObfuscationContext, OwnAgent, TokenKey, own_agent_reference, render_entry,
+    render_omitted,
 };
 use async_trait::async_trait;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::oplog::public_oplog_entry::CreateParams;
 use golem_common::model::oplog::{
-    OmittedOplogEntry, OplogCursor, PublicOplogEntry, PublicOplogEntryWithIndex,
-    PublicOplogPageEntry,
+    OmittedOplogEntry, OplogCursor, OplogScan, OplogScanAllowance, PublicOplogEntry,
+    PublicOplogEntryWithIndex, PublicOplogPageEntry,
 };
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -40,6 +47,18 @@ pub struct OplogPage {
     pub entries: Vec<PublicOplogPageEntry>,
     /// The cursor of the next page; `None` after the last page.
     pub next: Option<OplogCursor>,
+    /// The last index of the oplog when the server read the page.
+    pub last_index: u64,
+}
+
+/// One page of an oplog range read, with the scan accounting of the server.
+#[derive(Debug, Clone)]
+pub struct OplogRangePage {
+    pub entries: Vec<PublicOplogPageEntry>,
+    /// The cursor of the next page of the range; `None` when the read reached the end of the
+    /// range, or when the server spent the allowance before it found where the range starts.
+    pub next: Option<OplogCursor>,
+    pub scan: OplogScan,
 }
 
 /// The two oplog reads of the export.
@@ -54,6 +73,18 @@ pub trait OplogReads: Send + Sync {
         query: Option<&str>,
     ) -> anyhow::Result<OplogPage>;
 
+    /// Reads one page of the range from `from` to `to`, inclusive, within `allowance`, or
+    /// within the configured allowance of the server without one. A failed read is not retried,
+    /// because the server can have spent allowance on it.
+    async fn read_range_page(
+        &self,
+        from: u64,
+        to: u64,
+        count: u64,
+        cursor: Option<&OplogCursor>,
+        allowance: Option<OplogScanAllowance>,
+    ) -> anyhow::Result<OplogRangePage>;
+
     /// Reads the full form of one entry that a page omitted.
     async fn read_entry(
         &self,
@@ -61,6 +92,9 @@ pub trait OplogReads: Send + Sync {
         component_revision: ComponentRevision,
     ) -> anyhow::Result<PublicOplogEntryWithIndex>;
 }
+
+/// The default largest omitted entry, in bytes, that an export reads in full.
+pub const DEFAULT_MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct OplogExportOptions {
@@ -98,6 +132,28 @@ pub enum OplogExportError {
     ReadFailed { status: u16 },
     #[error("A read of the agent failed before the server answered")]
     ReadFailedWithoutResponse,
+    /// A read refused its position in the oplog as stale: the oplog no longer has the entries
+    /// that an earlier read of the export saw.
+    #[error("A read of the agent found the position of the export stale")]
+    StaleCursor,
+    #[error("The range must have 1 <= from <= to, but it is from {from} to {to}")]
+    RangeInvalid { from: u64, to: u64 },
+    #[error("The range ends at {to}, after the last oplog index {last_index} of the agent")]
+    RangePastEnd { to: u64, last_index: u64 },
+    #[error(
+        "The scan budget of the server ran out before the export read the whole range from {from} to {to}. Narrow `from`/`to`, or use `golem agent oplog --obfuscate`"
+    )]
+    ScanBudgetExceeded { from: u64, to: u64 },
+    #[error(
+        "The report is larger than the limit of {limit_bytes} bytes. Narrow `from`/`to`, or use `golem agent oplog --obfuscate`"
+    )]
+    OutputTooLarge {
+        limit_bytes: usize,
+        /// The number of entries of the range, when the export read the whole range.
+        matched_entries: Option<u64>,
+    },
+    #[error("The server returned an oplog page that does not continue the range")]
+    RangePageInvalid,
 }
 
 /// The rendered entries of one page, the cursor of the next page and the coverage of the page.
@@ -116,6 +172,8 @@ pub struct OplogExportSession<R: OplogReads> {
     options: OplogExportOptions,
     fingerprint: Uuid,
     root: ReportAgentRef,
+    /// The last index of the oplog at the pin.
+    last_index: u64,
     /// The function name of each `Start` index that the session read and whose `End` or
     /// `Cancelled` it has not rendered yet; `None` when the `Start` is unknown (not read, failed
     /// to read, or not a `Start`). The `End` or `Cancelled` removes the entry, so the map holds
@@ -124,21 +182,28 @@ pub struct OplogExportSession<R: OplogReads> {
 }
 
 impl<R: OplogReads> OplogExportSession<R> {
-    /// Reads the `Create` entry of the agent and pins the root to its `instance_id`.
+    /// Reads the `Create` entry of the agent and pins the root to its `instance_id`. The root
+    /// reference holds the agent ID and the agent type name of the `Create` entry.
     pub async fn pin(
         reads: R,
         key: &'static TokenKey,
         options: OplogExportOptions,
     ) -> anyhow::Result<Self> {
-        let ctx = ObfuscationContext::new(key, options.keep);
-        let (fingerprint, agent_id) = read_create(&reads, options.max_entry_bytes).await?;
-        let root = agent_reference(&ctx, &agent_id);
+        let (create, last_index) = read_create(&reads, options.max_entry_bytes).await?;
+        let own_agent = OwnAgent {
+            agent_id: create.agent_id,
+            agent_type: create.agent_type_name,
+        };
+        let ctx = ObfuscationContext::new(key, options.keep, own_agent);
+        let fingerprint = create.instance_id;
+        let root = own_agent_reference(&ctx);
         Ok(Self {
             reads,
             ctx,
             options,
             fingerprint,
             root,
+            last_index,
             start_functions: HashMap::new(),
         })
     }
@@ -169,8 +234,8 @@ impl<R: OplogReads> OplogExportSession<R> {
     /// Fails with [`OplogExportError::RootChanged`] when the `Create` entry has another
     /// `instance_id` than at the pin. A failed read fails too.
     pub async fn check_root(&self) -> anyhow::Result<()> {
-        let (fingerprint, _) = read_create(&self.reads, self.options.max_entry_bytes).await?;
-        self.check_fingerprint(fingerprint)?;
+        let (create, _) = read_create(&self.reads, self.options.max_entry_bytes).await?;
+        self.check_fingerprint(create.instance_id)?;
         Ok(())
     }
 
@@ -195,15 +260,7 @@ impl<R: OplogReads> OplogExportSession<R> {
         let mut coverage = self.empty_coverage();
         let mut entries = Vec::with_capacity(page.entries.len());
         for page_entry in page.entries {
-            let entry = match page_entry {
-                PublicOplogPageEntry::Included(entry) => {
-                    self.render_full(&entry, &mut coverage).await
-                }
-                PublicOplogPageEntry::Omitted(omitted) => {
-                    self.render_omitted_entry(omitted, &mut coverage).await
-                }
-            };
-            entries.push(entry);
+            entries.push(self.render_entry(page_entry, &mut coverage).await);
         }
         coverage.update_incomplete();
         Ok(RenderedPage {
@@ -211,6 +268,20 @@ impl<R: OplogReads> OplogExportSession<R> {
             next: page.next,
             coverage,
         })
+    }
+
+    /// Renders one entry of a page, and adds what it does not show in full to `coverage`.
+    async fn render_entry(
+        &mut self,
+        page_entry: PublicOplogPageEntry,
+        coverage: &mut OplogExportCoverage,
+    ) -> ReportEntry {
+        match page_entry {
+            PublicOplogPageEntry::Included(entry) => self.render_full(&entry, coverage).await,
+            PublicOplogPageEntry::Omitted(omitted) => {
+                self.render_omitted_entry(omitted, coverage).await
+            }
+        }
     }
 
     async fn render_omitted_entry(
@@ -332,12 +403,14 @@ impl<R: OplogReads> OplogExportSession<R> {
     }
 }
 
-/// Reads the `Create` entry at index 1 and returns its `instance_id` and agent ID.
+/// Reads the `Create` entry at index 1 and returns its `instance_id`, the agent ID and the last
+/// index of the oplog.
 async fn read_create<R: OplogReads>(
     reads: &R,
     max_entry_bytes: u64,
-) -> anyhow::Result<(Uuid, golem_common::model::AgentId)> {
+) -> anyhow::Result<(Box<CreateParams>, u64)> {
     let page = reads.read_page(Some(1), 1, None, None).await?;
+    let last_index = page.last_index;
     let entry = match page.entries.into_iter().next() {
         Some(PublicOplogPageEntry::Included(entry)) => entry,
         Some(PublicOplogPageEntry::Omitted(omitted))
@@ -356,7 +429,7 @@ async fn read_create<R: OplogReads>(
     };
     match entry.entry {
         PublicOplogEntry::Create(create) if entry.oplog_index.as_u64() == 1 => {
-            Ok((create.instance_id, create.agent_id))
+            Ok((Box::new(create), last_index))
         }
         _ => Err(OplogExportError::CreateMissing.into()),
     }
@@ -394,6 +467,153 @@ pub async fn export_oplog<R: OplogReads>(
 
     session.check_root().await?;
     sink.coverage(&coverage)
+}
+
+/// The closed range of oplog indexes that a bounded report selects; both ends are inclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OplogRange {
+    pub from: u64,
+    pub to: u64,
+}
+
+/// Exports one closed range of the oplog of one agent as one report, built in memory.
+///
+/// The range must be within the oplog at the pin of the root. The reads of the range share one
+/// scan allowance of the server: the first read gets the configured allowance, and each later
+/// read passes on what the reads before it left. When the allowance runs out before the end of
+/// the range, the export fails with [`OplogExportError::ScanBudgetExceeded`].
+///
+/// `document_bytes` is the size of the document of a report, with its newline. When the report
+/// cannot fit in `limit_bytes`, the export fails with [`OplogExportError::OutputTooLarge`] and
+/// does no more reads: after each entry it compares a lower bound of the size with the limit,
+/// and after the last read the exact size. The root is checked again after the size.
+pub async fn export_oplog_range<R: OplogReads>(
+    reads: R,
+    key: &'static TokenKey,
+    options: OplogExportOptions,
+    range: OplogRange,
+    limit_bytes: usize,
+    document_bytes: impl Fn(&OplogExportReport) -> anyhow::Result<usize>,
+) -> anyhow::Result<OplogExportReport> {
+    let OplogRange { from, to } = range;
+    if from < 1 || from > to {
+        return Err(OplogExportError::RangeInvalid { from, to }.into());
+    }
+    let page_size = options.page_size;
+    let mut session = OplogExportSession::pin(reads, key, options).await?;
+    if to > session.last_index {
+        return Err(OplogExportError::RangePastEnd {
+            to,
+            last_index: session.last_index,
+        }
+        .into());
+    }
+    let mut report = OplogExportReport {
+        header: OplogReportHeader {
+            export: session.header(),
+            from,
+            to,
+        },
+        entries: Vec::new(),
+        coverage: session.empty_coverage(),
+    };
+    // A lower bound of the size of the document: the document without its entries, with the
+    // coverage so far, and the entries with their separators.
+    let mut frame_bytes = report_frame_bytes(&report, &document_bytes)?;
+    let mut frame_coverage = report.coverage.clone();
+    let mut entry_bytes = 0usize;
+
+    let mut cursor: Option<OplogCursor> = None;
+    let mut allowance: Option<OplogScanAllowance> = None;
+    // The first index that the next page may hold.
+    let mut position = from;
+    loop {
+        let page = session
+            .reads
+            .read_range_page(from, to, page_size, cursor.as_ref(), allowance)
+            .await?;
+        let granted = match allowance {
+            Some(allowance) => OplogScanAllowance {
+                entries: allowance.entries.min(page.scan.limit.entries),
+                millis: allowance.millis.min(page.scan.limit.millis),
+            },
+            None => page.scan.limit,
+        };
+        let remaining = granted.after(&page.scan);
+
+        for entry in &page.entries {
+            let index = entry.oplog_index().as_u64();
+            if index != position || index > to {
+                return Err(OplogExportError::RangePageInvalid.into());
+            }
+            position = index + 1;
+        }
+        let complete = page.next.is_none() && !page.scan.exhausted;
+        for page_entry in page.entries {
+            let index = page_entry.oplog_index().as_u64();
+            let entry = session.render_entry(page_entry, &mut report.coverage).await;
+            let separator = usize::from(!report.entries.is_empty());
+            entry_bytes = entry_bytes.saturating_add(serde_json::to_vec(&entry)?.len() + separator);
+            report.entries.push(entry);
+            if report.coverage != frame_coverage {
+                frame_bytes = report_frame_bytes(&report, &document_bytes)?;
+                frame_coverage = report.coverage.clone();
+            }
+            if frame_bytes.saturating_add(entry_bytes) > limit_bytes {
+                return Err(OplogExportError::OutputTooLarge {
+                    limit_bytes,
+                    matched_entries: (index == to).then_some(report.entries.len() as u64),
+                }
+                .into());
+            }
+        }
+        match page.next {
+            None if complete => {
+                if position != to + 1 {
+                    return Err(OplogExportError::RangePageInvalid.into());
+                }
+                break;
+            }
+            None => return Err(OplogExportError::ScanBudgetExceeded { from, to }.into()),
+            Some(next) => {
+                if page.scan.exhausted || remaining.is_spent() {
+                    return Err(OplogExportError::ScanBudgetExceeded { from, to }.into());
+                }
+                let started_at = cursor.as_ref().map_or(from, |c| c.next_oplog_index);
+                if next.next_oplog_index <= started_at || next.next_oplog_index != position {
+                    return Err(OplogExportError::RangePageInvalid.into());
+                }
+                cursor = Some(next);
+                allowance = Some(remaining);
+            }
+        }
+    }
+
+    report.coverage.update_incomplete();
+    if document_bytes(&report)? > limit_bytes {
+        return Err(OplogExportError::OutputTooLarge {
+            limit_bytes,
+            matched_entries: Some(report.entries.len() as u64),
+        }
+        .into());
+    }
+    session.check_root().await?;
+    Ok(report)
+}
+
+/// The size of the document of `report` without its entries, with the coverage as the report
+/// would state it.
+fn report_frame_bytes(
+    report: &OplogExportReport,
+    document_bytes: impl Fn(&OplogExportReport) -> anyhow::Result<usize>,
+) -> anyhow::Result<usize> {
+    let mut frame = OplogExportReport {
+        header: report.header.clone(),
+        entries: Vec::new(),
+        coverage: report.coverage.clone(),
+    };
+    frame.coverage.update_incomplete();
+    document_bytes(&frame)
 }
 
 #[cfg(test)]

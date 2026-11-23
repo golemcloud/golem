@@ -23,7 +23,7 @@ mod tests {
     use golem_api_grpc::proto::golem::worker;
     use golem_client::api::RegistryServiceClient;
     #[cfg(unix)]
-    use golem_common::model::AgentId;
+    use golem_common::model::agent::OwnedAgentId;
     use golem_common::model::base64::Base64;
     use golem_common::model::component::ComponentDto;
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
@@ -35,7 +35,7 @@ mod tests {
     #[cfg(unix)]
     use golem_common::schema::SchemaValue;
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
-    use golem_common::{agent_id, data_value};
+    use golem_common::{agent_key, data_value};
     use golem_test_framework::components::rdb::DbInfo;
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
@@ -309,7 +309,7 @@ mod tests {
 
         let mut agents = Vec::new();
         for i in 1..=8 {
-            let parsed_agent_id = agent_id!("InstantiationGrowthCounter", format!("fenced-{i}"));
+            let parsed_agent_id = agent_key!("InstantiationGrowthCounter", format!("fenced-{i}"));
             let agent_id = admin
                 .start_agent(&component.id, parsed_agent_id.clone())
                 .await
@@ -487,12 +487,12 @@ mod tests {
     /// The owning epoch the executors' indexed storage holds for `agent_id`'s oplog. Read from the
     /// storage itself because the public oplog does not carry the shard epoch.
     #[cfg(unix)]
-    async fn stored_owning_epoch(pool: &sqlx::PgPool, agent_id: &AgentId) -> Option<i64> {
+    async fn stored_owning_epoch(pool: &sqlx::PgPool, agent_id: &OwnedAgentId) -> Option<i64> {
         sqlx::query_scalar(
             "SELECT epoch FROM golem_worker_executor_indexed.indexed_key_epoch \
              WHERE namespace = 'durable-worker-oplog' AND key = $1",
         )
-        .bind(agent_id.to_redis_key())
+        .bind(agent_id.storage_key())
         .fetch_optional(pool)
         .await
         .expect("Failed to read indexed_key_epoch")
@@ -502,7 +502,11 @@ mod tests {
     /// purpose: an agent's own initialization completes asynchronously after `start_agent` returns,
     /// so any count taken over every method races it.
     #[cfg(unix)]
-    async fn count_completions_of(user: &impl TestDsl, agent_id: &AgentId, method: &str) -> usize {
+    async fn count_completions_of(
+        user: &impl TestDsl,
+        agent_id: &OwnedAgentId,
+        method: &str,
+    ) -> usize {
         user.get_oplog(agent_id, OplogIndex::INITIAL)
             .await
             .unwrap()
@@ -713,7 +717,7 @@ mod tests {
 
             for i in 1..=n {
                 info!("Worker {i} starting");
-                let agent_id = agent_id!("Counter", format!("sharding-test-{i}"));
+                let agent_id = agent_key!("Counter", format!("sharding-test-{i}"));
                 admin
                     .start_agent(&component.id, agent_id.clone())
                     .await
@@ -1204,7 +1208,7 @@ mod tests {
         #[allow(dead_code)]
         account_id: String,
         #[allow(dead_code)]
-        component_id: String,
+        agent_type: Option<String>,
         #[allow(dead_code)]
         first_entry_index: u64,
         #[allow(dead_code)]
@@ -1303,7 +1307,7 @@ mod tests {
 
     async fn wait_for_oplog_completions(
         user: &(impl TestDsl + Send + Sync + ?Sized),
-        worker_id: &golem_common::model::AgentId,
+        worker_id: &golem_common::model::agent::OwnedAgentId,
         expected_count: usize,
         timeout: Duration,
         received: &Arc<Mutex<Vec<BatchCallback>>>,
@@ -1405,7 +1409,7 @@ mod tests {
             .await
             .unwrap();
 
-        let repo_id = agent_id!("Repository", "worker1");
+        let repo_id = agent_key!("Repository", "worker1");
         let worker_id = user
             .start_agent(&component.id, repo_id.clone())
             .await
@@ -1568,7 +1572,7 @@ mod tests {
             .await
             .unwrap();
 
-        let repo_id = agent_id!("Repository", "worker1");
+        let repo_id = agent_key!("Repository", "worker1");
         let worker_id = user
             .start_agent(&component.id, repo_id.clone())
             .await
@@ -1728,7 +1732,7 @@ mod tests {
             .await
             .unwrap();
 
-        let repo_id = agent_id!("Repository", "worker1");
+        let repo_id = agent_key!("Repository", "worker1");
         let worker_id = user
             .start_agent(&component.id, repo_id.clone())
             .await
@@ -1851,7 +1855,7 @@ mod tests {
             .await
             .unwrap();
 
-        let repo_id = agent_id!("Repository", "worker1");
+        let repo_id = agent_key!("Repository", "worker1");
         let worker_id = user
             .start_agent(&component.id, repo_id.clone())
             .await

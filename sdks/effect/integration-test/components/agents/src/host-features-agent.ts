@@ -50,6 +50,11 @@ import * as CoreTypes from "golem:core/types@2.0.0"
 const uuidToString = (uuid: { highBits: bigint; lowBits: bigint }): string =>
   CoreTypes.uuidToString(uuid)
 
+/** The raw WIT agent ID that the `Oplog` host wrappers take. */
+const selfRawAgentId = Effect.map(SelfAgentId.SelfAgentId, (id) => ({
+  uuid: CoreTypes.parseUuid(id.uuid),
+}))
+
 const HostFeaturesSpec = defineAgent({
   name: "HostFeatures",
   description:
@@ -66,7 +71,8 @@ const HostFeaturesSpec = defineAgent({
     selfMetadata: method({
       input: {},
       success: Schema.Struct({
-        agentName: Schema.String,
+        agentId: Schema.String,
+        agentTypeName: Schema.String,
         componentRevision: Schema.String,
         status: Schema.String,
         retryCount: Schema.String,
@@ -114,7 +120,8 @@ const hostFeatureMethods = (state: Ref.Ref<{ count: number }>) => ({
     Effect.gen(function* () {
       const meta = yield* Agents.getSelfMetadata
       return {
-        agentName: meta.agentId.agentId,
+        agentId: uuidToString(meta.agentId.uuid),
+        agentTypeName: meta.agentTypeName ?? "",
         componentRevision: meta.componentRevision.toString(),
         status: meta.status,
         retryCount: meta.retryCount.toString(),
@@ -129,7 +136,7 @@ const hostFeatureMethods = (state: Ref.Ref<{ count: number }>) => ({
 
   readOplog: ({ count }: { count: number }) =>
     Effect.gen(function* () {
-      const self = yield* SelfAgentId.SelfAgentId
+      const self = yield* selfRawAgentId
       const tags = yield* Stream.runCollect(
         Oplog.read({ agentId: self, start: 0n }).pipe(
           Stream.map((entry) => entry.tag),
@@ -141,7 +148,7 @@ const hostFeatureMethods = (state: Ref.Ref<{ count: number }>) => ({
 
   searchOplog: ({ query, count }: { query: string; count: number }) =>
     Effect.gen(function* () {
-      const self = yield* SelfAgentId.SelfAgentId
+      const self = yield* selfRawAgentId
       const tags = yield* Stream.runCollect(
         Oplog.search({ agentId: self, text: query }).pipe(
           Stream.map(([, entry]) => entry.tag),

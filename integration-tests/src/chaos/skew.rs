@@ -490,7 +490,10 @@ fn findings(report: &SkewReport) -> Vec<SkewFinding> {
 /// quota read-back short by however many probes the run took — a lost-work
 /// finding manufactured by the instrument.
 pub async fn probe_clock(ctx: &WorkloadContext, agent: &str, group: Group) -> ClockProbe {
-    let agent_id = routing_agent_id(ctx, QUOTA_COUNTER_AGENT, agent);
+    let agent_id = golem_common::model::agent::OwnedAgentId::new(
+        ctx.counters.environment_id,
+        &routing_agent_id(ctx, QUOTA_COUNTER_AGENT, agent),
+    );
 
     let failed = |asked_at: DateTime<Utc>, error: String| ClockProbe {
         agent: agent.to_string(),
@@ -517,7 +520,7 @@ pub async fn probe_clock(ctx: &WorkloadContext, agent: &str, group: Group) -> Cl
     // Taken as late as possible, so the interval this reading has to absorb is
     // the invocation alone rather than the invocation plus the read before it.
     let asked_at = Utc::now();
-    let parsed = golem_common::agent_id!(QUOTA_COUNTER_AGENT, agent.to_string());
+    let parsed = golem_common::agent_key!(QUOTA_COUNTER_AGENT, agent.to_string());
     if let Err(e) = tokio::time::timeout(
         PROBE_TIMEOUT,
         ctx.user.invoke_and_await_agent(

@@ -19,15 +19,15 @@ use golem_client::api::RegistryServiceClient;
 use golem_common::model::{AgentStatus, PromiseId};
 use golem_common::schema::FromSchema;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{
     DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_matches;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Once};
 use std::time::Duration;
 use test_r::{define_matrix_dimension, test, test_dep, timeout};
 use tracing::Instrument;
@@ -46,15 +46,21 @@ define_matrix_dimension!(db: EnvBasedTestDependencies -> "postgres", "sqlite");
 #[derive(Debug)]
 pub struct Tracing;
 
+// The global subscriber can be installed only once per process, and a retry of a failed test
+// creates its dependencies again in the same process.
+static TRACING_INIT: Once = Once::new();
+
 impl Tracing {
     pub fn init() -> Self {
-        #[cfg(unix)]
-        unsafe {
-            backtrace_on_stack_overflow::enable()
-        };
-        init_tracing_with_default_debug_env_filter(
-            &TracingConfig::test_pretty_without_time("integration-tests").with_env_overrides(),
-        );
+        TRACING_INIT.call_once(|| {
+            #[cfg(unix)]
+            unsafe {
+                backtrace_on_stack_overflow::enable()
+            };
+            init_tracing_with_default_debug_env_filter(
+                &TracingConfig::test_pretty_without_time("integration-tests").with_env_overrides(),
+            );
+        });
         Self
     }
 }
@@ -162,7 +168,7 @@ async fn environment_deletion_stops_self_scheduling_agent(
         .await?;
 
     let agent_name = "http-polling-self-scheduler-test";
-    let parsed_agent_id = agent_id!("HttpPollingSelfScheduler", agent_name);
+    let parsed_agent_id = agent_key!("HttpPollingSelfScheduler", agent_name);
     user.start_agent(&component.id, parsed_agent_id.clone())
         .await?;
 
@@ -247,7 +253,7 @@ async fn oplog_archive_in_deleted_environment_does_not_panic(
     // schedules an ArchiveOplog action 2 s from now (archive_interval=2s in tests).
     user.invoke_and_await_agent(
         &component,
-        &agent_id!("Counter", "archive-panic-test"),
+        &agent_key!("Counter", "archive-panic-test"),
         "increment",
         data_value!(),
     )
@@ -282,7 +288,7 @@ async fn oplog_archive_in_deleted_environment_does_not_panic(
     liveness_user
         .invoke_and_await_agent(
             &liveness_component,
-            &agent_id!("Counter", "liveness-check"),
+            &agent_key!("Counter", "liveness-check"),
             "increment",
             data_value!(),
         )
@@ -311,7 +317,7 @@ async fn invoke_existing_agent_in_deleted_environment_fails(
         .store()
         .await?;
 
-    let parsed_agent_id = agent_id!("Counter", "env-delete-existing");
+    let parsed_agent_id = agent_key!("Counter", "env-delete-existing");
 
     user.invoke_and_await_agent(&component, &parsed_agent_id, "increment", data_value!())
         .await?;
@@ -369,7 +375,7 @@ async fn invoke_new_agent_in_deleted_environment_fails(
     let error = user
         .invoke_and_await_agent(
             &component,
-            &agent_id!("Counter", "env-delete-new"),
+            &agent_key!("Counter", "env-delete-new"),
             "increment",
             data_value!(),
         )
@@ -405,7 +411,7 @@ async fn complete_promise_in_deleted_environment_results_in_404(
         .store()
         .await?;
 
-    let agent_id = agent_id!("PromiseAgent", "promise-env-delete-test");
+    let agent_id = agent_key!("PromiseAgent", "promise-env-delete-test");
     let worker = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result = user
@@ -449,7 +455,7 @@ async fn complete_promise_in_deleted_environment_results_in_404(
     info!("Completing pending promise");
 
     let error = user
-        .complete_promise(&promise_id, b"ignored".to_vec())
+        .complete_promise(&component.environment_id, &promise_id, b"ignored".to_vec())
         .await
         .unwrap_err();
 

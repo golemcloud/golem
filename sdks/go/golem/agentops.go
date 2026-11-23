@@ -20,29 +20,12 @@ import (
 	"time"
 
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
-	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 // Agent management: reading agents' metadata, listing them, and updating,
 // reverting and forking them. The host calls go through [hostOps], so the
 // conversions and the filter logic here run natively in tests.
-
-// AgentID identifies an agent across components: the component it belongs to
-// and its agent id string (agent type + constructor parameters, as
-// [Context.AgentID] returns it).
-type AgentID struct {
-	ComponentID UUID
-	AgentID     string
-}
-
-func agentIDFromWit(w types.AgentId) AgentID {
-	return AgentID{ComponentID: uuidFromWit(w.ComponentId.Uuid), AgentID: w.AgentId}
-}
-
-func (id AgentID) toWit() types.AgentId {
-	return types.AgentId{ComponentId: types.ComponentId{Uuid: uuidToWit(id.ComponentID)}, AgentId: id.AgentID}
-}
 
 // AgentOperationErrorKind classifies an [AgentOperationError].
 type AgentOperationErrorKind uint8
@@ -116,7 +99,13 @@ func (s AgentStatus) String() string {
 
 // AgentMetadata describes an agent as the host sees it.
 type AgentMetadata struct {
-	AgentID           AgentID
+	AgentID AgentID
+	// AgentTypeName is the name of the agent's type. Owners without an agent
+	// type have none.
+	AgentTypeName Option[string]
+	// Fingerprint is the incarnation of the agent: a deleted and re-created
+	// agent keeps its ID but gets a new fingerprint.
+	Fingerprint       UUID
 	Args              []string
 	Env               map[string]string
 	Config            map[string]string
@@ -127,8 +116,14 @@ type AgentMetadata struct {
 }
 
 func agentMetadataFromWit(w apiHost.AgentMetadata) AgentMetadata {
+	agentTypeName := None[string]()
+	if w.AgentTypeName.IsSome() {
+		agentTypeName = Some(w.AgentTypeName.Some())
+	}
 	return AgentMetadata{
 		AgentID:           agentIDFromWit(w.AgentId),
+		AgentTypeName:     agentTypeName,
+		Fingerprint:       uuidFromWit(w.Fingerprint),
 		Args:              w.Args,
 		Env:               pairsToMap(w.Env),
 		Config:            pairsToMap(w.Config),
@@ -180,7 +175,7 @@ func MustGetSelfMetadata() AgentMetadata { return must(GetSelfMetadata()) }
 // GetAgentMetadata returns an agent's metadata, or false if there is no such
 // agent.
 func GetAgentMetadata(id AgentID) (AgentMetadata, bool) {
-	w, ok := hostOps.getAgentMetadata(id.toWit())
+	w, ok := hostOps.getAgentMetadata(agentIDToWit(id))
 	if !ok {
 		return AgentMetadata{}, false
 	}
@@ -188,7 +183,7 @@ func GetAgentMetadata(id AgentID) (AgentMetadata, bool) {
 }
 
 // GetAgentsOptions narrows and tunes [GetAgents]. The zero value lists every
-// agent of the component, with metadata that may be slightly out of date.
+// agent of the type, with metadata that may be slightly out of date.
 type GetAgentsOptions struct {
 	Filter AgentFilter
 	// Precise makes the host compute each agent's latest state, which is
@@ -196,13 +191,14 @@ type GetAgentsOptions struct {
 	Precise bool
 }
 
-// GetAgents lists the agents of a component. Pages are fetched as the loop
-// advances; a failing page is yielded as an error and ends the iteration.
+// GetAgents lists the agents of the named agent type in the current
+// environment. Pages are fetched as the loop advances; a failing page is
+// yielded as an error and ends the iteration.
 //
-//	for md, err := range golem.GetAgents(componentID, golem.GetAgentsOptions{}) { … }
-func GetAgents(componentID UUID, opts GetAgentsOptions) iter.Seq2[AgentMetadata, error] {
+//	for md, err := range golem.GetAgents("CounterAgent", golem.GetAgentsOptions{}) { … }
+func GetAgents(agentTypeName string, opts GetAgentsOptions) iter.Seq2[AgentMetadata, error] {
 	return func(yield func(AgentMetadata, error) bool) {
-		pages := hostOps.getAgents(types.ComponentId{Uuid: uuidToWit(componentID)}, opts.Filter.toWit(), opts.Precise)
+		pages := hostOps.getAgents(agentTypeName, opts.Filter.toWit(), opts.Precise)
 		defer pages.close()
 		for {
 			page, more, err := pages.next()
@@ -223,9 +219,9 @@ func GetAgents(componentID UUID, opts GetAgentsOptions) iter.Seq2[AgentMetadata,
 }
 
 // MustGetAgents is [GetAgents], panicking on a failing page.
-func MustGetAgents(componentID UUID, opts GetAgentsOptions) iter.Seq[AgentMetadata] {
+func MustGetAgents(agentTypeName string, opts GetAgentsOptions) iter.Seq[AgentMetadata] {
 	return func(yield func(AgentMetadata) bool) {
-		for md, err := range GetAgents(componentID, opts) {
+		for md, err := range GetAgents(agentTypeName, opts) {
 			if err != nil {
 				panic(err)
 			}
@@ -249,7 +245,7 @@ const (
 	FilterLess
 )
 
-// StringFilterComparator compares an agent's name, environment or config
+// StringFilterComparator compares an agent's key, environment or config
 // variable in an [AgentFilter].
 type StringFilterComparator uint8
 
@@ -265,7 +261,7 @@ const (
 // conditions and combine them with And and Or; the zero value selects every
 // agent.
 //
-//	golem.AgentNameFilter(golem.StringFilterStartsWith, "order-").
+//	golem.AgentKeyFilter(golem.StringFilterStartsWith, "order-").
 //	    And(golem.AgentStatusFilter(golem.FilterEqual, golem.AgentStatusRunning))
 type AgentFilter struct {
 	// anyOf is the filter in disjunctive normal form: it matches an agent when
@@ -277,9 +273,10 @@ func condition(c apiHost.AgentPropertyFilter) AgentFilter {
 	return AgentFilter{anyOf: [][]apiHost.AgentPropertyFilter{{c}}}
 }
 
-// AgentNameFilter matches on the agent id string.
-func AgentNameFilter(cmp StringFilterComparator, value string) AgentFilter {
-	return condition(apiHost.MakeAgentPropertyFilterName(apiHost.AgentNameFilter{Comparator: uint8(cmp), Value: value}))
+// AgentKeyFilter matches on the canonical key of a keyed agent. An agent
+// without a key never matches it.
+func AgentKeyFilter(cmp StringFilterComparator, value string) AgentFilter {
+	return condition(apiHost.MakeAgentPropertyFilterKey(apiHost.AgentKeyFilter{Comparator: uint8(cmp), Value: value}))
 }
 
 // AgentStatusFilter matches on the agent's status.
@@ -359,7 +356,7 @@ const (
 // UpdateAgent starts updating an agent to the given component revision. It
 // returns once the request is accepted, without waiting for the update.
 func UpdateAgent(id AgentID, revision uint64, mode UpdateMode) error {
-	return hostOps.updateAgent(id.toWit(), revision, uint8(mode))
+	return hostOps.updateAgent(agentIDToWit(id), revision, uint8(mode))
 }
 
 // MustUpdateAgent is [UpdateAgent], panicking on failure.
@@ -383,30 +380,36 @@ func RevertLastInvocations(n uint64) RevertAgentTarget {
 
 // RevertAgent rewinds an agent's state.
 func RevertAgent(id AgentID, target RevertAgentTarget) error {
-	return hostOps.revertAgent(id.toWit(), target.wit)
+	return hostOps.revertAgent(agentIDToWit(id), target.wit)
 }
 
 // MustRevertAgent is [RevertAgent], panicking on failure.
 func MustRevertAgent(id AgentID, target RevertAgentTarget) { mustDo(RevertAgent(id, target)) }
 
-// ForkAgent creates target as a copy of source, with source's oplog up to and
-// including cutOff.
-func ForkAgent(source, target AgentID, cutOff uint64) error {
-	return hostOps.forkAgent(source.toWit(), target.toWit(), cutOff)
+// ForkAgent creates a new agent of source's type as a copy of source, with
+// source's oplog up to and including cutOff, and returns the ID Golem issued
+// for it. The new agent has no key.
+func ForkAgent(source AgentID, cutOff uint64) (AgentID, error) {
+	forked, err := hostOps.forkAgent(agentIDToWit(source), cutOff)
+	if err != nil {
+		return AgentID{}, err
+	}
+	return agentIDFromWit(forked), nil
 }
 
 // MustForkAgent is [ForkAgent], panicking on failure.
-func MustForkAgent(source, target AgentID, cutOff uint64) { mustDo(ForkAgent(source, target, cutOff)) }
+func MustForkAgent(source AgentID, cutOff uint64) AgentID { return must(ForkAgent(source, cutOff)) }
 
-// ForkSelf copies the running agent under a new phantom id. Both copies continue
-// from here: forked tells them apart, and phantomID is the copy's id in both.
-func ForkSelf() (forked bool, phantomID UUID, err error) { return hostOps.fork() }
+// ForkSelf copies the running agent into a new agent of the same type, with a
+// new ID that Golem issues and no key. Both copies continue from here: forked
+// tells them apart, and forkedID is the copy's ID in both.
+func ForkSelf() (forked bool, forkedID AgentID, err error) { return hostOps.fork() }
 
 // MustForkSelf is [ForkSelf], panicking on failure.
-func MustForkSelf() (forked bool, phantomID UUID) {
-	forked, phantomID, err := ForkSelf()
+func MustForkSelf() (forked bool, forkedID AgentID) {
+	forked, forkedID, err := ForkSelf()
 	mustDo(err)
-	return forked, phantomID
+	return forked, forkedID
 }
 
 // ResolveComponentID looks a component up by reference: its name, or on Golem
@@ -417,26 +420,6 @@ func ResolveComponentID(reference string) (UUID, bool) {
 		return UUID{}, false
 	}
 	return uuidFromWit(w.Uuid), true
-}
-
-// ResolveAgentID builds the id of the named agent in the referenced
-// component. It is false only if there is no such component.
-func ResolveAgentID(reference, agentName string) (AgentID, bool) {
-	w, ok := hostOps.resolveAgentID(reference, agentName, false)
-	if !ok {
-		return AgentID{}, false
-	}
-	return agentIDFromWit(w), true
-}
-
-// ResolveAgentIDStrict is [ResolveAgentID], but also false if the agent does
-// not exist.
-func ResolveAgentIDStrict(reference, agentName string) (AgentID, bool) {
-	w, ok := hostOps.resolveAgentID(reference, agentName, true)
-	if !ok {
-		return AgentID{}, false
-	}
-	return agentIDFromWit(w), true
 }
 
 func must[T any](v T, err error) T {

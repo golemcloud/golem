@@ -11,18 +11,14 @@
 # Steps:
 #   1. Generate the default agent/tool/middleware world.
 #   2. Preserve hand-maintained stubs and package descriptors.
-#   3. Split the oversized generated middleware argument lift whose unsplit
-#      shape currently triggers a MoonBit compiler ICE.
-#   4. Stabilize generated FFI helper and export-wrapper ordering, which the
-#      pinned generator currently emits from unordered collections.
-#   5. Fix the s8/s16 lifting bug: the generated code reads signed
+#   3. Fix the s8/s16 lifting bug: the generated code reads signed
 #      bytes/shorts with `mbt_ffi_load8`/`mbt_ffi_load16` (i32.load8_s/load16_s)
 #      AND then subtracts 0x100/0x10000 — a double sign-extension that corrupts
 #      every s8/s16 value lifted from the component ABI. We strip the spurious
 #      subtraction (the signed load alone already yields the correct value).
-#   6. Remove an emitted `moon.pkg.json` only where a sibling hand-maintained
+#   4. Remove an emitted `moon.pkg.json` only where a sibling hand-maintained
 #      `moon.pkg` owns package metadata (the export stubs and gen link package).
-#   7. Regenerate package interfaces and assert normalization and the s8/s16 fix.
+#   5. Regenerate package interfaces and assert the s8/s16 fix.
 #
 set -euo pipefail
 
@@ -105,9 +101,6 @@ fi
 
 rm -rf world/tool-middleware-guest world/agent-tool-middleware-guest
 
-echo "==> Stabilizing generated FFI declaration order"
-python3 scripts/normalize-generated-ffi.py "${GENERATED_ROOTS[@]}"
-
 echo "==> Fixing s8/s16 double sign-extension"
 # Only strip the subtraction where it follows the matching SIGNED load, so the
 # unsigned `mbt_ffi_load8_u`/`mbt_ffi_load16_u` paths are never touched.
@@ -136,9 +129,6 @@ done < <(
     \( -name 'moon.pkg' -o -name 'moon.pkg.json' \) -print0
 )
 moon info --target wasm "${generated_packages[@]}"
-
-echo "==> Verifying generated FFI declaration order"
-python3 scripts/normalize-generated-ffi.py --check "${GENERATED_ROOTS[@]}"
 
 echo "==> Verifying s8/s16 fix"
 if rg -n -g '*.mbt' -e ' - 0x100\b' -e ' - 0x10000\b' \

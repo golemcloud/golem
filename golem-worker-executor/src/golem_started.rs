@@ -78,7 +78,7 @@ pub(crate) fn agent_principal(
     };
     Principal::Agent(AgentPrincipal::of_agent(
         issuer.to_string(),
-        owned_agent_id.agent_id.clone(),
+        owned_agent_id.agent_id,
         metadata.fingerprint,
         agent_type,
         owned_agent_id.environment_id,

@@ -10,6 +10,7 @@ members = [
     "golem-mcp-import",
     "golem-model-mock",
     "golem-native-tool",
+    "golem-package",
     "golem-rust-macro",
     "golem-service-base",
     "golem-component-compilation-service",
@@ -56,6 +57,7 @@ golem-mcp-import = { version = "=0.0.0", path = "golem-mcp-import" }
 golem-model-mock = { version = "=0.0.0", path = "golem-model-mock" }
 golem-native-tool = { version = "=0.0.0", path = "golem-native-tool" }
 golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
+golem-package = { version = "=0.0.0", path = "golem-package" }
 golem-registry-service = { path = "golem-registry-service" }
 golem-rust-macro = { version = "=0.0.0", path = "golem-rust-macro" }
 golem-schema = { version = "=0.0.0", path = "golem-schema", default-features = false }
@@ -291,7 +293,7 @@ tap = "1.0.1"
 tar = "0.4.46"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
-test-r = { version = "3.0.15", default-features = true }
+test-r = { version = "3.0.16", default-features = true }
 testcontainers = { version = "0.27.1" }
 testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "mysql", ] }
 textwrap = { version = "0.16.1", default-features = false, features = ["unicode-linebreak", "unicode-width"] }

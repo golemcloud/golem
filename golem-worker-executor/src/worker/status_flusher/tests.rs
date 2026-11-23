@@ -18,13 +18,11 @@ use super::*;
 use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
 use async_trait::async_trait;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentId, AgentStatus, AgentStatusRecord};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use test_r::test;
-use uuid::Uuid;
 
 use crate::services::worker::{GetWorkerMetadataResult, WorkerService};
 
@@ -218,13 +216,7 @@ impl WorkerService for MockWorkerService {
 }
 
 fn agent_id() -> OwnedAgentId {
-    OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "test".to_string(),
-        },
-    )
+    OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1))
 }
 
 fn status(status: AgentStatus, oplog_idx: u64) -> AgentStatusRecord {

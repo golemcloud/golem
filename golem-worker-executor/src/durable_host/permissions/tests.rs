@@ -28,7 +28,8 @@ use test_r::test;
 fn valid_filesystem_grant() -> permissions_types::PatternGrant {
     permissions_types::PatternGrant {
         class: "filesystem".to_string(),
-        owner: "alice@example.com/shop/prod/cart-svc/CartAgent".to_string(),
+        owner: "alice@example.com/shop/prod/cart-svc/00000007-0000-8000-8000-000000000003"
+            .to_string(),
         recipient: "alice@example.com/shop/prod/cart-svc/CartAgent".to_string(),
         verb: "read".to_string(),
         resource_id: "/data/**".to_string(),
@@ -417,10 +418,7 @@ fn installed_child_request_matches_registry_canonicalization() {
     });
     let provenance = CardManagedByRuntimeDerived {
         environment_id: golem_common::model::environment::EnvironmentId(Uuid::new_v4()),
-        agent_id: AgentId {
-            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-            agent_id: "source-agent".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 1),
         invocation_key: Uuid::new_v4().into(),
         oplog_index: OplogIndex::from_u64(42),
     };
@@ -631,7 +629,10 @@ fn wallet_derivation_context() -> AgentPermissionMonomorphizationContext {
         application: ApplicationName::try_from("shop").unwrap(),
         environment: EnvironmentName::try_from("prod").unwrap(),
         component: ComponentName("cart-svc".to_string()),
-        agent_name: "cart-1".to_string(),
+        agent: golem_common::model::card::owner::AgentOwnerLeaf {
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
+            agent_type: Some(AgentTypeName("CartAgent".to_string())),
+        },
         owner: RecipientOwnerContext::AgentType(AgentTypeName("CartAgent".to_string())),
     }
 }
@@ -960,7 +961,11 @@ fn explicit_derivation_resolves_a_wallet_template_parent_for_the_caller() {
         .unwrap()
         .clone();
     assert!(!own_read.owner.contains('?'));
-    assert!(own_read.owner.contains("cart-1"));
+    assert!(
+        own_read
+            .owner
+            .contains(&golem_common::model::AgentId::from_parts(7, 1).to_string())
+    );
     let ceiling = concrete_pattern_grants(&parent.upper_positive).unwrap();
     assert!(
         derive_grant_sets(&parent, std::slice::from_ref(&own_read), &[], &ceiling, &[]).is_ok()
@@ -978,7 +983,10 @@ fn explicit_derivation_resolves_a_wallet_template_parent_for_the_caller() {
     );
 
     let sibling = permissions_types::PatternGrant {
-        owner: own_read.owner.replace("cart-1", "cart-2"),
+        owner: own_read.owner.replace(
+            &golem_common::model::AgentId::from_parts(7, 1).to_string(),
+            &golem_common::model::AgentId::from_parts(7, 2).to_string(),
+        ),
         ..own_read.clone()
     };
     assert!(derive_grant_sets(&parent, &[sibling], &[], &ceiling, &[]).is_err());
@@ -1215,7 +1223,8 @@ fn parse_pattern_grant_rejects_invalid_structured_fields_after_separator_injecti
 fn parse_pattern_grant_accepts_valid_account_emails_in_paths() {
     let grant = permissions_types::PatternGrant {
         class: "filesystem".to_string(),
-        owner: "alice@example.com/shop/prod/cart-svc/CartAgent".to_string(),
+        owner: "alice@example.com/shop/prod/cart-svc/00000007-0000-8000-8000-000000000003"
+            .to_string(),
         recipient: "alice@example.com/shop/prod/cart-svc/CartAgent".to_string(),
         verb: "read".to_string(),
         resource_id: "/data/**".to_string(),
@@ -1241,9 +1250,10 @@ fn parse_pattern_grant_accepts_valid_agent_owner_type_wildcard() {
 fn concrete_pattern_grant_preserves_valid_structured_fields_with_delimiters() {
     let grant = permissions_types::PatternGrant {
         class: "filesystem".to_string(),
-        owner: "alice@example.com/shop/prod/cart-svc/CartAgent(\"id) @ spoof : read : tmp\")"
+        owner: "alice@example.com/shop/prod/cart-svc/00000007-0000-8000-8000-000000000003"
             .to_string(),
-        recipient: "alice@example.com/shop/prod/cart-svc/CartAgent".to_string(),
+        recipient: "alice@example.com/shop/prod/cart-svc/CartAgent(\"id) @ spoof : read : tmp\")"
+            .to_string(),
         verb: "read".to_string(),
         resource_id: "/data/**".to_string(),
     };
@@ -1281,7 +1291,8 @@ fn concrete_pattern_grant_preserves_multi_segment_tool_command() {
 fn parse_pattern_grant_rejects_verb_suffix_that_completes_resource_separator() {
     let grant = permissions_types::PatternGrant {
         class: "config".to_string(),
-        owner: "alice@example.com/shop/prod/cart-svc/CartAgent".to_string(),
+        owner: "alice@example.com/shop/prod/cart-svc/00000007-0000-8000-8000-000000000003"
+            .to_string(),
         recipient: "alice@example.com/shop/prod/cart-svc/CartAgent".to_string(),
         verb: "read :".to_string(),
         resource_id: "ignored".to_string(),

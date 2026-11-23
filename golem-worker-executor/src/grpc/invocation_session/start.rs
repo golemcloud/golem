@@ -180,7 +180,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let (reason, error, worker_error) = match result {
                     Ok(_) => {
                         tracing::warn!(
-                            agent_id = ?start.agent_id,
+                            target = ?start.target,
                             attempt_id = ?start.attempt_id,
                             error = "invocation completed before acceptance",
                             "Invocation session start was rejected"
@@ -193,7 +193,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }
                     Err(error) => {
                         tracing::warn!(
-                            agent_id = ?start.agent_id,
+                            target = ?start.target,
                             attempt_id = ?start.attempt_id,
                             error = %error,
                             "Invocation session start was rejected"
@@ -250,7 +250,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(high_waters) => high_waters,
                 Err(error) => {
                     tracing::warn!(
-                        agent_id = ?start.agent_id,
+                        target = ?start.target,
                         attempt_id = ?start.attempt_id,
                         error = %error,
                         "Invocation session input high-water lookup failed"
@@ -277,7 +277,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .send(InvocationResponse {
                 response: Some(invocation_response::Response::Accepted(
                     InvocationAccepted {
-                        agent_id: start.agent_id.clone(),
+                        agent_id: Some(accepted.agent_id.into()),
                         idempotency_key: Some(accepted.idempotency_key.into()),
                         component_revision: accepted
                             .component_revision
@@ -371,7 +371,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     response: Some(invocation_response::Response::Result(InvocationSessionResult {
                         result: Some(invocation_session_result::Result::MethodResult(result.value)),
                         component_revision: accepted.component_revision.map(|revision| revision.get()),
-                        agent_id: start.agent_id.clone(),
+                        agent_id: Some(accepted.agent_id.into()),
                         idempotency_key: Some(accepted.idempotency_key.into()),
                         agent_fingerprint: start.expected_callee_fingerprint,
                         new_stream_mappings,
@@ -591,7 +591,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             component_revision: accepted
                                 .component_revision
                                 .map(|revision| revision.get()),
-                            agent_id: start.agent_id.clone(),
+                            agent_id: Some(accepted.agent_id.into()),
                             idempotency_key: Some(accepted.idempotency_key.into()),
                             fuel_consumed: None,
                             status: None,

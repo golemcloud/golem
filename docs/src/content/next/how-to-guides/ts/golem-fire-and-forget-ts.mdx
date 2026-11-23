@@ -14,13 +14,13 @@ the same input record as the awaited call but returns `void` immediately:
 ```typescript
 import { CounterAgent } from './counter-agent.js';
 
-const counter = CounterAgent.client.get({ name: 'my-counter' });
+const counter = CounterAgent.client.upsert({ name: 'my-counter' });
 
 // Fire-and-forget — returns immediately
 counter.increment.trigger();          // input: {}
 
 // With arguments
-const processor = DataProcessor.client.get({ name: 'pipeline-1' });
+const processor = DataProcessor.client.upsert({ name: 'pipeline-1' });
 processor.processBatch.trigger({ batch: batchData });
 ```
 
@@ -30,7 +30,7 @@ For an agent in another component, the generated guest client exposes the same
 ```typescript
 import { CounterAgent } from 'counter-agent-guest-client';
 
-CounterAgent.get('my-counter').increment.trigger();
+CounterAgent.upsert('my-counter').increment.trigger();
 ```
 
 See the [`golem-call-another-agent-ts`](/next/how-to-guides/ts/golem-call-another-agent-ts) skill for the required `golem.yaml` and
@@ -50,11 +50,11 @@ import { AgentA } from './agent-a.js';
 import { AgentB } from './agent-b.js';
 
 // In AgentA — calls AgentB and waits
-const b = AgentB.client.get({ name: 'b1' });
+const b = AgentB.client.upsert({ name: 'b1' });
 const result = await b.doWork({ data }); // OK: awaited call
 
 // In AgentB — notifies AgentA without waiting (would deadlock if awaited)
-const a = AgentA.client.get({ name: 'a1' });
+const a = AgentA.client.upsert({ name: 'a1' });
 a.onWorkDone.trigger({ result }); // OK: fire-and-forget
 ```
 

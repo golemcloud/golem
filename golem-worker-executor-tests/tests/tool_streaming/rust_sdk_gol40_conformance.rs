@@ -69,7 +69,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "gol40-rust-sdk-conformance");
+    let agent_id = agent_key!("ToolStreamingCaller", "gol40-rust-sdk-conformance");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
@@ -85,6 +85,20 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
         )
         .await?
         .into_typed()?;
+    // The provider sees the user as the original caller and the agent as the immediate one.
+    let principal = format!(
+        "{}|{}",
+        callers::user_text("https://gol40.test", "gol40-rust"),
+        callers::principal_text(
+            &callers::agent_in(
+                worker_id.agent_id,
+                agent_id.agent_type.clone(),
+                executor.get_worker_metadata(&worker_id).await?.fingerprint,
+                context.default_environment_id,
+            )
+            .immediate
+        )
+    );
     assert_eq!(
         proxy,
         [
@@ -93,7 +107,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
             "MATRIX.SAMPLE",
             "108",
             "south|east|north",
-            callers::user_text("https://gol40.test", "gol40-rust").as_str(),
+            principal.as_str(),
             "request.source",
             "unsupported source",
             "false",
@@ -115,7 +129,8 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
     assert_eq!(reflection[1], reflection[0]);
     assert!(reflection[2].contains("Declared"), "{reflection:?}");
     assert!(reflection[3].contains("declared"), "{reflection:?}");
-    assert_eq!(&reflection[4..], ["user", "user", "0", "0"]);
+    // The generated and the reflected client both reach the tool as the calling agent.
+    assert_eq!(&reflection[4..], ["agent", "agent", "0", "0"]);
     assert_eq!(
         executor.get_file_contents(&worker_id, capable_path).await?,
         Vec::<u8>::new(),
@@ -152,13 +167,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
     assert!(terminals.cancelled_reader_result);
     assert_eq!(terminals.dropped_observer_bytes, b"marker:detached");
 
-    if let Some(active) = executor
-        .active_entity_metadata(&OwnedAgentId::new(
-            context.default_environment_id,
-            &worker_id,
-        ))
-        .await
-    {
+    if let Some(active) = executor.active_entity_metadata(&worker_id.clone()).await {
         assert!(active.tool_operations.operations.is_empty());
         assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
     }
@@ -175,7 +184,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
         caller_checkpoint_server,
         mut caller_checkpoint_arrivals,
     ) = start_crash_checkpoint_server().await;
-    let exception_agent_id = agent_id!("ToolStreamingCaller", "gol40-rust-sdk-exception");
+    let exception_agent_id = agent_key!("ToolStreamingCaller", "gol40-rust-sdk-exception");
     let exception_worker_id = executor
         .start_agent_with(
             &caller_component.id,

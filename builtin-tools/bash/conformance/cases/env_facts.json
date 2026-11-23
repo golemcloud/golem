@@ -1,0 +1,296 @@
+{
+  "tier": "pr",
+  "description": "What a script can learn about its environment in a Golem agent.\n\nBoth sides run as a user with no passwd entry and no HOME, in `/`, with Golem's GOLEM_* variables\nand a fresh `/tmp`; `no_tmp` cases have no `/tmp` at all, which Golem does not guarantee. The oracle\nalso has a PATH (GNU bash must find its tools) and LC_ALL; our shell has neither, so cases that\nprint those are fixtures.",
+  "cases": [
+    {
+      "name": "env: HOME is unset",
+      "script": "echo \"[${HOME-unset}]\"; [ -z \"${HOME+x}\" ] && echo unset",
+      "tags": [
+        "env.home"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: cd with no operand and no HOME",
+      "script": "cd; echo status=$?; pwd",
+      "tags": [
+        "env.home",
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: tilde forms with no HOME",
+      "script": "echo ~ ~/a ~+ ~-; cd /tmp; echo ~+ ~-",
+      "tags": [
+        "env.home"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: HOME exported reaches children",
+      "script": "export HOME=/tmp; bash -c 'echo ~ $HOME'",
+      "tags": [
+        "env.home",
+        "param.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: UID and EUID",
+      "script": "echo \"uid=[${UID-unset}] euid=[${EUID-unset}]\"",
+      "tags": [
+        "env.identity"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: USER LOGNAME SHELL",
+      "script": "echo \"[${USER-u}] [${LOGNAME-l}] [${SHELL-s}]\"",
+      "tags": [
+        "env.identity"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: HOSTNAME and OSTYPE are set",
+      "script": "[ -n \"${OSTYPE+x}\" ] && echo ostype; [ -n \"${HOSTNAME+x}\" ] && echo hostname; true",
+      "tags": [
+        "env.identity"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: PPID is a number",
+      "script": "[[ $PPID =~ ^[0-9]+$ ]] && echo numeric",
+      "tags": [
+        "env.identity"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: GOLEM variables",
+      "script": "echo \"$GOLEM_AGENT_ID $GOLEM_COMPONENT_REVISION\"; env | grep -c \"^GOLEM_\"",
+      "tags": [
+        "env.golem"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: GOLEM variables are exported",
+      "script": "bash -c 'echo ${GOLEM_AGENT_ID-missing}'",
+      "tags": [
+        "env.golem",
+        "param.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: working directory",
+      "script": "pwd; echo $PWD; cd /tmp && pwd && cd - >/dev/null && pwd",
+      "tags": [
+        "builtin.pwd",
+        "builtin.cd"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: root is writable",
+      "script": "mkdir /work && echo data >/work/f && cat /work/f && ls /work",
+      "tags": [
+        "env.filesystem"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: dev null reads empty",
+      "script": "cat /dev/null | wc -c; wc -c </dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: dev null swallows output",
+      "script": "echo hidden >/dev/null; echo shown 2>/dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: test operators on dev null",
+      "script": "[ -e /dev/null ] && echo exists; [ -f /dev/null ] || echo not-regular; [ -c /dev/null ] && echo char",
+      "tags": [
+        "redirection.dev-paths",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: tmp is empty and writable",
+      "script": "ls -A /tmp | wc -l; touch /tmp/x && ls /tmp",
+      "tags": [
+        "env.tmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: mktemp in tmp",
+      "script": "f=$(mktemp); case \"$f\" in /tmp/tmp.*) echo in-tmp;; esac; [ -f \"$f\" ] && echo file",
+      "tags": [
+        "env.tmp",
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: mktemp directory",
+      "script": "d=$(mktemp -d); [ -d \"$d\" ] && echo dir; case \"$d\" in /tmp/*) echo in-tmp;; esac",
+      "tags": [
+        "env.tmp",
+        "cmd.mktemp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: no tmp directory",
+      "script": "[ -d /tmp ] && echo present || echo absent",
+      "tags": [
+        "env.tmp"
+      ],
+      "options": {
+        "no_tmp": true
+      }
+    },
+    {
+      "name": "env: mktemp without tmp",
+      "script": "mktemp; echo status=$?",
+      "tags": [
+        "env.tmp",
+        "cmd.mktemp",
+        "error"
+      ],
+      "options": {
+        "no_tmp": true
+      }
+    },
+    {
+      "name": "env: dev null without tmp",
+      "script": "echo x >/dev/null; echo status=$?; [ -d /tmp ] && echo tmp-created || echo no-tmp",
+      "tags": [
+        "env.tmp",
+        "redirection.dev-paths"
+      ],
+      "options": {
+        "no_tmp": true
+      }
+    },
+    {
+      "name": "env: TMPDIR unset",
+      "script": "echo \"[${TMPDIR-unset}]\"",
+      "tags": [
+        "env.tmp"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: LANG and LC_ALL",
+      "script": "echo \"[${LANG-unset}]\"",
+      "tags": [
+        "env.identity"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: command lookup of a builtin command",
+      "script": "command -v cat >/dev/null && echo found; type -t cat",
+      "tags": [
+        "env.path",
+        "builtin.command",
+        "builtin.type"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: command lookup of a missing command",
+      "script": "command -v nosuchcmd; echo status=$?; nosuchcmd 2>/dev/null; echo status=$?",
+      "tags": [
+        "env.path",
+        "builtin.command"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: hash of a missing command",
+      "script": "hash nosuchcmd 2>/dev/null; echo status=$?",
+      "tags": [
+        "env.path",
+        "builtin.hash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: SHLVL and BASH are set",
+      "script": "[ -n \"${SHLVL+x}\" ] && echo shlvl; [ -n \"${BASH+x}\" ] && echo bash",
+      "tags": [
+        "env.identity"
+      ],
+      "options": {}
+    },
+    {
+      "name": "env: umask default is printable",
+      "script": "umask >/dev/null; echo status=$?",
+      "tags": [
+        "env.identity"
+      ],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: umask is unsupported in bash-tool\n"
+        },
+        "reason": "refused (runtime-gaps): bash-tool refuses a feature it does not implement, up front when the script names it"
+      }
+    },
+    {
+      "name": "env: id -u",
+      "script": "id -u >/dev/null 2>&1; echo status=$?",
+      "tags": [
+        "env.identity"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=127\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "ignored (missing-commands): bash-tool has no such command"
+      }
+    },
+    {
+      "name": "env: whoami",
+      "script": "whoami >/dev/null 2>&1; echo status=$?",
+      "tags": [
+        "env.identity"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=127\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "ignored (missing-commands): bash-tool has no such command"
+      }
+    }
+  ]
+}

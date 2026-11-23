@@ -31,10 +31,12 @@ use golem_common::model::RetryProperties;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::card::owner::AgentOwnerPattern;
+use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcInvokeAndAwaitResult;
+use golem_common::model::type_id::TypeId;
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::SchemaGraph;
@@ -80,10 +82,19 @@ pub struct CancellationTokenEntry {
     pub recipient: OwnedAgentId,
 }
 
+/// The agent type that a client of an ephemeral agent type invokes. Each invocation runs on a
+/// new one-shot instance, whose ID derives from the invocation's owner key.
+#[derive(Clone, Debug)]
+pub struct EphemeralRpcTarget {
+    pub type_id: TypeId,
+    pub component_id: ComponentId,
+    pub constructor: ParsedAgentKey,
+}
+
 #[derive(Clone)]
 struct PreparedRpcInvocation {
     logical_remote_agent_id: OwnedAgentId,
-    ephemeral_logical_agent_id: Option<ParsedAgentKey>,
+    ephemeral: Option<EphemeralRpcTarget>,
     connection_span_id: SpanId,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
@@ -91,6 +102,8 @@ struct PreparedRpcInvocation {
     input_value: SchemaValue,
     streaming: bool,
     remote_agent_type: Arc<AgentTypeSchema>,
+    /// The component that implements the remote agent type.
+    remote_component_id: ComponentId,
 }
 
 type FutureInvokeTaskResult = Result<Result<SchemaValue, InternalRpcError>, Error>;
@@ -140,7 +153,9 @@ struct DurableStreamingTaskParams {
 
 pub struct WasmRpcEntryPayload {
     pub remote_agent_id: OwnedAgentId,
-    pub ephemeral_logical_agent_id: Option<ParsedAgentKey>,
+    /// Set for a client of an ephemeral agent type. `remote_agent_id` is then only the logical
+    /// ID of the client, which addresses no agent: each invocation runs at its own ID.
+    pub ephemeral: Option<EphemeralRpcTarget>,
     pub span_id: SpanId,
     /// Absent for snapshot-created resources whose span opening was not persisted.
     pub creation_index: Option<OplogIndex>,
@@ -151,6 +166,8 @@ pub struct WasmRpcEntryPayload {
     /// [`HostWasmRpc::new`](crate::preview2::golem::agent::host::HostWasmRpc::new), so it is consistent across live execution and
     /// replay.
     pub remote_agent_type: Arc<AgentTypeSchema>,
+    /// The component that implements the remote agent type.
+    pub remote_component_id: ComponentId,
     pub remote_method_streams: Arc<BTreeMap<String, bool>>,
     pub remote_owner: AgentOwnerPattern,
 }
@@ -200,7 +217,7 @@ enum FutureInvokeResultState {
     /// `task` is `Some` only on the live path — the background RPC task whose result feeds the `End`.
     /// On the replay path it is `None`: `get` replays the recorded `End`. If replay instead finds an
     /// incomplete `Start` (the worker crashed after the eager `Start` but before its terminal), `get`
-    /// re-dispatches the read-only RPC — using `remote_agent_id`, `request`, and `env` — and
+    /// re-dispatches the read-only RPC — using `remote_target`, `request`, and `env` — and
     /// completes the existing `Start`.
     ///
     /// `cancel_token` is the side-channel for cancelling an *in-flight* `get`: `get` takes the
@@ -215,13 +232,17 @@ enum FutureInvokeResultState {
         streaming: Option<DurableStreamingTaskParams>,
         request: HostRequestGolemRpcInvoke,
         invocation_id: OwnedInvocationId,
-        remote_agent_id: OwnedAgentId,
+        /// The agent the call dispatches to, with the owner a client of an ephemeral agent type
+        /// creates.
+        remote_target: crate::worker::target::ResolvedTarget,
         env: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
         deferred_activation: Option<RpcTargetActivation>,
         /// The incarnation each scalar dispatch of the call is pinned to. `None` for an ephemeral
         /// target, and for a streaming call, which carries the fingerprint in `streaming`.
         expected_callee_fingerprint: Option<AgentFingerprint>,
+        /// The retry properties of a scalar dispatch of the call, before enrichment.
+        retry_properties: golem_common::model::retry_policy::RetryProperties,
         span_id: SpanId,
         cancel_token: tokio_util::sync::CancellationToken,
         /// The agent authority of a live scalar call, for a dispatch after a retry backoff.
@@ -248,6 +269,7 @@ impl Debug for FutureInvokeResultState {
     }
 }
 
+mod create;
 mod denial;
 mod execution;
 mod future;

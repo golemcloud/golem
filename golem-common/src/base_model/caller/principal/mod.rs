@@ -168,11 +168,9 @@ pub enum AccountAuthentication {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct AgentPrincipal {
     pub issuer: String,
-    /// The agent's 2.0 ID, never its key. Until agents have UUID IDs it is
-    /// [`agent_subject_uuid`] of `address`.
+    /// The agent's UUID, never its key.
     pub agent_id: Uuid,
-    /// The agent's ID today (its component and name). It goes away when `agent_id` is the agent's
-    /// own ID.
+    /// The typed address used to route requests to this agent.
     pub address: AgentId,
     pub fingerprint: AgentFingerprint,
     pub agent_type: AgentTypeName,
@@ -210,13 +208,9 @@ impl AgentPrincipal {
     }
 }
 
-/// The namespace of [`agent_subject_uuid`].
-const AGENT_SUBJECT_NAMESPACE: Uuid = Uuid::from_u128(0xccee40b434a645959874802e49d72242);
-
-/// The UUID that names an agent in its Golem subject until agents have UUID IDs: the UUIDv5 of
-/// the agent's ID text (`<component-id>/<agent-name>`) in a fixed namespace.
+/// The UUID that names an agent in its Golem subject.
 pub fn agent_subject_uuid(agent_id: &AgentId) -> Uuid {
-    Uuid::new_v5(&AGENT_SUBJECT_NAMESPACE, agent_id.to_string().as_bytes())
+    agent_id.as_uuid()
 }
 
 /// A tool. The pair is `(issuer, tool:<environment-id>/<tool-name>)`, with the issuer as for an
@@ -481,6 +475,16 @@ impl Caller {
 
     pub fn anonymous() -> Self {
         Self::entry(Principal::Anonymous)
+    }
+
+    /// The caller of a call that an agent or tool makes inside the invocation that has this
+    /// caller: the same original caller and tokens, and `immediate` as the immediate caller.
+    pub fn propagate(&self, immediate: Principal) -> Caller {
+        Caller {
+            original: self.original.clone(),
+            immediate,
+            tokens: self.tokens.clone(),
+        }
     }
 }
 

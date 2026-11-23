@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use crate::service::agent_resolution_cache::AgentResolutionCache;
+use crate::service::agent_types::AgentTypeResolver;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::component::{ComponentService, ComponentServiceError};
 use crate::service::limit::{LimitService, LimitServiceError};
 use crate::service::worker::{
-    WorkerClient, WorkerResult, WorkerService, WorkerServiceError, WorkerStream,
+    ExistingAgent, RoutedTarget, WorkerClient, WorkerResult, WorkerService, WorkerServiceError,
+    WorkerStream,
 };
 use async_trait::async_trait;
 use chrono::Utc;
@@ -27,7 +29,8 @@ use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
+    AgentConfigEntryDto, AgentMetadataDto, RegisteredAgentType, RegisteredAgentTypeImplementer,
+    ResolvedRevert, RevertWorkerTarget,
 };
 use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::model::application::{ApplicationId, ApplicationName};
@@ -41,11 +44,14 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::filesystem::FileByteSelection;
 use golem_common::model::oplog::{OplogCursor, OplogIndex};
+use golem_common::model::type_id::{TypeId, TypeIdKind};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, PromiseId, ScanCursor,
 };
 use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, SchemaGraph};
-use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
+use golem_service_base::clients::registry::{
+    RegistryService, RegistryServiceError, ResolvedTypeId,
+};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
@@ -55,11 +61,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
 
-#[derive(Clone, Default)]
-struct NoopRegistryService;
+/// The registry of the harness: its environment's current deployment has the one agent type.
+#[derive(Clone)]
+struct HarnessRegistryService {
+    environment_id: EnvironmentId,
+    registered: RegisteredAgentType,
+}
 
 #[async_trait]
-impl RegistryService for NoopRegistryService {
+impl RegistryService for HarnessRegistryService {
     async fn resolve_mcp_import(
         &self,
         _: &golem_common::model::mcp_import::McpImportSource,
@@ -187,6 +197,32 @@ impl RegistryService for NoopRegistryService {
         unimplemented!()
     }
 
+    async fn resolve_type_id(
+        &self,
+        environment_id: EnvironmentId,
+        type_id: TypeId,
+    ) -> Result<Option<ResolvedTypeId>, RegistryServiceError> {
+        Ok(
+            (environment_id == self.environment_id && type_id == self.registered.type_id).then(
+                || ResolvedTypeId {
+                    kind: TypeIdKind::AgentType,
+                    name: self.registered.agent_type.type_name.0.clone(),
+                    implemented_by: Some(self.registered.implemented_by.clone()),
+                },
+            ),
+        )
+    }
+
+    async fn get_deployed_agent_type(
+        &self,
+        environment_id: EnvironmentId,
+        agent_type_name: &AgentTypeName,
+    ) -> Result<Option<RegisteredAgentType>, RegistryServiceError> {
+        Ok((environment_id == self.environment_id
+            && *agent_type_name == self.registered.agent_type.type_name)
+            .then(|| self.registered.clone()))
+    }
+
     async fn get_active_routes_for_domain(
         &self,
         _: &golem_common::model::domain_registration::Domain,
@@ -253,13 +289,60 @@ impl RegistryService for NoopRegistryService {
     }
 }
 
+/// The definition of the harness's native tool `native`: one command without input or output
+/// streams.
+fn native_tool_definition() -> golem_common::schema::tool::Tool {
+    use golem_common::schema::tool::{
+        CommandBody, CommandNode, CommandTree, Doc, Positionals, Tool,
+    };
+    Tool {
+        version: "1.0.0".to_string(),
+        requires_filesystem: false,
+        http_mount: None,
+        schema: SchemaGraph::empty(),
+        commands: CommandTree {
+            nodes: vec![CommandNode {
+                name: "native".to_string(),
+                aliases: vec![],
+                doc: Doc::default(),
+                http: None,
+                globals: Default::default(),
+                subcommands: vec![],
+                body: Some(CommandBody {
+                    positionals: Positionals::default(),
+                    options: vec![],
+                    flags: vec![],
+                    constraints: vec![],
+                    stdin: None,
+                    stdout: None,
+                    stderr: None,
+                    result: None,
+                    errors: vec![],
+                    annotations: None,
+                }),
+            }],
+        },
+    }
+}
+
 struct StaticComponentService {
     component: Component,
+    tool_state: golem_common::model::tool::ToolDeploymentState,
 }
 
 #[async_trait]
 impl ComponentService for StaticComponentService {
     async fn invalidate_current(&self) {}
+
+    async fn get_tool_deployment_state(
+        &self,
+        _: EnvironmentId,
+        component_id: ComponentId,
+        _: ComponentRevision,
+    ) -> Result<Option<Arc<golem_common::model::tool::ToolDeploymentState>>, ComponentServiceError>
+    {
+        Ok((self.component.id == component_id).then(|| Arc::new(self.tool_state.clone())))
+    }
 
     async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
         (self.component.id == component_id).then(|| self.component.clone())
@@ -328,6 +411,7 @@ impl LimitService for NoopLimitService {
 
 pub(crate) struct FileReadCall {
     pub agent_id: AgentId,
+    pub target: RoutedTarget,
     pub path: String,
     pub selection: FileByteSelection,
     pub environment_id: EnvironmentId,
@@ -373,7 +457,9 @@ pub(crate) struct NativeSessionLog {
 }
 
 struct RecordingWorkerClient {
+    component_id: ComponentId,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
+    targets: Arc<Mutex<Vec<RoutedTarget>>>,
     metadata: Arc<Mutex<HashMap<AgentId, AgentMetadataDto>>>,
     metadata_reads: Arc<Mutex<Vec<AgentId>>>,
     prepared_agent_ids: Arc<Mutex<Vec<AgentId>>>,
@@ -400,7 +486,7 @@ struct RecordingWorkerClient {
 impl WorkerClient for RecordingWorkerClient {
     async fn prepare(
         &self,
-        agent_id: &AgentTarget,
+        target: &RoutedTarget,
         environment_variables: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
@@ -412,7 +498,7 @@ impl WorkerClient for RecordingWorkerClient {
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
-        let AgentTarget::Current(agent_id) = agent_id;
+        let agent_id = target.agent_id;
         let _ = (
             environment_variables,
             config,
@@ -423,16 +509,13 @@ impl WorkerClient for RecordingWorkerClient {
             invocation_context,
             caller,
         );
-        self.prepared_agent_ids
-            .lock()
-            .unwrap()
-            .push(agent_id.clone());
-        Ok((agent_id.clone(), AgentFingerprint::new()))
+        self.prepared_agent_ids.lock().unwrap().push(agent_id);
+        Ok((agent_id, AgentFingerprint::new()))
     }
 
     async fn create(
         &self,
-        _: &AgentTarget,
+        _: &RoutedTarget,
         _: HashMap<String, String>,
         _: Vec<AgentConfigEntryDto>,
         _: bool,
@@ -456,7 +539,13 @@ impl WorkerClient for RecordingWorkerClient {
         unimplemented!()
     }
 
-    async fn delete(&self, _: &AgentId, _: EnvironmentId, _: AuthCtx) -> WorkerResult<()> {
+    async fn delete(
+        &self,
+        _: &AgentId,
+        _: EnvironmentId,
+        _: AgentFingerprint,
+        _: AuthCtx,
+    ) -> WorkerResult<()> {
         unimplemented!()
     }
 
@@ -475,6 +564,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: &AgentId,
         _: bool,
         _: EnvironmentId,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -485,30 +575,41 @@ impl WorkerClient for RecordingWorkerClient {
         agent_id: &AgentId,
         _: EnvironmentId,
         _: AuthCtx,
-    ) -> WorkerResult<AgentMetadataDto> {
-        self.metadata_reads.lock().unwrap().push(agent_id.clone());
+    ) -> WorkerResult<ExistingAgent> {
+        self.metadata_reads.lock().unwrap().push(*agent_id);
         self.metadata
             .lock()
             .unwrap()
             .get(agent_id)
             .cloned()
-            .ok_or_else(|| WorkerServiceError::AgentNotFound(agent_id.clone()))
+            .map(|metadata| ExistingAgent {
+                metadata,
+                component_id: self.component_id,
+            })
+            .ok_or(WorkerServiceError::AgentNotFound(*agent_id))
     }
 
     async fn find_metadata(
         &self,
-        _: ComponentId,
+        _: TypeId,
         _: Option<AgentFilter>,
         _: ScanCursor,
         _: u64,
         _: bool,
         _: EnvironmentId,
         _: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)> {
         unimplemented!()
     }
 
-    async fn resume(&self, _: &AgentId, _: bool, _: EnvironmentId, _: AuthCtx) -> WorkerResult<()> {
+    async fn resume(
+        &self,
+        _: &AgentId,
+        _: bool,
+        _: EnvironmentId,
+        _: AgentFingerprint,
+        _: AuthCtx,
+    ) -> WorkerResult<()> {
         unimplemented!()
     }
 
@@ -519,6 +620,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: ComponentRevision,
         _: bool,
         _: EnvironmentId,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<OplogIndex> {
         Ok(OplogIndex::INITIAL)
@@ -530,6 +632,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: OplogIndex,
         _: Option<OplogCursor>,
         _: u64,
+        _: Option<crate::service::worker::OplogRangeRead>,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {
@@ -585,7 +688,7 @@ impl WorkerClient for RecordingWorkerClient {
 
     async fn get_file_contents(
         &self,
-        agent_id: &AgentId,
+        target: &RoutedTarget,
         path: CanonicalFilePath,
         selection: FileByteSelection,
         environment_id: EnvironmentId,
@@ -593,7 +696,8 @@ impl WorkerClient for RecordingWorkerClient {
         auth: AuthCtx,
     ) -> WorkerResult<golem_service_base::model::FileReadResponse> {
         self.file_reads.calls.lock().unwrap().push(FileReadCall {
-            agent_id: agent_id.clone(),
+            agent_id: target.agent_id,
+            target: target.clone(),
             path: path.to_string(),
             selection,
             environment_id,
@@ -615,6 +719,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: &AgentId,
         _: PluginPriority,
         _: EnvironmentId,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -625,6 +730,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: &AgentId,
         _: PluginPriority,
         _: EnvironmentId,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -639,6 +745,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: AccountId,
         _: AccountEmail,
         _: Caller,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -650,6 +757,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: RevertWorkerTarget,
         _: Option<ResolvedRevert>,
         _: EnvironmentId,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -672,13 +780,48 @@ impl WorkerClient for RecordingWorkerClient {
         _: EnvironmentId,
         _: AuthCtx,
         _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
+        _: Option<AgentFingerprint>,
     ) -> WorkerResult<bool> {
+        unimplemented!()
+    }
+
+    async fn get_invocation(
+        &self,
+        _: &AgentId,
+        _: &golem_common::model::InvocationId,
+        _: EnvironmentId,
+        _: AuthCtx,
+    ) -> WorkerResult<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+    {
+        unimplemented!()
+    }
+
+    async fn list_invocations(
+        &self,
+        _: &AgentId,
+        _: golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+        _: EnvironmentId,
+        _: AuthCtx,
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsSuccess>
+    {
+        unimplemented!()
+    }
+
+    async fn lookup_invocations(
+        &self,
+        _: &AgentId,
+        _: &IdempotencyKey,
+        _: Option<String>,
+        _: EnvironmentId,
+        _: AuthCtx,
+    ) -> WorkerResult<Vec<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+    {
         unimplemented!()
     }
 
     async fn invoke_agent(
         &self,
-        agent_id: &AgentTarget,
+        target: &RoutedTarget,
         method_name: Option<String>,
         method_params: Option<golem_schema::proto::golem::schema::SchemaValue>,
         _: i32,
@@ -694,8 +837,8 @@ impl WorkerClient for RecordingWorkerClient {
         _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         _: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
-        let AgentTarget::Current(agent_id) = agent_id;
-        self.agent_ids.lock().unwrap().push(agent_id.clone());
+        self.agent_ids.lock().unwrap().push(target.agent_id);
+        self.targets.lock().unwrap().push(target.clone());
         self.method_params.lock().unwrap().push(method_params);
         self.contexts
             .lock()
@@ -818,6 +961,7 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         _: &AgentId,
         _: EnvironmentId,
+        _: ComponentId,
         _: ComponentRevision,
         _: golem_common::model::InvocationId,
         _: AccountId,
@@ -842,6 +986,7 @@ pub(crate) struct InvocationHarness {
     pub(crate) metadata: Arc<Mutex<HashMap<AgentId, AgentMetadataDto>>>,
     pub(crate) metadata_reads: Arc<Mutex<Vec<AgentId>>>,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
+    pub(crate) targets: Arc<Mutex<Vec<RoutedTarget>>>,
     method_params: Arc<Mutex<Vec<Option<golem_schema::proto::golem::schema::SchemaValue>>>>,
     durable_stream_controls: Arc<Mutex<Vec<
         golem_api_grpc::proto::golem::workerexecutor::v1::DurableStreamAttachmentControlRequest,
@@ -858,6 +1003,8 @@ pub(crate) struct InvocationHarness {
     pub(crate) contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
     pub(crate) native_sessions: Arc<Mutex<NativeSessionLog>>,
     pub(crate) agent_type: AgentTypeSchema,
+    /// The type ID that the registry assigns to the harness's agent type.
+    pub(crate) type_id: TypeId,
 }
 
 impl InvocationHarness {
@@ -923,8 +1070,22 @@ impl InvocationHarness {
             snapshotting: Snapshotting::Disabled(golem_schema::Empty {}),
             config: vec![],
         };
-        let component_id = ComponentId(Uuid::new_v4());
-        let environment_id = EnvironmentId(Uuid::new_v4());
+        Self::with_agent_type(
+            invocation_output,
+            agent_type,
+            ComponentId(Uuid::new_v4()),
+            EnvironmentId(Uuid::new_v4()),
+        )
+    }
+
+    /// A harness whose component `component_id` of the environment `environment_id`
+    /// implements `agent_type` in the current deployment.
+    pub(crate) fn with_agent_type(
+        invocation_output: AgentInvocationOutput,
+        agent_type: AgentTypeSchema,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+    ) -> Self {
         let account_id = AccountId(Uuid::new_v4());
         let account_email = golem_common::model::account::AccountEmail::new("mcp@golem");
         let component = Component {
@@ -947,9 +1108,11 @@ impl InvocationHarness {
             ),
             created_at: Utc::now(),
             wasm_hash: Hash::empty(),
+            package_metadata: None,
             object_store_key: String::new(),
         };
         let agent_ids = Arc::new(Mutex::new(Vec::new()));
+        let targets = Arc::new(Mutex::new(Vec::new()));
         let metadata = Arc::new(Mutex::new(HashMap::new()));
         let metadata_reads = Arc::new(Mutex::new(Vec::new()));
         let prepared_agent_ids = Arc::new(Mutex::new(Vec::new()));
@@ -968,7 +1131,9 @@ impl InvocationHarness {
             opened: tokio::sync::watch::Sender::new(0),
         }));
         let worker_client = Arc::new(RecordingWorkerClient {
+            component_id,
             agent_ids: agent_ids.clone(),
+            targets: targets.clone(),
             metadata: metadata.clone(),
             metadata_reads: metadata_reads.clone(),
             prepared_agent_ids,
@@ -983,14 +1148,48 @@ impl InvocationHarness {
             native_sessions: native_sessions.clone(),
         });
 
+        let type_id = TypeId::try_from(42u32).unwrap();
+        let registry = Arc::new(HarnessRegistryService {
+            environment_id,
+            registered: RegisteredAgentType {
+                type_id,
+                agent_type: agent_type.clone(),
+                implemented_by: RegisteredAgentTypeImplementer {
+                    component_id,
+                    component_revision: ComponentRevision::INITIAL,
+                    component_name: component.component_name.0.clone(),
+                    account_id,
+                    account_email: account_email.clone(),
+                },
+            },
+        });
+
         Self {
             worker_service: Arc::new(WorkerService::new(
-                Arc::new(StaticComponentService { component }),
+                Arc::new(StaticComponentService {
+                    tool_state: crate::service::component::tests::tool_deployment_state(
+                        &component,
+                        "native",
+                        native_tool_definition(),
+                        [
+                            golem_common::model::tool::ToolBindingOwner::ComponentBaseline {
+                                component_id,
+                            },
+                        ],
+                    ),
+                    component,
+                }),
                 Arc::new(AllowAllAuthService),
                 Arc::new(NoopLimitService),
                 worker_client,
                 Arc::new(AgentResolutionCache::new(
-                    Arc::new(NoopRegistryService),
+                    registry.clone(),
+                    1,
+                    Duration::from_secs(60),
+                    Duration::from_secs(60),
+                )),
+                Arc::new(AgentTypeResolver::new(
+                    registry,
                     1,
                     Duration::from_secs(60),
                     Duration::from_secs(60),
@@ -1013,6 +1212,8 @@ impl InvocationHarness {
             contexts,
             native_sessions,
             agent_type,
+            type_id,
+            targets,
         }
     }
 
@@ -1054,42 +1255,11 @@ impl InvocationHarness {
 
     /// A native tool `native` of the harness's component, without input or output streams.
     fn native_export(&self) -> golem_service_base::mcp::CompiledMcpToolExport {
-        use golem_common::schema::tool::{
-            CommandBody, CommandNode, CommandTree, Doc, Positionals, Tool,
-        };
-        let definition = Tool {
-            version: "1.0.0".to_string(),
-            requires_filesystem: false,
-            http_mount: None,
-            schema: SchemaGraph::empty(),
-            commands: CommandTree {
-                nodes: vec![CommandNode {
-                    name: "native".to_string(),
-                    aliases: vec![],
-                    doc: Doc::default(),
-                    http: None,
-                    globals: Default::default(),
-                    subcommands: vec![],
-                    body: Some(CommandBody {
-                        positionals: Positionals::default(),
-                        options: vec![],
-                        flags: vec![],
-                        constraints: vec![],
-                        stdin: None,
-                        stdout: None,
-                        stderr: None,
-                        result: None,
-                        errors: vec![],
-                        annotations: None,
-                    }),
-                }],
-            },
-        };
         let mut export = golem_service_base::mcp::native_tool::compile_native_tool_exports(
             self.component_id,
             "test:owner".try_into().unwrap(),
             "native".try_into().unwrap(),
-            &definition,
+            &native_tool_definition(),
             None,
             None,
         )
@@ -1134,7 +1304,24 @@ impl InvocationHarness {
     }
 
     pub(crate) fn recorded_agent_id(&self) -> AgentId {
-        self.agent_ids.lock().unwrap()[0].clone()
+        self.agent_ids.lock().unwrap()[0]
+    }
+
+    /// The target of the first invocation.
+    pub(crate) fn recorded_target(&self) -> RoutedTarget {
+        self.targets.lock().unwrap()[0].clone()
+    }
+
+    /// The constructor of the first invocation's target, and whether the target is the keyed
+    /// agent of that constructor rather than an agent at a given ID.
+    pub(crate) fn recorded_constructor(&self) -> (golem_common::model::agent::AgentKey, bool) {
+        use golem_api_grpc::proto::golem::worker::agent_target::Target;
+        let (target, constructor, _) = self.recorded_target().invoke_fields();
+        match (target.target, constructor) {
+            (Some(Target::Key(key)), None) => (key.try_into().unwrap(), true),
+            (Some(Target::Id(_)), Some(constructor)) => (constructor.try_into().unwrap(), false),
+            other => panic!("the target has no constructor: {other:?}"),
+        }
     }
 
     /// The method parameters recorded for the first invocation, decoded back
@@ -1172,14 +1359,6 @@ impl InvocationHarness {
         );
         self.durable_stream_reads.lock().unwrap().extend(reads);
     }
-}
-
-pub(crate) fn phantom_id(agent_id: &AgentId) -> Option<Uuid> {
-    agent_id
-        .agent_id
-        .rsplit_once('[')
-        .and_then(|(_, phantom_id)| phantom_id.strip_suffix(']'))
-        .and_then(|phantom_id| Uuid::parse_str(phantom_id).ok())
 }
 
 /// The JSON-RPC messages of a streamed MCP response, which must have status 200.

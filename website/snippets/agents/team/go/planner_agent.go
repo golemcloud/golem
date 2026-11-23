@@ -7,10 +7,10 @@ var _ = Planner.Implement(func(id PlannerID) *PlannerID {
     return &id
 }).Handle(Plan, golem.Adapt0(func(p *PlannerID) PlanResult {
     // wait for a typed result from a Rust ResearchAgent:
-    facts := researcher.MustGetResearchAgent( //@
+    facts := researcher.MustUpsertResearchAgent( //@
         researcher.ResearchAgentID{Topic: p.Topic}).MustGather() //@
     // send now, without waiting for a result:
-    slack.MustGetSlackAgent(slack.SlackAgentID{Channel: "ops"}).
+    slack.MustUpsertSlackAgent(slack.SlackAgentID{Channel: "ops"}).
         MustTriggerPost(facts.Summary) //@
     // discover agents, their methods, and available tools:
     var agents, tools []string

@@ -148,11 +148,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             snapshot: RawSnapshotData { data, mime_type },
             caller,
         };
-        let agent_id = store.as_context().data().parsed_agent_id();
         let lowered = lower_invocation(
             load_snapshot_invocation,
             &component_metadata,
-            agent_id.as_ref(),
+            store.as_context().data().durable_ctx().owner_context(),
         )
         .map_err(|err| {
             ManualLoadResult::Failed(format!(
@@ -436,11 +435,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             snapshot: RawSnapshotData { data, mime_type },
             caller,
         };
-        let agent_id = store.as_context().data().parsed_agent_id();
         let lowered = match lower_invocation(
             load_snapshot_invocation,
             &component_metadata,
-            agent_id.as_ref(),
+            store.as_context().data().durable_ctx().owner_context(),
         ) {
             Ok(lowered) => lowered,
             Err(err) => {

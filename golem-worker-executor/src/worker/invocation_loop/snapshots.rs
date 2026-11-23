@@ -314,7 +314,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,
-            self.parent.parsed_agent_id.as_ref(),
+            &self.parent.owner_context,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {
@@ -524,7 +524,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         let lowered = match lower_invocation(
             save_snapshot_invocation,
             &component_metadata,
-            self.parent.parsed_agent_id.as_ref(),
+            &self.parent.owner_context,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {

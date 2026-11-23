@@ -14,7 +14,6 @@
 
 use super::*;
 use crate::golem_started::{GolemStartedWork, agent_principal};
-use golem_common::model::agent::OwnerKind;
 use golem_common::model::golem_issuer::GolemIssuer;
 
 /// An implementation of the `OplogProcessorPlugin` trait that runs a single instance of each
@@ -37,6 +36,7 @@ type WorkerKey = (EnvironmentId, PluginRegistrationId);
 #[derive(Debug, Clone)]
 struct RunningPlugin {
     pub owned_agent_id: OwnedAgentId,
+    pub component_id: ComponentId,
     pub component_revision: ComponentRevision,
 }
 
@@ -80,7 +80,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                                 "missing oplog processor plugin component revision"
                             ))?;
 
-                        let agent_id = self.generate_agent_id_for(plugin_component_id).await?;
+                        let agent_id = self.generate_agent_id()?;
                         // Resolve the component's authoritative environment_id.
                         let plugin_component = self
                             .component_service
@@ -88,10 +88,11 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                             .await?;
                         let owned_agent_id = OwnedAgentId {
                             environment_id: plugin_component.environment_id,
-                            agent_id: agent_id.clone(),
+                            agent_id,
                         };
                         let running_plugin = RunningPlugin {
                             owned_agent_id: owned_agent_id.clone(),
+                            component_id: plugin_component_id,
                             component_revision: plugin_component_revision,
                         };
                         workers.insert(key, running_plugin.clone());
@@ -102,50 +103,27 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         }
     }
 
-    async fn generate_agent_id_for(
-        &self,
-        plugin_component_id: ComponentId,
-    ) -> Result<AgentId, WorkerExecutorError> {
+    fn generate_agent_id(&self) -> Result<AgentId, WorkerExecutorError> {
         let current_assignment = self.shard_service.current_assignment()?;
-        let agent_id = Self::generate_local_agent_id(
-            plugin_component_id,
+        Ok(Self::generate_local_agent_id(
             &current_assignment.shard_id_set(),
             current_assignment.number_of_shards,
-        );
-
-        Ok(agent_id)
+        ))
     }
 
-    /// Converts a `TargetAgentId` to an `AgentId`. If the worker name was not specified,
-    /// it generates a new unique one, and if the `force_in_shard` set is not empty, it guarantees
-    /// that the generated worker ID will belong to one of the provided shards.
-    ///
-    /// If the worker name was specified, `force_in_shard` is ignored.
+    /// A fresh oplog processor ID with the reserved tag. When `force_in_shard` is not empty, the
+    /// ID belongs to one of those shards, so this executor owns the processor.
     fn generate_local_agent_id(
-        component_id: ComponentId,
         force_in_shard: &HashSet<ShardId>,
         number_of_shards: usize,
     ) -> AgentId {
-        if force_in_shard.is_empty() || number_of_shards == 0 {
-            let agent_name = OwnerKind::oplog_processor_instance_name(Uuid::new_v4());
-            AgentId {
-                component_id,
-                agent_id: agent_name,
-            }
-        } else {
-            let mut current = Uuid::new_v4().to_u128_le();
-            loop {
-                let uuid = Uuid::from_u128_le(current);
-                let agent_name = OwnerKind::oplog_processor_instance_name(uuid);
-                let agent_id = AgentId {
-                    component_id,
-                    agent_id: agent_name,
-                };
-                let shard_id = ShardId::from_agent_id(&agent_id, number_of_shards);
-                if force_in_shard.contains(&shard_id) {
-                    return agent_id;
-                }
-                current += 1;
+        loop {
+            let agent_id = AgentId::random_reserved();
+            if force_in_shard.is_empty()
+                || number_of_shards == 0
+                || force_in_shard.contains(&ShardId::from_agent_id(&agent_id, number_of_shards))
+            {
+                return agent_id;
             }
         }
     }
@@ -180,7 +158,8 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             initial_oplog_index.range_end(entries.len() as u64)
         };
         let idempotency_key = oplog_processor_idempotency_key(
-            &worker_metadata.owned_agent_id().agent_id,
+            worker_metadata.environment_id,
+            &worker_metadata.agent_id,
             &plugin.environment_plugin_grant_id,
             initial_oplog_index,
             batch_last_index,
@@ -209,6 +188,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             self.worker_activator
                 .enqueue_oplog_processor(
                     &target_owned,
+                    running_plugin.component_id,
                     running_plugin.component_revision,
                     AgentInvocation::ProcessOplogEntries {
                         idempotency_key,
@@ -232,8 +212,15 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 use std::collections::HashMap;
                 let latest_status = &worker_metadata.last_known_status;
                 golem_api_grpc::proto::golem::worker::AgentMetadata {
-                    agent_id: Some(worker_metadata.agent_id.clone().into()),
+                    agent_id: Some(worker_metadata.agent_id.into()),
                     owner_kind: worker_metadata.owner_kind.into(),
+                    agent_type_name: worker_metadata
+                        .agent_type_name
+                        .as_ref()
+                        .map(|name| name.0.clone()),
+                    canonical_key: worker_metadata.canonical_key.clone(),
+                    constructor_parameters: worker_metadata.constructor_parameters.clone(),
+                    component_id: Some(worker_metadata.component_id.into()),
                     environment_id: Some(worker_metadata.environment_id.into()),
                     env: HashMap::from_iter(worker_metadata.env.iter().cloned()),
                     config: worker_metadata
@@ -311,6 +298,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 .process_oplog_entries(
                     target_agent_id,
                     running_plugin.owned_agent_id.environment_id,
+                    running_plugin.component_id,
                     running_plugin.component_revision,
                     idempotency_key,
                     worker_metadata.created_by,

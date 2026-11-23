@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::*;
-use golem_common::model::AgentId;
 use golem_common::model::Timestamp;
 use std::sync::Arc;
 use test_r::test;
@@ -1115,10 +1114,7 @@ fn agent_snapshots(name: &str) -> AgentSnapshots {
     AgentSnapshots::agent(
         &golem_common::model::OwnedAgentId::new(
             golem_common::model::environment::EnvironmentId::new(),
-            &AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: name.to_string(),
-            },
+            &crate::test_agent_id(name),
         ),
         golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
     )

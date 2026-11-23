@@ -132,9 +132,9 @@ async fn transaction_drop_disposal(
     sqlx::query(&format!("CREATE TABLE {table} (id BIGINT)"))
         .execute(&pool)
         .await?;
-    let agent = agent_id!("ToolStreamingCaller", "rdbms-drop-trap");
+    let agent = agent_key!("ToolStreamingCaller", "rdbms-drop-trap");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
-    let mut disposed = executor.probe_entity_store_disposal(&worker);
+    let mut disposed = executor.probe_entity_store_disposal(&worker.agent_id);
     let evidence: StreamEvidence = executor
         .invoke_and_await_agent(
             &component,
@@ -177,7 +177,7 @@ async fn transaction_drop_disposal(
             _ => None,
         })
         .expect("transaction scope");
-    let before = executor.stored_oplog(&worker).await;
+    let before = executor.stored_oplog(&worker.agent_id).await;
     let terminal_path = before
         .iter()
         .find_map(|entry| match entry {
@@ -227,13 +227,13 @@ async fn transaction_drop_disposal(
         .armed
         .store(fail_terminal_read, Ordering::SeqCst);
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    let mut disposed = executor.probe_entity_store_disposal(&worker);
+    let mut disposed = executor.probe_entity_store_disposal(&worker.agent_id);
     let invocation =
         executor.invoke_and_await_agent(&component, &agent, "replay_probe", data_value!());
     if fail_terminal_read {
         let release = async {
             tokio::time::timeout(Duration::from_secs(30), terminal_read.entered.notified()).await?;
-            let settled = executor.probe_entity_settlement_access(&worker, entity);
+            let settled = executor.probe_entity_settlement_access(&worker.agent_id, entity);
             terminal_read.reconstruct.notify_one();
             tokio::time::timeout(Duration::from_secs(30), settled).await??;
             terminal_read.release.notify_one();
@@ -263,7 +263,7 @@ async fn transaction_drop_disposal(
             Some(entity)
         );
     }
-    let after = executor.stored_oplog(&worker).await;
+    let after = executor.stored_oplog(&worker.agent_id).await;
     assert_eq!(&after[..before.len()], before.as_slice());
     if fail_terminal_read {
         assert!(

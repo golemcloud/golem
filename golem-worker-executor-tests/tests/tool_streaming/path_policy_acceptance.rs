@@ -383,8 +383,8 @@ async fn exercise_named_fork_tool_replay(
     audited: bool,
     incomplete: bool,
 ) -> anyhow::Result<()> {
+    use crate::agent::invoke_and_await_agent_by_id;
     use crate::fork::start_with_local_resume_and;
-    use golem_common::model::AgentId;
     use golem_worker_executor::services::golem_config::SnapshotPolicy;
 
     let (filesystem_metadata, audit_metadata) =
@@ -456,7 +456,7 @@ async fn exercise_named_fork_tool_replay(
         caller_component.revision,
         Some(deployment),
     );
-    let parent_name = agent_id!("ToolStreamingCaller", "fork-parent");
+    let parent_name = agent_key!("ToolStreamingCaller", "fork-parent");
     let parent = executor
         .start_agent(&caller_component.id, parent_name.clone())
         .await?;
@@ -496,12 +496,7 @@ async fn exercise_named_fork_tool_replay(
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Start(_)))
     );
 
-    let child_name = agent_id!("ToolStreamingCaller", "fork-child");
-    let child = AgentId {
-        component_id: caller_component.id,
-        agent_id: child_name.to_string(),
-    };
-    executor.fork_worker(&parent, &child.agent_id, cut).await?;
+    let child = executor.fork_worker(&parent, cut).await?;
     let copied = executor.get_oplog(&child, OplogIndex::INITIAL).await?;
     for entry in history.iter().filter(|entry| entry.oplog_index <= cut) {
         if let PublicOplogEntry::Start(start) = &entry.entry {
@@ -519,15 +514,16 @@ async fn exercise_named_fork_tool_replay(
             }
         }
     }
-    let restored: Result<String, String> = executor
-        .invoke_and_await_agent(
-            &caller_component,
-            &child_name,
-            "filesystem_policy_read",
-            data_value!("allowed/state.txt".to_string()),
-        )
-        .await?
-        .into_typed()?;
+    let restored: Result<String, String> = invoke_and_await_agent_by_id(
+        &executor,
+        &caller_component,
+        &child,
+        None,
+        "filesystem_policy_read",
+        data_value!("allowed/state.txt".to_string()),
+    )
+    .await?
+    .into_typed()?;
     assert_eq!(restored.map_err(anyhow::Error::msg)?, content);
     assert_eq!(
         executor
@@ -541,18 +537,19 @@ async fn exercise_named_fork_tool_replay(
         "completed replay must not repeat audit HTTP effects"
     );
 
-    let edited: Result<Vec<String>, String> = executor
-        .invoke_and_await_agent(
-            &caller_component,
-            &child_name,
-            "filesystem_policy_write_read",
-            data_value!(
-                "allowed/state.txt".to_string(),
-                "child-only edit".to_string()
-            ),
-        )
-        .await?
-        .into_typed()?;
+    let edited: Result<Vec<String>, String> = invoke_and_await_agent_by_id(
+        &executor,
+        &caller_component,
+        &child,
+        None,
+        "filesystem_policy_write_read",
+        data_value!(
+            "allowed/state.txt".to_string(),
+            "child-only edit".to_string()
+        ),
+    )
+    .await?
+    .into_typed()?;
     assert_eq!(
         edited.map_err(anyhow::Error::msg)?,
         vec!["replaced", "15", "child-only edit", "1", "1", "none"]
@@ -570,15 +567,16 @@ async fn exercise_named_fork_tool_replay(
     drop(executor);
 
     let executor = start_with_local_resume_and(deps, &context, overrides()).await?;
-    let recovered: Result<String, String> = executor
-        .invoke_and_await_agent(
-            &caller_component,
-            &child_name,
-            "filesystem_policy_read",
-            data_value!("allowed/state.txt".to_string()),
-        )
-        .await?
-        .into_typed()?;
+    let recovered: Result<String, String> = invoke_and_await_agent_by_id(
+        &executor,
+        &caller_component,
+        &child,
+        None,
+        "filesystem_policy_read",
+        data_value!("allowed/state.txt".to_string()),
+    )
+    .await?
+    .into_typed()?;
     assert_eq!(recovered.map_err(anyhow::Error::msg)?, "child-only edit");
     assert_eq!(
         audit_sink.committed.lock().unwrap().len(),
@@ -586,27 +584,19 @@ async fn exercise_named_fork_tool_replay(
         "restart must not repeat recorded audit effects"
     );
     let child_history = executor.get_oplog(&child, OplogIndex::INITIAL).await?;
-    let grandchild_name = agent_id!("ToolStreamingCaller", "fork-grandchild");
-    let grandchild = AgentId {
-        component_id: caller_component.id,
-        agent_id: grandchild_name.to_string(),
-    };
-    executor
-        .fork_worker(
-            &child,
-            &grandchild.agent_id,
-            child_history.last().unwrap().oplog_index,
-        )
+    let grandchild = executor
+        .fork_worker(&child, child_history.last().unwrap().oplog_index)
         .await?;
-    let inherited: Result<String, String> = executor
-        .invoke_and_await_agent(
-            &caller_component,
-            &grandchild_name,
-            "filesystem_policy_read",
-            data_value!("allowed/state.txt".to_string()),
-        )
-        .await?
-        .into_typed()?;
+    let inherited: Result<String, String> = invoke_and_await_agent_by_id(
+        &executor,
+        &caller_component,
+        &grandchild,
+        None,
+        "filesystem_policy_read",
+        data_value!("allowed/state.txt".to_string()),
+    )
+    .await?
+    .into_typed()?;
     assert_eq!(inherited.map_err(anyhow::Error::msg)?, "child-only edit");
     let records = audit_sink.committed.lock().unwrap();
     assert_eq!(records.len(), 7 * audit_calls_per_tool);
@@ -616,12 +606,15 @@ async fn exercise_named_fork_tool_replay(
     );
     if audited {
         for record in &records[..2] {
-            assert_eq!(record["owner"]["agentId"], parent.agent_id);
+            assert_eq!(record["owner"]["agentId"], parent.agent_id.to_string());
         }
         for record in &records[2..6] {
-            assert_eq!(record["owner"]["agentId"], child.agent_id);
+            assert_eq!(record["owner"]["agentId"], child.agent_id.to_string());
         }
-        assert_eq!(records[6]["owner"]["agentId"], grandchild.agent_id);
+        assert_eq!(
+            records[6]["owner"]["agentId"],
+            grandchild.agent_id.to_string()
+        );
     }
     drop(records);
     audit_sink_task.abort();
@@ -635,7 +628,7 @@ async fn unload_path_policy_owner(
 ) -> anyhow::Result<()> {
     executor
         .wait_for_status(
-            worker_id,
+            &OwnedAgentId::new(environment_id, worker_id),
             AgentStatus::Idle,
             std::time::Duration::from_secs(30),
         )
@@ -733,7 +726,7 @@ async fn path_1_audit_path_policy_real_file_tool_allows_and_denies(
     let worker_id = executor
         .start_agent(
             &caller_component.id,
-            agent_id!("ToolStreamingCaller", "path-1-audit-policy"),
+            agent_key!("ToolStreamingCaller", "path-1-audit-policy"),
         )
         .await?;
     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
@@ -742,7 +735,7 @@ async fn path_1_audit_path_policy_real_file_tool_allows_and_denies(
     let allowed_content = "allowed-content-must-not-enter-audit";
     let allowed = invoke_filesystem_tool_success(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller.clone(),
         &definitions,
@@ -769,7 +762,7 @@ async fn path_1_audit_path_policy_real_file_tool_allows_and_denies(
     let denied_path = "denied/result.txt";
     let denied = invoke_filesystem_tool(
         &executor,
-        &worker_id,
+        &worker_id.agent_id,
         fingerprint,
         caller,
         &definitions,
@@ -883,14 +876,14 @@ async fn path_2_two_owner_roots_remain_isolated_after_reconstruction(
         let worker_id = executor
             .start_agent(
                 &caller_component.id,
-                agent_id!("ToolStreamingCaller", owner_name),
+                agent_key!("ToolStreamingCaller", owner_name),
             )
             .await?;
         let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
         let caller = callers::account(context.account_id);
         invoke_filesystem_tool_success(
             &executor,
-            &worker_id,
+            &worker_id.agent_id,
             fingerprint,
             caller.clone(),
             &definitions,
@@ -915,7 +908,7 @@ async fn path_2_two_owner_roots_remain_isolated_after_reconstruction(
                 &owners[index];
             let own = invoke_filesystem_tool_success(
                 &executor,
-                worker_id,
+                &worker_id.agent_id,
                 *fingerprint,
                 caller.clone(),
                 &definitions,
@@ -929,7 +922,7 @@ async fn path_2_two_owner_roots_remain_isolated_after_reconstruction(
             let other_path = format!("{other_base}/durable/state.txt");
             let denied = invoke_filesystem_tool(
                 &executor,
-                worker_id,
+                &worker_id.agent_id,
                 *fingerprint,
                 caller.clone(),
                 &definitions,
@@ -947,7 +940,7 @@ async fn path_2_two_owner_roots_remain_isolated_after_reconstruction(
         }
         if !reconstruction_pass {
             for (environment_id, worker_id, ..) in &owners {
-                unload_path_policy_owner(&executor, *environment_id, worker_id).await?;
+                unload_path_policy_owner(&executor, *environment_id, &worker_id.agent_id).await?;
             }
         }
     }
@@ -965,15 +958,11 @@ async fn path_2_two_owner_roots_remain_isolated_after_reconstruction(
     }
     let records = audit_sink.committed.lock().unwrap();
     assert_eq!(records.len(), 10);
-    for (_, _, _, _, owner_name, base, content) in &owners {
+    for (_, worker_id, _, _, _, base, content) in &owners {
         assert_eq!(
             records
                 .iter()
-                .filter(|record| {
-                    record["owner"]["agentId"]
-                        .as_str()
-                        .is_some_and(|agent_id| agent_id.contains(owner_name))
-                })
+                .filter(|record| record["owner"]["agentId"] == worker_id.agent_id.to_string())
                 .count(),
             5,
             "Audit must attribute every allowed and denied outcome to its durable owner"

@@ -49,26 +49,25 @@ async fn monthly_stop_keeps_typed_signal_and_one_pending_tcp_result(
             .store()
             .await?;
         let name = if durable {
-            agent_id!("Networking", "cause-freeze")
+            agent_key!("Networking", "cause-freeze")
         } else {
-            agent_id!("EphemeralNetworking", "cause-freeze")
+            agent_key!("EphemeralNetworking", "cause-freeze")
         };
         let key = IdempotencyKey::fresh();
         let id = if durable {
-            executor.start_agent(&component.id, name.clone()).await?
+            executor
+                .start_agent(&component.id, name.clone())
+                .await?
+                .agent_id
         } else {
-            AgentId::from_agent_id(
-                component.id,
-                &name
-                    .clone()
-                    .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                        &executor,
-                        &key,
-                        "tcp_collect_p3",
-                    ))
-                    .unwrap(),
+            invocation_agent_id(
+                &executor,
+                component.environment_id,
+                &name,
+                false,
+                &key,
+                "tcp_collect_p3",
             )
-            .unwrap()
         };
         let owned = OwnedAgentId::new(context.default_environment_id, &id);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -101,7 +100,7 @@ async fn monthly_stop_keeps_typed_signal_and_one_pending_tcp_result(
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 if let Some(start) = entries.iter().find_map(|entry| match &entry.entry {
                     PublicOplogEntry::Start(start)
                         if start.function_name == "sockets::types::tcp-socket::receive-chunk" =>
@@ -172,15 +171,15 @@ async fn monthly_stop_keeps_typed_signal_and_one_pending_tcp_result(
         refresh.await?;
         if durable {
             executor
-                .wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(10))
+                .wait_for_status(&owned, AgentStatus::Suspended, Duration::from_secs(10))
                 .await?;
             assert!(!invocation.is_finished());
             registry.set_policy(policy);
             limits.run_batch_for_test().await;
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             let result = invocation.await??.into_typed::<Result<String, String>>()?;
             assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
-            let oplog = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let oplog = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             assert_eq!(
                 count_agent_invocation_pair_since(&oplog, OplogIndex::INITIAL),
                 (2, 2)
@@ -273,15 +272,15 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let name = agent_id!("Counter", format!("outcome-cutoff-{after_selection}"));
+        let name = agent_key!("Counter", format!("outcome-cutoff-{after_selection}"));
         let id = executor.start_agent(&component.id, name.clone()).await?;
-        wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+        wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
         let worker = executor
-            .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+            .production_active_agent(&id.clone())
             .await
             .unwrap()
             .primary();
-        let owned = OwnedAgentId::new(context.default_environment_id, &id);
+        let owned = id.clone();
         let lane = worker.owner_execution().lane();
         let prebody = if after_selection {
             None
@@ -289,7 +288,11 @@ async fn quota_before_guest_and_user_stop_after_selection_keep_one_result(
             Some(lane.acquire_exclusive().await)
         };
         let mut selected_write = if after_selection {
-            Some(executor.gate_next_invocation_outcome_append(&id).await)
+            Some(
+                executor
+                    .gate_next_invocation_outcome_append(&id.agent_id)
+                    .await,
+            )
         } else {
             None
         };
@@ -485,15 +488,17 @@ async fn quota_stop_preserves_selected_independent_guest_failure(
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let name = agent_id!("FailingCounter", "monthly-selected-failure");
+        let name = agent_key!("FailingCounter", "monthly-selected-failure");
         let id = executor.start_agent(&component.id, name.clone()).await?;
-        wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+        wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
         let worker = executor
-            .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+            .production_active_agent(&id.clone())
             .await
             .unwrap()
             .primary();
-        let (at_outcome, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
+        let (at_outcome, release_outcome) = executor
+            .gate_next_invocation_outcome_append(&id.agent_id)
+            .await;
         let key = IdempotencyKey::fresh();
         let invocation = tokio::spawn({
             let executor = executor.clone();
@@ -645,30 +650,30 @@ async fn deadline_selection(
             .store()
             .await?;
         let name = if durable {
-            agent_id!("Networking", format!("deadline-cutoff-{timeout_first}"))
+            agent_key!("Networking", format!("deadline-cutoff-{timeout_first}"))
         } else {
-            agent_id!(
+            agent_key!(
                 "EphemeralNetworking",
                 format!("deadline-cutoff-{timeout_first}")
             )
         };
         let key = IdempotencyKey::fresh();
         let id = if durable {
-            executor.start_agent(&component.id, name.clone()).await?
+            executor
+                .start_agent(&component.id, name.clone())
+                .await?
+                .agent_id
         } else {
-            AgentId::from_agent_id(
-                component.id,
-                &name
-                    .clone()
-                    .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                        &executor,
-                        &key,
-                        "tcp_collect_p3",
-                    ))
-                    .unwrap(),
+            invocation_agent_id(
+                &executor,
+                component.environment_id,
+                &name,
+                false,
+                &key,
+                "tcp_collect_p3",
             )
-            .unwrap()
         };
+        let owned = OwnedAgentId::new(context.default_environment_id, &id);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let invocation = tokio::spawn({
@@ -690,14 +695,14 @@ async fn deadline_selection(
         });
         let (mut socket, _) = listener.accept().await?;
         let worker = executor
-            .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+            .production_active_agent(&owned)
             .await
             .unwrap()
             .primary();
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 if let Some(start) = entries.iter().find_map(|entry| match &entry.entry {
                     PublicOplogEntry::Start(start)
                         if start.function_name == "sockets::types::tcp-socket::receive-chunk" =>
@@ -877,7 +882,7 @@ async fn deadline_selection(
             assert!(!invocation.is_finished());
             registry.set_policy(policy);
             limits.run_batch_for_test().await;
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             let result = invocation.await??.into_typed::<Result<String, String>>()?;
             assert_eq!(result, Err("ErrorCode::ConnectionBroken".to_string()));
         } else {

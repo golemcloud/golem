@@ -15,6 +15,7 @@
 package bridge
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -273,10 +274,11 @@ func TestEncodeLetsOtherPanicsThrough(t *testing.T) {
 	_, _ = Encode(func() schema.SchemaValue { panic("boom") })
 }
 
-// A configuration value its schema does not accept is reported by NewAgent.
-func TestNewAgentReportsAConfigValueThatDoesNotEncode(t *testing.T) {
+// A configuration value its schema does not accept is reported by Create
+// before anything is sent.
+func TestCreateReportsAConfigValueThatDoesNotEncode(t *testing.T) {
 	configuration := Configuration{Server: Custom("http://localhost:1", "t"), AppName: "app", EnvName: "env"}
-	_, err := NewAgent("scale", schema.RecordValue{}, WithConfiguration(configuration), WithTypedConfig(TypedConfigEntry{
+	_, err := Create(context.Background(), "scale", schema.RecordValue{}, WithConfiguration(configuration), WithTypedConfig(TypedConfigEntry{
 		Path:  []string{"limit"},
 		Type:  "{}",
 		Value: func() schema.SchemaValue { return EncodeQuantity(values.Quantity[kilograms]{Mantissa: 1, Unit: "lb"}) },

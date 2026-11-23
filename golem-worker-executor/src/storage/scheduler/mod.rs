@@ -109,17 +109,26 @@ pub trait SchedulerStorage: Debug {
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError>;
 
+    /// Renews a matching lease that is still live as of `now`, without shortening it.
+    /// Times are compared at millisecond precision; equality with expiry is expired.
+    /// Returns false for a lost lease or a requested deadline not later than `now`.
+    /// As with `claim_due`, `now` is trusted caller time, not database execution time:
+    /// a wait after sampling it does not advance the authorization check.
     async fn extend_lease(
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
         lease_until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError>;
 
+    /// Deletes only a matching lease that is live as of the caller-supplied `now`.
+    /// Uses the same millisecond, as-of time semantics as `extend_lease`.
     async fn ack(
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError>;
 }
 

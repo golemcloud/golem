@@ -49,9 +49,9 @@ use golem_common::model::card::{
 };
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
-    ComponentRevision, ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
-    PluginInstallationAction, ToolDeploymentConfigCreation, ToolDeploymentConfigUpdate,
-    ToolProvisionConfigCreation, ToolProvisionConfigUpdate,
+    ComponentPackageMetadata, ComponentRevision, ComponentUpdate, InitialAgentFile,
+    InstalledPlugin, PluginInstallation, PluginInstallationAction, ToolDeploymentConfigCreation,
+    ToolDeploymentConfigUpdate, ToolProvisionConfigCreation, ToolProvisionConfigUpdate,
 };
 use golem_common::model::component::{
     AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
@@ -259,6 +259,12 @@ impl ComponentWriteService {
             &environment,
             &component_creation.component_name,
             ComponentVerb::Create,
+        )?;
+
+        validate_package_metadata(
+            &component_creation.component_name,
+            component_creation.package_metadata.as_ref(),
+            Some(&wasm),
         )?;
 
         // Fast path check to avoid processing the component if we are going to reject it anyway
@@ -480,6 +486,7 @@ impl ComponentWriteService {
             component_size,
             component_metadata,
             wasm_hash,
+            component_creation.package_metadata,
             wasm_object_store_key,
             auth.actor_account_id(),
         );
@@ -546,6 +553,7 @@ impl ComponentWriteService {
 
         let ComponentUpdate {
             current_revision,
+            package_metadata,
             config_schema,
             component_provision_config,
             agent_types: agent_type_update,
@@ -566,6 +574,12 @@ impl ComponentWriteService {
         if current_revision != component.revision {
             Err(ComponentError::ConcurrentUpdate)?
         };
+
+        validate_package_metadata(
+            &component_name,
+            package_metadata.as_ref(),
+            new_wasm.as_deref(),
+        )?;
 
         component.revision = component.revision.next()?;
 
@@ -831,6 +845,7 @@ impl ComponentWriteService {
             );
 
             component.wasm_hash = wasm_hash;
+            component.package_metadata = package_metadata;
             component.object_store_key = wasm_object_store_key;
             let metadata = analyze_and_validate_component_wasm(
                 final_config_schema.clone(),
@@ -2124,6 +2139,25 @@ fn check_config_entries_match(
     Ok(())
 }
 
+fn validate_package_metadata(
+    component: &ComponentName,
+    metadata: Option<&ComponentPackageMetadata>,
+    wasm: Option<&[u8]>,
+) -> Result<(), ComponentError> {
+    use sha2::{Digest, Sha256};
+
+    if let Some(metadata) = metadata {
+        let wasm =
+            wasm.ok_or_else(|| ComponentError::PackageMetadataWithoutWasm(component.clone()))?;
+        if format!("sha256:{:x}", Sha256::digest(wasm)) != metadata.layer_digest {
+            return Err(ComponentError::PackageLayerDigestMismatch(
+                component.clone(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 async fn analyze_and_validate_component_wasm(
     config_schema: ComponentConfigSchema,
     component_provision_config: ComponentProvisionConfig,
@@ -2184,6 +2218,16 @@ fn validate_component_metadata_invariants(
             return Err(ComponentError::DuplicateAgentTypeName(
                 agent_type.type_name.clone(),
             ));
+        }
+        if let Some(method) = agent_type
+            .methods
+            .iter()
+            .find(|method| method.name.len() > golem_common::model::MAX_INVOCATION_OPERATION_BYTES)
+        {
+            return Err(ComponentError::AgentMethodNameTooLong {
+                agent_type: agent_type.type_name.clone(),
+                method: method.name.clone(),
+            });
         }
     }
 

@@ -18,7 +18,7 @@ use anyhow::anyhow;
 use assert2::let_assert;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
@@ -50,7 +50,7 @@ async fn optional_group_present_with_all_fields(
         .store()
         .await?;
 
-    let agent_id = agent_id!("OptionalGroupConfigAgent", "test-agent");
+    let agent_id = agent_key!("OptionalGroupConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),
@@ -122,7 +122,7 @@ async fn optional_group_present_with_required_field_only(
         .store()
         .await?;
 
-    let agent_id = agent_id!("OptionalGroupConfigAgent", "test-agent");
+    let agent_id = agent_key!("OptionalGroupConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),
@@ -187,7 +187,7 @@ async fn all_optional_group_is_empty_object_when_no_children_provided(
         .store()
         .await?;
 
-    let agent_id = agent_id!("AllOptionalGroupConfigAgent", "test-agent");
+    let agent_id = agent_key!("AllOptionalGroupConfigAgent", "test-agent");
     user.start_agent_with(&component.id, agent_id.clone(), HashMap::new(), vec![])
         .await?;
 
@@ -227,7 +227,7 @@ async fn all_optional_group_present_when_child_provided(
         .store()
         .await?;
 
-    let agent_id = agent_id!("AllOptionalGroupConfigAgent", "test-agent");
+    let agent_id = agent_key!("AllOptionalGroupConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),
@@ -281,7 +281,7 @@ async fn optional_group_absent_when_required_nested_child_missing(
 
     // Provide outer.required but not outer.inner.a — inner is pruned, which
     // makes outer.inner undefined, which prunes outer itself.
-    let agent_id = agent_id!("NestedRequiredGroupConfigAgent", "test-agent");
+    let agent_id = agent_key!("NestedRequiredGroupConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),
@@ -332,7 +332,7 @@ async fn optional_group_present_when_required_nested_child_provided(
         .store()
         .await?;
 
-    let agent_id = agent_id!("NestedRequiredGroupConfigAgent", "test-agent");
+    let agent_id = agent_key!("NestedRequiredGroupConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),

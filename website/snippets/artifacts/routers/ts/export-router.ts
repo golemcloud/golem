@@ -9,7 +9,7 @@ export const Exports = defineHttpRouter('ExportsRouter')
       return { status: 404, headers: [], body: empty() } //@
     }
     // that user's agent builds the CSV now and streams it:
-    const csv = await Analyst.client.get({ chat: m[1] }) //@
+    const csv = await Analyst.client.upsert({ chat: m[1] }) //@
       .exportCsv({ id: m[2] })
     return {
       status: 200,

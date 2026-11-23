@@ -4,7 +4,7 @@
 
 Golem agents process invocations **sequentially**. Async I/O can overlap cooperatively within one invocation, but it does not provide CPU-thread parallelism. Distribute work across **multiple agent instances** for parallel invocation execution. This skill covers two approaches:
 
-1. **Child agents via `AgentDef.client.newPhantom(id).client`** — create separate agent instances, dispatch work, and collect results
+1. **Child agents via `await AgentDef.client.create(id)`** — create separate agent instances, dispatch work, and collect results
 2. **`fork()`** — clone the current agent at the current execution point for lightweight parallel execution
 
 ## Approach 1: Child Agent Fan-Out
@@ -46,8 +46,10 @@ export const CoordinatorImpl = Coordinator.implement({
     init: () => ({}),
     methods: {
         async fanOut({ items }) {
-            // Use a fresh phantom identity for each child, even across coordinators.
-            const promises = items.map((item, i) => Worker.client.newPhantom({ id: i }).client.process({ data: item }));
+            // Create a new agent without a key for each child, even across coordinators.
+            const promises = items.map(async (item, i) =>
+                (await Worker.client.create({ id: i })).process({ data: item }),
+            );
             // Wait for all children to finish.
             return await Promise.all(promises);
         },
@@ -65,7 +67,9 @@ async fanOutChunked({ items }) {
     const results: string[] = [];
 
     for (const chunk of chunks) {
-        const promises = chunk.map((item, i) => Worker.client.newPhantom({ id: i }).client.process({ data: item }));
+        const promises = chunk.map(async (item, i) =>
+            (await Worker.client.create({ id: i })).process({ data: item }),
+        );
         results.push(...await Promise.all(promises));
     }
     return results;
@@ -127,9 +131,12 @@ async dispatchAndCollect({ regions }) {
     const promiseIds = regions.map(() => createPromise());
 
     // Fire-and-forget: trigger each child with its (encoded) promise ID.
-    regions.forEach((region, i) => {
-        RegionWorker.client.newPhantom({ region }).client.runReport.trigger({ promiseId: encodePromiseId(promiseIds[i]) });
-    });
+    await Promise.all(
+        regions.map(async (region, i) => {
+            const worker = await RegionWorker.client.create({ region });
+            worker.runReport.trigger({ promiseId: encodePromiseId(promiseIds[i]) });
+        }),
+    );
 
     // Collect all results (the agent suspends until each promise completes).
     return await Promise.all(
@@ -144,7 +151,9 @@ Use `Promise.allSettled` to handle partial failures:
 
 ```typescript
 async fanOutWithErrors({ items }) {
-    const promises = items.map((item, i) => Worker.client.newPhantom({ id: i }).client.process({ data: item }));
+    const promises = items.map(async (item, i) =>
+        (await Worker.client.create({ id: i })).process({ data: item }),
+    );
     const settled = await Promise.allSettled(promises);
 
     const successes: string[] = [];
@@ -164,7 +173,7 @@ async fanOutWithErrors({ items }) {
 
 ## Approach 2: `fork()`
 
-`fork()` clones the current agent at the current execution point, creating a new agent instance with the same state but a unique phantom ID. Only a durable agent can fork, and the forked agent is durable too. Use Golem promises to synchronize between the original and forked agents.
+`fork()` clones the current agent at the current execution point, creating a new agent instance with the same state, a new agent ID, and no key. Both sides receive the forked agent's ID in `result.val.forkedAgentId`. Only a durable agent can fork, and the forked agent is durable too. Use Golem promises to synchronize between the original and forked agents.
 
 ### Basic Fork Pattern
 
@@ -240,7 +249,7 @@ async multiFork({ n }) {
 |----------|-------------|----------|
 | Work is **independent** and stateless | ✅ Best fit | Works but overkill |
 | Need to **share current state** with workers | ❌ Must pass via args | ✅ Forked copy inherits state |
-| Need a **caller-selected identity** | ✅ Use `client.get(id)` with a coordinator/job namespace | Generated phantom ID; durable and addressable with `client.getPhantom(id, phantomId)` |
+| Need a **caller-selected key** | ✅ Use `client.upsert(id)` with a coordinator/job namespace | New agent ID and no key; durable and addressable with `client.getById(result.val.forkedAgentId)` |
 | Number of parallel tasks is **dynamic** | ✅ Spawn as many as needed | ✅ Fork in a loop |
 | Need **simple error isolation** | ✅ Child failure doesn't crash parent | ⚠️ Forked agent shares oplog lineage |
 
@@ -249,5 +258,5 @@ async multiFork({ n }) {
 - **No threads**: Golem is single-threaded per agent — parallelism is achieved by distributing across agent instances
 - **Durability**: All RPC calls, promises, and fork operations are durably recorded — work survives crashes
 - **Deadlock avoidance**: Never have two agents awaiting each other synchronously — use `.trigger()` to break cycles
-- **Identity**: These examples create fresh durable phantoms with `newPhantom(...).client`. Retain the returned phantom ID to address one later with `getPhantom`. If using `get(id)` instead, namespace IDs by coordinator and job to avoid sharing children unintentionally.
+- **Identity**: These examples create new durable agents without a key with `create(...)`. Retain `await client.agentId()` to address one later with `getById`. If using `upsert(id)` instead, namespace the id records by coordinator and job to avoid sharing children unintentionally.
 - **Cleanup**: Durable children and forks persist after the coordinator finishes. Delete only instances the coordinator owns and no caller still needs; never delete shared workers merely because one job finished.

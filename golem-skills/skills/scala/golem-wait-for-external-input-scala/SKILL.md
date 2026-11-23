@@ -72,19 +72,19 @@ HostApi.completePromiseJson(promiseId, Decision("approved"))
 A `PromiseId` contains an `agentId`, a `fingerprint` and an `oplogIdx`. The `fingerprint` is a UUID that identifies the agent incarnation that created the promise. To let an external system complete the promise via the Golem REST API, the agent must expose all three fields. The external caller then sends:
 
 ```
-POST /v1/components/{component_id}/workers/{agent_name}/complete
+POST /v1/runtime/envs/{environment_id}/agents/{agent_id}/complete
 Content-Type: application/json
 
 {"oplogIdx": <oplog_idx>, "fingerprint": "<fingerprint_uuid>", "data": [<bytes>]}
 ```
 
-All three body fields are required. Use `JsUuid.toUuid` from `golem.host.js` to convert the `fingerprint` and the component ID to `java.util.UUID` values.
+`{agent_id}` is the agent ID, a UUID. All three body fields are required. Use `JsAgentId.toAgentId` and `JsUuid.toUuid` from `golem.host.js` to convert the `agentId` to a `golem.AgentId` and the `fingerprint` to a `java.util.UUID`.
 
 ## Full Example: Human-in-the-Loop Approval
 
 ```scala
 import golem.*
-import golem.host.js.JsUuid
+import golem.host.js.{JsAgentId, JsUuid}
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
 import scala.concurrent.Future
 import golem.concurrent.Implicits.global
@@ -106,10 +106,10 @@ class WorkflowAgentImpl(private val name: String) extends WorkflowAgent {
     val promiseId = HostApi.createPromise()
 
     // Publish the identity before waiting (replace with your notification integration).
-    val componentId = JsUuid.toUuid(promiseId.agentId.componentId.uuid)
+    val agentId     = JsAgentId.toAgentId(promiseId.agentId)
     val fingerprint = JsUuid.toUuid(promiseId.fingerprint)
     println(
-      s"Approval for $name: component $componentId, agent ${promiseId.agentId.agentId}, " +
+      s"Approval for $name: agent $agentId, " +
         s"fingerprint $fingerprint, oplog index ${promiseId.oplogIdx}"
     )
 

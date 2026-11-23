@@ -105,7 +105,7 @@ func MakeRetryPolicyScope(policy golem_api_retry.NamedRetryPolicy) *RetryPolicyS
 	result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*(16+4*4))
-		wasm_lower_1_t190(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t192(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -114,7 +114,7 @@ func MakeRetryPolicyScope(policy golem_api_retry.NamedRetryPolicy) *RetryPolicyS
 	result1 := witRuntime.Allocate(pinner, uintptr(length2*32), 8)
 	for index, element := range slice0 {
 		base := unsafe.Add(result1, index*32)
-		wasm_lower_1_t203(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t205(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -124,38 +124,38 @@ func MakeRetryPolicyScope(policy golem_api_retry.NamedRetryPolicy) *RetryPolicyS
 }
 
 //go:noinline
-func wasm_lower_1_t190(pinner *runtime.Pinner, value golem_api_retry.PredicateNode, dst unsafe.Pointer) {
+func wasm_lower_1_t192(pinner *runtime.Pinner, value golem_api_retry.PredicateNode, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case golem_api_retry.PredicateNodePropEq:
 		payload := value.PropEq()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(0))
-		wasm_lower_1_t185(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PredicateNodePropNeq:
 		payload := value.PropNeq()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t185(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PredicateNodePropGt:
 		payload := value.PropGt()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
-		wasm_lower_1_t185(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PredicateNodePropGte:
 		payload := value.PropGte()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(3))
-		wasm_lower_1_t185(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PredicateNodePropLt:
 		payload := value.PropLt()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(4))
-		wasm_lower_1_t185(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PredicateNodePropLte:
 		payload := value.PropLte()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
-		wasm_lower_1_t185(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PredicateNodePropExists:
 		payload := value.PropExists()
@@ -168,22 +168,22 @@ func wasm_lower_1_t190(pinner *runtime.Pinner, value golem_api_retry.PredicateNo
 	case golem_api_retry.PredicateNodePropIn:
 		payload := value.PropIn()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(7))
-		wasm_lower_1_t187(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t189(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PredicateNodePropMatches:
 		payload := value.PropMatches()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(8))
-		wasm_lower_1_t188(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t190(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PredicateNodePropStartsWith:
 		payload := value.PropStartsWith()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(9))
-		wasm_lower_1_t188(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t190(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PredicateNodePropContains:
 		payload := value.PropContains()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(10))
-		wasm_lower_1_t188(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t190(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PredicateNodePredAnd:
 		payload := value.PredAnd()
@@ -217,7 +217,7 @@ func wasm_lower_1_t190(pinner *runtime.Pinner, value golem_api_retry.PredicateNo
 }
 
 //go:noinline
-func wasm_lower_1_t203(pinner *runtime.Pinner, value golem_api_retry.PolicyNode, dst unsafe.Pointer) {
+func wasm_lower_1_t205(pinner *runtime.Pinner, value golem_api_retry.PolicyNode, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case golem_api_retry.PolicyNodePeriodic:
@@ -228,12 +228,12 @@ func wasm_lower_1_t203(pinner *runtime.Pinner, value golem_api_retry.PolicyNode,
 	case golem_api_retry.PolicyNodeExponential:
 		payload := value.Exponential()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t194(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t196(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PolicyNodeFibonacci:
 		payload := value.Fibonacci()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(2))
-		wasm_lower_1_t195(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t197(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PolicyNodeImmediate:
 
@@ -246,32 +246,32 @@ func wasm_lower_1_t203(pinner *runtime.Pinner, value golem_api_retry.PolicyNode,
 	case golem_api_retry.PolicyNodeCountBox:
 		payload := value.CountBox()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(5))
-		wasm_lower_1_t196(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t198(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PolicyNodeTimeBox:
 		payload := value.TimeBox()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(6))
-		wasm_lower_1_t197(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t199(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PolicyNodeClampDelay:
 		payload := value.ClampDelay()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(7))
-		wasm_lower_1_t198(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t200(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PolicyNodeAddDelay:
 		payload := value.AddDelay()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(8))
-		wasm_lower_1_t199(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t201(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PolicyNodeJitter:
 		payload := value.Jitter()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(9))
-		wasm_lower_1_t200(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t202(nil, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PolicyNodeFilteredOn:
 		payload := value.FilteredOn()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(10))
-		wasm_lower_1_t201(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
+		wasm_lower_1_t203(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 8))
 
 	case golem_api_retry.PolicyNodeAndThen:
 		payload := value.AndThen()
@@ -298,17 +298,17 @@ func wasm_lower_1_t203(pinner *runtime.Pinner, value golem_api_retry.PolicyNode,
 }
 
 //go:noinline
-func wasm_lower_1_t185(pinner *runtime.Pinner, value golem_api_retry.PropertyComparison, dst unsafe.Pointer) {
+func wasm_lower_1_t187(pinner *runtime.Pinner, value golem_api_retry.PropertyComparison, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).PropertyName))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).PropertyName)))
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 0)) = uint32(uintptr(uintptr(utf8)))
-	wasm_lower_1_t183(pinner, (value).Value, unsafe.Add(unsafe.Pointer(dst), (2*4)))
+	wasm_lower_1_t185(pinner, (value).Value, unsafe.Add(unsafe.Pointer(dst), (2*4)))
 
 }
 
 //go:noinline
-func wasm_lower_1_t187(pinner *runtime.Pinner, value golem_api_retry.PropertySetCheck, dst unsafe.Pointer) {
+func wasm_lower_1_t189(pinner *runtime.Pinner, value golem_api_retry.PropertySetCheck, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).PropertyName))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).PropertyName)))
@@ -318,7 +318,7 @@ func wasm_lower_1_t187(pinner *runtime.Pinner, value golem_api_retry.PropertySet
 	result := witRuntime.Allocate(pinner, uintptr(length*(8+2*4)), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*(8+2*4))
-		wasm_lower_1_t183(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t185(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -328,7 +328,7 @@ func wasm_lower_1_t187(pinner *runtime.Pinner, value golem_api_retry.PropertySet
 }
 
 //go:noinline
-func wasm_lower_1_t188(pinner *runtime.Pinner, value golem_api_retry.PropertyPattern, dst unsafe.Pointer) {
+func wasm_lower_1_t190(pinner *runtime.Pinner, value golem_api_retry.PropertyPattern, dst unsafe.Pointer) {
 	utf8 := unsafe.Pointer(unsafe.StringData((value).PropertyName))
 	pinner.Pin(utf8)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), 4)) = uint32(uint32(len((value).PropertyName)))
@@ -341,35 +341,35 @@ func wasm_lower_1_t188(pinner *runtime.Pinner, value golem_api_retry.PropertyPat
 }
 
 //go:noinline
-func wasm_lower_1_t194(pinner *runtime.Pinner, value golem_api_retry.ExponentialConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t196(pinner *runtime.Pinner, value golem_api_retry.ExponentialConfig, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).BaseDelay)
 	*(*float64)(unsafe.Add(unsafe.Pointer(dst), 8)) = (value).Factor
 
 }
 
 //go:noinline
-func wasm_lower_1_t195(pinner *runtime.Pinner, value golem_api_retry.FibonacciConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t197(pinner *runtime.Pinner, value golem_api_retry.FibonacciConfig, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).First)
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64((value).Second)
 
 }
 
 //go:noinline
-func wasm_lower_1_t196(pinner *runtime.Pinner, value golem_api_retry.CountBoxConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t198(pinner *runtime.Pinner, value golem_api_retry.CountBoxConfig, dst unsafe.Pointer) {
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 0)) = int32((value).MaxRetries)
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 4)) = (value).Inner
 
 }
 
 //go:noinline
-func wasm_lower_1_t197(pinner *runtime.Pinner, value golem_api_retry.TimeBoxConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t199(pinner *runtime.Pinner, value golem_api_retry.TimeBoxConfig, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).Limit)
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (value).Inner
 
 }
 
 //go:noinline
-func wasm_lower_1_t198(pinner *runtime.Pinner, value golem_api_retry.ClampConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t200(pinner *runtime.Pinner, value golem_api_retry.ClampConfig, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).MinDelay)
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 8)) = int64((value).MaxDelay)
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 16)) = (value).Inner
@@ -377,28 +377,28 @@ func wasm_lower_1_t198(pinner *runtime.Pinner, value golem_api_retry.ClampConfig
 }
 
 //go:noinline
-func wasm_lower_1_t199(pinner *runtime.Pinner, value golem_api_retry.AddDelayConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t201(pinner *runtime.Pinner, value golem_api_retry.AddDelayConfig, dst unsafe.Pointer) {
 	*(*int64)(unsafe.Add(unsafe.Pointer(dst), 0)) = int64((value).Delay)
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (value).Inner
 
 }
 
 //go:noinline
-func wasm_lower_1_t200(pinner *runtime.Pinner, value golem_api_retry.JitterConfig, dst unsafe.Pointer) {
+func wasm_lower_1_t202(pinner *runtime.Pinner, value golem_api_retry.JitterConfig, dst unsafe.Pointer) {
 	*(*float64)(unsafe.Add(unsafe.Pointer(dst), 0)) = (value).Factor
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), 8)) = (value).Inner
 
 }
 
 //go:noinline
-func wasm_lower_1_t201(pinner *runtime.Pinner, value golem_api_retry.FilteredConfig, dst unsafe.Pointer) {
-	wasm_lower_1_t192(pinner, (value).Predicate, unsafe.Add(unsafe.Pointer(dst), 0))
+func wasm_lower_1_t203(pinner *runtime.Pinner, value golem_api_retry.FilteredConfig, dst unsafe.Pointer) {
+	wasm_lower_1_t194(pinner, (value).Predicate, unsafe.Add(unsafe.Pointer(dst), 0))
 	*(*int32)(unsafe.Add(unsafe.Pointer(dst), (2 * 4))) = (value).Inner
 
 }
 
 //go:noinline
-func wasm_lower_1_t183(pinner *runtime.Pinner, value golem_api_retry.PredicateValue, dst unsafe.Pointer) {
+func wasm_lower_1_t185(pinner *runtime.Pinner, value golem_api_retry.PredicateValue, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case golem_api_retry.PredicateValueText:
@@ -432,13 +432,13 @@ func wasm_lower_1_t183(pinner *runtime.Pinner, value golem_api_retry.PredicateVa
 }
 
 //go:noinline
-func wasm_lower_1_t192(pinner *runtime.Pinner, value golem_api_retry.RetryPredicate, dst unsafe.Pointer) {
+func wasm_lower_1_t194(pinner *runtime.Pinner, value golem_api_retry.RetryPredicate, dst unsafe.Pointer) {
 	slice := (value).Nodes
 	length := uint32(len(slice))
 	result := witRuntime.Allocate(pinner, uintptr(length*(16+4*4)), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*(16+4*4))
-		wasm_lower_1_t190(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t192(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 

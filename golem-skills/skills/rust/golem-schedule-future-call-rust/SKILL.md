@@ -21,7 +21,7 @@ let scheduled_time = ScheduledTime {
     nanoseconds: at.subsec_nanos(),
 };
 
-let reporter = ReportAgentClient::get("daily".to_string());
+let reporter = ReportAgentClient::upsert("daily".to_string());
 reporter
     .schedule_generate_report("summary".to_string(), scheduled_time)
     .expect("failed to schedule report");

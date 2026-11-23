@@ -44,8 +44,8 @@ for name in "main-validation-linux-$id" "main-validation-apfs-$id"; do
   fi
 done
 
-python3 -I "$dir/ctrf-summary.py" "$out/artifacts" > "$out/ctrf.json"
-python3 -I "$dir/task-evidence.py" "$out/artifacts" > "$out/task-evidence.json"
+bun "$dir/ctrf-summary.ts" "$out/artifacts" > "$out/ctrf.json"
+bun "$dir/task-evidence.ts" "$out/artifacts" > "$out/task-evidence.json"
 
 jq -n \
   --slurpfile attempt "$out/attempt.json" \

@@ -203,14 +203,14 @@ You build one or more agent types into a **component**, the WebAssembly binary t
 
 ## Agent identity
 
-An agent is identified by its agent type and its constructor arguments. These are two different agents, each with its own count:
+Every agent has an **agent ID**, a UUID that Golem issues when it creates the agent. An agent can also have a **key**: the agent type and its constructor arguments. A key names at most one agent, its **keyed agent**. These are two different keyed agents, each with its own count:
 
 ```text
 CounterAgent("alice")
 CounterAgent("bob")
 ```
 
-Every call to `CounterAgent("alice")` reaches the same agent, whether it comes from the CLI, an HTTP endpoint, or another agent. Golem creates an agent the first time it is called; there is no separate "create" step, and deploying an application does not start any agents.
+Every call to `CounterAgent("alice")` reaches the same agent, whether it comes from the CLI, an HTTP endpoint, or another agent. Golem creates a keyed agent the first time it is called by its key; no "create" step is needed, and deploying an application does not start any agents. The agent keeps its agent ID for its whole life, and the ID addresses it as well as the key.
 
 From the command line:
 
@@ -253,7 +253,7 @@ The mode is set on the agent type. A durable counter called three times returns 
 
 Only durable agents can take [snapshots](/next/develop/snapshotting). An ephemeral agent has no state to save, so the SDKs refuse an ephemeral agent definition that enables snapshotting.
 
-A caller can also create a **phantom** agent: a separate agent with the same constructor arguments, distinguished by a generated ID. Phantoms are useful for running several independent copies of the same job.
+A caller can also explicitly create a durable agent **without a key**: a separate agent, possibly with the same constructor arguments as a keyed agent, that is reachable only by its agent ID. Agents without a key are useful for running several independent copies of the same job.
 
 ## How agents are isolated
 

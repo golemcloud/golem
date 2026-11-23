@@ -14,12 +14,14 @@
 
 use super::*;
 use crate::durable_host::schema_value_stream::contains_stream;
+use crate::grpc::invocation::CanStartWorker;
 use crate::model::LookupResult;
 use crate::services::{HasActiveAgents, HasEnvironmentStateService};
 use crate::worker::ResultOrSubscription;
 use golem_api_grpc::proto::golem::worker::{AgentInvocationMode, ExternalToolInvocation};
-use golem_common::model::InvocationRequestKey;
-use golem_common::model::agent::OwnerKind;
+use golem_common::model::RESERVED_TYPE_TAG;
+use golem_common::model::agent::AgentTarget;
+use golem_common::model::{InvocationRequestKey, OwnedAgentId};
 use golem_common::schema::TypedSchemaValue;
 
 fn validate_live_stream_mode(
@@ -51,20 +53,42 @@ where
         use golem_api_grpc::proto::golem::worker::AgentInvocationMode as Mode;
 
         let tool = request.external_tool.as_ref().expect("native tool request");
-        let owned = extract_owned_agent_id(request, |r| &r.agent_id, |r| &r.environment_id)?;
+        let AgentTarget::Id(agent_id) = request.agent_target()? else {
+            return Err(WorkerExecutorError::invalid_request(
+                "an external tool invocation names its owner by ID",
+            ));
+        };
+        let owned = OwnedAgentId::new(request.environment_id()?, &agent_id);
         self.ensure_worker_belongs_to_this_executor(&owned.agent_id)?;
-        let operation = format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/"));
-        if !tool.fresh_owner && OwnerKind::is_reserved_instance_name(&owned.agent_id.agent_id) {
+        let operation = golem_common::model::InvocationOperation::tool_operation(
+            &tool.tool_name,
+            &tool.command_path,
+        );
+        let mode = request.mode();
+        let virtual_lookup = mode == Mode::Lookup && owned.agent_id.type_tag() == RESERVED_TYPE_TAG;
+        if !tool.fresh_owner && owned.agent_id.type_tag() == RESERVED_TYPE_TAG && !virtual_lookup {
             return Err(WorkerExecutorError::invalid_request(
                 "existing tool target must be a real agent",
             ));
         }
-        // An existing owner is named by its fingerprint, and the guard pins that incarnation in
-        // every mode. A virtual owner has no incarnation a caller can name.
+        // A fresh owner is created on the component that the request names.
+        let fresh_owner_component = if tool.fresh_owner {
+            Some(request.component_id()?.ok_or_else(|| {
+                WorkerExecutorError::invalid_request(
+                    "a fresh external tool owner requires component_id",
+                )
+            })?)
+        } else {
+            None
+        };
+        // An existing agent is named by its fingerprint, and the guard pins that incarnation in
+        // every mode. A virtual receipt can also be observed without a fingerprint; its lookup
+        // acquires only an existing owner and never starts it.
         let expected_fingerprint = match (tool.fresh_owner, request.expected_callee_fingerprint) {
             (false, Some(fingerprint)) => {
                 Some(golem_common::model::AgentFingerprint(fingerprint.into()))
             }
+            (false, None) if virtual_lookup => None,
             (true, None) => None,
             (true, Some(_)) => {
                 return Err(WorkerExecutorError::invalid_request(
@@ -86,7 +110,6 @@ where
             .map(TryInto::try_into)
             .transpose()
             .map_err(WorkerExecutorError::permission_denied)?;
-        let mode = request.mode();
         if scope_card.is_some() && mode != Mode::Await {
             return Err(WorkerExecutorError::permission_denied(
                 "scope cards are supported only for invoke-and-await",
@@ -97,7 +120,7 @@ where
             consumed_fuel: None,
             invocation_status: None,
             component_revision: None,
-            agent_id: Some(owned.agent_id.clone()),
+            agent_id: Some(owned.agent_id),
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
@@ -140,7 +163,13 @@ where
                 let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned).await?;
                 let Some(metadata) = metadata else {
                     response.invocation_status = Some(InvocationStatus::Unknown);
-                    publish_acceptance(acceptance_committed, accepted, &key, None)?;
+                    publish_acceptance(
+                        acceptance_committed,
+                        accepted,
+                        &owned.agent_id,
+                        &key,
+                        None,
+                    )?;
                     return Ok(response);
                 };
                 let (worker, response_lease) =
@@ -159,6 +188,9 @@ where
                     output.invocation_status = Some(InvocationStatus::Complete);
                     response = output;
                 }
+                LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled)) => {
+                    response.invocation_status = Some(InvocationStatus::Cancelled)
+                }
                 LookupResult::Complete(Err(error)) => return Err(error),
                 LookupResult::Pending => {
                     response.invocation_status = Some(InvocationStatus::Pending)
@@ -170,6 +202,7 @@ where
             publish_acceptance(
                 acceptance_committed,
                 accepted,
+                &owned.agent_id,
                 &key,
                 response.component_revision,
             )?;
@@ -182,8 +215,9 @@ where
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
         let owner_key = request_key.owner_key(&operation);
-        if tool.fresh_owner
-            && owned.agent_id.agent_id != OwnerKind::external_tool_instance_name(&owner_key)
+        if let Some(component_id) = fresh_owner_component
+            && owned.agent_id
+                != AgentId::external_tool_owner(owned.environment_id, component_id, &owner_key)
         {
             return Err(WorkerExecutorError::invalid_request(
                 "virtual owner identity does not match the prepared request",
@@ -221,13 +255,13 @@ where
             ));
         }
         let streaming = validate_live_stream_mode(tool, mode, request.schedule_at.is_some())?;
-        if tool.fresh_owner
+        if let Some(component_id) = fresh_owner_component
             && mode == Mode::Schedule
             && let Some(timestamp) = request.schedule_at.as_ref()
         {
             let component = self
                 .component_service()
-                .get_metadata(owned.component_id(), None)
+                .get_metadata(component_id, None)
                 .await?;
             if component.environment_id != owned.environment_id {
                 return Err(WorkerExecutorError::invalid_request(
@@ -275,6 +309,11 @@ where
                     .map_err(WorkerExecutorError::invalid_request)?,
                 activation.registered_tool.deployment_revision,
             )?;
+            crate::worker::require_canonical_command_path(
+                &activation,
+                &tool_name,
+                &tool.command_path,
+            )?;
             let at = DateTime::from_timestamp(
                 timestamp.seconds,
                 timestamp.nanos.try_into().map_err(|_| {
@@ -291,7 +330,7 @@ where
                 .active_agents()
                 .get_or_add_ephemeral_external_tool_pinned(
                     self,
-                    owned.component_id(),
+                    component_id,
                     owned.environment_id,
                     &owner_key,
                     component.revision,
@@ -326,16 +365,17 @@ where
             publish_acceptance(
                 acceptance_committed,
                 accepted,
+                &owned.agent_id,
                 &key,
                 response.component_revision,
             )?;
             return Ok(response);
         }
-        if tool.fresh_owner {
+        if let Some(component_id) = fresh_owner_component {
             self.active_agents()
                 .get_or_add_ephemeral_external_tool(
                     self,
-                    owned.component_id(),
+                    component_id,
                     owned.environment_id,
                     &owner_key,
                     &context,
@@ -357,7 +397,7 @@ where
             .await?;
         let metadata = worker.get_latest_worker_metadata().await;
         let key = request_key
-            .finalize(owned.agent_id.clone(), metadata.fingerprint, &operation)
+            .finalize(owned.agent_id, metadata.fingerprint, &operation)
             .id();
         response.idempotency_key = Some(key);
         response.component_revision = Some(metadata.last_known_status.component_revision);
@@ -396,6 +436,7 @@ where
             publish_acceptance(
                 acceptance_committed,
                 accepted,
+                &owned.agent_id,
                 &key,
                 response.component_revision,
             )?;
@@ -410,12 +451,14 @@ where
         if streaming {
             let component = self
                 .component_service()
-                .get_metadata(owned.component_id(), response.component_revision)
+                .get_metadata(metadata.component_id, response.component_revision)
                 .await?;
             let mut pinned_request = request.clone();
             pinned_request.expected_callee_fingerprint = Some(metadata.fingerprint.0.into());
             let durable_request = build_durable_streaming_request(
                 &pinned_request,
+                owned.agent_id,
+                None,
                 &component.metadata,
                 component.revision,
                 metadata.fingerprint,
@@ -433,6 +476,7 @@ where
                 .await?;
             accepted
                 .send(AcceptedInvocation {
+                    agent_id: owned.agent_id,
                     idempotency_key: key,
                     component_revision: response.component_revision,
                     durable_streams: Some(acceptance.streams),
@@ -464,6 +508,7 @@ where
             publish_acceptance(
                 acceptance_committed,
                 accepted,
+                &owned.agent_id,
                 &key,
                 response.component_revision,
             )?;
@@ -476,6 +521,7 @@ where
             publish_acceptance(
                 acceptance_committed,
                 accepted,
+                &owned.agent_id,
                 &key,
                 response.component_revision,
             )?;

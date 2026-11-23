@@ -86,26 +86,25 @@ async fn stop_order(
         .store()
         .await?;
     let name = if durable {
-        agent_id!("Networking", format!("stop-order-{first:?}"))
+        agent_key!("Networking", format!("stop-order-{first:?}"))
     } else {
-        agent_id!("EphemeralNetworking", format!("stop-order-{first:?}"))
+        agent_key!("EphemeralNetworking", format!("stop-order-{first:?}"))
     };
     let key = IdempotencyKey::fresh();
     let id = if durable {
-        executor.start_agent(&component.id, name.clone()).await?
+        executor
+            .start_agent(&component.id, name.clone())
+            .await?
+            .agent_id
     } else {
-        AgentId::from_agent_id(
-            component.id,
-            &name
-                .clone()
-                .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                    &executor,
-                    &key,
-                    "tcp_collect_p3",
-                ))
-                .unwrap(),
+        invocation_agent_id(
+            &executor,
+            component.environment_id,
+            &name,
+            false,
+            &key,
+            "tcp_collect_p3",
         )
-        .unwrap()
     };
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -135,7 +134,7 @@ async fn stop_order(
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             executor.commit_oplog(&id).await?;
-            let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             if let Some(start) = entries.iter().find_map(|entry| match &entry.entry {
                 PublicOplogEntry::Start(start)
                     if start.function_name == "sockets::types::tcp-socket::receive-chunk" =>
@@ -181,8 +180,8 @@ async fn stop_order(
     let delete = || {
         tokio::spawn({
             let executor = executor.clone();
-            let id = id.clone();
-            async move { executor.delete_worker(&id).await }
+            let owned = owned.clone();
+            async move { executor.delete_worker(&owned).await }
         })
     };
     if first == FirstStop::Deletion {

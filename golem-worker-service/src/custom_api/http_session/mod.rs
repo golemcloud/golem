@@ -321,7 +321,7 @@ impl HttpSession {
         let prepared_cleanup_identity = prepared_unkeyed_identity(&prepared_start);
         let session_span = info_span!(
             "http_invocation_session",
-            agent = ?cleanup_start.agent_id,
+            agent = ?cleanup_start.target_agent_id(),
             idempotency_key = cleanup_start.idempotency_key.as_ref().map(|key| key.value.as_str()),
         );
         tokio::spawn(async move {
@@ -412,7 +412,7 @@ pub(super) mod tests;
 fn prepared_unkeyed_identity(
     start: &InvocationStart,
 ) -> Option<(
-    golem_common::model::AgentId,
+    golem_common::model::OwnedAgentId,
     golem_common::model::InvocationId,
 )> {
     let request_key =
@@ -420,6 +420,11 @@ fn prepared_unkeyed_identity(
     let golem_common::model::InvocationRequestKey::Unkeyed(uuid) = request_key else {
         return None;
     };
-    let agent = golem_common::model::AgentId::try_from(start.agent_id.clone()?).ok()?;
-    Some((agent, golem_common::model::InvocationId(uuid)))
+    let agent = golem_common::model::AgentId::try_from(*start.target_agent_id()?).ok()?;
+    let environment_id =
+        golem_common::model::environment::EnvironmentId::try_from(start.environment_id?).ok()?;
+    Some((
+        golem_common::model::OwnedAgentId::new(environment_id, &agent),
+        golem_common::model::InvocationId(uuid),
+    ))
 }

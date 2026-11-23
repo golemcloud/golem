@@ -88,6 +88,7 @@ mod input_observation;
 pub mod io;
 pub mod keyvalue;
 mod logging;
+pub(crate) mod outgoing_caller;
 pub mod p3;
 pub(crate) mod permissions;
 pub mod quota;
@@ -251,7 +252,7 @@ use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
 };
-use golem_common::model::component::{CanonicalFilePath, ComponentId, ComponentRevision};
+use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     AgentEntity, EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
@@ -272,6 +273,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
@@ -1185,7 +1187,6 @@ struct PrivateDurableWorkerState {
     /// oplog.
     file_stream_pollables: HashSet<u32>,
 
-    tcp_connect_replay: sockets::tcp::TcpConnectReplay,
     /// The hostnames that this Store's completed address lookups linked to addresses, for the
     /// grant check of socket connects and datagrams.
     resolved_names: sockets::resolved_names::SharedResolvedNames,
@@ -1298,8 +1299,6 @@ struct PrivateDurableWorkerState {
     /// wallet-independent calls must not extend target-only history while that outcome is pending.
     automatic_update_unsettled: bool,
 
-    /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
-    current_phantom_id: Option<Uuid>,
     last_snapshot_index: Option<OplogIndex>,
     /// The baseline of the start: the column of the start outcome table.
     baseline_role: BaselineRole,
@@ -1357,7 +1356,7 @@ impl WakeupScheduler {
         let promise_id = self
             .promise_service
             .create(
-                &self.owned_agent_id.agent_id,
+                &self.owned_agent_id,
                 self.target_worker_fingerprint,
                 self.oplog.current_oplog_index().await,
             )
@@ -1773,7 +1772,7 @@ impl PrivateDurableWorkerState {
 
     pub async fn get_workers(
         &self,
-        component_id: &ComponentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -1782,7 +1781,7 @@ impl PrivateDurableWorkerState {
         self.worker_enumeration_service
             .get(
                 &self.owned_agent_id.environment_id,
-                component_id,
+                type_id,
                 filter,
                 cursor,
                 count,

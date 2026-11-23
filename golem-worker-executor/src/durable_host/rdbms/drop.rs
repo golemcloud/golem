@@ -433,7 +433,7 @@ where
                 ctx.state.oplog.clone(),
                 ctx.public_state.worker(),
                 ctx.state.rdbms_service.clone(),
-                ctx.state.owned_agent_id.agent_id.clone(),
+                ctx.state.owned_agent_id.agent_id,
             )
         });
         if let Some(resolution) = replay {

@@ -56,6 +56,16 @@ fn tracing() -> Tracing {
 #[cfg(test)]
 test_r::enable!();
 
+/// A test agent ID with type tag 7 whose H is the FNV-1a hash of `name`, so distinct names
+/// give distinct agents of one type.
+#[cfg(test)]
+pub(crate) fn test_agent_id(name: &str) -> golem_common::model::AgentId {
+    let h = name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, byte| {
+        (h ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    golem_common::model::AgentId::from_parts(7, u128::from(h))
+}
+
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};
 use self::services::HasAgentFilesystemSnapshots;
 use self::services::HasQuotaService;
@@ -1147,7 +1157,6 @@ async fn create_worker_executor_impl<
         indexed_storage.clone(),
         &sweep_archives,
         shard_service.clone(),
-        component_service.clone(),
         Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx>>),
     );
     shutdown.spawn({

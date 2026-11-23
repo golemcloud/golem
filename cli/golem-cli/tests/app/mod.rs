@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod account;
+mod agent_keys;
 mod agents;
 
 #[allow(clippy::module_inception)]
@@ -35,6 +36,7 @@ mod go_native_tool;
 mod go_principal;
 mod go_tools;
 mod initial_cards;
+mod invocations;
 mod mcp_import;
 mod mcp_oauth;
 mod mcp_serve;
@@ -107,6 +109,7 @@ inherit_test_dep!(Tracing);
 // The `agents` module is split further by per-test `#[tag(agents_guest_bridge)]` and
 // `#[tag(agents_streaming)]` attributes; the `agents` CI shard skips those two tags.
 tag_suite!(agents, agents);
+tag_suite!(agent_keys, agents);
 // Native guest bridge suites run in `agents_guest_bridge`; other tagged app suites run in
 // `deploy`.
 // The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
@@ -238,6 +241,7 @@ mod cmd {
     pub static BUILD: &str = "build";
     pub static COMPLETION: &str = "completion";
     pub static COMPONENT: &str = "component";
+    pub static CREATE: &str = "create";
     pub static DEPLOY: &str = "deploy";
     pub static GENERATE_BRIDGE: &str = "generate-bridge";
     pub static GET: &str = "get";
@@ -252,6 +256,7 @@ mod cmd {
     pub static SECRET: &str = "secret";
     pub static TEMPLATES: &str = "templates";
     pub static TOOL: &str = "tool";
+    pub static UPSERT: &str = "upsert";
 }
 
 mod flag {

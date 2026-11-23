@@ -158,7 +158,7 @@ impl ErrorHandler {
                         "ok".green(),
                         environment_formatted,
                         agent_id_match.component_name.0.log_color_highlight(),
-                        agent_id_match.agent_id.0.log_color_highlight(),
+                        agent_id_match.display_name().log_color_highlight(),
                         match agent_id_match.component_name_match_kind {
                             ComponentNameMatchKind::AppCurrentDir =>
                                 "component was selected based on current dir",
@@ -176,25 +176,14 @@ impl ErrorHandler {
                     .resolve_component(
                         &agent_id_match.environment,
                         &agent_id_match.component_name,
-                        Some((&agent_id_match.agent_id).into()),
+                        None,
                     )
                     .await
                 {
-                    let canonical_agent_id = self
-                        .ctx
-                        .agent_handler()
-                        .try_recanonicalize_agent_id(&agent_id_match.agent_id, &component);
-                    let agent_id = self.ctx.agent_handler().validate_agent_and_function_names(
+                    log_text_view(&AvailableFunctionNamesHelp::new_agent(
                         &component,
-                        &canonical_agent_id,
-                        None,
-                    )?;
-
-                    if let Some((agent_id, agent_type)) = agent_id.as_ref() {
-                        log_text_view(&AvailableFunctionNamesHelp::new_agent(
-                            &component, agent_id, agent_type,
-                        ));
-                    }
+                        &agent_id_match.agent_type.agent_type,
+                    ));
                     logln("");
                 }
                 Ok(())

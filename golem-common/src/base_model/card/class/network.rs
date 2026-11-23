@@ -89,6 +89,15 @@ pub enum NetworkResourcePattern {
         this_host: bool,
         hostnames: Vec<String>,
     },
+    /// The host of an address lookup. It is a request, never a grant: card text never parses to
+    /// it. A lookup reveals addresses and opens no connection, so a grant matches it when the
+    /// grant's host matches, whatever ports the grant names; a connect to the looked-up address
+    /// is still checked against the ports. A grant whose host is only `*` and that names ports,
+    /// such as `*:443`, names no host, so it does not match a lookup. A denial covers it only when the denial covers every
+    /// port that a connect can use (1 to 65535), as for a lookup the ports are unknown.
+    Lookup {
+        host: String,
+    },
 }
 
 impl NetworkResourcePattern {
@@ -121,6 +130,11 @@ impl NetworkResourcePattern {
         }
     }
 
+    /// The host of an address lookup of `host`.
+    pub fn lookup(host: impl Into<String>) -> Self {
+        Self::Lookup { host: host.into() }
+    }
+
     /// Whether this pattern, used as a denial, covers `other`. A denial with a wildcard host also
     /// covers socket destinations that are not public, a denial of an IPv4 host also covers the
     /// IPv6 forms that embed it (NAT64, 6to4, IPv4-compatible), and a denial that covers a linked
@@ -144,6 +158,10 @@ impl NetworkResourcePattern {
                         || hostnames
                             .iter()
                             .any(|name| host_pattern_subsumes(host, name)))
+            }
+            (Self::HostPort { host, ports }, Self::Lookup { host: target }) => {
+                ports.subsumes(&PortPattern::range(1, u16::MAX))
+                    && host_pattern_subsumes(host, target)
             }
             _ => self.subsumes(other),
         }
@@ -244,8 +262,11 @@ impl ResourcePattern for NetworkResourcePattern {
                         .chain(hostnames)
                         .any(|name| host_pattern_subsumes(host, name))
             }
+            (Self::HostPort { host, ports }, Self::Lookup { host: target }) => {
+                (host != "*" || *ports == PortPattern::Any) && host_pattern_subsumes(host, target)
+            }
             (Self::HostPort { .. }, Self::Any) => false,
-            (Self::SocketAddress { .. }, _) => false,
+            (Self::SocketAddress { .. } | Self::Lookup { .. }, _) => false,
         }
     }
 }

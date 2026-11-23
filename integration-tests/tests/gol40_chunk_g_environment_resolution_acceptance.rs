@@ -40,7 +40,7 @@ use golem_common::model::tool::{
 };
 use golem_common::model::tool_release::{ToolReleaseByCoordinates, ToolReleaseReference};
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -66,7 +66,7 @@ struct ChunkGConsumer {
     environment: Environment,
     component: ComponentDto,
     parsed_agent_id: ParsedAgentKey,
-    agent_id: golem_common::model::AgentId,
+    agent_id: golem_common::model::agent::OwnedAgentId,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -191,7 +191,7 @@ async fn identity(
 ) -> anyhow::Result<AgentMetadataDto> {
     let metadata = user.get_worker_metadata(&consumer.agent_id).await?;
     assert_eq!(metadata.environment_id, consumer.environment.id);
-    assert_eq!(metadata.agent_id, consumer.agent_id);
+    assert_eq!(metadata.agent_id, consumer.agent_id.agent_id);
     Ok(metadata)
 }
 
@@ -378,7 +378,7 @@ async fn prepare_consumer(
             ),
         )
         .await?;
-    let parsed_agent_id = agent_id!(CALLER, &format!("gol40-chunk-g-{label}"));
+    let parsed_agent_id = agent_key!(CALLER, &format!("gol40-chunk-g-{label}"));
     let agent_id = user
         .start_agent_with(
             &component.id,

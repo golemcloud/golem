@@ -176,14 +176,14 @@ async fn persistent_rate_limit(
         ));
     }
 
-    let mut backend = RateLimitBackendClient::get(
+    let mut backend = RateLimitBackendClient::upsert(
         parameters.policy,
         parameters.limit,
         parameters.window_milliseconds,
     );
     let admission = backend
         .admit(
-            principal_key(context.caller().immediate()),
+            principal_key(context.caller().original()),
             generate_idempotency_key().to_string(),
         )
         .await;

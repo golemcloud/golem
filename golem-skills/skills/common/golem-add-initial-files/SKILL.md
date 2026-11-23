@@ -256,7 +256,7 @@ When a directory source is used, the permission setting applies to all files wit
 - Files are content-addressed. The executor populates agent filesystems by copying, cloning, or reflinking files as supported by the filesystem, not by sharing hardlinks.
 - The worker executor downloads initial files when needed. Its weak-reference cache can reuse a file while a live cache entry retains it; it does not guarantee reuse across subsequent starts.
 - The initial-file cache has no dedicated configurable disk-space cap.
-- Initial files are **not** passed per agent instance at creation time via `golem agent new`. They are defined at the agent type level in the manifest and applied to all instances of that type.
+- Initial files are **not** passed per agent instance at creation time via `golem agent create`. They are defined at the agent type level in the manifest and applied to all instances of that type.
 
 ## Initial Files, Updates and Snapshots
 

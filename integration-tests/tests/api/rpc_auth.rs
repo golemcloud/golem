@@ -49,7 +49,7 @@ use golem_common::model::permission_share::{
     PermissionShareCreation, PermissionShareData, PermissionShareName,
 };
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{AgentResult, TestDsl, TestDslExtended};
 use test_r::{inherit_test_dep, test, timeout};
@@ -163,7 +163,7 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
 
     let env_owner_created_counter_name = "auth-test-allowed-counter-env-owner";
     let env_owner_created_counter_agent_id =
-        agent_id!("RpcCounter", env_owner_created_counter_name);
+        agent_key!("RpcCounter", env_owner_created_counter_name);
     owner
         .start_agent(
             &owner_component.id,
@@ -173,7 +173,7 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
 
     let shared_grantee_created_counter_name = "auth-test-allowed-counter-shared-grantee";
     let shared_grantee_created_counter_agent_id =
-        agent_id!("RpcCounter", shared_grantee_created_counter_name);
+        agent_key!("RpcCounter", shared_grantee_created_counter_name);
     caller
         .start_agent(
             &owner_component.id,
@@ -181,7 +181,7 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
         )
         .await?;
 
-    let tester_agent_id = agent_id!("RpcAuthTester", "tester-allowed");
+    let tester_agent_id = agent_key!("RpcAuthTester", "tester-allowed");
     caller
         .start_agent(&caller_component.id, tester_agent_id.clone())
         .await?;
@@ -223,12 +223,12 @@ async fn owner_calling_own_worker_via_rpc_succeeds(
     let component = store_rpc_component(&owner, &env.id).await?;
 
     let counter_name = "auth-test-own-counter";
-    let counter_agent_id = agent_id!("RpcCounter", counter_name);
+    let counter_agent_id = agent_key!("RpcCounter", counter_name);
     owner
         .start_agent(&component.id, counter_agent_id.clone())
         .await?;
 
-    let tester_agent_id = agent_id!("RpcAuthTester", "tester-own");
+    let tester_agent_id = agent_key!("RpcAuthTester", "tester-own");
     owner
         .start_agent(&component.id, tester_agent_id.clone())
         .await?;

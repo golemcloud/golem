@@ -13,20 +13,27 @@
 // limitations under the License.
 
 import type { InvocationMetadata as HostInvocationMetadata } from 'golem:agent/host@2.0.0';
+import { AgentId } from '../src/agentId';
 import { InvocationId } from '../src/invocationId';
 import { Uuid } from '../src/uuid';
 
 /** The invocation UUID used by host invocation metadata fakes. */
 export const testInvocationUuid = new Uuid(0x0123456789abcdefn, 0xfedcba9876543210n);
 
+/** The agent ID that host invocation metadata fakes name by default. */
+export const TEST_INVOKED_AGENT_ID = '00000007-0000-8000-8000-0000000000aa';
+
 /** Host invocation metadata as `golem:agent/host` returns it. */
-export function hostInvocationMetadata(agentId: string): HostInvocationMetadata {
+export function hostInvocationMetadata(
+  agentId: string = TEST_INVOKED_AGENT_ID,
+): HostInvocationMetadata {
+  const raw = { uuid: AgentId.parse(agentId).uuid };
   return {
-    agentId,
+    agentId: { uuid: { highBits: raw.uuid.highBits, lowBits: raw.uuid.lowBits } },
     invocationId: {
       owner: {
         tag: 'agent',
-        val: { componentId: { uuid: { highBits: 0n, lowBits: 1n } }, agentId },
+        val: { uuid: { highBits: raw.uuid.highBits, lowBits: raw.uuid.lowBits } },
       },
       id: { highBits: testInvocationUuid.highBits, lowBits: testInvocationUuid.lowBits },
     },
@@ -34,6 +41,7 @@ export function hostInvocationMetadata(agentId: string): HostInvocationMetadata 
 }
 
 /** The SDK invocation metadata that {@link hostInvocationMetadata} converts to. */
-export function sdkInvocationMetadata(agentId: string) {
-  return { agentId, invocationId: new InvocationId(agentId, testInvocationUuid) };
+export function sdkInvocationMetadata(agentId: string = TEST_INVOKED_AGENT_ID) {
+  const id = AgentId.parse(agentId);
+  return { agentId: id, invocationId: new InvocationId(id, testInvocationUuid) };
 }

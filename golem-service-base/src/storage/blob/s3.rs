@@ -505,30 +505,25 @@ impl S3BlobStorage {
                 agent_id,
                 agent_mode,
             } => {
-                // The key holds the agent path segment and not the agent id. A raw agent id can
-                // hold `/`, `\` and `.` segments, and the rules of a key refuse them. The segment
-                // has at most 97 bytes and holds none of them.
                 let mode = super::agent_mode_prefix(*agent_mode);
                 let agent = agent_path_segment(agent_id);
                 format!("{mode}/{environment_id}/{agent}")
             }
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
-                component_id,
+                type_tag,
                 agent_mode,
                 ..
             } => {
                 let mode = super::agent_mode_prefix(*agent_mode);
-                format!("{mode}/{environment_id}/{component_id}")
+                format!("{mode}/{environment_id}/{type_tag:08x}")
             }
             BlobStorageNamespace::FilesystemSnapshots {
                 environment_id,
                 agent_id,
                 fingerprint,
             } => {
-                // The agent is one segment of a bounded length, because a raw agent id can hold
-                // `/`, `\` and `.` segments, which the rules of a key refuse. The fingerprint of
-                // the incarnation is the segment below it.
+                // The fingerprint of the incarnation is the segment below the agent.
                 let agent = agent_path_segment(agent_id);
                 format!("{environment_id}/{agent}/{}", fingerprint.0)
             }

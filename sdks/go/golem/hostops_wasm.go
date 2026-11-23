@@ -27,15 +27,14 @@ import (
 
 var hostOps agentHost = witHost{}
 
-// selfAgentID reads the agent's id through the durable host environment on
-// each call: replay sees the id the call saw when it ran, and a copy made by a
-// fork sees its own. os.Getenv would return the value captured at start-up.
-// The host shows GOLEM_AGENT_ID only when the agent's permission card allows
-// env(?agent) @ ?agent : read : GOLEM_AGENT_ID; without that grant the result
-// is "".
-var selfAgentID = func() string {
+// selfEnv reads an environment variable through the durable host environment
+// on each call: replay sees the value the call saw when it ran, and a copy made
+// by a fork sees its own agent ID. os.Getenv would return the value captured at
+// start-up. The host shows a variable that Golem sets only when the agent's
+// permission card allows the agent to read it; otherwise the result is "".
+var selfEnv = func(name string) string {
 	for _, kv := range environment.GetEnvironment() {
-		if kv.F0 == agentIDEnvVar {
+		if kv.F0 == name {
 			return kv.F1
 		}
 	}
@@ -47,16 +46,16 @@ var currentCaller = func() common.Caller { return invocationContext.Caller() }
 
 type witHost struct{}
 
-func (witHost) fork() (bool, UUID, error) {
+func (witHost) fork() (bool, AgentID, error) {
 	res := apiHost.Fork()
 	if res.IsErr() {
-		return false, UUID{}, agentOperationErrorFromWit(res.Err())
+		return false, AgentID{}, agentOperationErrorFromWit(res.Err())
 	}
 	r := res.Ok()
 	if r.Tag() == apiHost.ForkResultForked {
-		return true, uuidFromWit(r.Forked().ForkedPhantomId), nil
+		return true, agentIDFromWit(r.Forked().ForkedAgentId), nil
 	}
-	return false, uuidFromWit(r.Original().ForkedPhantomId), nil
+	return false, agentIDFromWit(r.Original().ForkedAgentId), nil
 }
 
 func (witHost) getSelfMetadata() (apiHost.AgentMetadata, error) {
@@ -71,8 +70,8 @@ func (witHost) getAgentMetadata(id types.AgentId) (apiHost.AgentMetadata, bool) 
 	return o.Some(), true
 }
 
-func (witHost) getAgents(component types.ComponentId, filter witTypes.Option[apiHost.AgentAnyFilter], precise bool) agentPages {
-	return witAgentPages{apiHost.MakeGetAgents(component, filter, precise)}
+func (witHost) getAgents(agentTypeName string, filter witTypes.Option[apiHost.AgentAnyFilter], precise bool) agentPages {
+	return witAgentPages{apiHost.MakeGetAgents(agentTypeName, filter, precise)}
 }
 
 type witAgentPages struct{ r *apiHost.GetAgents }
@@ -106,25 +105,18 @@ func (witHost) revertAgent(id types.AgentId, target apiHost.RevertAgentTarget) e
 	return unitResult(apiHost.RevertAgent(id, target))
 }
 
-func (witHost) forkAgent(source, target types.AgentId, cutOff uint64) error {
-	return unitResult(apiHost.ForkAgent(source, target, cutOff))
+func (witHost) forkAgent(source types.AgentId, cutOff uint64) (types.AgentId, error) {
+	res := apiHost.ForkAgent(source, cutOff)
+	if res.IsErr() {
+		return types.AgentId{}, agentOperationErrorFromWit(res.Err())
+	}
+	return res.Ok(), nil
 }
 
 func (witHost) resolveComponentID(reference string) (types.ComponentId, bool) {
 	o := apiHost.ResolveComponentId(reference)
 	if o.IsNone() {
 		return types.ComponentId{}, false
-	}
-	return o.Some(), true
-}
-
-func (witHost) resolveAgentID(reference, agentName string, strict bool) (types.AgentId, bool) {
-	o := apiHost.ResolveAgentId(reference, agentName)
-	if strict {
-		o = apiHost.ResolveAgentIdStrict(reference, agentName)
-	}
-	if o.IsNone() {
-		return types.AgentId{}, false
 	}
 	return o.Some(), true
 }

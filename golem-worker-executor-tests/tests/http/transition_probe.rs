@@ -57,7 +57,7 @@ async fn http_clock_recovery(
             axum::serve(listener, route).await.unwrap();
         }
     }));
-    let agent = agent_id!("HttpClient4");
+    let agent = agent_key!("HttpClient4");
     let worker = executor
         .start_agent_with(
             &component.id,
@@ -67,12 +67,12 @@ async fn http_clock_recovery(
         )
         .await?;
     let mut before_clock = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::now",
         Stage::BeforeDeferredStart,
     );
     let mut issued_clock = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::now",
         Stage::AfterDeferredStart,
     );
@@ -87,7 +87,7 @@ async fn http_clock_recovery(
         let release_http = requests.recv().await.expect("HTTP recording starts");
         before_clock.release();
         issued_clock.entered().await;
-        executor.commit_oplog(&worker).await?;
+        executor.commit_oplog(&worker.agent_id).await?;
         issued_clock.release();
         release_http.send(()).unwrap();
         anyhow::Ok(())
@@ -125,21 +125,31 @@ async fn http_clock_recovery(
 
     let executor = start(deps, &context).await?;
     let mut before_clock = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::now",
         Stage::BeforeDeferredStart,
     );
     let mut issued_clock = executor.gate_next_replay_access_admission(
-        &worker,
+        &worker.agent_id,
         "monotonic-clock::now",
         Stage::AfterDeferredStart,
     );
-    let mut before_send =
-        executor.gate_next_replay_access_admission(&worker, "client::send", Stage::AfterScope);
-    let mut issued_send =
-        executor.gate_next_replay_access_admission(&worker, "client::send", Stage::AfterStart);
+    let mut before_send = executor.gate_next_replay_access_admission(
+        &worker.agent_id,
+        "client::send",
+        Stage::AfterScope,
+    );
+    let mut issued_send = executor.gate_next_replay_access_admission(
+        &worker.agent_id,
+        "client::send",
+        Stage::AfterStart,
+    );
     let mut before_scope = (schedule == RecoverySchedule::ClockIssuedBeforeSend).then(|| {
-        executor.gate_next_replay_access_admission(&worker, "client::send", Stage::BeforeScope)
+        executor.gate_next_replay_access_admission(
+            &worker.agent_id,
+            "client::send",
+            Stage::BeforeScope,
+        )
     });
     let reconstruction =
         executor.invoke_and_await_agent(&component, &agent, "stored_send_error", data_value!());
@@ -178,7 +188,7 @@ async fn http_clock_recovery(
     coordinated?;
     assert_eq!(recovered?.into_typed::<String>()?, "none");
     assert_eq!(count.load(Ordering::SeqCst), 2);
-    executor.commit_oplog(&worker).await?;
+    executor.commit_oplog(&worker.agent_id).await?;
     let repaired = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     let dropped_regions: Vec<_> = repaired
         .iter()

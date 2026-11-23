@@ -22,7 +22,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentId;
-use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::component::{ComponentName, ComponentPackageMetadata, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff::{self, Hashable};
@@ -33,6 +33,7 @@ use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
+use sqlx::types::Json;
 use std::fmt::Debug;
 use uuid::Uuid;
 
@@ -89,6 +90,7 @@ pub struct ComponentRevisionRecord {
     pub metadata: Blob<ComponentMetadata>,
     pub object_store_key: String,
     pub binary_hash: SqlBlake3Hash, // NOTE: expected to be provided by service-layer
+    pub package_metadata: Option<Json<ComponentPackageMetadata>>,
 }
 
 impl ComponentRevisionRecord {
@@ -111,6 +113,7 @@ impl ComponentRevisionRecord {
         component_size: u64,
         metadata: ComponentMetadata,
         wasm_hash: diff::Hash,
+        package_metadata: Option<ComponentPackageMetadata>,
         object_store_key: String,
         actor: AccountId,
     ) -> Self {
@@ -126,6 +129,7 @@ impl ComponentRevisionRecord {
             metadata: Blob::new(metadata),
             object_store_key,
             binary_hash: wasm_hash.into(),
+            package_metadata: package_metadata.map(Json),
         }
     }
 
@@ -142,6 +146,7 @@ impl ComponentRevisionRecord {
             audit: DeletableRevisionAuditFields::new(actor.0),
             object_store_key: value.object_store_key,
             binary_hash: value.wasm_hash.into(),
+            package_metadata: value.package_metadata.map(Json),
         }
     }
 
@@ -159,6 +164,7 @@ impl ComponentRevisionRecord {
             metadata: Blob::new(ComponentMetadata::default()),
             object_store_key: "".to_string(),
             binary_hash: SqlBlake3Hash::empty(),
+            package_metadata: None,
         };
         value.update_hash()?;
         Ok(value)
@@ -371,6 +377,10 @@ impl ComponentRevisionRecord {
 
         Ok(diff::Component {
             wasm_hash: self.binary_hash.into(),
+            package_metadata: self
+                .package_metadata
+                .as_ref()
+                .map(|metadata| metadata.0.clone()),
             agent_types: self
                 .metadata
                 .value()
@@ -528,6 +538,7 @@ impl ComponentExtRevisionRecord {
             created_at: self.revision.audit.created_at.into(),
             object_store_key: self.revision.object_store_key,
             wasm_hash: self.revision.binary_hash.into(),
+            package_metadata: self.revision.package_metadata.map(|metadata| metadata.0),
             hash: self.revision.hash.into(),
         })
     }

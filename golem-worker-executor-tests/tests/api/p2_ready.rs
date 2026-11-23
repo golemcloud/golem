@@ -44,25 +44,24 @@ async fn silent_tcp_ready(
         .store()
         .await?;
     let name = if durable {
-        agent_id!("Networking", "p2-ready-silent-peer")
+        agent_key!("Networking", "p2-ready-silent-peer")
     } else {
-        agent_id!("EphemeralNetworking", "p2-ready-silent-peer")
+        agent_key!("EphemeralNetworking", "p2-ready-silent-peer")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
+    let id = if durable {
+        crate::agent::keyed_agent_id(component.environment_id, &name)
     } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(
-                &golem_common::model::InvocationRequestKey::external(
-                    executor.auth_ctx().idempotency_scope(),
-                    Some(&key),
-                )
-                .owner_key("tcp_input_ready_p2"),
-            )
-            .map_err(|error| anyhow!(error))?
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).map_err(|error| anyhow!(error))?;
+        crate::agent::ephemeral_agent_id(
+            &executor,
+            component.environment_id,
+            &name,
+            &key,
+            "tcp_input_ready_p2",
+        )
+    }
+    .agent_id;
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let mut invocation = tokio::spawn({
@@ -96,7 +95,7 @@ async fn silent_tcp_ready(
             "guest closes the socket without sending data"
         );
         executor.commit_oplog(&id).await?;
-        let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         let ready_starts: Vec<_> = entries
             .iter()
             .filter_map(|entry| match &entry.entry {
@@ -131,7 +130,7 @@ async fn silent_tcp_ready(
     // Dropping the peer releases an unexpectedly blocked input wait before stopping the worker.
     drop(listener);
     if result.is_err() {
-        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&owned)).await;
         if !invocation.is_finished() {
             let _ = tokio::time::timeout(Duration::from_secs(10), &mut invocation).await;
         }

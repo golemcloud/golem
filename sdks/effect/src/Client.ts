@@ -3,10 +3,7 @@ import { Effect, Result, Schema, Scope } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
-import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
-import * as AgentIdentity from "./AgentIdentity.js"
-import type { Identity } from "./AgentIdentity.js"
-import { connectIdentity } from "./internal/agentIdentity.js"
+import type { AgentId } from "./AgentId.js"
 import type { AgentMetadata } from "./Agent.js"
 import {
   ConfigError,
@@ -16,9 +13,9 @@ import {
 } from "./Config.js"
 import * as Datetime from "./Datetime.js"
 import type { InvocationId } from "./InvocationId.js"
-import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
-import { RpcClient, RpcHostError, type RpcConnection } from "./host/RpcClient.js"
+import { RpcClient, type RpcConnection } from "./host/RpcClient.js"
+import { agentIdFromWit, agentIdToWit } from "./internal/agentId.js"
 import {
   awaitInvocation,
   invocationMetadataFromHost,
@@ -38,11 +35,15 @@ import {
   type MethodSuccessType,
 } from "./Method.js"
 import type { SchemaGraph, SchemaType } from "./internal/schema-model/model.js"
-import { SchemaRef } from "./SchemaRef.js"
 import { decodeFromWire, type UnsupportedSchemaError } from "./WitCodec.js"
 
 type AnyMethodSpec = MethodSpec<any, any, any>
 export type RpcError = AgentHost.RpcError
+/**
+ * Failures of remote calls and client construction. `RpcCallError` carries the host
+ * `rpc-error`: `not-found` for an unknown agent ID or an ID of another agent type, and
+ * `conflict` for a keyed create whose key is current.
+ */
 export type RemoteCallError =
   | { readonly _tag: "RpcCallError"; readonly cause: RpcError }
   | { readonly _tag: "InvalidUuidError"; readonly value: string; readonly reason: string }
@@ -52,13 +53,14 @@ export type RemoteCallError =
 const responseError = (reason: string): RemoteCallError => ({ _tag: "RemoteResponseError", reason })
 
 /**
- * Host metadata of one invocation: the agent ID text of the target and the typed invocation ID.
+ * Host metadata of one invocation: the ID of the agent that ran it and the typed invocation ID.
+ * For an ephemeral target, the agent ID is the ID of the one-shot instance.
  *
  * @since 1.6.0
  * @category models
  */
 export interface InvocationMetadata {
-  readonly agentId: string
+  readonly agentId: AgentId
   readonly invocationId: InvocationId
 }
 export interface EphemeralInvocationResult<T> {
@@ -124,18 +126,31 @@ export interface EphemeralRemoteMethod<
     Scope.Scope
   >
 }
+
+/**
+ * Name of the client member that reads the ID of the connected agent. A method with this name
+ * cannot be called through a typed client.
+ */
+const agentIdMember = "agentId"
+
+/**
+ * A client of one durable agent. `agentId` reads the ID of the agent from the host; on a client
+ * of `upsert` it creates the agent when it is missing, without invoking a method.
+ */
 export type RemoteAgent<Methods extends Record<string, AnyMethodSpec>> = {
-  readonly [K in keyof Methods]: Methods[K] extends MethodSpec<infer P, infer S, infer E>
+  readonly [K in Exclude<keyof Methods, typeof agentIdMember>]: Methods[K] extends MethodSpec<
+    infer P,
+    infer S,
+    infer E
+  >
     ? RemoteMethod<P, S, E>
     : never
-}
+} & { readonly agentId: Effect.Effect<AgentId, RemoteCallError> }
 export type EphemeralRemoteAgent<Methods extends Record<string, AnyMethodSpec>> = {
   readonly [K in keyof Methods]: Methods[K] extends MethodSpec<infer P, infer S, infer E>
     ? EphemeralRemoteMethod<P, S, E>
     : never
 }
-export type PhantomRemoteAgent<Methods extends Record<string, AnyMethodSpec>> =
-  RemoteAgent<Methods> & { readonly phantomId: string }
 
 export interface ScopeCardOptions {
   /**
@@ -147,12 +162,22 @@ export interface ScopeCardOptions {
    */
   readonly scopeCard?: GuestScopeCard
 }
-export interface GetOptions<F extends ConfigFields = never> extends ScopeCardOptions {
-  readonly overrides?: [F] extends [never]
+
+/**
+ * Options of `create`. `keyed` creates the keyed agent of the constructor input and fails with
+ * an `RpcCallError` whose cause is `conflict` when that agent already exists; without `keyed`,
+ * every create makes a new agent with a new ID. `config` overrides local configuration values,
+ * and `env` adds environment variables to the ones the manifest defines. The new agent never
+ * inherits the caller's environment.
+ */
+export interface CreateOptions<F extends ConfigFields = never> extends ScopeCardOptions {
+  readonly keyed?: boolean
+  readonly config?: [F] extends [never]
     ? never
     : F extends ConfigFields
       ? NonSecretOverride<F>
       : never
+  readonly env?: Readonly<Record<string, string>>
 }
 export interface DurableClient<
   C extends MethodParams,
@@ -162,9 +187,9 @@ export interface DurableClient<
   /**
    * Bind the current durable incarnation without creating it or waiting for initialization.
    *
-   * Use this to schedule work on self from inside the constructor. Normal `get` reuses
+   * Use this to schedule work on self from inside the constructor. Normal `upsert` reuses
    * an initialized agent without rerunning its constructor, but waits for an unfinished
-   * constructor. Calling `get` on self from that constructor would therefore deadlock.
+   * constructor. Calling `upsert` on self from that constructor would therefore deadlock.
    *
    * Scheduled work runs after construction finishes. This does not make awaited
    * self-calls reentrant or bypass method permissions. A different client type fails
@@ -174,55 +199,51 @@ export interface DurableClient<
     options?: ScopeCardOptions,
   ) => Effect.Effect<
     RemoteAgent<M>,
-    RemoteCallError | UnsupportedSchemaError | AgentIdentity.AgentIdentityError,
+    RemoteCallError | UnsupportedSchemaError,
     RpcClient | AgentHostClient | Scope.Scope
   >
-  readonly get: (
+  /**
+   * Connect to the keyed agent of the constructor input, creating it when it is missing. An
+   * initialized agent is reused without rerunning its constructor.
+   */
+  readonly upsert: (
     input: MethodInput<C>,
-    options?: GetOptions<F>,
+    options?: ScopeCardOptions,
+  ) => Effect.Effect<
+    RemoteAgent<M>,
+    RemoteCallError | UnsupportedSchemaError,
+    RpcClient | Scope.Scope
+  >
+  /** Create an agent and connect to it after its successful initialization. */
+  readonly create: (
+    input: MethodInput<C>,
+    options?: CreateOptions<F>,
   ) => Effect.Effect<
     RemoteAgent<M>,
     RemoteCallError | UnsupportedSchemaError | ConfigError,
     RpcClient | Scope.Scope
   >
-  readonly getPhantom: (
-    input: MethodInput<C>,
-    phantomId: string,
-    options?: GetOptions<F>,
+  /**
+   * Connect to the existing agent with the given ID. It never creates an agent: an unknown ID or
+   * an ID of another agent type fails with an `RpcCallError` whose cause is `not-found`.
+   */
+  readonly getById: (
+    id: AgentId,
+    options?: ScopeCardOptions,
   ) => Effect.Effect<
     RemoteAgent<M>,
-    RemoteCallError | UnsupportedSchemaError | ConfigError,
+    RemoteCallError | UnsupportedSchemaError,
     RpcClient | Scope.Scope
-  >
-  readonly newPhantom: (
-    input: MethodInput<C>,
-    options?: GetOptions<F>,
-  ) => Effect.Effect<
-    PhantomRemoteAgent<M>,
-    RemoteCallError | UnsupportedSchemaError | ConfigError,
-    DurabilityModeClient | RpcClient | Scope.Scope
   >
 }
-export interface EphemeralClient<
-  C extends MethodParams,
-  M extends Record<string, AnyMethodSpec>,
-  F extends ConfigFields,
-> {
-  readonly getPhantom: (
+export interface EphemeralClient<C extends MethodParams, M extends Record<string, AnyMethodSpec>> {
+  /** Connect to the agent type; each invocation runs on a new one-shot instance. */
+  readonly upsert: (
     input: MethodInput<C>,
-    phantomId: string,
-    options?: GetOptions<F>,
+    options?: ScopeCardOptions,
   ) => Effect.Effect<
     EphemeralRemoteAgent<M>,
-    RemoteCallError | UnsupportedSchemaError | ConfigError,
-    RpcClient | Scope.Scope
-  >
-  readonly newPhantom: (
-    input: MethodInput<C>,
-    options?: GetOptions<F>,
-  ) => Effect.Effect<
-    EphemeralRemoteAgent<M>,
-    RemoteCallError | UnsupportedSchemaError | ConfigError,
+    RemoteCallError | UnsupportedSchemaError,
     RpcClient | Scope.Scope
   >
 }
@@ -231,7 +252,7 @@ export type AgentClient<
   Methods extends Record<string, AnyMethodSpec>,
   Mode extends AgentCommon.AgentMode,
   F extends ConfigFields = never,
-> = "ephemeral" extends Mode ? EphemeralClient<C, Methods, F> : DurableClient<C, Methods, F>
+> = "ephemeral" extends Mode ? EphemeralClient<C, Methods> : DurableClient<C, Methods, F>
 
 interface WireMethod {
   readonly name: string
@@ -249,17 +270,8 @@ interface CompiledClient<C extends MethodParams = MethodParams> {
 
 export interface MethodOnlyClient<
   Methods extends Record<string, AnyMethodSpec>,
-> extends IdentityBinding<RemoteAgent<Methods>> {
+> extends AgentIdBinding<RemoteAgent<Methods>> {
   readonly methods: Methods
-  readonly bindWithEntries: (
-    identity: Identity,
-    entries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
-    options?: ScopeCardOptions,
-  ) => Effect.Effect<
-    RemoteAgent<Methods>,
-    RemoteCallError | UnsupportedSchemaError | ClientBindingError,
-    RpcClient | Scope.Scope
-  >
 }
 
 export type FullClient<
@@ -269,33 +281,7 @@ export type FullClient<
   F extends ConfigFields = never,
 > = ClientDefinition<C, Methods, Mode, F> & {
   readonly client: AgentClient<C, Methods, Mode, F>
-  readonly agentId: Mode extends "ephemeral"
-    ? (
-        input: MethodInput<C>,
-        phantomId: string,
-      ) => Effect.Effect<
-        Identity,
-        AgentIdentity.AgentIdentityError | UnsupportedSchemaError,
-        AgentHostClient
-      >
-    : (
-        input: MethodInput<C>,
-        phantomId?: string,
-      ) => Effect.Effect<
-        Identity,
-        AgentIdentity.AgentIdentityError | UnsupportedSchemaError,
-        AgentHostClient
-      >
-} & IdentityBinding<RemoteAgent<Methods>> & {
-    readonly bindWithConfig: (
-      identity: Identity,
-      options?: GetOptions<F>,
-    ) => Effect.Effect<
-      RemoteAgent<Methods>,
-      RemoteCallError | UnsupportedSchemaError | ClientBindingError | ConfigError,
-      RpcClient | Scope.Scope
-    >
-  }
+} & AgentIdBinding<RemoteAgent<Methods>>
 
 export interface ClientDefinition<
   C extends MethodParams,
@@ -323,15 +309,62 @@ export class ClientBindingError {
   constructor(readonly reason: string) {}
 }
 
-export const bindIdentity: unique symbol = Symbol.for("effect-golem/client/bind-identity")
+export const bindAgentId: unique symbol = Symbol.for("effect-golem/client/bind-agent-id")
 
-export interface IdentityBinding<
+/** A client definition that connects to an existing agent by its ID. */
+export interface AgentIdBinding<
   Client,
   Error = RemoteCallError | UnsupportedSchemaError | ClientBindingError,
-  Requirements = RpcClient | Scope.Scope,
+  Requirements = RpcClient | AgentHostClient | Scope.Scope,
 > {
-  readonly [bindIdentity]: (identity: Identity) => Effect.Effect<Client, Error, Requirements>
+  readonly [bindAgentId]: (id: AgentId) => Effect.Effect<Client, Error, Requirements>
 }
+
+const witAgentId = (id: AgentId) =>
+  Effect.try({
+    try: () => agentIdToWit(id),
+    catch: (cause): RemoteCallError => ({
+      _tag: "InvalidUuidError",
+      value: String(id?.uuid),
+      reason: String(cause),
+    }),
+  })
+
+/**
+ * The deployed agent type that the type tag of `id` names. An ID whose tag names no deployed
+ * agent type fails like an unknown ID, with `not-found`.
+ */
+export const registeredTypeOf = (id: AgentId) =>
+  Effect.gen(function* () {
+    const raw = yield* witAgentId(id)
+    const host = yield* AgentHostClient
+    const registered = yield* Effect.try({
+      try: () => host.getAgentTypeByAgentId(raw),
+      catch: wrapHostThrow,
+    })
+    if (registered === undefined)
+      return yield* Effect.fail<RemoteCallError>({
+        _tag: "RpcCallError",
+        cause: { tag: "not-found", val: `no deployed agent type has agent ID ${id.uuid}` },
+      })
+    return { raw, registered }
+  })
+
+/** Open a scoped connection to the existing agent with the given ID. */
+export const connectById = (agentTypeName: string, id: CoreTypes.AgentId) =>
+  Effect.gen(function* () {
+    const host = yield* RpcClient
+    return yield* Effect.acquireRelease(
+      host.getById(agentTypeName, id).pipe(Effect.mapError((error) => wrapHostThrow(error.cause))),
+      (connection) => Effect.sync(() => connection.drop()),
+    )
+  })
+
+/** Read the ID of the connected agent from the host. */
+export const connectionAgentId = (rpc: RpcConnection): Effect.Effect<AgentId, RemoteCallError> =>
+  Effect.tryPromise({ try: () => rpc.agentId(), catch: wrapHostThrow }).pipe(
+    Effect.map(agentIdFromWit),
+  )
 
 const decodeOutput = (mc: WireMethod, tree: CoreTypes.SchemaValueTree | undefined) => {
   if (mc.decodeOutput === undefined) {
@@ -447,102 +480,73 @@ const buildRemote = (
       awaited(input, card)
     remote[name] = Object.assign(call, { trigger, schedule, withScopeCard })
   }
+  if (!ephemeral) remote[agentIdMember] = connectionAgentId(rpc)
   return remote
 }
+
+const compileMethods = (methods: Record<string, AnyMethodSpec>) =>
+  Effect.gen(function* () {
+    const compiled = new Map<string, WireMethod>()
+    for (const [name, spec] of Object.entries(methods)) {
+      const mc = (yield* compileMethodSpec(name, spec)) as MethodCodec<
+        MethodParams,
+        MethodSuccess,
+        Schema.Top
+      >
+      const output = mc.outputCodec
+      compiled.set(name, {
+        name,
+        inputCodec: mc.inputCodec,
+        decodeOutput: output ? (tree) => decodeFromWire(output.codec, tree) : undefined,
+        streaming:
+          graphUsesStreams(mc.inputCodec.graph) ||
+          (output !== undefined && graphUsesStreams(output.graph)),
+        errorWrapped: mc.errorWrapped,
+        successVoid: mc.successVoid,
+      })
+    }
+    return compiled as ReadonlyMap<string, WireMethod>
+  })
 
 const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(definition: {
   readonly methods: Methods
   readonly name?: string
-  readonly id?: MethodParams
   readonly mode?: AgentCommon.AgentMode
-}): IdentityBinding<RemoteAgent<Methods>> & {
-  readonly bindWithEntries: (
-    identity: Identity,
-    entries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
-    options?: ScopeCardOptions,
-  ) => Effect.Effect<
-    RemoteAgent<Methods>,
-    RemoteCallError | UnsupportedSchemaError | ClientBindingError,
-    RpcClient | Scope.Scope
-  >
-} => {
+}): AgentIdBinding<RemoteAgent<Methods>> => {
   let cachedMethods: ReadonlyMap<string, WireMethod> | undefined
-  let cachedConstructor: CompiledInputCodec | undefined
-  const compile = Effect.gen(function* () {
-    if (cachedMethods === undefined) {
-      const methods = new Map<string, WireMethod>()
-      for (const [name, spec] of Object.entries(definition.methods)) {
-        const mc = (yield* compileMethodSpec(name, spec)) as MethodCodec<
-          MethodParams,
-          MethodSuccess,
-          Schema.Top
-        >
-        const output = mc.outputCodec
-        methods.set(name, {
-          name,
-          inputCodec: mc.inputCodec,
-          decodeOutput: output ? (tree) => decodeFromWire(output.codec, tree) : undefined,
-          streaming:
-            graphUsesStreams(mc.inputCodec.graph) ||
-            (output !== undefined && graphUsesStreams(output.graph)),
-          errorWrapped: mc.errorWrapped,
-          successVoid: mc.successVoid,
-        })
-      }
-      cachedMethods = methods
-    }
-    if (definition.id !== undefined && cachedConstructor === undefined)
-      cachedConstructor = yield* compileParamBindings(
-        `${definition.name ?? "agent"} constructor`,
-        definition.id,
-      )
-    return { methods: cachedMethods, constructorCodec: cachedConstructor }
-  })
-  const bindWithEntries = (
-    identity: Identity,
-    entries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
-    options?: ScopeCardOptions,
-  ) =>
+  const compile = Effect.suspend(() =>
+    cachedMethods === undefined
+      ? Effect.map(compileMethods(definition.methods), (methods) => (cachedMethods = methods))
+      : Effect.succeed(cachedMethods),
+  )
+  const bindById = (id: AgentId) =>
     Effect.gen(function* () {
-      if (definition.mode === "ephemeral") {
+      if (definition.mode === "ephemeral")
         return yield* Effect.fail(
           new ClientBindingError(
-            `Cannot bind existing identity '${identity.encoded}' to ephemeral agent type '${identity.typeName}'; use getPhantom(...) or newPhantom(...)`,
+            `Cannot bind agent ID '${id.uuid}' to ephemeral agent type '${definition.name}'; use upsert(...)`,
           ),
         )
-      }
-      if (definition.name !== undefined && identity.typeName !== definition.name) {
-        return yield* Effect.fail(
-          new ClientBindingError(
-            `Full agent client '${definition.name}' cannot bind agent type '${identity.typeName}'`,
-          ),
-        )
-      }
-      const compiled = yield* compile
-      if (compiled.constructorCodec !== undefined) {
-        const constructor = compiled.constructorCodec.graph
-        if (
-          !SchemaRef.fromImmutableGraph(constructor, constructor.root).validateValue(
-            identity.constructorValue,
-          ).success
-        ) {
+      let typeName = definition.name
+      let raw: CoreTypes.AgentId
+      if (typeName === undefined) {
+        const resolved = yield* registeredTypeOf(id)
+        if (resolved.registered.agentType.mode === "ephemeral")
           return yield* Effect.fail(
             new ClientBindingError(
-              `Full agent client '${definition.name}' cannot bind identity '${identity.encoded}': constructor value does not conform to the client ID schema`,
+              `Cannot bind agent ID '${id.uuid}' to ephemeral agent type '${resolved.registered.agentType.typeName}'`,
             ),
           )
-        }
+        typeName = resolved.registered.agentType.typeName
+        raw = resolved.raw
+      } else {
+        raw = yield* witAgentId(id)
       }
-      const rpc = yield* Effect.acquireRelease(
-        connectIdentity(identity, entries, (cause) => new ClientBindingError(String(cause))),
-        (connection) => Effect.sync(() => connection.drop()),
-      )
-      return buildRemote(rpc, compiled, false, options?.scopeCard) as RemoteAgent<Methods>
+      const methods = yield* compile
+      const rpc = yield* connectById(typeName, raw)
+      return buildRemote(rpc, { methods }, false, undefined) as RemoteAgent<Methods>
     })
-  return {
-    [bindIdentity]: (identity) => bindWithEntries(identity, []),
-    bindWithEntries,
-  }
+  return { [bindAgentId]: bindById }
 }
 
 /** Define a caller-only client without registering an agent. @since 1.6.0 @category constructors */
@@ -613,61 +617,20 @@ export function defineAgentClient(definition: {
       ConfigFields
     >,
   )
-  const binding = bindingForDefinition(canonical)
-  const bindWithConfig = (identity: Identity, options?: GetOptions<ConfigFields>) =>
-    Effect.gen(function* () {
-      let entries: AgentCommon.TypedAgentConfigValue[] = []
-      if (options?.overrides !== undefined) {
-        if (canonical.config === undefined)
-          return yield* Effect.fail(
-            new ConfigError([], {
-              _tag: "Unsupported",
-              reason: `agent '${canonical.name}' has no config; cannot apply overrides`,
-            }),
-          )
-        entries = yield* encodeOverrides(
-          yield* canonical.config.__compile(),
-          options.overrides as Record<string, unknown>,
-        ).pipe(
-          Effect.mapError((error) =>
-            error instanceof ConfigError
-              ? error
-              : responseError(`failed to encode config override: ${String(error)}`),
-          ),
-        )
-      }
-      return yield* binding.bindWithEntries(identity, entries, options)
-    })
-  let identityCodec: CompiledInputCodec | undefined
-  const agentId = (input: MethodInput<MethodParams>, phantomId?: string) =>
-    Effect.gen(function* () {
-      if (canonical.mode === "ephemeral" && phantomId === undefined)
-        return yield* Effect.fail(
-          new AgentIdentity.AgentIdentityError(
-            new TypeError(`ephemeral agent type '${canonical.name}' requires a phantom ID`),
-          ),
-        )
-      const codec = (identityCodec ??= yield* compileParamBindings(
-        `${canonical.name} constructor`,
-        canonical.id,
-      ))
-      const constructorValue = yield* codec
-        .encodeAsync(input as MethodInput<MethodParams>)
-        .pipe(Effect.mapError((cause) => new AgentIdentity.AgentIdentityError(cause)))
-      return yield* AgentIdentity.make({
-        typeName: canonical.name!,
-        constructorValue,
-        ...(phantomId === undefined ? {} : { phantomId }),
-      })
-    })
-  return Object.freeze({ ...canonical, client, agentId, ...binding, bindWithConfig })
+  return Object.freeze({ ...canonical, client, ...bindingForDefinition(canonical) })
 }
 
-/** Bind a parsed identity through a method-only, full, definition-owned, or reflected client. @since 1.6.0 @category constructors */
+/**
+ * Connect a method-only, full, definition-owned, or reflected client to the existing agent with
+ * the given ID. It never creates an agent: an unknown ID fails with `not-found`.
+ *
+ * @since 1.6.0
+ * @category constructors
+ */
 export const bind = <Client, Error, Requirements>(
-  identity: Identity,
-  binding: IdentityBinding<Client, Error, Requirements>,
-): Effect.Effect<Client, Error, Requirements> => binding[bindIdentity](identity)
+  id: AgentId,
+  binding: AgentIdBinding<Client, Error, Requirements>,
+): Effect.Effect<Client, Error, Requirements> => binding[bindAgentId](id)
 
 /** @internal Build the binding protocol shared by `defineAgent` specs. */
 export const bindingFor = <
@@ -677,7 +640,7 @@ export const bindingFor = <
   F extends ConfigFields,
 >(
   definition: AgentMetadata<C, Methods, Mode, F>,
-): IdentityBinding<RemoteAgent<Methods>> => bindingForDefinition(definition)
+): AgentIdBinding<RemoteAgent<Methods>> => bindingForDefinition(definition)
 
 /** Build a client from the full agent-definition input: `name`, `mode`, `id`, `methods`, and optional `config`. */
 export const clientFor = <
@@ -694,97 +657,90 @@ export const clientFor = <
       ? Effect.succeed(cached)
       : Effect.gen(function* () {
           const constructorCodec = yield* compileParamBindings(`${def.name} constructor`, def.id)
-          const methods = new Map<string, WireMethod>()
-          for (const [name, spec] of Object.entries(def.methods)) {
-            const mc = yield* compileMethodSpec(name, spec)
-            const output = mc.outputCodec
-            methods.set(name, {
-              name,
-              inputCodec: mc.inputCodec,
-              decodeOutput: output ? (tree) => decodeFromWire(output.codec, tree) : undefined,
-              streaming:
-                graphUsesStreams(mc.inputCodec.graph) ||
-                (output !== undefined && graphUsesStreams(output.graph)),
-              errorWrapped: mc.errorWrapped,
-              successVoid: mc.successVoid,
-            })
-          }
+          const methods = yield* compileMethods(def.methods)
           return (cached = { constructorCodec, methods })
         }),
   )
-  const config = (options?: GetOptions<F>) =>
+  const config = (options?: CreateOptions<F>) =>
     Effect.gen(function* () {
-      const values: AgentCommon.TypedAgentConfigValue[] = []
-      if (options?.overrides !== undefined) {
-        if (def.config === undefined)
-          return yield* Effect.fail(
-            new ConfigError([], {
-              _tag: "Unsupported",
-              reason: `agent '${def.name}' has no config; cannot apply overrides`,
-            }),
-          )
-        const encoded = yield* encodeOverrides(
-          yield* def.config.__compile(),
-          options.overrides as Record<string, unknown>,
-        ).pipe(
-          Effect.mapError((error) =>
-            error instanceof ConfigError
-              ? error
-              : responseError(`failed to encode config override: ${String(error)}`),
-          ),
-        )
-        values.push(...encoded)
-      }
-      return values
-    })
-  return clientForCompiled(def, compile, config)
-}
-
-const clientForCompiled = <
-  C extends MethodParams,
-  Methods extends Record<string, AnyMethodSpec>,
-  Mode extends AgentCommon.AgentMode,
-  F extends ConfigFields = never,
->(
-  def: AgentMetadata<C, Methods, Mode, F>,
-  compile: Effect.Effect<CompiledClient<C>, UnsupportedSchemaError>,
-  config: (
-    options?: GetOptions<F>,
-  ) => Effect.Effect<
-    AgentCommon.TypedAgentConfigValue[],
-    UnsupportedSchemaError | ConfigError | RemoteCallError,
-    any
-  > = (options) =>
-    options?.overrides === undefined
-      ? Effect.succeed([])
-      : Effect.fail(
+      if (options?.config === undefined) return [] as AgentCommon.TypedAgentConfigValue[]
+      if (def.config === undefined)
+        return yield* Effect.fail(
           new ConfigError([], {
             _tag: "Unsupported",
             reason: `agent '${def.name}' has no config; cannot apply overrides`,
           }),
+        )
+      return yield* encodeOverrides(
+        yield* def.config.__compile(),
+        options.config as Record<string, unknown>,
+      ).pipe(
+        Effect.mapError((error) =>
+          error instanceof ConfigError
+            ? error
+            : responseError(`failed to encode config override: ${String(error)}`),
         ),
-): AgentClient<C, Methods, Mode, F> => {
-  const construct = (
-    input: MethodInput<C>,
-    phantom: CoreTypes.Uuid | undefined,
-    options?: GetOptions<F>,
+      )
+    })
+  const encodeConstructor = (codecs: CompiledClient<C>, input: MethodInput<C>) =>
+    Effect.mapError(codecs.constructorCodec.encodeAsync(input), (e) =>
+      responseError(`failed to encode constructor input: ${String(e)}`),
+    )
+  const connected = (
+    acquire: Effect.Effect<RpcConnection, RemoteCallError, RpcClient>,
+    codecs: CompiledClient<C>,
+    ephemeral: boolean,
+    scopeCard: GuestScopeCard | undefined,
   ) =>
+    Effect.map(
+      Effect.acquireRelease(acquire, (connection) => Effect.sync(() => connection.drop())),
+      (rpc) => buildRemote(rpc, codecs, ephemeral, scopeCard),
+    )
+  const upsert = (input: MethodInput<C>, options?: ScopeCardOptions) =>
     Effect.gen(function* () {
       const codecs = yield* compile
-      const overrides = yield* config(options)
-      const constructorTree = yield* Effect.mapError(
-        codecs.constructorCodec.encodeAsync(input),
-        (e) => responseError(`failed to encode constructor input: ${String(e)}`),
-      )
+      const constructorTree = yield* encodeConstructor(codecs, input)
       const host = yield* RpcClient
-      const rpc = yield* Effect.acquireRelease(
-        Effect.mapError(
-          host.connect(def.name, constructorTree, phantom, overrides),
-          (e: RpcHostError) => wrapHostThrow(e.cause),
-        ),
-        (connection) => Effect.sync(() => connection.drop()),
+      return yield* connected(
+        Effect.mapError(host.upsert(def.name, constructorTree), (e) => wrapHostThrow(e.cause)),
+        codecs,
+        (def.mode ?? "durable") === "ephemeral",
+        options?.scopeCard,
       )
-      return { rpc, codecs, scopeCard: options?.scopeCard }
+    })
+  const create = (input: MethodInput<C>, options?: CreateOptions<F>) =>
+    Effect.gen(function* () {
+      const codecs = yield* compile
+      const agentConfig = yield* config(options)
+      const constructorTree = yield* encodeConstructor(codecs, input)
+      const host = yield* RpcClient
+      return (yield* connected(
+        host
+          .create(def.name, constructorTree, {
+            keyed: options?.keyed ?? false,
+            agentConfig,
+            env: Object.entries(options?.env ?? {}),
+          })
+          .pipe(
+            Effect.map(({ connection }) => connection),
+            Effect.mapError((e) => wrapHostThrow(e.cause)),
+          ),
+        codecs,
+        false,
+        options?.scopeCard,
+      )) as RemoteAgent<Methods>
+    })
+  const getById = (id: AgentId, options?: ScopeCardOptions) =>
+    Effect.gen(function* () {
+      const raw = yield* witAgentId(id)
+      const codecs = yield* compile
+      const host = yield* RpcClient
+      return (yield* connected(
+        Effect.mapError(host.getById(def.name, raw), (e) => wrapHostThrow(e.cause)),
+        codecs,
+        false,
+        options?.scopeCard,
+      )) as RemoteAgent<Methods>
     })
   const bindSelf = (options?: ScopeCardOptions) =>
     Effect.gen(function* () {
@@ -793,75 +749,23 @@ const clientForCompiled = <
         host.bindSelf().pipe(Effect.mapError((error) => wrapHostThrow(error.cause))),
         ([, connection]) => Effect.sync(() => connection.drop()),
       )
-      const identity = yield* AgentIdentity.parse(id)
-      if (identity.typeName !== def.name)
+      const { registered } = yield* registeredTypeOf(agentIdFromWit(id))
+      const typeName = registered.agentType.typeName
+      if (typeName !== def.name)
         return yield* Effect.fail<RemoteCallError>({
           _tag: "RpcCallError",
           cause: {
             tag: "remote-agent-error",
             val: {
               tag: "invalid-type",
-              val: `self binding expects ${def.name}, identity is ${identity.typeName}`,
+              val: `self binding expects ${def.name}, the agent type is ${typeName}`,
             },
           },
         })
       const codecs = yield* compile
       return buildRemote(rpc, codecs, false, options?.scopeCard) as RemoteAgent<Methods>
     })
-  const get = (input: MethodInput<C>, options?: GetOptions<F>) =>
-    construct(input, undefined, options).pipe(
-      Effect.map(
-        ({ rpc, codecs, scopeCard }) =>
-          buildRemote(rpc, codecs, false, scopeCard) as RemoteAgent<Methods>,
-      ),
-    )
-  const getPhantom = (input: MethodInput<C>, id: string, options?: GetOptions<F>) =>
-    Effect.try({
-      try: () => parseUuid(id),
-      catch: (e): RemoteCallError => ({ _tag: "InvalidUuidError", value: id, reason: String(e) }),
-    }).pipe(
-      Effect.flatMap((uuid) => construct(input, uuid, options)),
-      Effect.map(
-        ({ rpc, codecs, scopeCard }) =>
-          buildRemote(rpc, codecs, false, scopeCard) as RemoteAgent<Methods>,
-      ),
-    )
-  const newPhantom = (input: MethodInput<C>, options?: GetOptions<F>) =>
-    Effect.gen(function* () {
-      if ((def.mode ?? "durable") === "ephemeral") {
-        const { rpc, codecs, scopeCard } = yield* construct(input, undefined, options)
-        return buildRemote(rpc, codecs, true, scopeCard) as EphemeralRemoteAgent<Methods>
-      }
-      const dm = yield* DurabilityModeClient
-      const uuid = yield* Effect.try({
-        try: () => dm.generateIdempotencyKey(),
-        catch: wrapHostThrow,
-      })
-      const { rpc, codecs, scopeCard } = yield* construct(input, uuid, options)
-      return Object.assign(buildRemote(rpc, codecs, false, scopeCard), {
-        phantomId: uuidToString(uuid),
-      }) as PhantomRemoteAgent<Methods>
-    })
   return (
-    (def.mode ?? "durable") === "ephemeral"
-      ? {
-          getPhantom: (input: MethodInput<C>, id: string, options?: GetOptions<F>) =>
-            Effect.try({
-              try: () => parseUuid(id),
-              catch: (e): RemoteCallError => ({
-                _tag: "InvalidUuidError",
-                value: id,
-                reason: String(e),
-              }),
-            }).pipe(
-              Effect.flatMap((uuid) => construct(input, uuid, options)),
-              Effect.map(
-                ({ rpc, codecs, scopeCard }) =>
-                  buildRemote(rpc, codecs, true, scopeCard) as EphemeralRemoteAgent<Methods>,
-              ),
-            ),
-          newPhantom,
-        }
-      : { bindSelf, get, getPhantom, newPhantom }
+    (def.mode ?? "durable") === "ephemeral" ? { upsert } : { bindSelf, upsert, create, getById }
   ) as AgentClient<C, Methods, Mode, F>
 }

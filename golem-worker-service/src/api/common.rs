@@ -247,6 +247,12 @@ impl From<WorkerServiceError> for ApiEndpointError {
             WorkerServiceError::AgentNotFound(_) => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
             }
+            WorkerServiceError::InvocationNotFound(_) => {
+                Self::not_found(api::error_code::INVOCATION_NOT_FOUND, error)
+            }
+            WorkerServiceError::AgentAccessDenied(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
             WorkerServiceError::GolemError(inner) => inner.into(),
             WorkerServiceError::Component(inner) => inner.into(),
             WorkerServiceError::InternalCallError(inner) => inner.into(),
@@ -323,8 +329,18 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::AgentAlreadyExists { .. } => {
                 Self::conflict(api::error_code::AGENT_ALREADY_EXISTS, error)
             }
+            WorkerExecutorError::AgentKeyCollision { .. } => {
+                Self::conflict(api::error_code::AGENT_KEY_COLLISION, error)
+            }
             WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => {
                 Self::unprocessable_entity(api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT, error)
+            }
+            WorkerExecutorError::InvocationCancelled => {
+                Self::conflict(api::error_code::INVOCATION_CANCELLED, error)
+            }
+            // Until running invocations can be cancelled, this is a conflict instead of `202`.
+            WorkerExecutorError::CannotCancelRunningInvocation => {
+                Self::conflict(api::error_code::CANNOT_CANCEL_RUNNING_INVOCATION, error)
             }
             WorkerExecutorError::InvocationFailed { error, stderr } => Self::internal_worker(
                 api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
@@ -533,6 +549,13 @@ impl From<RequestHandlerError> for ApiEndpointError {
             )) if matches!(&error, WorkerExecutorError::InvalidRequest { details } if details.starts_with("IdempotencyConflict:")) => {
                 error.into()
             }
+            RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
+                error @ WorkerExecutorError::AgentKeyCollision { .. },
+            )) => error.into(),
+            RequestHandlerError::AgentInvocationFailed(
+                WorkerServiceError::AgentNotFound(_)
+                | WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. }),
+            ) => Self::not_found(api::error_code::AGENT_NOT_FOUND, value),
             RequestHandlerError::AgentInvocationFailed(_) => {
                 Self::internal(api::error_code::INTERNAL_AGENT_EXECUTION_FAILED, value)
             }
@@ -572,22 +595,24 @@ mod tests {
     async fn create_conflicts_preserve_their_codes_through_grpc_and_http() {
         use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
         use golem_common::model::AgentId;
-        use golem_common::model::component::ComponentId;
         use poem::IntoResponse;
         use poem::http::StatusCode;
         use prost::Message;
 
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Counter(\"create-conflicts\")".into(),
-        };
+        let agent_id = AgentId::from_parts(7, 1);
         for (error, status, code) in [
             (
-                WorkerExecutorError::AgentAlreadyExists {
-                    agent_id: agent_id.clone(),
-                },
+                WorkerExecutorError::AgentAlreadyExists { agent_id },
                 StatusCode::CONFLICT,
                 api::error_code::AGENT_ALREADY_EXISTS,
+            ),
+            (
+                WorkerExecutorError::AgentKeyCollision {
+                    agent_id,
+                    requested_key: "Counter(\"a\")".to_string(),
+                },
+                StatusCode::CONFLICT,
+                api::error_code::AGENT_KEY_COLLISION,
             ),
             (
                 WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id },
@@ -736,12 +761,7 @@ mod tests {
         ] {
             let api_error: ApiEndpointError =
                 WorkerServiceError::GolemError(WorkerExecutorError::StaleCursor {
-                    agent_id: golem_common::model::AgentId {
-                        component_id: golem_common::model::component::ComponentId(
-                            uuid::Uuid::nil(),
-                        ),
-                        agent_id: "Counter(\"a\")".to_string(),
-                    },
+                    agent_id: golem_common::model::AgentId::from_parts(7, 3),
                     next_oplog_index: golem_common::model::OplogIndex::from_u64(42),
                     reason,
                 })
@@ -765,6 +785,25 @@ mod tests {
                 assert_eq!(body.code, api::error_code::INTERNAL_SHARDING_NOT_READY);
             }
             other => panic!("expected InternalError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cancelled_and_running_cancel_map_to_distinct_conflicts() {
+        for (error, code) in [
+            (
+                WorkerExecutorError::InvocationCancelled,
+                api::error_code::INVOCATION_CANCELLED,
+            ),
+            (
+                WorkerExecutorError::CannotCancelRunningInvocation,
+                api::error_code::CANNOT_CANCEL_RUNNING_INVOCATION,
+            ),
+        ] {
+            match ApiEndpointError::from(error) {
+                ApiEndpointError::Conflict(Json(body)) => assert_eq!(body.code, code),
+                other => panic!("expected Conflict, got: {other:?}"),
+            }
         }
     }
 }

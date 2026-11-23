@@ -39,7 +39,7 @@ use golem_common::model::tool::{
 };
 use golem_common::model::tool_release::{ToolReleaseByCoordinates, ToolReleaseReference};
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -340,8 +340,8 @@ async fn granted_tool_uses_calling_owner_environment_for_config_secrets_and_name
         prepare_consumer_environment(deps, &consumer, &env1, &grant1, "e1", "secret-e1", 2).await?;
     let component2 =
         prepare_consumer_environment(deps, &consumer, &env2, &grant2, "e2", "secret-e2", 4).await?;
-    let agent1 = agent_id!(CALLER, "e1-caller");
-    let agent2 = agent_id!(CALLER, "e2-caller");
+    let agent1 = agent_key!(CALLER, "e1-caller");
+    let agent2 = agent_key!(CALLER, "e2-caller");
     consumer
         .start_agent_with(
             &component1.id,
