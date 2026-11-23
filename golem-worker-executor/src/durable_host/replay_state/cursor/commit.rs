@@ -55,11 +55,13 @@ impl CursorTx<'_> {
     }
 
     /// The owner of `entry` at `read_idx` when it is a `Start`, validated against the recorded
-    /// prefix without changing any state. A reader that changes state for a `Start` before it
-    /// commits it validates the owner first, so a divergent `Start` leaves no state behind and
-    /// every later read reports the same divergence.
-    pub(super) fn validate_start_owner(
-        &self,
+    /// prefix without changing any state but [`Self::is_committed_start`]'s cache. A reader that
+    /// changes state for a `Start` before it commits it validates the owner first, so a divergent
+    /// `Start` leaves no state behind and every later read reports the same divergence. An oplog
+    /// read that fails while it decides whether a reference is pruned fails the read as any cursor
+    /// read does: a transient failure requires recovery, any other fails the oplog.
+    pub(super) async fn validate_start_owner(
+        &mut self,
         read_idx: OplogIndex,
         entry: &OplogEntry,
     ) -> Result<Option<crate::durable_host::replay_state::owners::RecordOwner>, WorkerExecutorError>
@@ -67,9 +69,13 @@ impl CursorTx<'_> {
         if !matches!(entry, OplogEntry::Start { .. }) {
             return Ok(None);
         }
+        let pruned = match self.st.owners.unresolved_reference(read_idx, entry) {
+            Some(reference) => self.is_committed_start(reference).await?,
+            None => false,
+        };
         self.st
             .owners
-            .validate_start(read_idx, entry)
+            .validate_start(read_idx, entry, pruned)
             .map(Some)
             .map_err(|divergence| {
                 WorkerExecutorError::replay_divergence(ReplayDivergence {
@@ -79,6 +85,31 @@ impl CursorTx<'_> {
                     mismatched: Vec::new(),
                 })
             })
+    }
+
+    /// Whether the earlier entry at `index` is a `Start` the cursor committed: a visible entry
+    /// that the recorded prefix holds as a `Start`. The cursor commits every visible entry it
+    /// passes, so the owner map dropped the owner of such a `Start` when it does not hold it. The
+    /// last `Start` confirmed this way is cached (`CursorState::pruned_start`).
+    async fn is_committed_start(&mut self, index: OplogIndex) -> Result<bool, WorkerExecutorError> {
+        if self.st.pruned_start == Some(index) {
+            return Ok(true);
+        }
+        if index > self.cursor.last_replayed_index()
+            || index > self.cursor.replay_target()
+            || self.st.skipped_regions.is_in_deleted_region(index)
+        {
+            return Ok(false);
+        }
+        let entries = self.cursor.read_oplog(index, 1).await?;
+        let committed = matches!(
+            entries.first(),
+            Some((read, OplogEntry::Start { .. })) if *read == index
+        );
+        if committed {
+            self.st.pruned_start = Some(index);
+        }
+        Ok(committed)
     }
 
     async fn commit_entry_inner(
@@ -92,7 +123,7 @@ impl CursorTx<'_> {
         // resolver routing / progress signalling below never run — a partial-publish on the error
         // path. None of these effects depend on the cursor position. The owner of a `Start` is
         // validated first, so a divergent `Start` changes nothing.
-        let owner = self.validate_start_owner(read_idx, entry)?;
+        let owner = self.validate_start_owner(read_idx, entry).await?;
         self.apply_commit_effects(read_idx, entry).await?;
         if let Some(owner) = owner {
             self.st.owners.record_start(read_idx, entry, owner);

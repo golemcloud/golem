@@ -17015,13 +17015,14 @@ fn record_owner_resolves_ids_parents_observers_and_agent_level_records() {
     assert_eq!(
         map.record_owner(
             OplogIndex::from_u64(9),
-            &with_invocation_id(start_now(), 7, 1)
+            &with_invocation_id(start_now(), 7, 1),
+            false
         ),
         Ok(invocation_owner(2, None)),
         "a call numbered under a custom root takes the root's owner"
     );
     assert_eq!(
-        map.record_owner(OplogIndex::from_u64(9), &start_now()),
+        map.record_owner(OplogIndex::from_u64(9), &start_now(), false),
         Ok(owners::RecordOwner {
             invocation: owners::InvocationOwner::AgentLevel,
             body: None,
@@ -17035,7 +17036,7 @@ fn record_owner_takes_the_driver_and_keeps_the_nearest_body() {
     map.commit_invocation_started(OplogIndex::from_u64(9), replayed_invocation_id());
     let driven = with_parent(driven_start(4, 1, 9), 5);
     assert_eq!(
-        map.record_owner(OplogIndex::from_u64(10), &driven),
+        map.record_owner(OplogIndex::from_u64(10), &driven, false),
         Ok(invocation_owner(9, Some(4)))
     );
 }
@@ -17045,7 +17046,7 @@ fn record_owner_reports_orphans() {
     let mut map = owner_map_of_one_invocation();
     let orphan = |map: &owners::OwnerMap, index: u64, entry: OplogEntry, what: &str| {
         assert!(
-            map.record_owner(OplogIndex::from_u64(index), &entry)
+            map.record_owner(OplogIndex::from_u64(index), &entry, false)
                 .is_err(),
             "{what} is an orphan"
         );
@@ -17085,16 +17086,17 @@ fn record_owner_reports_orphans() {
         "a parent beyond a shrunk replay target",
     );
     assert_eq!(
-        map.record_owner(OplogIndex::from_u64(9), &owned_start_now(4)),
+        map.record_owner(OplogIndex::from_u64(9), &owned_start_now(4), false),
         Ok(invocation_owner(2, Some(4))),
         "the entries up to the shrunk target stay"
     );
 }
 
 /// A parent or observational owner that resolves to no owner is an orphan even when the
-/// invocation id resolves, unless the map pruned it at its invocation's close: a later entry, an
-/// earlier entry that was never committed, the creation entry and an entry inside a closed
-/// invocation that is no `Start` are orphans. One that the map pruned gives way to the id.
+/// invocation id resolves, unless it is pruned, a committed `Start` whose owner its invocation's
+/// close dropped: a later entry, an earlier entry that was never committed, the creation entry and
+/// an entry inside a closed invocation that is no `Start` are orphans. A pruned one gives way to
+/// the id. The cursor tells the map which unresolved references are pruned.
 #[test]
 fn record_owner_refuses_a_never_committed_reference_beside_a_resolved_id() {
     let mut map = owner_map_of_one_invocation();
@@ -17119,7 +17121,7 @@ fn record_owner_refuses_a_never_committed_reference_beside_a_resolved_id() {
         ),
     ] {
         assert!(
-            map.record_owner(index, &entry).is_err(),
+            map.record_owner(index, &entry, false).is_err(),
             "{what} beside a resolved id is an orphan"
         );
         assert!(
@@ -17131,7 +17133,8 @@ fn record_owner_refuses_a_never_committed_reference_beside_a_resolved_id() {
     assert!(
         map.record_owner(
             OplogIndex::from_u64(9),
-            &with_parent(anchored_start(2, 3), 11)
+            &with_parent(anchored_start(2, 3), 11),
+            false
         )
         .is_err()
     );
@@ -17142,7 +17145,8 @@ fn record_owner_refuses_a_never_committed_reference_beside_a_resolved_id() {
     assert_eq!(
         map.record_owner(
             OplogIndex::from_u64(14),
-            &with_driver(with_parent(anchored_start(2, 3), 3), 13)
+            &with_driver(with_parent(anchored_start(2, 3), 3), 13),
+            true
         ),
         Ok(invocation_owner(13, None)),
         "a parent pruned at its invocation's close gives way to the id"
@@ -17162,7 +17166,8 @@ fn record_owner_refuses_a_never_committed_reference_beside_a_resolved_id() {
         ),
     ] {
         assert!(
-            map.record_owner(OplogIndex::from_u64(14), &entry).is_err(),
+            map.record_owner(OplogIndex::from_u64(14), &entry, false)
+                .is_err(),
             "{what} was never pruned, so it is an orphan beside a resolved id"
         );
     }
@@ -17231,30 +17236,6 @@ fn closed_set_handles_out_of_order_closes() {
     assert!(map.is_closed(OplogIndex::from_u64(30)));
 }
 
-/// A shrunk replay target drops the closes recorded beyond it, also of an anchor below it.
-#[test]
-fn truncation_drops_closes_beyond_the_target() {
-    let mut map = owners::OwnerMap::default();
-    for anchor in [10, 20] {
-        map.commit_invocation_started(OplogIndex::from_u64(anchor), replayed_invocation_id());
-    }
-    map.close(OplogIndex::from_u64(10), OplogIndex::from_u64(15), |_| {
-        false
-    });
-    map.close(OplogIndex::from_u64(20), OplogIndex::from_u64(25), |_| {
-        false
-    });
-    map.truncate_after(OplogIndex::from_u64(22));
-    assert!(
-        map.is_closed(OplogIndex::from_u64(10)),
-        "a close at or below the target stays"
-    );
-    assert!(
-        !map.is_closed(OplogIndex::from_u64(20)),
-        "a close beyond the target is dropped although its anchor stays"
-    );
-}
-
 /// X starts at 2, claims a send `Start` at 3 and settles at 6. B starts at 7, and a store task
 /// of X records a body-chunk `Start` at 8 under the send, numbered under X, with B as its
 /// `driver`. X's close prunes the send from the owner map, and the chunk still resolves to B
@@ -17318,6 +17299,228 @@ async fn a_child_under_a_pruned_parent_resolves_through_its_driver() {
             .unwrap(),
         SettledAt::Recorded(OplogIndex::from_u64(11))
     );
+}
+
+/// The history of [`a_child_under_a_pruned_parent_resolves_through_its_driver`], with a chunk
+/// `Start` that records the `End` at 4 as its parent. That entry lies inside the closed invocation,
+/// and the recorded prefix holds no `Start` there, so the parent is an orphan even beside a valid
+/// driver, and committing the chunk is a divergence.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_driven_child_under_an_entry_that_is_no_start_is_a_divergence() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        end_for(3, 41),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        with_parent(driven_start(2, 1, 7), 4),
+        end_for(8, 42),
+        invocation_finished_for(other_invocation_id()),
+        invocation_settled_for(other_invocation_id()),
+    ])
+    .await;
+    let anchor_x = start_open_invocation(&rs).await;
+    let send = claim_anchored(&rs, 2, 0).await;
+    rs.await_resolution(send).await.unwrap();
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    rs.close_invocation_anchor(anchor_x, &replayed_invocation_id())
+        .await
+        .unwrap();
+
+    let anchor_b = start_open_invocation(&rs).await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.claim_start_or_replay_end(
+            StartClaim::owned(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(4),
+            )
+            .with_invocation_id(Some(DurableInvocationId::new(OplogIndex::from_u64(2), 1)))
+            .with_driver(Some(anchor_b)),
+        ),
+    )
+    .await
+    .expect("the claim must not hang");
+    match result {
+        Err(WorkerExecutorError::UnexpectedOplogEntry { divergence }) => assert!(
+            divergence
+                .actual
+                .to_string()
+                .contains("which is no committed Start"),
+            "unexpected divergence: {divergence}"
+        ),
+        Err(other) => panic!("expected a divergence, got {other}"),
+        Ok(_) => panic!("expected a divergence, got a claim outcome"),
+    }
+}
+
+/// Replaying many closed invocations leaves no owner of their `Start`s in the owner map, whichever
+/// path closes them. The first invocations record their result at the export's return and leave a
+/// custom root `Start`, a child `Start` under it and their `End`s unclaimed; their settlement
+/// closes them and folds those as abandoned records. The next ones keep the settled path: they
+/// claim a `Start` and close at their terminal, at the invocation-boundary read. The last one
+/// records its result at the return, leaves its `Start` unclaimed and has no recorded settlement:
+/// the live invocation end releases the `Start` and closes it. A close keeps one record per invocation
+/// and drops the owners of its `Start`s; the custom anchors stay, one per custom invocation.
+#[test]
+#[test_r::timeout("30s")]
+async fn closed_invocations_leave_no_owners_in_the_owner_map() {
+    const INVOCATIONS: usize = 20;
+    let mut entries = vec![OplogEntry::recovery_succeeded()];
+    for _ in 0..INVOCATIONS {
+        let anchor = entries.len() as u64 + 1;
+        entries.extend([
+            unpinned_invocation_started(),
+            with_invocation_id(custom_start("custom", 1, None, 0), anchor, 0),
+            end_for(anchor + 1, 41),
+            with_parent(anchored_start(anchor, 1), anchor + 1),
+            end_for(anchor + 3, 42),
+            invocation_finished(),
+            invocation_settled_for(replayed_invocation_id()),
+        ]);
+    }
+    let mut settled_path = Vec::new();
+    for _ in 0..INVOCATIONS {
+        let anchor = entries.len() as u64 + 1;
+        settled_path.push(anchor);
+        entries.extend([
+            unpinned_invocation_started(),
+            anchored_start(anchor, 0),
+            end_for(anchor + 1, 43),
+            invocation_finished(),
+        ]);
+    }
+    // The last invocation leaves its `Start` unclaimed and has no recorded settlement: the live
+    // run settles it.
+    let last = entries.len() as u64 + 1;
+    entries.extend([
+        unpinned_invocation_started(),
+        anchored_start(last, 0),
+        end_for(last + 1, 44),
+        invocation_finished(),
+    ]);
+    let rs = replay_state_over(entries).await;
+    for _ in 0..INVOCATIONS {
+        let anchor = start_open_invocation(&rs).await;
+        read_open_anchor_terminal(&rs, replayed_invocation_id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+                .await
+                .unwrap(),
+            SettledAt::Recorded(_)
+        ));
+    }
+    for anchor in settled_path {
+        enter_invocation(&rs).await;
+        let call = claim_anchored(&rs, anchor, 0).await;
+        rs.await_resolution(call).await.unwrap();
+        read_invocation_finished(&rs).await.unwrap().unwrap();
+    }
+    start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(rs.has_unclaimed_retained_starts());
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    let st = rs.cursor.state.lock().await;
+    assert_eq!(st.owners.owner_count(), 0);
+    assert_eq!(st.owners.identity_anchor_count(), INVOCATIONS);
+    assert_eq!(st.owners.closed_invocation_count(), 2 * INVOCATIONS + 1);
+    assert!(!st.owners.has_open_invocation());
+    assert_eq!(st.starts.retained_len(), 0);
+}
+
+/// X starts at 2 and records an entity `Start` at 3, a `Start` under that body at 4 and a `Start`
+/// at 5 with no body. X closes at 6 while 4 and 5 are retained, so their owners stay. Y starts at
+/// 7 and closes at 8 after both left the retained set: the later close drops the owner of 5, and
+/// keeps the owner of 4, whose body still decides a later `Start` under it.
+#[test]
+fn a_later_close_drops_released_owners_unless_a_body_encloses_them() {
+    let mut map = owners::OwnerMap::default();
+    map.commit_invocation_started(OplogIndex::from_u64(2), replayed_invocation_id());
+    map.commit_start(
+        OplogIndex::from_u64(3),
+        &rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+    )
+    .unwrap();
+    map.commit_start(OplogIndex::from_u64(4), &owned_start_now(3))
+        .unwrap();
+    map.commit_start(OplogIndex::from_u64(5), &anchored_start(2, 0))
+        .unwrap();
+    map.close(OplogIndex::from_u64(2), OplogIndex::from_u64(6), |index| {
+        index == OplogIndex::from_u64(4) || index == OplogIndex::from_u64(5)
+    });
+    assert_eq!(map.owner(OplogIndex::from_u64(3)), None);
+    assert_eq!(
+        map.owner(OplogIndex::from_u64(4)),
+        Some(invocation_owner(2, Some(3)))
+    );
+    assert_eq!(
+        map.owner(OplogIndex::from_u64(5)),
+        Some(invocation_owner(2, None))
+    );
+    map.commit_invocation_started(OplogIndex::from_u64(7), other_invocation_id());
+    map.close(OplogIndex::from_u64(7), OplogIndex::from_u64(8), |_| false);
+    assert_eq!(
+        map.owner(OplogIndex::from_u64(4)),
+        Some(invocation_owner(2, Some(3))),
+        "an owner with a body stays"
+    );
+    assert_eq!(
+        map.owner(OplogIndex::from_u64(5)),
+        None,
+        "an owner without a body is dropped once released"
+    );
+}
+
+/// The recorded run crashed between Finished and the settlement: the invocation settles at the
+/// replay tail and keeps the owner of its retained `Start`. The live invocation end releases that
+/// `Start` and, the invocation being closed already, drops its owner.
+#[test]
+#[test_r::timeout("30s")]
+async fn the_live_end_after_a_replay_tail_settlement_drops_the_released_owner() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        invocation_finished(),
+        end_for(3, 41),
+        anchored_start(2, 1),
+        end_for(6, 42),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let call = claim_anchored(&rs, 2, 0).await;
+    rs.await_resolution(call).await.unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::ReplayTail
+    );
+    assert_eq!(rs.cursor.state.lock().await.owners.owner_count(), 1);
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+    assert_eq!(rs.cursor.state.lock().await.owners.owner_count(), 0);
 }
 
 /// The same history with a chunk `Start` that records no driver: it was recorded after its
@@ -18349,8 +18552,8 @@ async fn cancelled_body_claim_of_unclosed_start_does_not_continue_live() {
 
 /// X starts at 2 and claims its `Start` at 3; X closes at 5 and its close prunes 3 from the owner
 /// map. Y starts at 6. A `Start` at 7 records the committed `Start` at 3 as its parent, no
-/// invocation id, and Y as its `driver`. The map pruned the parent, so it is no orphan, and the
-/// owner comes from the recorded driver. A parent the map never pruned stays an orphan.
+/// invocation id, and Y as its `driver`. The parent is pruned, so it is no orphan, and the owner
+/// comes from the recorded driver. A parent that is not pruned stays an orphan.
 #[test]
 fn driven_child_of_a_pruned_parent_without_an_id_takes_its_driver() {
     let mut map = owners::OwnerMap::default();
@@ -18361,7 +18564,7 @@ fn driven_child_of_a_pruned_parent_without_an_id_takes_its_driver() {
     map.commit_invocation_started(OplogIndex::from_u64(6), replayed_invocation_id());
     let child = with_driver(owned_start_now(3), 6);
     assert_eq!(
-        map.record_owner(OplogIndex::from_u64(7), &child),
+        map.record_owner(OplogIndex::from_u64(7), &child, true),
         Ok(invocation_owner(6, None)),
         "a pruned parent is an earlier committed Start, so the recorded driver owns the Start"
     );
@@ -18373,39 +18576,13 @@ fn driven_child_of_a_pruned_parent_without_an_id_takes_its_driver() {
         assert!(
             map.record_owner(
                 OplogIndex::from_u64(7),
-                &with_driver(owned_start_now(parent), 6)
+                &with_driver(owned_start_now(parent), 6),
+                false
             )
             .is_err(),
             "{what} was never pruned, so it stays an orphan under a driver"
         );
     }
-}
-
-/// A shrunk replay target undoes the closes beyond it, and the owners such a close pruned are
-/// owners again; the `Start`s beyond the target are neither owners nor pruned.
-#[test]
-fn truncation_restores_the_owners_an_undone_close_pruned() {
-    let mut map = owners::OwnerMap::default();
-    map.commit_invocation_started(OplogIndex::from_u64(2), replayed_invocation_id());
-    map.commit_start(OplogIndex::from_u64(3), &anchored_start(2, 0))
-        .unwrap();
-    map.commit_start(OplogIndex::from_u64(5), &anchored_start(2, 1))
-        .unwrap();
-    map.close(OplogIndex::from_u64(2), OplogIndex::from_u64(6), |_| false);
-    assert_eq!(map.owner(OplogIndex::from_u64(3)), None);
-    map.truncate_after(OplogIndex::from_u64(4));
-    assert!(!map.is_closed(OplogIndex::from_u64(2)));
-    assert_eq!(
-        map.owner(OplogIndex::from_u64(3)),
-        Some(invocation_owner(2, None)),
-        "the owner the undone close pruned is an owner again"
-    );
-    assert_eq!(map.owner(OplogIndex::from_u64(5)), None);
-    assert!(
-        map.record_owner(OplogIndex::from_u64(7), &with_driver(owned_start_now(5), 2))
-            .is_err(),
-        "a pruned Start beyond the target is no longer pruned"
-    );
 }
 
 /// A body `Start` recorded after the recorded `Cancelled` of its entity body is corrupt history.
@@ -18571,4 +18748,102 @@ async fn an_orphaned_retained_start_is_the_same_divergence_on_every_read() {
         "every read reports the same divergence"
     );
     assert!(!rs.has_unclaimed_retained_starts());
+}
+
+/// [`a_body_record_after_its_recorded_cancellation_is_a_divergence`] with the invocation closing
+/// between the recorded `Cancelled` of the entity body and the body record: X starts at 2, its
+/// entity body at 3 is cancelled at 4, and X finishes at 5. Y starts at 6, and a `Start` at 7
+/// records the cancelled body at 3 as its parent with Y as its driver. The body record follows
+/// the recorded cancellation of its body, which is corrupt history: the close keeps the body's
+/// entity anchor, so replay reports a divergence.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_driven_body_record_after_its_cancellation_in_a_closed_invocation_is_a_divergence() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        cancelled_for(3),
+        invocation_finished(),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        with_driver(owned_start_now(3), 6),
+        end_for(7, 42),
+        invocation_finished_for(other_invocation_id()),
+    ])
+    .await;
+    enter_invocation(&rs).await;
+    let (body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    assert!(matches!(
+        rs.await_resolution(body).await.unwrap(),
+        Resolution::Cancelled { .. }
+    ));
+    reconstruction.body_settled();
+    tokio::time::timeout(Duration::from_secs(2), read_invocation_finished(&rs))
+        .await
+        .expect("X's terminal read must not hang")
+        .unwrap()
+        .expect("X finishes");
+    enter_invocation(&rs).await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.get_oplog_entry_agent_invocation_finished(&other_invocation_id()),
+    )
+    .await
+    .expect("Y's terminal read must not hang");
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "a body record after the recorded cancellation of its body must be a divergence, got \
+         {result:?}"
+    );
+}
+
+/// X starts at 2 and claims a custom root at 3, which ends at 4; X finishes at 5. Y starts at 6,
+/// and a `Start` at 7 is numbered under the custom root at 3 (its invocation id is anchored
+/// there) with Y as its driver. The close keeps the custom anchor, so the id resolves to the root
+/// and the driver owns the `Start`: the history replays.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_driven_call_numbered_under_a_custom_root_of_a_closed_invocation_replays() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        custom_start("custom-op", 1, None, 0),
+        custom_end(3, 1),
+        invocation_finished(),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        with_driver(with_invocation_id(start_now(), 3, 1), 6),
+        end_for(7, 42),
+        invocation_finished_for(other_invocation_id()),
+    ])
+    .await;
+    enter_invocation(&rs).await;
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("custom-op".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        test_invocation_id(0),
+    )
+    .await
+    .unwrap();
+    rs.await_resolution(claimed.handle).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), read_invocation_finished(&rs))
+        .await
+        .expect("X's terminal read must not hang")
+        .unwrap()
+        .expect("X finishes");
+    enter_invocation(&rs).await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.get_oplog_entry_agent_invocation_finished(&other_invocation_id()),
+    )
+    .await
+    .expect("Y's terminal read must not hang");
+    assert!(
+        matches!(result, Ok(Some(_))),
+        "a driven call numbered under a closed custom root replays, got {result:?}"
+    );
 }

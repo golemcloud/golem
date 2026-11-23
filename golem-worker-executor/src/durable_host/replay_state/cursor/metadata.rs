@@ -170,6 +170,7 @@ impl ReplayState {
                 starts,
                 custom_subtrees: HashMap::new(),
                 owners: Default::default(),
+                pruned_start: None,
             }),
             unclaimed_retained_starts: RetainedStartCounts::default(),
             reconstruction_claims,
@@ -753,6 +754,7 @@ impl ReplayState {
                     tx.st.replay_buffer.clear();
                     tx.prune_retained_starts(|idx| idx > new_target);
                     tx.st.owners.truncate_after(new_target);
+                    tx.st.pruned_start = None;
                     cursor
                         .completion_markers
                         .lock()

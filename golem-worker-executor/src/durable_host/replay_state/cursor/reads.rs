@@ -273,7 +273,7 @@ impl CursorTx<'_> {
                 // stays reserved even if registration failed or was explicitly removed. Consume
                 // its position without changing any remaining terminal obligation; it must never
                 // be handed to a positional reader.
-                self.validate_start_owner(read_idx, &entry)?;
+                self.validate_start_owner(read_idx, &entry).await?;
                 self.st.starts.consume_claimed_start(&read_idx);
                 self.commit_consumed_entry(read_idx, &entry).await?;
                 continue;
@@ -359,7 +359,7 @@ impl CursorTx<'_> {
                 // still need the Store this reader holds). Commit past it and retain it for the
                 // owner's claim; the terminal that closes it is attached above when reached. The
                 // non-hint position stays where the owner will observe it at its `begin_function`.
-                self.validate_start_owner(read_idx, &entry)?;
+                self.validate_start_owner(read_idx, &entry).await?;
                 self.retain_start(read_idx, entry.clone());
                 self.commit_retained_entry(read_idx, &entry).await?;
                 continue;
@@ -1373,10 +1373,7 @@ impl CursorTx<'_> {
             },
         )?;
         self.fold_retained_into_abandoned(abandoned, &own)?;
-        let st = &mut *self.st;
-        st.owners.close(anchor, index, |start| {
-            st.starts.get_retained(&start).is_some()
-        });
+        self.st.close_invocation(anchor, index);
         Ok(())
     }
 
@@ -1607,9 +1604,7 @@ impl CursorTx<'_> {
         if let Some(wallet) = &self.cursor.wallet {
             wallet.finish_replayed_invocation();
         }
-        let st = &mut *self.st;
-        st.owners
-            .close(anchor, at, |index| st.starts.get_retained(&index).is_some());
+        self.st.close_invocation(anchor, at);
         self.notify_progress = true;
     }
 }

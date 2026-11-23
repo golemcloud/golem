@@ -761,15 +761,15 @@ impl ReplayState {
                 .cursor
                 .unclaimed_retained_starts
                 .publish(st.starts.retained_summary());
-            if !waiting && let Some(ending) = ending {
-                let st = &mut *st;
-                let retained = |index| st.starts.get_retained(&index).is_some();
-                if st.owners.is_open(ending) {
-                    // The live run appends the terminal or the settlement after the replay target.
-                    st.owners.close(ending, replay_target.next(), retained);
-                } else {
-                    st.owners.prune_closed(ending, retained);
+            match ending {
+                Some(ending) if st.owners.is_open(ending) => {
+                    if !waiting {
+                        // The live run appends the terminal or the settlement after the replay
+                        // target.
+                        st.close_invocation(ending, replay_target.next());
+                    }
                 }
+                _ => st.forget_released(),
             }
             if released.is_empty() {
                 return Ok(());

@@ -905,6 +905,11 @@ struct CursorState {
     /// The lifecycle of every invocation the cursor started, and the owners of the committed
     /// `Start`s.
     owners: owners::OwnerMap,
+    /// The last committed `Start` whose owner a close dropped that a later `Start` named as its
+    /// parent or observational owner. A store task resumed after its spawner settled records
+    /// every request-body chunk under the same such `Start`, so this saves an oplog read per
+    /// chunk. A lowered replay target clears it.
+    pruned_start: Option<OplogIndex>,
 }
 
 /// Whether `entry` is the primary invocation terminal (`AgentInvocationFinished`, or an

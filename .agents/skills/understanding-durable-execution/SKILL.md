@@ -2317,35 +2317,50 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   through it is committed, with or without `driver`; no producer records a forward reference, and
   a debug assertion in the primary writer (`primary/state.rs` `push`) checks it. One rule covers a
   parent or observational owner that resolves to no owner: it counts as pruned only when it is a
-  committed `Start` whose owner a close dropped (the map's `pruned` set); any other entry, such as
-  the creation entry or an `End` or hint inside a closed invocation, is an orphan. A pruned
-  reference gives way to a resolved invocation id, or, when the `Start` records no invocation id,
-  to its `driver`. That invocation closed, so every entity body on the reference's chain ended,
-  and the driven `Start` has no enclosing body. The map is resident state derived from the
-  prefix: each cursor rebuilds it, and `set_replay_target` truncates it. It holds the one record
-  of each invocation the cursor started: open from its `AgentInvocationStarted` (with the return
-  signal of an invocation that records its result at the export's return) until its close, then
-  closed with its closing entry, in any order. Every open/closed question of the cursor reads that
-  record. Truncation reopens the closes beyond the new target, and the owners such a close pruned
-  become owners again. The owner of a `Start` is validated before a reader commits or retains it
-  (`validate_start_owner`); a `Start` that a scan-ahead claim finds is validated when the cursor
-  reaches it. So a divergent `Start` is the same divergence on every read. Committing a
-  `Start` without `driver` whose owner invocation already closed, or a root `Start` with no id or
-  driver inside an invocation, or a `Start` whose enclosing entity body's recorded `Cancelled`
-  precedes it, is a divergence. So is any claim whose `driver` (`None` unless
-  `StartClaim::with_driver` sets one) differs from the recorded `driver`. On the producer side,
-  every oplog writer's `push` (primary and ephemeral, `services/oplog/owned_starts.rs`) has a
-  debug assertion that no `Start` without a driver, id, parent or observer is appended between an
-  `AgentInvocationStarted` and its close. It is a debug-build aid, not a guarantee: release
-  builds skip it, a writer reopened in the middle of an invocation checks nothing until the next
-  `AgentInvocationStarted`, and it cannot see whether a recorded parent resolves (an orphan
-  parent or a parent the map never pruned), which only replay detects. A producer inside a
-  custom durable invocation, where a direct call records no id, records the custom root as
-  `observational_owner` (`resolve_current_observational_owner`), as the RDBMS
-  `<scope:transaction>` `Start` does; the fork copy in the target repeats the owner fields of the
-  source's fork `Start` (`ForkCallOwner`: parent, invocation id, observer, driver), so an entity
-  body that called `fork` claims the copy under its entity `Start`. The parent precedes the fork
-  `Start`, so it lies in the copied prefix.
+  committed `Start` whose owner a close dropped; any other entry, such as the creation entry or an
+  `End` or hint inside a closed invocation, is an orphan. The map keeps no record of the owners a
+  close drops, so the cursor answers that question from the recorded prefix
+  (`OwnerMap::unresolved_reference`, `CursorTx::is_committed_start`): the cursor commits every
+  visible entry it passes, so a visible earlier entry that the oplog holds as a `Start` is a
+  committed one. The cursor caches the last `Start` it confirmed this way
+  (`CursorState::pruned_start`), because a store task resumed after its spawner settled records
+  every request-body chunk under the same pruned send. A pruned reference gives way to a resolved
+  invocation id, or, when the `Start` records no invocation id, to its `driver`. That invocation
+  closed, so every entity body on the reference's chain ended, and the driven `Start` has no
+  enclosing body. The map is resident state
+  derived from the prefix: each cursor rebuilds it, and `set_replay_target` truncates it. It holds
+  the one record of each invocation the cursor started: open from its `AgentInvocationStarted`
+  (with the return signal of an invocation that records its result at the export's return) until
+  its close, then closed with its closing entry, in any order. Every open/closed question of the
+  cursor reads that record. A close drops the owners of the invocation's `Start`s except retained
+  ones; once such a `Start` leaves the retained set, a later close or the live invocation end drops
+  its owner too unless an entity body encloses it (with a body, the owner still decides whether a
+  later `Start` under it follows the body's recorded `Cancelled`). The entity and custom anchors
+  stay for the life of the cursor, one per entity or custom invocation, because an invocation id
+  or a reference can name them after their invocation closed and their owner and cancellation
+  still decide such a `Start`. So the map holds owners only for open invocations, agent-level
+  work, retained `Start`s and formerly retained `Start`s under an entity body, plus one record per
+  invocation and one anchor per entity or custom invocation. Truncation drops the owners and
+  anchors beyond a lowered target; recovery sets the target before replay commits anything, so no
+  invocation started or closed beyond it, which a debug assertion checks. The owner of a `Start`
+  is validated before a reader commits or retains it (`validate_start_owner`); a `Start` that a
+  scan-ahead claim finds is validated when the cursor reaches it. So a divergent `Start` is the
+  same divergence on every read. Committing a `Start` without `driver` whose owner invocation
+  already closed, or a root `Start` with no id or driver inside an invocation, or a `Start` whose
+  enclosing entity body's recorded `Cancelled` precedes it, is a divergence. So is any claim whose
+  `driver` (`None` unless `StartClaim::with_driver` sets one) differs from the recorded `driver`.
+  On the producer side, every oplog writer's `push` (primary and ephemeral,
+  `services/oplog/owned_starts.rs`) has a debug assertion that no `Start` without a driver, id,
+  parent or observer is appended between an `AgentInvocationStarted` and its close. It is a
+  debug-build aid, not a guarantee: release builds skip it, a writer reopened in the middle of an
+  invocation checks nothing until the next `AgentInvocationStarted`, and it cannot see whether a
+  recorded parent resolves (an orphan parent or a parent the map never pruned), which only replay
+  detects. A producer inside a custom durable invocation, where a direct call records no id,
+  records the custom root as `observational_owner` (`resolve_current_observational_owner`), as the
+  RDBMS `<scope:transaction>` `Start` does; the fork copy in the target repeats the owner fields
+  of the source's fork `Start` (`ForkCallOwner`: parent, invocation id, observer, driver), so an
+  entity body that called `fork` claims the copy under its entity `Start`. The parent precedes the
+  fork `Start`, so it lies in the copied prefix.
 - **`Start.driver`** names the invocation whose settlement waits for the call in two cases: a
   store task that records after its spawning invocation closed, parked across a settlement and
   resumed under a later invocation (see "Spawned tasks may park across invocation settlement"),

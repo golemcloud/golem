@@ -17,6 +17,14 @@
 //! belongs to a closed invocation, so every entity body on its chain ended, and a driven `Start`
 //! under it has no enclosing body. The map is resident state derived from the recorded prefix,
 //! rebuilt by every new cursor.
+//!
+//! A close drops the owners of its invocation's `Start`s except retained ones, and keeps no record
+//! of what it dropped: whether a reference that resolves to no owner is pruned is a question about
+//! the recorded prefix (is the entry a committed `Start`?), so the cursor answers it from the oplog
+//! ([`OwnerMap::unresolved_reference`]) and passes the answer in. The entity and custom anchors
+//! stay for the life of the cursor, one per entity or custom invocation: an invocation id or a
+//! reference can name them after their invocation closed, and their recorded owner and
+//! cancellation still decide such a `Start`.
 
 use golem_common::model::InvocationId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -89,14 +97,6 @@ impl OpenInvocation {
     }
 }
 
-/// An invocation whose close the cursor reached.
-#[derive(Debug, Clone, Copy)]
-struct ClosedInvocation {
-    id: InvocationId,
-    /// The entry that closed the invocation.
-    at: OplogIndex,
-}
-
 /// A committed `Start` that identities and references can name besides an invocation anchor.
 #[derive(Debug, Clone, Copy)]
 enum AnchorKind {
@@ -115,27 +115,30 @@ pub(super) struct OwnerMap {
     /// not reach, by anchor. Every committed invocation is in this map or in
     /// [`Self::closed_invocations`].
     open_invocations: BTreeMap<OplogIndex, OpenInvocation>,
-    /// The invocations whose close the cursor reached, by anchor.
-    closed_invocations: BTreeMap<OplogIndex, ClosedInvocation>,
-    /// Every committed entity `Start` and custom root `Start`.
+    /// The invocations whose close the cursor reached: the entry that closed each, by anchor.
+    closed_invocations: BTreeMap<OplogIndex, OplogIndex>,
+    /// Every committed entity `Start` and custom root `Start`, one per entity or custom
+    /// invocation, for the life of the cursor: invocation ids and references name them after their
+    /// invocation closed.
     identity_anchors: BTreeMap<OplogIndex, AnchorKind>,
-    /// The owners of the committed `Start`s of open invocations, and of retained `Start`s.
+    /// The owners of the committed `Start`s of open invocations and of agent-level work, and of
+    /// the `Start`s of closed invocations that a close kept because they were retained (see
+    /// [`Self::forget_released`]).
     owners: BTreeMap<OplogIndex, RecordOwner>,
-    /// The committed `Start`s whose owners a close dropped, with the entry that closed their
-    /// invocation and the owner it dropped.
-    pruned: BTreeMap<OplogIndex, (OplogIndex, RecordOwner)>,
 }
 
 impl OwnerMap {
     /// The owner of the `Start` `entry` at `index`, from its recorded fields and the owners of
     /// the entries committed before it. A parent or observational owner that resolves to no owner
-    /// gives way to a resolved invocation id, or with no invocation id to a valid driver, when the
-    /// map pruned it at its invocation's close; any other one, such as a later entry, an entry in
-    /// a deleted region or an earlier entry that is no `Start`, is an [`Orphan`].
+    /// gives way to a resolved invocation id, or with no invocation id to a valid driver, when it
+    /// is `pruned`: a committed `Start` whose owner a close dropped. Any other one, such as a
+    /// later entry, an entry in a deleted region or an earlier entry that is no `Start`, is an
+    /// [`Orphan`].
     pub(super) fn record_owner(
         &self,
         index: OplogIndex,
         entry: &OplogEntry,
+        pruned: bool,
     ) -> Result<RecordOwner, Orphan> {
         let OplogEntry::Start {
             driver,
@@ -159,7 +162,7 @@ impl OwnerMap {
                             body: by_id.body.max(by_reference.body),
                         })
                     }
-                    Err(orphan) if !self.pruned.contains_key(&reference) => Err(orphan),
+                    Err(orphan) if !pruned => Err(orphan),
                     _ => Ok(by_id),
                 },
             },
@@ -172,17 +175,11 @@ impl OwnerMap {
             None => recorded,
             Some(driver) if *driver < index && self.is_invocation(*driver) => {
                 // With no invocation id, a reference that resolves to no owner gives way to the
-                // driver when the map pruned it at its invocation's close. That invocation closed,
-                // so every body on the reference's chain ended: no body encloses the Start.
+                // driver when it is pruned. Its invocation closed, so every body on the
+                // reference's chain ended: no body encloses the Start.
                 let body = match recorded {
                     Ok(recorded) => recorded.body,
-                    Err(_)
-                        if invocation_id.is_none()
-                            && reference
-                                .is_some_and(|reference| self.pruned.contains_key(&reference)) =>
-                    {
-                        None
-                    }
+                    Err(_) if invocation_id.is_none() && pruned => None,
                     Err(orphan) => return Err(orphan),
                 };
                 Ok(RecordOwner {
@@ -232,30 +229,53 @@ impl OwnerMap {
         }
     }
 
-    /// Records the owner of the `Start` committed at `index`: [`Self::validate_start`], then
-    /// [`Self::record_start`].
+    /// The parent or observational owner of the `Start` `entry` at `index` when it is an earlier
+    /// entry that resolves to no owner. It is either an orphan or a committed `Start` whose owner a
+    /// close dropped; only the recorded prefix tells them apart, so the caller looks the entry up
+    /// and passes the answer to [`Self::validate_start`].
+    pub(super) fn unresolved_reference(
+        &self,
+        index: OplogIndex,
+        entry: &OplogEntry,
+    ) -> Option<OplogIndex> {
+        let OplogEntry::Start {
+            parent_start_index,
+            observational_owner,
+            ..
+        } = entry
+        else {
+            return None;
+        };
+        let reference = parent_start_index.or(*observational_owner)?;
+        (reference < index && self.resolve(index, reference, false).is_err()).then_some(reference)
+    }
+
+    /// Records the owner of the `Start` committed at `index`, whose references are no pruned
+    /// `Start`s: [`Self::validate_start`], then [`Self::record_start`].
     #[cfg(test)]
     pub(super) fn commit_start(
         &mut self,
         index: OplogIndex,
         entry: &OplogEntry,
     ) -> Result<(), String> {
-        let owner = self.validate_start(index, entry)?;
+        let owner = self.validate_start(index, entry, false)?;
         self.record_start(index, entry, owner);
         Ok(())
     }
 
-    /// The owner of the `Start` at `index`, without changing the map. Returns the divergence of
-    /// an [`Orphan`], of a `Start` recorded without a driver after its invocation closed, of a
+    /// The owner of the `Start` at `index`, without changing the map, where `pruned` tells
+    /// whether its [`Self::unresolved_reference`] is a committed `Start`. Returns the divergence
+    /// of an [`Orphan`], of a `Start` recorded without a driver after its invocation closed, of a
     /// root `Start` with no driver or invocation id recorded while an invocation is open, and of
     /// a `Start` recorded after the recorded `Cancelled` of its enclosing entity body.
     pub(super) fn validate_start(
         &self,
         index: OplogIndex,
         entry: &OplogEntry,
+        pruned: bool,
     ) -> Result<RecordOwner, String> {
         let owner = self
-            .record_owner(index, entry)
+            .record_owner(index, entry, pruned)
             .map_err(|Orphan(reason)| reason)?;
         if self.has_open_invocation() && owner == RecordOwner::AGENT_LEVEL {
             return Err(format!(
@@ -421,74 +441,70 @@ impl OwnerMap {
         open.max(closed)
     }
 
-    /// Closes the open invocation started at `anchor` at the entry at `at`, and drops the owners
-    /// of its `Start`s except the ones `retained` still holds. Every invocation closes once.
+    /// Closes the open invocation started at `anchor` at the entry at `at`, drops the owners of
+    /// its `Start`s that `retained` does not hold, then [`Self::forget_released`]. Every
+    /// invocation closes once.
     pub(super) fn close(
         &mut self,
         anchor: OplogIndex,
         at: OplogIndex,
         retained: impl Fn(OplogIndex) -> bool,
     ) {
-        if let Some(open) = self.open_invocations.remove(&anchor) {
-            self.closed_invocations
-                .insert(anchor, ClosedInvocation { id: open.id, at });
-            self.prune_closed(anchor, retained);
+        if self.open_invocations.remove(&anchor).is_some() {
+            self.closed_invocations.insert(anchor, at);
+            self.owners.retain(|index, owner| {
+                owner.invocation != InvocationOwner::Anchor(anchor) || retained(*index)
+            });
+            self.forget_released(retained);
         }
     }
 
-    /// Drops the owners of the `Start`s of the closed invocation started at `anchor` that
-    /// `retained` no longer holds.
-    pub(super) fn prune_closed(
-        &mut self,
-        anchor: OplogIndex,
-        retained: impl Fn(OplogIndex) -> bool,
-    ) {
-        let Some(&ClosedInvocation { at, .. }) = self.closed_invocations.get(&anchor) else {
-            return;
-        };
-        let pruned = &mut self.pruned;
+    /// Drops the owners that closes kept for retained `Start`s that `retained` no longer holds,
+    /// when no entity body encloses the `Start`. Without a body, a later `Start` that names such a
+    /// `Start` as its parent or observational owner resolves the same way whether it counts as
+    /// pruned or finds the owner. With a body, the owner keeps deciding it: the body encloses the
+    /// later `Start`, whose record after the body's recorded `Cancelled` is a divergence.
+    pub(super) fn forget_released(&mut self, retained: impl Fn(OplogIndex) -> bool) {
+        let closed_invocations = &self.closed_invocations;
         self.owners.retain(|index, owner| {
-            let keep = owner.invocation != InvocationOwner::Anchor(anchor) || retained(*index);
-            if !keep {
-                pruned.insert(*index, (at, *owner));
-            }
-            keep
+            !matches!(
+                owner.invocation,
+                InvocationOwner::Anchor(anchor) if closed_invocations.contains_key(&anchor)
+            ) || owner.body.is_some()
+                || retained(*index)
         });
     }
 
-    /// Drops everything recorded beyond `target`, including the closes at entries beyond it. The
-    /// owners such a close pruned are owners again.
+    /// The number of owners the map holds.
+    #[cfg(test)]
+    pub(super) fn owner_count(&self) -> usize {
+        self.owners.len()
+    }
+
+    /// The number of entity and custom anchors the map holds.
+    #[cfg(test)]
+    pub(super) fn identity_anchor_count(&self) -> usize {
+        self.identity_anchors.len()
+    }
+
+    /// The number of invocations whose close the map recorded.
+    #[cfg(test)]
+    pub(super) fn closed_invocation_count(&self) -> usize {
+        self.closed_invocations.len()
+    }
+
+    /// Drops the owners and anchors of the `Start`s committed beyond `target`. Recovery sets the
+    /// target before replay commits anything, so no invocation started or closed beyond it, and
+    /// none is reopened.
     pub(super) fn truncate_after(&mut self, target: OplogIndex) {
         let from = target.next();
-        self.open_invocations.split_off(&from);
-        self.closed_invocations.split_off(&from);
-        let reopened: Vec<OplogIndex> = self
-            .closed_invocations
-            .iter()
-            .filter(|(_, closed)| closed.at > target)
-            .map(|(anchor, _)| *anchor)
-            .collect();
-        for anchor in reopened {
-            let closed = self.closed_invocations.remove(&anchor).unwrap();
-            self.open_invocations.insert(
-                anchor,
-                OpenInvocation {
-                    id: closed.id,
-                    export_returned: None,
-                },
-            );
-        }
+        debug_assert!(
+            self.open_invocations.range(from..).next().is_none()
+                && self.closed_invocations.values().all(|at| *at <= target),
+            "the replay target was lowered below a committed invocation boundary"
+        );
         self.identity_anchors.split_off(&from);
         self.owners.split_off(&from);
-        self.pruned.split_off(&from);
-        let owners = &mut self.owners;
-        self.pruned.retain(|index, (at, owner)| {
-            let undone = *at > target;
-            if undone {
-                owners.insert(*index, *owner);
-            }
-            !undone
-        });
     }
 }
 
@@ -563,6 +579,22 @@ impl super::CursorState {
             .owner(reference)
             .or_else(|| self.owners.anchor_owner(reference))
             .and_then(|owner| owner.body)
+    }
+
+    /// Closes the open invocation started at `anchor` at the entry at `at`; the owners of its
+    /// retained `Start`s stay ([`OwnerMap::close`]).
+    pub(super) fn close_invocation(&mut self, anchor: OplogIndex, at: OplogIndex) {
+        let starts = &self.starts;
+        self.owners
+            .close(anchor, at, |index| starts.get_retained(&index).is_some());
+    }
+
+    /// Drops the owners closes kept for `Start`s that are no longer retained
+    /// ([`OwnerMap::forget_released`]).
+    pub(super) fn forget_released(&mut self) {
+        let starts = &self.starts;
+        self.owners
+            .forget_released(|index| starts.get_retained(&index).is_some());
     }
 
     /// Classifies the retained `Start`s recorded before `end` (all of them without `end`) for the

@@ -383,7 +383,7 @@ impl CursorTx<'_> {
             }
             match self.sibling_record_at_head().await? {
                 SiblingRecord::Retain(index, entry) => {
-                    self.validate_start_owner(index, &entry)?;
+                    self.validate_start_owner(index, &entry).await?;
                     self.retain_start(index, entry.clone());
                     self.commit_retained_entry(index, &entry).await?;
                 }
