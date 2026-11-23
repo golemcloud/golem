@@ -4632,7 +4632,9 @@ mod tests {
             selector: Box::new(InvocationSelector {
                 agent_type: "agent".to_string(),
                 application: "app".to_string(),
-                constructor_parameters: serde_json::json!({}),
+                target: golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                    constructor_parameters: serde_json::json!({}),
+                },
                 environment: "env".to_string(),
                 method: "run".to_string(),
             }),
@@ -4816,7 +4818,9 @@ mod tests {
             selector: Box::new(InvocationSelector {
                 agent_type: "agent".to_string(),
                 application: "app".to_string(),
-                constructor_parameters: serde_json::json!({}),
+                target: golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                    constructor_parameters: serde_json::json!({}),
+                },
                 environment: "env".to_string(),
                 method: "run".to_string(),
             }),
