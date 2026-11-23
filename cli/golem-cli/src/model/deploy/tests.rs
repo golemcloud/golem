@@ -17,25 +17,40 @@ use test_r::test;
 use uuid::Uuid;
 
 #[test]
-fn deploy_display_preserves_phantom_selector() {
-    use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
+fn deploy_display_preserves_agent_id_binding_and_create_route() {
+    use golem_common::model::agent::{
+        AgentIdBinding, AgentIdBindingDetails, SystemVariableSegment,
+    };
 
-    for optional in [false, true] {
+    for create_route in [
+        None,
+        Some(vec![]),
+        Some(vec![
+            PathSegment::SystemVariable(SystemVariableSegment {
+                value: golem_common::model::agent::SystemVariable::AgentType,
+            }),
+            PathSegment::Segment(golem_schema::http::PathSegment::Literal(
+                golem_schema::http::LiteralSegment {
+                    value: "create".into(),
+                },
+            )),
+        ]),
+    ] {
         for path in [false, true] {
-            let details = PhantomIdBindingDetails {
+            let details = AgentIdBindingDetails {
                 name: "instance".into(),
-                optional,
             };
             let binding = if path {
-                PhantomIdBinding::Path(details)
+                AgentIdBinding::Path(details)
             } else {
-                PhantomIdBinding::Query(details)
+                AgentIdBinding::Query(details)
             };
             let mount = HttpMountDetails {
                 path_prefix: vec![],
                 auth_details: None,
-                phantom_agent: true,
-                phantom_id_binding: Some(binding.clone()),
+                phantom_agent: false,
+                agent_id_binding: Some(binding),
+                create_route: create_route.clone(),
                 cors_options: CorsOptions {
                     allowed_patterns: vec![],
                 },
@@ -47,18 +62,27 @@ fn deploy_display_preserves_phantom_selector() {
             };
             let value = serde_json::to_value(display_http_mount(&mount)).unwrap();
             assert_eq!(
-                value["phantomIdBinding"],
+                value["agentIdBinding"],
                 serde_json::json!({
                     "type": if path { "Path" } else { "Query" },
                     "name": "instance",
-                    "optional": optional,
                 })
             );
+            assert_eq!(value["phantomAgent"], false);
+            assert!(value.get("phantomIdBinding").is_none());
+            match &create_route {
+                None => assert!(value.get("createRoute").is_none()),
+                Some(segments) if segments.is_empty() => assert_eq!(value["createRoute"], "/"),
+                Some(_) => assert_eq!(value["createRoute"], "/{AgentType}/create"),
+            }
             let unbound = HttpMountDetails {
-                phantom_id_binding: None,
+                agent_id_binding: None,
+                create_route: None,
                 ..mount
             };
             let value = serde_json::to_value(display_http_mount(&unbound)).unwrap();
+            assert!(value.get("agentIdBinding").is_none());
+            assert!(value.get("createRoute").is_none());
             assert!(value.get("phantomIdBinding").is_none());
         }
     }

@@ -112,10 +112,15 @@ fn large_file_exceeds_compressed_grpc_window() {
 async fn context(deps: &EnvBasedTestDependencies) -> anyhow::Result<HttpTestContext> {
     make_test_context_with_files(
         deps,
-        vec![(
-            AgentTypeName("LiveFiles".into()),
-            HttpApiDeploymentAgentOptions::default(),
-        )],
+        ["LiveFiles", "LiveFilesByPath", "LiveFilesByQuery"]
+            .into_iter()
+            .map(|name| {
+                (
+                    AgentTypeName(name.into()),
+                    HttpApiDeploymentAgentOptions::default(),
+                )
+            })
+            .collect(),
         "it_initial_file_system_release",
         "golem-it:initial-file-system",
         HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
@@ -163,6 +168,156 @@ async fn effects(context: &HttpTestContext, name: &str) -> anyhow::Result<(usize
         }
     }
     Ok(counts)
+}
+
+#[test]
+#[timeout("240s")]
+async fn id_mounted_files_resolve_existing_targets_and_do_not_create_on_misses(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentId;
+    use integration_tests::agents::{agent_type_id, create_agent};
+    let foreign = context(deps).await?;
+    let context = context(deps).await?;
+    let component = context
+        .user
+        .get_latest_component_revision(&context.component_id)
+        .await?;
+    let wrong_type = create_agent(
+        &context.user,
+        &component,
+        &agent_key!("LiveFiles", "wrong-type"),
+    )
+    .await?;
+    let foreign_component = foreign
+        .user
+        .get_latest_component_revision(&foreign.component_id)
+        .await?;
+    for (agent_type, prefix, query) in [
+        ("LiveFilesByPath", "files-by-path", false),
+        ("LiveFilesByQuery", "files-by-query", true),
+    ] {
+        let foreign_id = create_agent(
+            &foreign.user,
+            &foreign_component,
+            &agent_key!(agent_type, "foreign"),
+        )
+        .await?;
+        let path = |id: AgentId, file: &str| {
+            if query {
+                format!("/{prefix}/{file}?instance={id}")
+            } else {
+                format!("/{prefix}/{id}/{file}")
+            }
+        };
+        let existing = create_agent(
+            &context.user,
+            &component,
+            &agent_key!(agent_type, "existing bytes"),
+        )
+        .await?;
+        context
+            .user
+            .start_agent(&context.component_id, agent_key!(agent_type, "keyed bytes"))
+            .await?;
+        let keyed = derive_keyed_agent_id(
+            &context.user,
+            &context.component_id,
+            &agent_key!(agent_type, "keyed bytes"),
+        )
+        .await?;
+        let response = context
+            .client
+            .get(
+                context
+                    .base_url
+                    .join(&path(keyed.agent_id, "created.txt"))?,
+            )
+            .send()
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.text().await?, "keyed bytes");
+        for (file, bytes) in [("created.txt", "existing bytes"), ("only.txt", "fallback")] {
+            let response = context
+                .client
+                .get(context.base_url.join(&path(existing.agent_id, file))?)
+                .send()
+                .await?;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.text().await?, bytes);
+        }
+        let type_id =
+            agent_type_id(&context.user, &component, &AgentTypeName(agent_type.into())).await?;
+        let missing = AgentId::random(type_id);
+        let deleted = create_agent(
+            &context.user,
+            &component,
+            &agent_key!(agent_type, "deleted"),
+        )
+        .await?;
+        context.user.delete_worker(&deleted).await?;
+        for target in [
+            missing,
+            deleted.agent_id,
+            wrong_type.agent_id,
+            foreign_id.agent_id,
+        ] {
+            for method in [Method::GET, Method::HEAD] {
+                let response = context
+                    .client
+                    .request(
+                        method.clone(),
+                        context.base_url.join(&path(target, "only.txt"))?,
+                    )
+                    .send()
+                    .await?;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::NOT_FOUND,
+                    "{agent_type} {target} {method}"
+                );
+            }
+            if target != wrong_type.agent_id {
+                assert!(
+                    context
+                        .user
+                        .get_worker_metadata_opt(&OwnedAgentId::new(context.env_id, &target))
+                        .await?
+                        .is_none()
+                );
+            }
+        }
+        assert!(
+            context
+                .user
+                .get_worker_metadata_opt(&wrong_type)
+                .await?
+                .is_some()
+        );
+        assert!(
+            foreign
+                .user
+                .get_worker_metadata_opt(&foreign_id)
+                .await?
+                .is_some()
+        );
+        // A real file miss can use the second binding; a directory is a denial, not a miss.
+        for (file, expected) in [
+            ("absent.txt", StatusCode::NOT_FOUND),
+            ("directory", StatusCode::FORBIDDEN),
+        ] {
+            assert_eq!(
+                context
+                    .client
+                    .get(context.base_url.join(&path(existing.agent_id, file))?)
+                    .send()
+                    .await?
+                    .status(),
+                expected
+            );
+        }
+    }
+    Ok(())
 }
 
 #[test]

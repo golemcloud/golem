@@ -121,7 +121,8 @@ impl ProviderInvoker for WorkerProviderInvoker {
             .0
             .bound_invocation_target(
                 call.component_id,
-                &call.constructor,
+                &call.constructor.agent_type,
+                Some(&call.constructor),
                 AgentBinding::Constructor,
                 &call.key,
                 &call.method,
