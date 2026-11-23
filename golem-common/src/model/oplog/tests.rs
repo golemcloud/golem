@@ -4164,6 +4164,45 @@ fn public_claims_are_read_through_a_buffer() {
     );
 }
 
+/// Two claim sets are equal when they are the same JSON object: the order of the members and the
+/// spelling of a number do not count. So an entry is equal to its own JSON round trip, also when
+/// the reader writes the claims in another spelling.
+#[test]
+fn public_claims_are_equal_as_json_objects() {
+    let claims = |text: &str| PublicClaims::from_json(text.to_string()).unwrap();
+    let recorded = claims(r#"{"sub":"bob","n":1e3,"nested":{"list":[1,2.50],"flag":true}}"#);
+    assert_eq!(
+        recorded,
+        claims(r#"{"nested":{"flag":true,"list":[1,2.5]},"n":1000.0,"sub":"bob"}"#)
+    );
+    assert_ne!(
+        recorded,
+        claims(r#"{"sub":"bob","n":1e3,"nested":{"list":[1,2.51],"flag":true}}"#)
+    );
+    assert_ne!(recorded, claims(r#"{"sub":"bob"}"#));
+    // The order of the items of an array counts.
+    assert_ne!(claims(r#"{"list":[1,2]}"#), claims(r#"{"list":[2,1]}"#));
+
+    // A claim set that a JSON value cannot hold is equal only to the same text.
+    let beyond = claims(r#"{"sub":"bob","n":1e400}"#);
+    assert_eq!(beyond, claims(r#"{"sub":"bob","n":1e400}"#));
+    assert_ne!(beyond, claims(r#"{"n":1e400,"sub":"bob"}"#));
+
+    // An entry is equal to what a reader gets from its JSON text.
+    let user = Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", "user-1"),
+        claims: Claims::from_json(r#"{"sub":"bob","n":1e3,"list":[1,2.50]}"#.to_string()).unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    let entry = started_entry_with_caller(PublicCaller::new(
+        &Caller::entry(user),
+        ClaimVisibility::Shown,
+    ));
+    let read: PublicOplogEntry =
+        serde_json::from_str(&serde_json::to_string(&entry).unwrap()).unwrap();
+    assert_eq!(read, entry);
+}
+
 /// Claims on the wire must be one JSON object.
 #[test]
 fn public_claims_refuse_anything_but_a_json_object() {

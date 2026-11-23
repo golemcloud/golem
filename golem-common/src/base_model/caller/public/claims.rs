@@ -73,9 +73,18 @@ impl From<&Claims> for PublicClaims {
     }
 }
 
+/// Two claim sets are equal when they are the same JSON object: the order of the members and the
+/// spelling of a number do not count. So a public caller is equal to what a reader gets from its
+/// JSON text. A claim set that a `serde_json::Value` cannot hold is equal only to the same text.
 impl PartialEq for PublicClaims {
     fn eq(&self, other: &Self) -> bool {
-        self.as_json() == other.as_json()
+        if self.as_json() == other.as_json() {
+            return true;
+        }
+        match (self.to_value(), other.to_value()) {
+            (Ok(this), Ok(that)) => this == that,
+            _ => false,
+        }
     }
 }
 
