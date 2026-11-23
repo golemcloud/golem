@@ -56,6 +56,7 @@ h2 = { workspace = true }
 http = { workspace = true }
 hyper = { workspace = true }
 redis = { workspace = true }
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
 sqlx = { workspace = true }
 test-r = { workspace = true }
 url = { workspace = true }

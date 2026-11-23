@@ -90,7 +90,7 @@ Method options compose — pass several in one `Agent.Method` call (e.g. `golem.
 
 ## Mounting over HTTP
 
-Set `Spec.HTTP` to a `*golem.Mount` and add `golem.HTTP(...)` routes per method. Every `ID` field must appear as a `{var}` in the mount path so the platform can identify the instance.
+Set `Spec.HTTP` to a `*golem.Mount` and add `golem.HTTP(...)` routes per method. On a key mount, every user-supplied `ID` field must appear as a `{var}` in the mount path. An ID mount instead binds only a required agent ID and contains no constructor bindings.
 
 ```go
 var Agent = golem.DefineAgent[ID](golem.Spec{
@@ -106,7 +106,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 var CheckStock = Agent.Method[CheckStockIn, uint32]("check-stock", golem.Description("Returns units in stock for the given SKU."), golem.HTTP(golem.GET("/stock/{sku}")))
 ```
 
-`golem.Mount` fields: `Path` (required), `Auth`, `CORS`, `PhantomAgent`, `PhantomID` (select an existing phantom by `golem.PhantomIDPath(name)` or `golem.PhantomIDQuery(name)`, optionally `.Optional()`), `WebhookSuffix`, `ExposeFiles`, `FileResponseHeaders`. Verb constructors are `golem.GET/POST/PUT/DELETE/PATCH/...` and `golem.Custom("VERB", "/path")`. For full route-binding rules (path/query/header/body, per-route auth and CORS) load [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go).
+`golem.Mount` fields: `Path` (required), `Auth`, `CORS`, `PhantomAgent`, `AgentID` (address an existing durable agent with required `golem.AgentIDPath(name)` or `golem.AgentIDQuery(name)`), `CreateRoute` (a full exact POST path, valid only with `AgentID`), `WebhookSuffix`, `ExposeFiles`, `FileResponseHeaders`. `AgentID` excludes constructor bindings, `PhantomAgent`, and ephemeral mode; it has no optional or keyed fallback. Verb constructors are `golem.GET/POST/PUT/DELETE/PATCH/...` and `golem.Custom("VERB", "/path")`. For creation semantics and full route-binding rules (path/query/header/body, per-route auth and CORS) load [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go).
 
 ## Key Constraints
 

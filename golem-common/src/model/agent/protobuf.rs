@@ -4,9 +4,9 @@ use super::{
     SnapshotAssistedUpdateMetadata, SuccessfulUpdate, TypedAgentConfigEntry, UpdateRecord,
 };
 use super::{
-    AgentConfigSource, AgentHttpAuthDetails, AgentInvocationMode, AgentMode, CachePolicy,
-    CachePolicyTtl, CorsOptions, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
-    PhantomIdBinding, PhantomIdBindingDetails, ReadOnlyConfig, RegisteredAgentType,
+    AgentConfigSource, AgentHttpAuthDetails, AgentIdBinding, AgentIdBindingDetails,
+    AgentInvocationMode, AgentMode, CachePolicy, CachePolicyTtl, CorsOptions, HttpEndpointDetails,
+    HttpMethod, HttpMountDetails, PathSegment, ReadOnlyConfig, RegisteredAgentType,
     RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
@@ -14,8 +14,10 @@ use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWo
 use crate::base_model::AgentFingerprint;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::caller::{
-    AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, Claims, Pair, Principal,
-    PrincipalRef, TokenProvenance, ToolPrincipal, UserPrincipal,
+    AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, ClaimVisibility, Claims, Pair,
+    Principal, PrincipalRef, PublicAccountPrincipal, PublicAgentPrincipal, PublicCaller,
+    PublicClaims, PublicPrincipal, PublicTokenProvenance, PublicToolPrincipal, PublicUserPrincipal,
+    TokenProvenance, ToolPrincipal, UserPrincipal,
 };
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::tool::ToolName;
@@ -219,9 +221,16 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMountDetails> for Http
                 .collect::<Result<_, _>>()?,
             auth_details: value.auth_details.map(TryInto::try_into).transpose()?,
             phantom_agent: value.phantom_agent,
-            phantom_id_binding: value
-                .phantom_id_binding
-                .map(TryInto::try_into)
+            agent_id_binding: value.agent_id_binding.map(TryInto::try_into).transpose()?,
+            create_route: value
+                .create_route
+                .map(|route| {
+                    route
+                        .path
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<Vec<_>, _>>()
+                })
                 .transpose()?,
             cors_options: value
                 .cors_options
@@ -258,7 +267,12 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
             path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             phantom_agent: value.phantom_agent,
-            phantom_id_binding: value.phantom_id_binding.map(Into::into),
+            agent_id_binding: value.agent_id_binding.map(Into::into),
+            create_route: value.create_route.map(|path| {
+                golem_api_grpc::proto::golem::component::HttpCreateRoute {
+                    path: path.into_iter().map(Into::into).collect(),
+                }
+            }),
             cors_options: Some(value.cors_options.into()),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
             static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
@@ -277,41 +291,33 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::PhantomIdBinding> for PhantomIdBinding {
+impl TryFrom<golem_api_grpc::proto::golem::component::AgentIdBinding> for AgentIdBinding {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::component::PhantomIdBinding,
+        value: golem_api_grpc::proto::golem::component::AgentIdBinding,
     ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::component::phantom_id_binding::Source;
-        match value.source.ok_or("Missing PhantomIdBinding.source")? {
-            Source::Path(value) => Ok(Self::Path(PhantomIdBindingDetails {
-                name: value.name,
-                optional: value.optional,
-            })),
-            Source::Query(value) => Ok(Self::Query(PhantomIdBindingDetails {
-                name: value.name,
-                optional: value.optional,
-            })),
+        use golem_api_grpc::proto::golem::component::agent_id_binding::Source;
+        match value.source.ok_or("Missing AgentIdBinding.source")? {
+            Source::Path(value) => Ok(Self::Path(AgentIdBindingDetails { name: value.name })),
+            Source::Query(value) => Ok(Self::Query(AgentIdBindingDetails { name: value.name })),
         }
     }
 }
 
-impl From<PhantomIdBinding> for golem_api_grpc::proto::golem::component::PhantomIdBinding {
-    fn from(value: PhantomIdBinding) -> Self {
+impl From<AgentIdBinding> for golem_api_grpc::proto::golem::component::AgentIdBinding {
+    fn from(value: AgentIdBinding) -> Self {
         use golem_api_grpc::proto::golem::component::{
-            PhantomIdBindingDetails, phantom_id_binding::Source,
+            AgentIdBindingDetails, agent_id_binding::Source,
         };
         Self {
             source: Some(match value {
-                PhantomIdBinding::Path(value) => Source::Path(PhantomIdBindingDetails {
-                    name: value.name,
-                    optional: value.optional,
-                }),
-                PhantomIdBinding::Query(value) => Source::Query(PhantomIdBindingDetails {
-                    name: value.name,
-                    optional: value.optional,
-                }),
+                AgentIdBinding::Path(value) => {
+                    Source::Path(AgentIdBindingDetails { name: value.name })
+                }
+                AgentIdBinding::Query(value) => {
+                    Source::Query(AgentIdBindingDetails { name: value.name })
+                }
             }),
         }
     }
@@ -817,6 +823,277 @@ impl From<Caller> for golem_api_grpc::proto::golem::component::Caller {
                 .then(|| value.immediate.into()),
             original: Some(value.original.into()),
             tokens: value.tokens.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicCaller> for PublicCaller {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicCaller,
+    ) -> Result<Self, Self::Error> {
+        let original: PublicPrincipal = value
+            .original
+            .ok_or_else(|| missing("original"))?
+            .try_into()?;
+        Ok(Self {
+            // An absent immediate principal is the same as the original one.
+            immediate: match value.immediate {
+                Some(immediate) => immediate.try_into()?,
+                None => original.clone(),
+            },
+            original,
+            tokens: value
+                .tokens
+                .into_iter()
+                .map(PublicTokenProvenance::try_from)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl From<PublicCaller> for golem_api_grpc::proto::golem::component::PublicCaller {
+    fn from(value: PublicCaller) -> Self {
+        Self {
+            // The immediate principal is left out when it is the same as the original one, so
+            // that shown claims cross the wire once.
+            immediate: (value.original != value.immediate).then(|| value.immediate.into()),
+            original: Some(value.original.into()),
+            tokens: value.tokens.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicPrincipal> for PublicPrincipal {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicPrincipal,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::public_principal::Value;
+
+        match value.value.ok_or_else(|| missing("value"))? {
+            Value::User(v) => Ok(Self::User(v.try_into()?)),
+            Value::Account(v) => Ok(Self::Account(v.try_into()?)),
+            Value::Agent(v) => Ok(Self::Agent(v.try_into()?)),
+            Value::Tool(v) => Ok(Self::Tool(v.try_into()?)),
+            Value::Anonymous(_) => Ok(Self::Anonymous(Empty {})),
+        }
+    }
+}
+
+impl From<PublicPrincipal> for golem_api_grpc::proto::golem::component::PublicPrincipal {
+    fn from(value: PublicPrincipal) -> Self {
+        use golem_api_grpc::proto::golem::component::public_principal::Value;
+
+        Self {
+            value: Some(match value {
+                PublicPrincipal::User(v) => Value::User(v.into()),
+                PublicPrincipal::Account(v) => Value::Account(v.into()),
+                PublicPrincipal::Agent(v) => Value::Agent(v.into()),
+                PublicPrincipal::Tool(v) => Value::Tool(v.into()),
+                PublicPrincipal::Anonymous(_) => {
+                    Value::Anonymous(golem_schema::proto::golem::common::Empty {})
+                }
+            }),
+        }
+    }
+}
+
+impl From<ClaimVisibility> for golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility {
+    fn from(value: ClaimVisibility) -> Self {
+        match value {
+            ClaimVisibility::Hidden => Self::Hidden,
+            ClaimVisibility::Shown => Self::Shown,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility> for ClaimVisibility {
+    fn from(value: golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility) -> Self {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility as Proto;
+        match value {
+            Proto::Hidden => Self::Hidden,
+            Proto::Shown => Self::Shown,
+        }
+    }
+}
+
+impl ClaimVisibility {
+    /// The value of the `claims` field of the executor's oplog read requests.
+    pub fn to_protobuf(self) -> i32 {
+        golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility::from(self).into()
+    }
+
+    /// Reads the `claims` field of an oplog read request. An unknown value is refused, so a
+    /// request never gets a visibility that its sender did not ask for.
+    pub fn from_protobuf(value: i32) -> Result<Self, String> {
+        golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility::try_from(value)
+            .map(Self::from)
+            .map_err(|_| format!("Invalid field: claims: unknown value {value}"))
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicUserPrincipal> for PublicUserPrincipal {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicUserPrincipal,
+    ) -> Result<Self, Self::Error> {
+        let claims = value
+            .claims
+            .map(|text| {
+                // The text must be one valid claim set. The check does not parse numbers.
+                Claims::from_json(text)
+                    .map(|claims| PublicClaims::from(&claims))
+                    .map_err(|error| format!("Invalid field: claims: {error}"))
+            })
+            .transpose()?;
+        Ok(Self {
+            pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
+            authenticated_at: authenticated_at_from_protobuf(
+                value
+                    .authenticated_at
+                    .ok_or_else(|| missing("authenticated_at"))?,
+            )?,
+            claims,
+        })
+    }
+}
+
+impl From<PublicUserPrincipal> for golem_api_grpc::proto::golem::component::PublicUserPrincipal {
+    fn from(value: PublicUserPrincipal) -> Self {
+        Self {
+            pair: Some(value.pair.into()),
+            authenticated_at: Some(value.authenticated_at.into()),
+            claims: value.claims.map(|claims| claims.as_json().to_string()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicAccountPrincipal>
+    for PublicAccountPrincipal
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicAccountPrincipal,
+    ) -> Result<Self, Self::Error> {
+        let authentication =
+            golem_api_grpc::proto::golem::component::AccountAuthentication::try_from(
+                value.authentication,
+            )
+            .map_err(|_| "Invalid field: authentication".to_string())?
+            .try_into()?;
+        Ok(Self {
+            pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
+            account_id: value
+                .account_id
+                .ok_or_else(|| missing("account_id"))?
+                .try_into()?,
+            authentication,
+        })
+    }
+}
+
+impl From<PublicAccountPrincipal>
+    for golem_api_grpc::proto::golem::component::PublicAccountPrincipal
+{
+    fn from(value: PublicAccountPrincipal) -> Self {
+        Self {
+            pair: Some(value.pair.into()),
+            account_id: Some(value.account_id.into()),
+            authentication: golem_api_grpc::proto::golem::component::AccountAuthentication::from(
+                value.authentication,
+            ) as i32,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicAgentPrincipal>
+    for PublicAgentPrincipal
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicAgentPrincipal,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
+            agent_id: value
+                .agent_id
+                .ok_or_else(|| missing("agent_id"))?
+                .try_into()?,
+            agent_type: value.agent_type,
+            environment_id: value
+                .environment_id
+                .ok_or_else(|| missing("environment_id"))?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<PublicAgentPrincipal> for golem_api_grpc::proto::golem::component::PublicAgentPrincipal {
+    fn from(value: PublicAgentPrincipal) -> Self {
+        Self {
+            pair: Some(value.pair.into()),
+            agent_id: Some(value.agent_id.into()),
+            agent_type: value.agent_type,
+            environment_id: Some(value.environment_id.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicToolPrincipal> for PublicToolPrincipal {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicToolPrincipal,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
+            environment_id: value
+                .environment_id
+                .ok_or_else(|| missing("environment_id"))?
+                .try_into()?,
+            tool_name: value.tool_name,
+        })
+    }
+}
+
+impl From<PublicToolPrincipal> for golem_api_grpc::proto::golem::component::PublicToolPrincipal {
+    fn from(value: PublicToolPrincipal) -> Self {
+        Self {
+            pair: Some(value.pair.into()),
+            environment_id: Some(value.environment_id.into()),
+            tool_name: value.tool_name,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PublicTokenProvenance>
+    for PublicTokenProvenance
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PublicTokenProvenance,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.id.ok_or_else(|| missing("token id"))?.into(),
+            maker: value.maker.map(Into::into),
+        })
+    }
+}
+
+impl From<PublicTokenProvenance>
+    for golem_api_grpc::proto::golem::component::PublicTokenProvenance
+{
+    fn from(value: PublicTokenProvenance) -> Self {
+        Self {
+            id: Some(value.id.into()),
+            maker: value.maker.map(Into::into),
         }
     }
 }

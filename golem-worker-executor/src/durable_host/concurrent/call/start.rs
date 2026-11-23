@@ -216,11 +216,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         observational_owner: Option<OplogIndex>,
         invocation_id: Option<DurableInvocationId>,
     ) -> (BegunCallExecutionScope, InFunctionRetryController) {
+        // Snapshotting appends nothing, so its calls record no driver.
+        let driver = (ctx.runtime == OwnerRuntime::Agent && !ctx.state.snapshotting_mode)
+            .then(|| ctx.state.recording_driver())
+            .flatten();
         let execution_scope = BegunCallExecutionScope {
             entity_parent_start_index: ctx.entity_parent_start_index(),
             parent_start_index,
             observational_owner,
             invocation_id,
+            driver,
             logical_key_position: None,
             agent_invocation: ctx.state.get_current_idempotency_key(),
         };
@@ -575,6 +580,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let parent_start_index = execution_scope.parent_start_index;
                 let observational_owner = execution_scope.observational_owner;
                 let invocation_id = execution_scope.invocation_id;
+                let driver = execution_scope.driver;
                 let denial = prepared.claim_options.denial.clone();
                 let span_activity = if span_observer.is_some() {
                     Some(
@@ -675,6 +681,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 function_name: Pair::HOST_FUNCTION_NAME,
                                 invocation_id,
                                 observational_owner,
+                                driver,
                                 durable_function_type: function_type,
                                 denial,
                             },
@@ -1127,6 +1134,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                     function_name: Pair::HOST_FUNCTION_NAME,
                     invocation_id: self.execution_scope.invocation_id,
                     observational_owner: self.execution_scope.observational_owner,
+                    driver: self.execution_scope.driver,
                     durable_function_type: self.retry.function_type().clone(),
                     denial,
                 },
@@ -1228,6 +1236,7 @@ pub(super) struct StartHeader {
     pub(super) function_name: HostFunctionName,
     pub(super) invocation_id: Option<DurableInvocationId>,
     pub(super) observational_owner: Option<OplogIndex>,
+    pub(super) driver: Option<OplogIndex>,
     pub(super) durable_function_type: DurableFunctionType,
     pub(super) denial: Option<String>,
 }
@@ -1270,6 +1279,7 @@ pub(super) async fn append_start(
                     function_name: header.function_name,
                     invocation_id: header.invocation_id,
                     observational_owner: header.observational_owner,
+                    driver: header.driver,
                     request: Some(request_payload),
                     durable_function_type: header.durable_function_type,
                     span_started,

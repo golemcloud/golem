@@ -294,6 +294,7 @@ async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord
             function_name: HostFunctionName::MonotonicClockNow,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
@@ -1088,6 +1089,7 @@ async fn tail_gated_token_over_crash_tail(
             parent_start_index: None,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             function_name: HostFunctionName::MonotonicClockNow,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
@@ -1363,6 +1365,7 @@ impl InMemoryOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for InMemoryOplog {
     async fn add(
         &self,
@@ -1597,6 +1600,7 @@ async fn dropped_cancellable_call_records_cancelled_at_next_drain_point() {
             function_name: HostFunctionName::MonotonicClockNow,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
@@ -1724,6 +1728,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
             function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 golem_common::model::oplog::HostRequestNoInput {},
             )))),
@@ -2089,6 +2094,7 @@ impl RetryHostProbe {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl InFunctionRetryHost for RetryHostProbe {
     fn current_retry_point(&self) -> OplogIndex {
         self.current_retry_point
@@ -2395,6 +2401,7 @@ fn begun_execution_scope_uses_parent_scope_as_retry_from() {
     let begun = BegunCallExecutionScope {
         parent_start_index: Some(idx(10)),
         observational_owner: None,
+        driver: None,
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,
@@ -2412,6 +2419,7 @@ fn begun_execution_scope_uses_call_start_as_retry_from_when_unscoped() {
     let begun = BegunCallExecutionScope {
         parent_start_index: None,
         observational_owner: None,
+        driver: None,
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,
@@ -2429,6 +2437,7 @@ fn begun_observational_scope_uses_custom_owner_as_retry_from() {
     let begun = BegunCallExecutionScope {
         parent_start_index: Some(idx(10)),
         observational_owner: Some(idx(7)),
+        driver: None,
         invocation_id: None,
         entity_parent_start_index: None,
         logical_key_position: None,

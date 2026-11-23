@@ -108,6 +108,7 @@ impl ScriptedRecovery {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CapacityRecoverySource for ScriptedRecovery {
     type Candidate = u8;
 
@@ -233,6 +234,7 @@ struct BlockedInitialObservation {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CapacityRecoverySource for BlockedInitialObservation {
     type Candidate = ();
 
@@ -610,6 +612,7 @@ struct SharedCapacityRecovery {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CapacityRecoverySource for SharedCapacityRecovery {
     type Candidate = u8;
 
@@ -732,6 +735,7 @@ mod linux {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl CapacityRecoverySource for RealVolumeRecovery {
         type Candidate = ();
 

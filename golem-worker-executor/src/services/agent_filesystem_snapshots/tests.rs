@@ -416,6 +416,7 @@ fn unbusy(operation: &str) -> Failed {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl FilesystemSnapshotStore for ScriptedStore {
     async fn save(
         &self,

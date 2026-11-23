@@ -7,6 +7,7 @@ an updated wit-bindgen without modifying generated bindings by hand.
 import argparse
 import collections
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -102,15 +103,18 @@ def main():
     args = parser.parse_args()
     sdk = args.sdk.resolve()
     tools = (args.tools or sdk.parent / "golem_sdk_tools").resolve()
+    target = os.environ.get("GOLEM_MOONBIT_TARGET", "wasm")
+    if target not in ("wasm", "wasm-gc"):
+        parser.error(f"unsupported MoonBit guest target: {target}")
     fixtures = Path(__file__).resolve().parents[2] / "golem_sdk_tools/test-data/minimal-exports"
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     project = output / "fixtures"
     project.mkdir(exist_ok=True)
     (output / "moon.work").write_text(f'members = [{json.dumps(str(sdk))}, "./fixtures"]\n')
-    (project / "moon.mod").write_text('name = "golemcloud/minimal_export_fixtures"\npreferred_target = "wasm"\nimport { "golemcloud/golem_sdk@0.5.1" }\n')
+    (project / "moon.mod").write_text(f'name = "golemcloud/minimal_export_fixtures"\npreferred_target = "{target}"\nimport {{ "golemcloud/golem_sdk@0.5.1" }}\n')
     expected_exports = re.findall(r'"[^":\n]+:([^"\n]+)"', (sdk / "gen/moon.pkg").read_text())
-    expected_exports = [s for s in expected_exports if "#" in s or s == "cabi_realloc"]
+    expected_exports = sorted({s for s in expected_exports if "#" in s or s == "cabi_realloc"})
     summaries = {}
     for name, agents, tools_present in [("empty", False, False), ("tool", False, True), ("agent", True, False), ("mixed", True, True)]:
         package = project / name
@@ -126,7 +130,7 @@ def main():
         before = {p.name: p.read_bytes() for p in package.iterdir()}
         run("moon", "run", "cmd", "--", "agents", project, "--component-dir", name, cwd=tools)
         assert before == {p.name: p.read_bytes() for p in package.iterdir()}, "codegen is not idempotent"
-        run("moon", "build", "--target", "wasm", "--release", "--no-strip", name, cwd=project)
+        run("moon", "build", "--target", target, "--release", "--no-strip", name, cwd=project)
         candidates = list((output / "_build").rglob(f"{name}.wasm"))
         assert len(candidates) == 1, candidates
         wasm = output / f"{name}.wasm"

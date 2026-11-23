@@ -210,6 +210,7 @@ fn noop_nonce_verifier(_nonce: Option<&Nonce>) -> Result<(), String> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl IdentityProvider for DefaultIdentityProvider {
     async fn exchange_code_for_scopes_and_claims(
         &self,

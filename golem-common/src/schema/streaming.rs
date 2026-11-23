@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::durable_stream::{
+use crate::base_model::durable_stream::{
     MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE,
     MAX_STREAM_VALUE_TRAVERSAL_DEPTH, StreamMapSide, StreamValuePathStep,
 };

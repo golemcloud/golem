@@ -218,6 +218,7 @@ impl ApiEndpointError {
 impl From<WorkerServiceError> for ApiEndpointError {
     fn from(error: WorkerServiceError) -> Self {
         match error {
+            WorkerServiceError::AcceptedInvocation { source, .. } => (*source).into(),
             WorkerServiceError::Internal(_) => {
                 Self::internal(api::error_code::INTERNAL_UNKNOWN, error)
             }
@@ -541,6 +542,9 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::ResolvingRouteFailed(RouteResolverError::CouldNotBuildRouter) => {
                 Self::internal(api::error_code::INTERNAL_ROUTING_FAILURE, value)
             }
+            RequestHandlerError::AgentInvocationFailed(
+                WorkerServiceError::AcceptedInvocation { source, .. },
+            ) => RequestHandlerError::AgentInvocationFailed(*source).into(),
             RequestHandlerError::AgentInvocationFailed(WorkerServiceError::InternalCallError(
                 CallWorkerExecutorError::MessageTooLarge(_),
             )) => Self::payload_too_large(api::error_code::REQUEST_PAYLOAD_TOO_LARGE, value),
@@ -803,6 +807,61 @@ mod tests {
             match ApiEndpointError::from(error) {
                 ApiEndpointError::Conflict(Json(body)) => assert_eq!(body.code, code),
                 other => panic!("expected Conflict, got: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    async fn acceptance_metadata_preserves_public_error_responses() {
+        use crate::service::worker::AcceptedInvocation;
+        use golem_common::model::environment::EnvironmentId;
+        use golem_common::model::{AgentId, InvocationId, OwnedInvocationId};
+        use poem::IntoResponse;
+
+        let wrap = |source| WorkerServiceError::AcceptedInvocation {
+            accepted: AcceptedInvocation {
+                id: OwnedInvocationId::new(
+                    AgentId::from_parts(7, 1),
+                    InvocationId(uuid::Uuid::new_v4()),
+                ),
+                environment_id: EnvironmentId::new(),
+            },
+            source: Box::new(source),
+        };
+        for make_error in [
+            (|| {
+                WorkerServiceError::GolemError(WorkerExecutorError::invalid_request(
+                    "IdempotencyConflict: different input",
+                ))
+            }) as fn() -> WorkerServiceError,
+            || WorkerServiceError::GolemError(WorkerExecutorError::InvocationCancelled),
+            || {
+                WorkerServiceError::RegistryServiceError(RegistryServiceError::LimitExceeded(
+                    "limit reached".into(),
+                ))
+            },
+            || WorkerServiceError::TypeChecker("invalid input".into()),
+        ] {
+            let plain: golem_api_grpc::proto::golem::worker::v1::AgentError = make_error().into();
+            let decorated: golem_api_grpc::proto::golem::worker::v1::AgentError =
+                wrap(make_error()).into();
+            assert_eq!(plain, decorated);
+            for custom_api in [false, true] {
+                let response = |error| {
+                    if custom_api {
+                        ApiEndpointError::from(RequestHandlerError::AgentInvocationFailed(error))
+                    } else {
+                        ApiEndpointError::from(error)
+                    }
+                    .into_response()
+                };
+                let plain = response(make_error());
+                let decorated = response(wrap(make_error()));
+                assert_eq!(plain.status(), decorated.status());
+                assert_eq!(
+                    plain.into_body().into_vec().await.unwrap(),
+                    decorated.into_body().into_vec().await.unwrap()
+                );
             }
         }
     }

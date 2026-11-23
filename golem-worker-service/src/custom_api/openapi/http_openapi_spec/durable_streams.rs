@@ -6,7 +6,7 @@ use super::super::route_schema::StreamSlotSchema;
 use super::super::schema_mapping::render_output_schema;
 use super::*;
 use golem_service_base::custom_api::{
-    DurableStreamRepresentation, MethodParameter, PhantomSelection,
+    AgentSelection, DurableStreamRepresentation, MethodParameter,
 };
 
 const OFFSET: &str = "GolemDSOffset";
@@ -60,12 +60,12 @@ pub(super) fn emit(
         components,
         &mut creation_parameters,
     )?;
-    let identity_parameter = match &behaviour.phantom_selection {
-        PhantomSelection::Query { name, .. } => {
+    let identity_parameter = match &behaviour.agent_selection {
+        AgentSelection::Query { name } => {
             let index = creation_parameters
                 .iter()
                 .position(|p| p["in"] == "query" && p["name"] == name.as_str())
-                .expect("Lowered phantom query selector is missing");
+                .expect("Lowered agent ID query selector is missing");
             Some(creation_parameters.remove(index))
         }
         _ => None,
@@ -151,6 +151,7 @@ pub(super) fn emit(
         create_responses[code]["headers"] =
             json!({"Location": header("Created session URL", string_schema())});
     }
+    add_invocation_response_headers(&mut create_responses);
     let mut create_parameters = creation_parameters.clone();
     create_parameters.extend(expiry_parameters());
     operation(
@@ -165,21 +166,23 @@ pub(super) fn emit(
     let mut parameters = creation_parameters.clone();
     parameters.push(path_parameter(&session_name, reference(SESSION)));
     parameters.extend(expiry_parameters());
+    let mut ensure_responses = responses(
+        &[
+            ("201", "Session created"),
+            ("200", "Existing invocation"),
+            ("400", "Invalid arguments"),
+            ("409", "Invocation arguments conflict"),
+        ],
+        false,
+    );
+    add_invocation_response_headers(&mut ensure_responses);
     operation(
         &session_path,
         "put",
         "ensure-session",
         parameters,
         creation_body,
-        responses(
-            &[
-                ("201", "Session created"),
-                ("200", "Existing invocation"),
-                ("400", "Invalid arguments"),
-                ("409", "Invocation arguments conflict"),
-            ],
-            false,
-        ),
+        ensure_responses,
         None,
     )?;
     for method in ["get", "head"] {
@@ -305,6 +308,7 @@ pub(super) fn emit(
         for code in ["201", "200"] {
             r[code]["headers"] = metadata_headers(false, true);
         }
+        add_invocation_response_headers(&mut r);
         operation(
             &path,
             "put",
@@ -485,13 +489,17 @@ pub(super) fn emit(
                     parameters.retain(|p| p["in"] == "path" || p["in"] == "header");
                     parameters.push(path_parameter(&fork_name, reference(SESSION)));
                 }
+                let mut responses = r.clone();
+                if path != &fork_path && url_bound {
+                    add_invocation_response_headers(&mut responses);
+                }
                 operation(
                     path,
                     "post",
                     &format!("append-{}", slot.public_name),
                     parameters,
                     Some(body.clone()),
-                    r.clone(),
+                    responses,
                     Some(slot),
                 )?;
             }

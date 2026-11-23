@@ -2231,7 +2231,6 @@ fn prepared_revert_payload_pair_roundtrips() {
             }),
             resolved_revert: Some(ResolvedRevert {
                 last_oplog_index: OplogIndex::from_u64(42),
-                observed_oplog_index: OplogIndex::from_u64(100),
             }),
         },
         HostResponseGolemApiUnit { result: Ok(()) },

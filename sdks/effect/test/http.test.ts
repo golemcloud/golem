@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "@effect/vitest"
 import { Cause, Effect, Option, Schema, Stream } from "effect"
-import { defineAgent, __resetAgents } from "../src/Agent.js"
+import { defineAgent, registerAgent, __resetAgents } from "../src/Agent.js"
 import { method } from "../src/Method.js"
 import { InvocationContext } from "../src/InvocationContext.js"
 import { AgentStream } from "../src/WitTypes.js"
@@ -26,7 +26,7 @@ import {
   parseMountPath,
   patch,
   pathVar,
-  phantomId,
+  agentId,
   post,
   put,
   restVar,
@@ -602,28 +602,33 @@ describe("Http defineAgent integration", () => {
     ).toBeUndefined()
   })
 
-  it("publishes all selector variants through agent registration", async () => {
+  it("publishes required ID bindings, create paths and files without constructor URL inputs", async () => {
     for (const source of ["path", "query"] as const) {
-      for (const optional of [false, true]) {
-        const name = `Selected_${source}_${optional}`
-        defineAgent({
-          name,
-          id: { customer: Schema.String },
-          http: mount(source === "path" ? "/c/{customer}/{instance}" : "/c/{customer}", {
-            phantomId: phantomId[source]("instance", { optional }),
-            phantomAgent: true,
-          }),
-          methods: { read: method({ input: {}, success: Schema.String, http: [get("/read")] }) },
-        }).implement({
-          init: () => Effect.void,
-          methods: () => Effect.succeed({ read: () => Effect.succeed("ok") }),
-        })
-        const types = await guest.discoverAgentTypes()
-        expect(types.find((t) => t.typeName === name)?.httpMount?.phantomIdBinding).toEqual({
-          tag: source,
-          val: { name: "instance", optional },
-        })
-      }
+      const name = `Selected_${source}`
+      defineAgent({
+        name,
+        id: { customer: Schema.Struct({ name: Schema.String }) },
+        http: mount(source === "path" ? "/c/{instance}" : "/c", {
+          agentIdBinding: agentId[source]("instance"),
+          createRoute: "/{agent-type}/create",
+          exposeFiles: [{ route: "/a", path: "/a" }],
+        }),
+        methods: { read: method({ input: {}, success: Schema.String, http: [get("/read")] }) },
+      }).implement({
+        init: () => Effect.void,
+        methods: () => Effect.succeed({ read: () => Effect.succeed("ok") }),
+      })
+      const types = await guest.discoverAgentTypes()
+      const metadata = types.find((t) => t.typeName === name)!.httpMount!
+      expect(metadata.agentIdBinding).toEqual({
+        tag: source,
+        val: { name: "instance" },
+      })
+      expect(metadata.createRoute).toEqual([
+        { tag: "system-variable", val: "agent-type" },
+        { tag: "segment", val: { tag: "literal", val: "create" } },
+      ])
+      expect(metadata.filesystemBindings).toHaveLength(1)
     }
   })
 
@@ -631,6 +636,7 @@ describe("Http defineAgent integration", () => {
     const check = (
       http: import("../src/Http.js").MountDef<string, string>,
       ep: import("../src/Http.js").EndpointDef<string> = post("/read"),
+      params: Record<string, typeof Schema.String> = {},
     ) =>
       Effect.runPromise(
         runFail(
@@ -643,52 +649,192 @@ describe("Http defineAgent integration", () => {
             methods: [
               {
                 name: "read",
-                params: {},
+                params,
                 endpoints: [ep],
                 nonStringBindableParams: new Set(),
                 stringBindableParams: new Set(),
                 queryOrHeaderBindableParams: new Set(),
                 queryBindableParams: new Set(),
                 streamParams: new Set(),
+                usesStreams: false,
               },
             ],
           }),
         ),
       ).then((error) => error.reason)
-    for (const source of ["path", "query"] as const) {
-      for (const optional of ['"false"', "null", "0"]) {
-        await expect(
-          check(
-            mount(source === "path" ? "/c/{instance}" : "/c", {
-              phantomId: phantomId[source]("instance", JSON.parse(`{"optional":${optional}}`)),
-            }),
-          ),
-        ).resolves.toMatch(/optionality must be a boolean/)
-      }
-    }
     await expect(
-      check(mount("/c" as string, { phantomId: phantomId.path("instance") })),
+      check(mount("/c" as string, { agentIdBinding: agentId.path("instance") })),
     ).resolves.toMatch(/ownership/)
     await expect(
-      check(mount("/c/{instance}/{other}", { phantomId: phantomId.path("instance") })),
+      check(mount("/c/{instance}/{other}" as string, { agentIdBinding: agentId.path("instance") })),
     ).resolves.toMatch(/other/)
     await expect(
-      check(mount("/c/{instance}", { phantomId: phantomId.query("instance") })),
+      check(mount("/c/{instance}" as string, { agentIdBinding: agentId.query("instance") })),
     ).resolves.toMatch(/constructor/)
     await expect(
-      check(
-        mount("/c", {
-          phantomId: phantomId.query("instance"),
-          exposeFiles: [{ route: "/a", path: "/a" }],
-        }),
-      ),
-    ).resolves.toMatch(/file exposure/)
+      check({ ...mount("/c", { agentIdBinding: agentId.query("instance") }), phantomAgent: true }),
+    ).resolves.toMatch(/phantomAgent/)
+    await expect(check({ ...mount("/c"), createRoute: [] })).resolves.toMatch(/create route/)
+    await expect(
+      check({
+        ...mount("/c", { agentIdBinding: agentId.query("instance") }),
+        createRoute: [pathVar("instance")],
+      }),
+    ).resolves.toMatch(/create route/)
     await expect(
       check(
-        mount("/c", { phantomId: phantomId.query("instance") }),
+        mount("/c", { agentIdBinding: agentId.query("instance") }),
         post("/read?instance={value}"),
       ),
     ).resolves.toMatch(/conflicts/)
+    for (const ep of [get("/read"), head("/read"), del("/read")]) {
+      await expect(
+        check(mount("/c", { agentIdBinding: agentId.query("instance") }), ep, {
+          instance: Schema.String,
+        }),
+      ).resolves.toMatch(/conflicts/)
+    }
+    await expect(
+      check(
+        mount("/c", { agentIdBinding: agentId.query("offset") }),
+        get("/read", { durableStreams: { slots: [] } }),
+      ),
+    ).resolves.toMatch(/conflicts/)
+  })
+
+  it("reserves query ID controls for inferred streams but not explicit SSE or plain routes", async () => {
+    for (const name of ["offset", "cursor", "live"]) {
+      for (const output of [false, true]) {
+        for (const mode of [undefined, "durableStreams", "sse"] as const) {
+          if (!output && mode === "sse") continue
+          const registration = registerAgent(
+            {
+              name: `StreamId_${name}_${output}_${mode}`,
+              id: {},
+              http: mount("/c", { agentIdBinding: agentId.query(name) }),
+              methods: {
+                events: method({
+                  input: output ? {} : { uploads: AgentStream(Schema.String) },
+                  success: output ? AgentStream(Schema.String) : Schema.String,
+                  http: [get("/events", { mode })],
+                }),
+              },
+            },
+            {
+              init: () => Effect.void,
+              methods: () => Effect.succeed({ events: () => Effect.die("not invoked") }),
+            },
+          )
+          if (mode === "sse") {
+            await Effect.runPromise(registration)
+          } else {
+            const error = await Effect.runPromise(runFail(registration))
+            expect((error as HttpRouteError).reason).toMatch(/conflicts/)
+          }
+        }
+      }
+      await Effect.runPromise(
+        registerAgent(
+          {
+            name: `PlainId_${name}`,
+            id: {},
+            http: mount("/c", { agentIdBinding: agentId.query(name) }),
+            methods: { read: method({ input: {}, success: Schema.String, http: [get("/read")] }) },
+          },
+          {
+            init: () => Effect.void,
+            methods: () => Effect.succeed({ read: () => Effect.succeed("ok") }),
+          },
+        ),
+      )
+    }
+  })
+
+  it("rejects ID selection on ephemeral agents during registration", async () => {
+    const error = await Effect.runPromise(
+      runFail(
+        registerAgent(
+          {
+            name: "EphemeralIdMount",
+            mode: "ephemeral",
+            id: {},
+            http: mount("/c", { agentIdBinding: agentId.query("instance") }),
+            methods: {},
+          },
+          {
+            init: () => Effect.void,
+            methods: () => Effect.succeed({}),
+          },
+        ),
+      ),
+    )
+    expect(error).toBeInstanceOf(HttpRouteError)
+    expect((error as HttpRouteError).reason).toMatch(/regular durable/)
+  })
+
+  it("reserves query IDs from implicit input but preserves body, header and distinct query inputs", async () => {
+    const http = mount("/c", { agentIdBinding: agentId.query("instance") })
+    const error = await Effect.runPromise(
+      runFail(
+        registerAgent(
+          {
+            name: "ConflictingImplicitId",
+            id: { customer: Schema.String },
+            http,
+            methods: {
+              read: method({
+                input: { instance: Schema.String },
+                success: Schema.String,
+                http: [get("/read")],
+              }),
+            },
+          },
+          {
+            init: () => Effect.void,
+            methods: () => Effect.succeed({ read: () => Effect.succeed("ok") }),
+          },
+        ),
+      ),
+    )
+    expect((error as HttpRouteError).reason).toMatch(/conflicts/)
+    await Effect.runPromise(
+      registerAgent(
+        {
+          name: "DistinctIdInputs",
+          id: { customer: Schema.String },
+          http,
+          methods: {
+            query: method({
+              input: { search: Schema.String },
+              success: Schema.String,
+              http: [get("/query")],
+            }),
+            body: method({
+              input: { instance: Schema.String },
+              success: Schema.String,
+              http: [post("/body")],
+            }),
+            header: method({
+              input: { instance: Schema.String },
+              success: Schema.String,
+              http: [get("/header").pipe(withHeader("X-Instance", "instance"))],
+            }),
+          },
+        },
+        {
+          init: () => Effect.void,
+          methods: () =>
+            Effect.succeed({
+              query: () => Effect.succeed("ok"),
+              body: () => Effect.succeed("ok"),
+              header: () => Effect.succeed("ok"),
+            }),
+        },
+      ),
+    )
+    expect(
+      (await guest.discoverAgentTypes()).find((t) => t.typeName === "DistinctIdInputs"),
+    ).toBeDefined()
   })
 
   it.effect("populates httpMount and httpEndpoint on the registered AgentType", () =>
