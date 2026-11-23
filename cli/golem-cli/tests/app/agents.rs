@@ -552,6 +552,91 @@ async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
 }
 
 #[test]
+#[timeout("10 minutes")]
+async fn test_streaming_invocation_cli_identity_and_fingerprint() {
+    let ctx = streaming_invocation_context().await;
+    let key = streaming_agent(&Uuid::new_v4().to_string());
+    let mut previous_reference: Option<(String, String)> = None;
+
+    for _ in 0..2 {
+        let created = ctx
+            .cli([
+                flag::YES,
+                flag::FORMAT,
+                "json",
+                cmd::AGENT,
+                cmd::CREATE,
+                &key,
+                "--keyed",
+            ])
+            .await;
+        assert!(created.success_or_dump());
+        let reference = created
+            .stdout_json::<serde_json::Value>()
+            .into_iter()
+            .find(|document| document["$type"] == "agent.create")
+            .unwrap();
+        let id = reference["agentId"].as_str().unwrap();
+        let fingerprint = reference["agentFingerprint"].as_str().unwrap();
+        let by_id = format!("StreamingRpcTarget[{id}]");
+
+        if let Some((previous_id, previous_fingerprint)) = &previous_reference {
+            assert_eq!(id, previous_id);
+            assert_ne!(fingerprint, previous_fingerprint);
+            for address in [&key, &by_id] {
+                let stale = ctx
+                    .cli_with_input(
+                        [
+                            cmd::AGENT,
+                            cmd::INVOKE,
+                            address,
+                            "produce",
+                            "[3, 7]",
+                            "--expected-fingerprint",
+                            previous_fingerprint,
+                        ],
+                        b"",
+                    )
+                    .await;
+                assert!(
+                    !stale.success(),
+                    "a stale fingerprint must reject {address}"
+                );
+                assert!(
+                    stale.stderr_text().contains("not-found"),
+                    "{}",
+                    stale.stderr_text()
+                );
+            }
+        }
+
+        for (address, expected) in [
+            (&by_id, None),
+            (&by_id, Some(fingerprint)),
+            (&key, Some(fingerprint)),
+        ] {
+            let mut args = vec![
+                cmd::AGENT,
+                cmd::INVOKE,
+                address.as_str(),
+                "produce",
+                "[3, 7]",
+            ];
+            if let Some(expected) = expected {
+                args.extend(["--expected-fingerprint", expected]);
+            }
+            let output = ctx.cli_with_input(args, b"").await;
+            assert!(output.success(), "{}", output.stderr_text());
+            assert!(output.stdout_text().contains("3\n7\n"));
+        }
+
+        previous_reference = Some((id.to_string(), fingerprint.to_string()));
+        let deleted = ctx.cli([flag::YES, cmd::AGENT, "delete", &key]).await;
+        assert!(deleted.success_or_dump());
+    }
+}
+
+#[test]
 #[timeout("15 minutes")]
 async fn test_streaming_invocation_cli_end_to_end() {
     let ctx = streaming_invocation_context().await;
