@@ -285,6 +285,8 @@ async fn wait_for_memory_growth(
 ) -> anyhow::Result<u64> {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
+            // A lifecycle growth hint can arrive after the invocation's final commit.
+            executor.commit_oplog(&agent_id.agent_id).await?;
             let (total, _) =
                 memory_history(&executor.get_oplog(agent_id, OplogIndex::INITIAL).await?);
             if total >= at_least {
@@ -351,10 +353,18 @@ async fn gc_heap_growth_is_counted_and_hinted(
     assert_eq!(retained.into_typed::<u32>()?, 0);
     let before = wait_for_memory_growth(&executor, &worker_id, 0).await?;
 
+    let mut growth = executor
+        .gate_next_memory_growth_append(&worker_id.agent_id)
+        .await;
     let retained = executor
         .invoke_and_await_agent(&component, &agent, "retain", data_value!(16u32 * 1024))
         .await?;
     assert_eq!(retained.into_typed::<u32>()?, 16 * 1024);
+    growth.entered().await;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    growth.release();
 
     // The Rust agent's linear memory does not grow for this call, so only the GC heap growth
     // can raise the hinted total by the retained 16 MiB.

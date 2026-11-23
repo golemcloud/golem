@@ -14,7 +14,7 @@
 
 use crate::agentic::{EnrichedAgentMethod, EnrichedParameterSchema, ExtendedAgentConstructor};
 use crate::golem_agentic::golem::agent::common::{
-    HttpEndpointDetails, HttpMountDetails, PathSegment, PhantomIdBinding,
+    AgentIdBinding, HttpEndpointDetails, HttpMountDetails, PathSegment,
 };
 use golem_schema::http::wit::wire as http;
 use std::collections::HashSet;
@@ -23,7 +23,7 @@ use std::collections::HashSet;
 pub fn validate_wire_agent_http(
     agent: &crate::golem_agentic::golem::agent::common::AgentType,
 ) -> Result<(), String> {
-    use crate::golem_agentic::golem::agent::common::{FieldSource, InputSchema};
+    use crate::golem_agentic::golem::agent::common::{FieldSource, InputSchema, OutputSchema};
     use crate::schema::wit::wire::Role;
     let names = |input: &InputSchema| {
         let InputSchema::Parameters(fields) = input;
@@ -52,13 +52,22 @@ pub fn validate_wire_agent_http(
     if let Some(mount) = &agent.http_mount {
         let input = &agent.constructor.input_schema;
         let parameters = names(input);
-        validate_phantom_selector(mount, &parameters)?;
-        if mount.phantom_id_binding.is_some()
+        validate_agent_id_binding(mount)?;
+        if mount.agent_id_binding.is_some()
             && (agent.mode == crate::golem_agentic::golem::agent::common::AgentMode::Ephemeral
                 || agent.kind
                     == crate::golem_agentic::golem::agent::common::AgentTypeKind::HttpRouter)
         {
-            return Err("Phantom selectors require a regular durable agent".into());
+            return Err("Agent ID bindings require a regular durable agent".into());
+        }
+        if !mount.filesystem_bindings.is_empty()
+            && (agent.mode != crate::golem_agentic::golem::agent::common::AgentMode::Durable
+                || agent.kind != crate::golem_agentic::golem::agent::common::AgentTypeKind::Regular
+                || mount.phantom_agent)
+        {
+            return Err(
+                "Filesystem bindings require a regular durable owner without phantom_agent".into(),
+            );
         }
         validate_no_catch_all_in_http_mount(&agent.type_name, mount)?;
         for (role, kind) in [
@@ -66,7 +75,9 @@ pub fn validate_wire_agent_http(
             (Role::UnstructuredBinary, "UnstructuredBinary"),
             (Role::Multimodal, "Multimodal"),
         ] {
-            if let Some(name) = roles(input, role).iter().next() {
+            if mount.agent_id_binding.is_none()
+                && let Some(name) = roles(input, role).iter().next()
+            {
                 return Err(format!(
                     "Agent '{}' constructor parameter '{}' cannot be of type '{}' when used with HTTP mount",
                     agent.type_name, name, kind
@@ -87,8 +98,43 @@ pub fn validate_wire_agent_http(
             ));
         }
         let input = &method.input_schema;
+        let decoder = crate::schema::wit::GraphDecoder::new(&agent.schema)
+            .map_err(|error| error.to_string())?;
+        let defs = decoder.decode_defs().map_err(|error| error.to_string())?;
+        let InputSchema::Parameters(fields) = input;
+        let mut implicit_query_vars = names(input);
+        let mut uses_streams = false;
+        for field in fields {
+            let graph = crate::schema::SchemaGraph {
+                root: decoder
+                    .decode_type_at(field.schema)
+                    .map_err(|error| error.to_string())?,
+                defs: defs.clone(),
+            };
+            if matches!(field.source, FieldSource::UserSupplied) {
+                uses_streams |=
+                    crate::agentic::schema_type_contains_stream(&graph.root, &graph.defs);
+            }
+            if matches!(
+                graph.resolve_ref(&graph.root),
+                Ok(crate::schema::SchemaType::Stream { .. })
+            ) {
+                implicit_query_vars.remove(&field.name);
+            }
+        }
+        if let OutputSchema::Single(index) = method.output_schema {
+            let root = decoder
+                .decode_type_at(index)
+                .map_err(|error| error.to_string())?;
+            uses_streams |= crate::agentic::schema_type_contains_stream(&root, &defs);
+        }
         for endpoint in &method.http_endpoint {
-            validate_phantom_endpoint(agent.http_mount.as_ref().unwrap(), endpoint)?;
+            validate_agent_id_endpoint(
+                agent.http_mount.as_ref().unwrap(),
+                endpoint,
+                &implicit_query_vars,
+                uses_streams,
+            )?;
             validate_endpoint_variables(
                 endpoint,
                 &names(input),
@@ -110,9 +156,11 @@ pub fn validate_http_mount(
 ) -> Result<(), String> {
     let constructor_input_params = collect_constructor_input_parameter_names(agent_constructor);
 
-    validate_phantom_selector(agent_mount, &constructor_input_params)?;
+    validate_agent_id_binding(agent_mount)?;
     validate_no_catch_all_in_http_mount(agent_class_name, agent_mount)?;
-    validate_constructor_params_are_http_safe(agent_class_name, agent_constructor)?;
+    if agent_mount.agent_id_binding.is_none() {
+        validate_constructor_params_are_http_safe(agent_class_name, agent_constructor)?;
+    }
     validate_mount_variables_exist_in_constructor(agent_mount, &constructor_input_params)?;
     validate_constructor_vars_are_satisfied(agent_mount, &constructor_input_params)?;
 
@@ -140,8 +188,36 @@ pub fn validate_http_endpoint(
     let unstructured_text_params = collect_unstructured_text_params(&agent_method.input_schema);
     let multimodal_params = collect_multimodal_params(&agent_method.input_schema);
 
+    let implicit_query_vars = agent_method
+        .input_schema
+        .iter()
+        .filter_map(|(name, param)| match param {
+            EnrichedParameterSchema::Value(graph)
+                if !matches!(
+                    graph.resolve_ref(&graph.root),
+                    Ok(crate::schema::SchemaType::Stream { .. })
+                ) =>
+            {
+                Some(name.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let uses_streams = agent_method
+        .input_schema
+        .iter()
+        .map(|(_, param)| match param {
+            EnrichedParameterSchema::Value(graph) => graph,
+        })
+        .chain(agent_method.output_schema.iter().map(|(_, graph)| graph))
+        .any(|graph| crate::agentic::schema_type_contains_stream(&graph.root, &graph.defs));
     for endpoint in &agent_method.http_endpoint {
-        validate_phantom_endpoint(http_mount_details.unwrap(), endpoint)?;
+        validate_agent_id_endpoint(
+            http_mount_details.unwrap(),
+            endpoint,
+            &implicit_query_vars,
+            uses_streams,
+        )?;
         validate_endpoint_variables(
             endpoint,
             &method_vars,
@@ -459,7 +535,7 @@ fn validate_mount_variables_exist_in_constructor(
         if let PathSegment::Segment(http::PathSegment::PathVariable(path_variable)) = segment {
             let variable_name = &path_variable.variable_name;
 
-            if matches!(&agent_mount.phantom_id_binding, Some(PhantomIdBinding::Path(binding)) if &binding.name == variable_name)
+            if matches!(&agent_mount.agent_id_binding, Some(AgentIdBinding::Path(binding)) if &binding.name == variable_name)
             {
                 continue;
             }
@@ -475,36 +551,78 @@ fn validate_mount_variables_exist_in_constructor(
     Ok(())
 }
 
-fn validate_phantom_selector(
-    mount: &HttpMountDetails,
-    constructor_vars: &HashSet<String>,
-) -> Result<(), String> {
-    let Some(selector) = &mount.phantom_id_binding else {
+fn validate_agent_id_binding(mount: &HttpMountDetails) -> Result<(), String> {
+    if let Some(path) = &mount.create_route {
+        if mount.agent_id_binding.is_none() {
+            return Err("HTTP create route requires an agent ID binding".into());
+        }
+        if path.iter().any(|segment| {
+            !matches!(
+                segment,
+                PathSegment::SystemVariable(_)
+                    | PathSegment::Segment(http::PathSegment::Literal(_))
+            )
+        }) {
+            return Err("HTTP create route can contain only literals and system variables".into());
+        }
+    }
+    let Some(selector) = &mount.agent_id_binding else {
         return Ok(());
     };
-    let (PhantomIdBinding::Path(binding) | PhantomIdBinding::Query(binding)) = selector;
-    if binding.name.is_empty() || !mount.filesystem_bindings.is_empty() {
-        return Err("Phantom selectors require a nonempty name and no filesystem exposure".into());
+    let (AgentIdBinding::Path(binding) | AgentIdBinding::Query(binding)) = selector;
+    if binding.name.trim().is_empty() {
+        return Err("Agent ID binding requires a nonempty name".into());
     }
-    if matches!(selector, PhantomIdBinding::Path(_)) &&
-        (constructor_vars.contains(&binding.name) || mount.path_prefix.iter().filter(|s| matches!(s, PathSegment::Segment(http::PathSegment::PathVariable(v)) if v.variable_name == binding.name)).count() != 1) {
-        return Err("Phantom path selector must name exactly one mount capture, not a constructor parameter".into());
+    if mount.phantom_agent {
+        return Err("Agent ID binding cannot be combined with phantom_agent".into());
+    }
+    if matches!(selector, AgentIdBinding::Path(_)) &&
+        mount.path_prefix.iter().filter(|s| matches!(s, PathSegment::Segment(http::PathSegment::PathVariable(v)) if v.variable_name == binding.name)).count() != 1 {
+        return Err("Agent ID path binding must name exactly one ordinary mount capture".into());
+    }
+    for segment in &mount.path_prefix {
+        if let PathSegment::Segment(
+            http::PathSegment::PathVariable(variable)
+            | http::PathSegment::RemainingPathVariable(variable),
+        ) = segment
+            && !matches!(selector, AgentIdBinding::Path(binding) if binding.name == variable.variable_name)
+        {
+            return Err(format!(
+                "Agent ID binding cannot be combined with constructor URL binding '{}'",
+                variable.variable_name
+            ));
+        }
     }
     Ok(())
 }
 
-fn validate_phantom_endpoint(
+fn validate_agent_id_endpoint(
     mount: &HttpMountDetails,
     endpoint: &HttpEndpointDetails,
+    method_vars: &HashSet<String>,
+    uses_streams: bool,
 ) -> Result<(), String> {
-    let conflict = match &mount.phantom_id_binding {
-        Some(PhantomIdBinding::Path(binding)) => endpoint.path_suffix.iter().any(|s| matches!(s, PathSegment::Segment(http::PathSegment::PathVariable(v) | http::PathSegment::RemainingPathVariable(v)) if v.variable_name == binding.name)),
-        Some(PhantomIdBinding::Query(binding)) => endpoint.query_vars.iter().any(|q| q.query_param_name == binding.name) || (endpoint.durable_streams.is_some() && ["offset", "cursor", "live"].contains(&binding.name.as_str())),
+    let durable_streams = match endpoint.mode {
+        Some(http::HttpRouteMode::DurableStreams) => true,
+        None => uses_streams || endpoint.durable_streams.is_some(),
+        _ => false,
+    };
+    let conflict = match &mount.agent_id_binding {
+        Some(AgentIdBinding::Path(binding)) => endpoint.path_suffix.iter().any(|s| matches!(s, PathSegment::Segment(http::PathSegment::PathVariable(v) | http::PathSegment::RemainingPathVariable(v)) if v.variable_name == binding.name)),
+        Some(AgentIdBinding::Query(binding)) => {
+            let implicit_query = matches!(endpoint.http_method, crate::golem_agentic::golem::agent::common::HttpMethod::Method(http::HttpMethod::Get | http::HttpMethod::Head | http::HttpMethod::Delete));
+            let explicitly_bound = endpoint.header_vars.iter().any(|v| v.variable_name == binding.name)
+                || endpoint.query_vars.iter().any(|v| v.variable_name == binding.name)
+                || endpoint.path_suffix.iter().any(|s| matches!(s, PathSegment::Segment(http::PathSegment::PathVariable(v) | http::PathSegment::RemainingPathVariable(v)) if v.variable_name == binding.name));
+            endpoint.query_vars.iter().any(|q| q.query_param_name == binding.name)
+                || (implicit_query && method_vars.contains(&binding.name) && !explicitly_bound)
+                || (durable_streams && ["offset", "cursor", "live"].contains(&binding.name.as_str()))
+        },
         None => false,
     };
     if conflict {
         return Err(
-            "Phantom selector conflicts with an endpoint binding or durable-stream control".into(),
+            "Agent ID binding conflicts with an endpoint input or durable-stream control".into(),
         );
     }
     Ok(())
@@ -514,6 +632,9 @@ fn validate_constructor_vars_are_satisfied(
     agent_mount: &HttpMountDetails,
     constructor_vars: &std::collections::HashSet<String>,
 ) -> Result<(), String> {
+    if agent_mount.agent_id_binding.is_some() {
+        return Ok(());
+    }
     let provided_vars = collect_http_mount_variables(agent_mount);
 
     for constructor_var in constructor_vars {
@@ -564,7 +685,8 @@ mod tests {
             path_prefix: segments,
             auth_details: Some(AuthDetails { required: true }),
             phantom_agent: false,
-            phantom_id_binding: None,
+            agent_id_binding: None,
+            create_route: None,
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },
@@ -593,45 +715,300 @@ mod tests {
     }
 
     #[test]
-    fn phantom_capture_is_not_a_constructor_binding() {
-        use crate::golem_agentic::golem::agent::common::PhantomIdBindingDetails;
+    fn agent_id_capture_is_exclusive_and_does_not_require_constructor_values() {
+        use crate::golem_agentic::golem::agent::common::AgentIdBindingDetails;
         let constructor = constructor_with_params(vec![("customer", String::get_type())]);
-        let mut mount =
-            mount_with_segments(vec![literal(), path_var("customer"), path_var("instance")]);
-        mount.phantom_id_binding = Some(PhantomIdBinding::Path(PhantomIdBindingDetails {
+        let mut mount = mount_with_segments(vec![literal(), path_var("instance")]);
+        mount.agent_id_binding = Some(AgentIdBinding::Path(AgentIdBindingDetails {
             name: "instance".into(),
-            optional: true,
         }));
         assert!(validate_http_mount("Selected", &mount, &constructor).is_ok());
-        mount.path_prefix.push(path_var("other"));
+        mount.path_prefix.push(path_var("customer"));
         assert!(
             validate_http_mount("Selected", &mount, &constructor)
                 .unwrap_err()
-                .contains("other")
+                .contains("constructor URL binding")
         );
         mount.path_prefix.pop();
-        let colliding = constructor_with_params(vec![
+        let same_name = constructor_with_params(vec![
             ("customer", String::get_type()),
             ("instance", String::get_type()),
         ]);
-        assert!(
-            validate_http_mount("Selected", &mount, &colliding)
-                .unwrap_err()
-                .contains("constructor parameter")
-        );
+        assert!(validate_http_mount("Selected", &mount, &same_name).is_ok());
         mount.path_prefix.pop();
         assert!(
             validate_http_mount("Selected", &mount, &constructor)
                 .unwrap_err()
                 .contains("exactly one")
         );
-        mount.phantom_id_binding = Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+        mount.agent_id_binding = Some(AgentIdBinding::Query(AgentIdBindingDetails {
             name: "instance".into(),
-            optional: false,
         }));
         assert!(validate_http_mount("Selected", &mount, &constructor).is_ok());
         mount.path_prefix.push(path_var("instance"));
         assert!(validate_http_mount("Selected", &mount, &constructor).is_err());
+    }
+
+    #[test]
+    fn create_route_requires_id_and_literal_or_system_path() {
+        use crate::golem_agentic::golem::agent::common::{AgentIdBindingDetails, SystemVariable};
+        let constructor = constructor_with_params(vec![("customer", String::get_type())]);
+        let mut mount = mount_with_segments(vec![literal()]);
+        mount.create_route = Some(vec![literal()]);
+        assert!(
+            validate_http_mount("Selected", &mount, &constructor)
+                .unwrap_err()
+                .contains("requires an agent ID")
+        );
+        mount.agent_id_binding = Some(AgentIdBinding::Query(AgentIdBindingDetails {
+            name: "id".into(),
+        }));
+        mount.create_route = Some(vec![
+            literal(),
+            PathSegment::SystemVariable(SystemVariable::AgentType),
+        ]);
+        assert!(validate_http_mount("Selected", &mount, &constructor).is_ok());
+        mount.create_route = Some(vec![]);
+        assert!(validate_http_mount("Selected", &mount, &constructor).is_ok());
+        for capture in [path_var("id"), path_var("customer"), catch_all("rest")] {
+            mount.create_route = Some(vec![capture]);
+            assert!(
+                validate_http_mount("Selected", &mount, &constructor)
+                    .unwrap_err()
+                    .contains("only literals")
+            );
+        }
+        mount.create_route = None;
+        mount.phantom_agent = true;
+        assert!(
+            validate_http_mount("Selected", &mount, &constructor)
+                .unwrap_err()
+                .contains("phantom_agent")
+        );
+    }
+
+    #[test]
+    fn query_id_is_reserved_from_implicit_and_explicit_method_inputs() {
+        use crate::golem_agentic::golem::agent::common::AgentIdBindingDetails;
+        let mut mount = mount_with_segments(vec![literal()]);
+        mount.agent_id_binding = Some(AgentIdBinding::Query(AgentIdBindingDetails {
+            name: "id".into(),
+        }));
+        let endpoint = make_endpoint(
+            HttpMethod::Method(http::HttpMethod::Get),
+            vec![],
+            vec![],
+            vec![],
+            None,
+            vec![],
+        );
+        let method = make_agent_method(
+            "read",
+            make_schema(vec!["id"], vec![]),
+            vec![endpoint.clone()],
+        );
+        assert!(
+            validate_http_endpoint("Selected", &method, Some(&mount))
+                .unwrap_err()
+                .contains("conflicts")
+        );
+        let mut method =
+            make_agent_method("read", make_schema(vec!["filter"], vec![]), vec![endpoint]);
+        assert!(validate_http_endpoint("Selected", &method, Some(&mount)).is_ok());
+        method.http_endpoint[0].query_vars.push(QueryVariable {
+            query_param_name: "id".into(),
+            variable_name: "filter".into(),
+        });
+        assert!(
+            validate_http_endpoint("Selected", &method, Some(&mount))
+                .unwrap_err()
+                .contains("conflicts")
+        );
+        for http_method in [
+            http::HttpMethod::Get,
+            http::HttpMethod::Head,
+            http::HttpMethod::Delete,
+        ] {
+            let mut method = make_agent_method(
+                "read",
+                make_schema(vec!["id"], vec![]),
+                vec![make_endpoint(
+                    HttpMethod::Method(http_method),
+                    vec![],
+                    vec![],
+                    vec![],
+                    None,
+                    vec![],
+                )],
+            );
+            assert!(validate_http_endpoint("Selected", &method, Some(&mount)).is_err());
+            method.http_endpoint[0].header_vars.push(HeaderVariable {
+                header_name: "x-filter".into(),
+                variable_name: "id".into(),
+            });
+            assert!(validate_http_endpoint("Selected", &method, Some(&mount)).is_ok());
+            method.http_endpoint[0].header_vars.clear();
+            method.http_endpoint[0].path_suffix.push(path_var("id"));
+            assert!(validate_http_endpoint("Selected", &method, Some(&mount)).is_ok());
+            method.http_endpoint[0].path_suffix.clear();
+            method.http_endpoint[0].query_vars.push(QueryVariable {
+                query_param_name: "filter".into(),
+                variable_name: "id".into(),
+            });
+            assert!(validate_http_endpoint("Selected", &method, Some(&mount)).is_ok());
+        }
+        let method = make_agent_method(
+            "write",
+            make_schema(vec!["id"], vec![]),
+            vec![make_endpoint(
+                HttpMethod::Method(http::HttpMethod::Post),
+                vec![],
+                vec![],
+                vec![],
+                None,
+                vec![],
+            )],
+        );
+        assert!(validate_http_endpoint("Selected", &method, Some(&mount)).is_ok());
+    }
+
+    #[test]
+    fn wire_id_mounts_allow_files_and_preserve_metadata() {
+        use crate::agentic::ExtendedAgentType;
+        use crate::golem_agentic::golem::agent::common::{
+            AgentIdBindingDetails, AgentMode, AgentTypeKind, Snapshotting,
+        };
+        use http::{ExactFileMapping, FileMapping};
+        let mut mount = mount_with_segments(vec![literal(), path_var("id")]);
+        mount.agent_id_binding = Some(AgentIdBinding::Path(AgentIdBindingDetails {
+            name: "id".into(),
+        }));
+        mount.create_route = Some(vec![literal()]);
+        mount.filesystem_bindings = vec![FileMapping::Exact(ExactFileMapping {
+            public_path: vec!["state".into()],
+            file_path: "/state".into(),
+        })];
+        let mut extended = ExtendedAgentType {
+            type_name: "Selected".into(),
+            kind: AgentTypeKind::Regular,
+            description: String::new(),
+            source_language: "rust".into(),
+            constructor: constructor_with_params(vec![("customer", String::get_type())]),
+            methods: vec![],
+            dependencies: vec![],
+            mode: AgentMode::Durable,
+            http_mount: Some(mount),
+            snapshotting: Snapshotting::Disabled,
+            config: vec![],
+            sorted_method_indices: vec![],
+        };
+        for binding in [
+            AgentIdBinding::Path(AgentIdBindingDetails { name: "id".into() }),
+            AgentIdBinding::Query(AgentIdBindingDetails { name: "id".into() }),
+        ] {
+            let mount = extended.http_mount.as_mut().unwrap();
+            mount.path_prefix = if matches!(binding, AgentIdBinding::Path(_)) {
+                vec![literal(), path_var("id")]
+            } else {
+                vec![literal()]
+            };
+            mount.agent_id_binding = Some(binding);
+            let wire = extended.to_agent_type();
+            assert!(validate_wire_agent_http(&wire).is_ok());
+            let decoded = ExtendedAgentType::from_agent_type(wire).unwrap();
+            let mount = decoded.http_mount.unwrap();
+            assert!(mount.agent_id_binding.is_some());
+            assert_eq!(mount.create_route.unwrap().len(), 1);
+            assert_eq!(mount.filesystem_bindings.len(), 1);
+            for (kind, mode) in [
+                (AgentTypeKind::HttpRouter, AgentMode::Durable),
+                (AgentTypeKind::Regular, AgentMode::Ephemeral),
+            ] {
+                let mut wire = extended.to_agent_type();
+                wire.kind = kind;
+                wire.mode = mode;
+                assert!(
+                    validate_wire_agent_http(&wire)
+                        .unwrap_err()
+                        .contains("regular durable")
+                );
+            }
+        }
+        for name in ["offset", "cursor", "live"] {
+            extended.http_mount.as_mut().unwrap().agent_id_binding =
+                Some(AgentIdBinding::Query(AgentIdBindingDetails {
+                    name: name.into(),
+                }));
+            for output in [false, true] {
+                let stream =
+                    crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::stream(None));
+                let mut method = make_agent_method(
+                    "events",
+                    vec![],
+                    vec![make_endpoint(
+                        HttpMethod::Method(http::HttpMethod::Post),
+                        vec![],
+                        vec![],
+                        vec![],
+                        None,
+                        vec![],
+                    )],
+                );
+                if output {
+                    method.output_schema.push(("events".into(), stream));
+                } else {
+                    method
+                        .input_schema
+                        .push(("events".into(), EnrichedParameterSchema::Value(stream)));
+                }
+                for (mode, conflict) in [
+                    (None, true),
+                    (Some(http::HttpRouteMode::DurableStreams), true),
+                    (Some(http::HttpRouteMode::Sse), false),
+                    (Some(http::HttpRouteMode::WebSocket), false),
+                ] {
+                    method.http_endpoint[0].mode = mode;
+                    assert_eq!(
+                        validate_http_endpoint("Selected", &method, extended.http_mount.as_ref())
+                            .is_err(),
+                        conflict,
+                        "{name}, output={output}, mode={mode:?}"
+                    );
+                    extended.methods = vec![method.clone()];
+                    assert_eq!(
+                        validate_wire_agent_http(&extended.to_agent_type()).is_err(),
+                        conflict,
+                        "wire {name}, output={output}, mode={mode:?}"
+                    );
+                }
+            }
+        }
+        extended.methods.clear();
+        let mount = extended.http_mount.as_mut().unwrap();
+        mount.agent_id_binding = None;
+        mount.create_route = None;
+        mount.path_prefix.push(path_var("customer"));
+        mount.phantom_agent = true;
+        assert!(
+            validate_wire_agent_http(&extended.to_agent_type())
+                .unwrap_err()
+                .contains("durable owner")
+        );
+        extended.http_mount.as_mut().unwrap().phantom_agent = false;
+        extended.mode = AgentMode::Ephemeral;
+        assert!(
+            validate_wire_agent_http(&extended.to_agent_type())
+                .unwrap_err()
+                .contains("durable owner")
+        );
+        extended.mode = AgentMode::Durable;
+        assert!(validate_wire_agent_http(&extended.to_agent_type()).is_ok());
+        let mount = extended.http_mount.as_mut().unwrap();
+        mount.filesystem_bindings.clear();
+        mount.phantom_agent = true;
+        assert!(validate_wire_agent_http(&extended.to_agent_type()).is_ok());
+        extended.mode = AgentMode::Ephemeral;
+        assert!(validate_wire_agent_http(&extended.to_agent_type()).is_ok());
     }
 
     #[test]

@@ -158,9 +158,6 @@ const HELPER_TIME_LIMIT: u32 = 5;
 /// How long `tools` waits for the list before it says there was no answer.
 const TOOLS_WAIT: Duration = Duration::from_secs(15);
 
-/// How often a waiting prompt checks that its terminal is still there.
-const TERMINAL_CHECK: Duration = Duration::from_millis(500);
-
 /// Runs the editor's helper scripts on the agent. The editor calls it from its blocking
 /// thread, never from an async task.
 struct AgentFetcher {
@@ -1289,46 +1286,54 @@ fn output_lost(status: u8, error: &std::io::Error) -> u8 {
 /// Throws away what was typed and not yet read. A session that ends by itself would otherwise
 /// leave it to the shell it returns to, which would run it there.
 #[cfg(unix)]
-fn discard_typed_ahead() {
-    if let Ok(stdin) = crate::command_handler::interactive::stdin("typed-ahead input") {
-        let _ = rustix::termios::tcflush(stdin, rustix::termios::QueueSelector::IFlush);
+mod terminal {
+    use std::time::Duration;
+
+    /// How often a waiting prompt checks that its terminal is still there.
+    const TERMINAL_CHECK: Duration = Duration::from_millis(500);
+
+    pub(super) fn discard_typed_ahead() {
+        if let Ok(stdin) = crate::command_handler::interactive::stdin("typed-ahead input") {
+            let _ = rustix::termios::tcflush(stdin, rustix::termios::QueueSelector::IFlush);
+        }
     }
-}
 
-#[cfg(not(unix))]
-fn discard_typed_ahead() {}
+    /// Completes once the terminal on stdin has gone. The line editor does not notice that by
+    /// itself and would read end-of-input in a loop.
+    pub(super) async fn terminal_gone() {
+        use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
-/// Completes once the terminal on stdin has gone. The line editor does not notice that by
-/// itself and would read end-of-input in a loop.
-#[cfg(unix)]
-async fn terminal_gone() {
-    use rustix::event::{PollFd, PollFlags, Timespec, poll};
-
-    loop {
-        tokio::time::sleep(TERMINAL_CHECK).await;
-        let Ok(stdin) = crate::command_handler::interactive::stdin("the terminal") else {
-            return;
-        };
-        // Asking for input as well: some systems report a hang-up only with a request.
-        let mut waiting = [PollFd::new(&stdin, PollFlags::IN)];
-        let at_once = Timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        if poll(&mut waiting, Some(&at_once)).is_ok()
-            && waiting[0]
-                .revents()
-                .intersects(PollFlags::HUP | PollFlags::ERR | PollFlags::NVAL)
-        {
-            return;
+        loop {
+            tokio::time::sleep(TERMINAL_CHECK).await;
+            let Ok(stdin) = crate::command_handler::interactive::stdin("the terminal") else {
+                return;
+            };
+            // Asking for input as well: some systems report a hang-up only with a request.
+            let mut waiting = [PollFd::new(&stdin, PollFlags::IN)];
+            let at_once = Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            if poll(&mut waiting, Some(&at_once)).is_ok()
+                && waiting[0]
+                    .revents()
+                    .intersects(PollFlags::HUP | PollFlags::ERR | PollFlags::NVAL)
+            {
+                return;
+            }
         }
     }
 }
 
 #[cfg(not(unix))]
-async fn terminal_gone() {
-    std::future::pending().await
+mod terminal {
+    pub(super) fn discard_typed_ahead() {}
+    pub(super) async fn terminal_gone() {
+        std::future::pending().await
+    }
 }
+
+use terminal::{discard_typed_ahead, terminal_gone};
 
 /// Moves to a new line when the output did not end with one, so the prompt starts on its own
 /// line; a dim `⏎` marks where the newline was added.

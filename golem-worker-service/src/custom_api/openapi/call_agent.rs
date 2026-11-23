@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_service_base::custom_api::{
-    ConstructorParameter, MethodParameter, PathSegment, PathSegmentType, PhantomSelection,
+    AgentSelection, ConstructorParameter, MethodParameter, PathSegment, PathSegmentType,
     QueryOrHeaderType,
 };
 use golem_service_base::model::SafeIndex;
@@ -41,11 +41,11 @@ pub fn get_path_variables_and_types<'a>(
     path_segments: &'a [PathSegment],
     constructor_parameter: &'a [ConstructorParameter],
     method_params: &'a [MethodParameter],
-    selection: &PhantomSelection,
+    selection: &AgentSelection,
 ) -> Vec<(&'a str, bool, &'a PathSegmentType)> {
     let mut input_path_variable_types =
         collect_path_variable_types(constructor_parameter, method_params);
-    if let PhantomSelection::Path { index } = selection {
+    if let AgentSelection::Path { index } = selection {
         input_path_variable_types.push((*index, &PathSegmentType::Uuid));
     }
     build_path_segments_and_types(path_segments, input_path_variable_types)

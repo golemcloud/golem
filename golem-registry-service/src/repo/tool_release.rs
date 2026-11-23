@@ -103,6 +103,7 @@ impl<Repo: ToolReleaseRepo> LoggedToolReleaseRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: ToolReleaseRepo> ToolReleaseRepo for LoggedToolReleaseRepo<Repo> {
     async fn create(
         &self,
@@ -442,6 +443,7 @@ impl DbToolReleaseRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ToolReleaseRepo for DbToolReleaseRepo<PostgresPool> {
     async fn create(
         &self,

@@ -54,9 +54,9 @@ fn route(mappings: &[(&str, &str)]) -> CompiledRoute {
 }
 
 /// A harness whose component is the one of `route`: the component `agent1(id: u64)`
-/// implements in the nil environment.
+/// implements in the nil environment, with existing keyed agents for IDs 8, 9 and 42.
 fn live_files_harness() -> InvocationHarness {
-    InvocationHarness::with_agent_type(
+    let harness = InvocationHarness::with_agent_type(
         AgentInvocationOutput {
             result: golem_common::model::AgentInvocationResult::AgentInitialization,
             consumed_fuel: None,
@@ -90,7 +90,11 @@ fn live_files_harness() -> InvocationHarness {
         },
         ComponentId(uuid::Uuid::nil()),
         EnvironmentId(uuid::Uuid::nil()),
-    )
+    );
+    for id in [8, 9, 42] {
+        harness.add_keyed_agent(&agent1(id));
+    }
+    harness
 }
 
 /// The constructor of the `agent1` agent with this ID parameter.
@@ -383,7 +387,9 @@ async fn mounted_read_rejects_paths_before_normalization() {
                 .worker_service
                 .read_mounted_file(
                     harness.component_id,
-                    &constructor,
+                    &harness.agent_type.type_name,
+                    Some(&constructor),
+                    crate::service::worker::AgentBinding::Constructor,
                     path,
                     FileByteSelection::Full,
                     harness.environment_id,

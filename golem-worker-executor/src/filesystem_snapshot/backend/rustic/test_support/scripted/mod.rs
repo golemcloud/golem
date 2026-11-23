@@ -499,6 +499,7 @@ impl Debug for ScriptedBlobStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl BlobStorageBackend for ScriptedBlobStorage {
     async fn get_raw_at(
         &self,

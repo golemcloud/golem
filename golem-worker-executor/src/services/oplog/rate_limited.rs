@@ -176,6 +176,7 @@ impl Debug for RateLimitedOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for RateLimitedOplog {
     fn retire(&self) {
         self.inner.retire();
@@ -418,6 +419,7 @@ impl std::fmt::Debug for RateLimitedOplogService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogService for RateLimitedOplogService {
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         self.inner.lock_lifecycle(agent_id).await
@@ -783,6 +785,7 @@ mod tests {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ResourceLimits for FixedResourceLimits {
         async fn initialize_account(
             &self,

@@ -1855,6 +1855,50 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
 }
 
 #[test]
+fn cli_output_schema_validates_agent_id_mounts_and_rejects_old_selectors() {
+    use golem_common::model::agent::{AgentIdBinding, AgentIdBindingDetails};
+
+    let schema = load_command_output_schema();
+    let mount_schema = json!({
+        "$ref": "#/definitions/HttpMountDetails",
+        "definitions": schema["definitions"],
+    });
+    let validator = jsonschema::options().build(&mount_schema).unwrap();
+    let mut runner = proptest::test_runner::TestRunner::deterministic();
+    let mut mount = arb_http_mount_details()
+        .new_tree(&mut runner)
+        .unwrap()
+        .current();
+    for binding in [
+        AgentIdBinding::Path(AgentIdBindingDetails { name: "id".into() }),
+        AgentIdBinding::Query(AgentIdBindingDetails { name: "id".into() }),
+    ] {
+        mount.agent_id_binding = Some(binding);
+        for create_route in [None, Some(vec![])] {
+            mount.create_route = create_route;
+            let value = serde_json::to_value(&mount).unwrap();
+            assert!(validator.is_valid(&value));
+
+            let mut optional_selector = value.clone();
+            optional_selector["agentIdBinding"]["optional"] = json!(false);
+            assert!(!validator.is_valid(&optional_selector));
+
+            let mut old_selector = value.clone();
+            let object = old_selector.as_object_mut().unwrap();
+            let binding = object.remove("agentIdBinding").unwrap();
+            object.insert("phantomIdBinding".into(), binding);
+            assert!(!validator.is_valid(&old_selector));
+
+            let mut display_path = value;
+            display_path["createRoute"] = json!("/create");
+            assert!(!validator.is_valid(&display_path));
+        }
+    }
+    mount.agent_id_binding = None;
+    assert!(validator.is_valid(&serde_json::to_value(&mount).unwrap()));
+}
+
+#[test]
 fn cli_output_schema_accepts_every_sample_oplog_entry() {
     let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
     for entry in sample_public_oplog_entries() {
@@ -3587,17 +3631,17 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                 .prop_map(|required| golem_common::model::agent::AgentHttpAuthDetails { required }),
         ),
         any::<bool>(),
-        proptest::option::of((any::<bool>(), arb_small_string(), any::<bool>()).prop_map(
-            |(path, name, optional)| {
-                let details =
-                    golem_common::model::agent::PhantomIdBindingDetails { name, optional };
+        proptest::option::of(
+            (any::<bool>(), arb_small_string()).prop_map(|(path, name)| {
+                let details = golem_common::model::agent::AgentIdBindingDetails { name };
                 if path {
-                    golem_common::model::agent::PhantomIdBinding::Path(details)
+                    golem_common::model::agent::AgentIdBinding::Path(details)
                 } else {
-                    golem_common::model::agent::PhantomIdBinding::Query(details)
+                    golem_common::model::agent::AgentIdBinding::Query(details)
                 }
-            },
-        )),
+            }),
+        ),
+        proptest::option::of(proptest::collection::vec(arb_path_segment(), 0..3)),
         proptest::collection::vec(arb_small_string(), 0..2),
         proptest::collection::vec(arb_path_segment(), 0..2),
         proptest::collection::vec(arb_file_mapping(), 1..3),
@@ -3610,7 +3654,8 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                 path_prefix,
                 auth_details,
                 phantom_agent,
-                phantom_id_binding,
+                agent_id_binding,
+                create_route,
                 allowed_patterns,
                 webhook_suffix,
                 static_bindings,
@@ -3622,7 +3667,8 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                     path_prefix,
                     auth_details,
                     phantom_agent,
-                    phantom_id_binding,
+                    agent_id_binding,
+                    create_route,
                     cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
                     webhook_suffix,
                     static_bindings,

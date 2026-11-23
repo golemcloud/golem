@@ -365,6 +365,7 @@ impl<Repo: AccountResourceOverrideRepo> LoggedAccountResourceOverrideRepo<Repo> 
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: AccountResourceOverrideRepo> AccountResourceOverrideRepo
     for LoggedAccountResourceOverrideRepo<Repo>
 {
@@ -1127,6 +1128,7 @@ impl DbAccountResourceOverrideRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl AccountResourceOverrideRepo for DbAccountResourceOverrideRepo<PostgresPool> {
     async fn get_active_value(
         &self,

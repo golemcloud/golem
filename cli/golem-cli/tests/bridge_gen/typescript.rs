@@ -1869,7 +1869,7 @@ fn external_streaming_generation_compiles_recursive_streams() {
     assert!(source.contains(".validate(") && source.contains("'none'"));
     assert!(source.contains("'provisional'"));
     assert!(source.contains("\"stable\""));
-    assert!(source.contains("constructorParameters: this.__getPublicParameters(), config: [],"));
+    assert!(source.contains("target: this.__getPublicTarget(), config: [],"));
     assert!(!source.contains("publicConfig"));
     assert!(source.contains("path: [\"limits\",\"maximum\"]"));
     assert!(source.contains("base.UnstructuredText.toSchemaValue"));
@@ -2173,7 +2173,8 @@ fn http_router_bridge_rejection_uses_kind_not_name() {
             path_prefix: vec![],
             auth_details: None,
             phantom_agent: false,
-            phantom_id_binding: None,
+            agent_id_binding: None,
+            create_route: None,
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },

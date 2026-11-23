@@ -171,6 +171,7 @@ fn next_retry_delay(current: Duration) -> Duration {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> RegistryInvalidationHandler
     for WorkerExecutorRegistryInvalidationHandler<Ctx>
 {
