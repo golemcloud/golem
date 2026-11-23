@@ -6213,6 +6213,7 @@ impl HasComponentService for TestCase {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for TestCase {
     async fn get(
         &self,

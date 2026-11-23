@@ -16,7 +16,7 @@ mod control;
 mod pty;
 
 use anyhow::{Context, anyhow};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::disable_raw_mode;
 use portable_pty::PtySize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
+use terminal::{RawTerminalGuard, enable_raw_terminal_mode};
 use tokio::sync::mpsc as tokio_mpsc;
 use uuid::Uuid;
 
@@ -699,89 +700,112 @@ enum SupervisorEvent {
     RunCli(control::RunCliSupervisorRequest),
 }
 
-struct RawTerminalGuard {
-    #[cfg(windows)]
-    windows_input_mode: Option<WindowsConsoleInputModeGuard>,
-}
+#[cfg(windows)]
+mod terminal {
+    use anyhow::Context;
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
-impl RawTerminalGuard {
-    fn enter() -> anyhow::Result<Self> {
-        #[cfg(windows)]
-        let windows_input_mode = WindowsConsoleInputModeGuard::capture();
-        enable_raw_terminal_mode().context("Failed to enable terminal raw mode")?;
-        Ok(Self {
-            #[cfg(windows)]
-            windows_input_mode,
-        })
+    pub(super) struct RawTerminalGuard {
+        windows_input_mode: Option<WindowsConsoleInputModeGuard>,
     }
-}
 
-impl Drop for RawTerminalGuard {
-    fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        #[cfg(windows)]
-        if let Some(guard) = &self.windows_input_mode {
-            guard.restore();
+    impl RawTerminalGuard {
+        pub(super) fn enter() -> anyhow::Result<Self> {
+            let windows_input_mode = WindowsConsoleInputModeGuard::capture();
+            enable_raw_terminal_mode().context("Failed to enable terminal raw mode")?;
+            Ok(Self { windows_input_mode })
         }
     }
-}
 
-fn enable_raw_terminal_mode() -> anyhow::Result<()> {
-    enable_raw_mode().context("Failed to enable terminal raw mode")?;
-    #[cfg(windows)]
-    enable_windows_virtual_terminal_input();
-    Ok(())
-}
+    impl Drop for RawTerminalGuard {
+        fn drop(&mut self) {
+            let _ = disable_raw_mode();
+            if let Some(guard) = &self.windows_input_mode {
+                guard.restore();
+            }
+        }
+    }
 
-#[cfg(windows)]
-#[derive(Clone, Copy)]
-struct WindowsConsoleInputModeGuard {
-    handle: windows_sys::Win32::Foundation::HANDLE,
-    original_mode: windows_sys::Win32::System::Console::CONSOLE_MODE,
-}
+    pub(super) fn enable_raw_terminal_mode() -> anyhow::Result<()> {
+        enable_raw_mode().context("Failed to enable terminal raw mode")?;
+        enable_windows_virtual_terminal_input();
+        Ok(())
+    }
 
-#[cfg(windows)]
-impl WindowsConsoleInputModeGuard {
-    fn capture() -> Option<Self> {
-        use windows_sys::Win32::System::Console::{GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE};
+    #[derive(Clone, Copy)]
+    struct WindowsConsoleInputModeGuard {
+        handle: windows_sys::Win32::Foundation::HANDLE,
+        original_mode: windows_sys::Win32::System::Console::CONSOLE_MODE,
+    }
+
+    impl WindowsConsoleInputModeGuard {
+        fn capture() -> Option<Self> {
+            use windows_sys::Win32::System::Console::{
+                GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
+            };
+
+            let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+            let mut original_mode = 0;
+            if unsafe { GetConsoleMode(handle, &mut original_mode) } == 0 {
+                return None;
+            }
+
+            Some(Self {
+                handle,
+                original_mode,
+            })
+        }
+
+        fn restore(&self) {
+            use windows_sys::Win32::System::Console::SetConsoleMode;
+            let _ = unsafe { SetConsoleMode(self.handle, self.original_mode) };
+        }
+    }
+
+    fn enable_windows_virtual_terminal_input() {
+        // crossterm raw mode disables line/echo/processed input on Windows, but it
+        // does not enable VT input. The REPL running inside the child PTY can
+        // emit terminal queries such as ESC[6n; the terminal's response must reach
+        // this supervisor as raw stdin bytes so it can be forwarded to the child.
+        use windows_sys::Win32::System::Console::{
+            ENABLE_VIRTUAL_TERMINAL_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
+            SetConsoleMode,
+        };
 
         let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-        let mut original_mode = 0;
-        if unsafe { GetConsoleMode(handle, &mut original_mode) } == 0 {
-            return None;
+        let mut mode = 0;
+        if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+            return;
         }
 
-        Some(Self {
-            handle,
-            original_mode,
-        })
-    }
-
-    fn restore(&self) {
-        use windows_sys::Win32::System::Console::SetConsoleMode;
-        let _ = unsafe { SetConsoleMode(self.handle, self.original_mode) };
+        let updated_mode = mode | ENABLE_VIRTUAL_TERMINAL_INPUT;
+        if updated_mode != mode {
+            let _ = unsafe { SetConsoleMode(handle, updated_mode) };
+        }
     }
 }
 
-#[cfg(windows)]
-fn enable_windows_virtual_terminal_input() {
-    // crossterm raw mode disables line/echo/processed input on Windows, but it
-    // does not enable VT input. The REPL running inside the child PTY can
-    // emit terminal queries such as ESC[6n; the terminal's response must reach
-    // this supervisor as raw stdin bytes so it can be forwarded to the child.
-    use windows_sys::Win32::System::Console::{
-        ENABLE_VIRTUAL_TERMINAL_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
-        SetConsoleMode,
-    };
+#[cfg(not(windows))]
+mod terminal {
+    use anyhow::Context;
+    use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
-    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-    let mut mode = 0;
-    if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
-        return;
+    pub(super) struct RawTerminalGuard;
+
+    impl RawTerminalGuard {
+        pub(super) fn enter() -> anyhow::Result<Self> {
+            enable_raw_terminal_mode().context("Failed to enable terminal raw mode")?;
+            Ok(Self)
+        }
     }
 
-    let updated_mode = mode | ENABLE_VIRTUAL_TERMINAL_INPUT;
-    if updated_mode != mode {
-        let _ = unsafe { SetConsoleMode(handle, updated_mode) };
+    impl Drop for RawTerminalGuard {
+        fn drop(&mut self) {
+            let _ = disable_raw_mode();
+        }
+    }
+
+    pub(super) fn enable_raw_terminal_mode() -> anyhow::Result<()> {
+        enable_raw_mode().context("Failed to enable terminal raw mode")
     }
 }

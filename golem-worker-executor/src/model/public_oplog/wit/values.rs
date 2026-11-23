@@ -40,21 +40,17 @@ pub(super) fn decode_untyped_schema_value(
     decode_value(&value).map_err(|e| e.to_string())
 }
 
-/// Drain owned `quota-token` handles out of guest-supplied raw oplog entries
+/// Drain owned handles out of guest-supplied raw oplog entries
 /// before they are converted with the pure (resolver-less)
 /// [`TryFrom<oplog::OplogEntry>`] path.
 ///
 /// `enrich-oplog-entries` is the only guest-reachable caller of that conversion,
 /// and it returns the conversion error as a non-trapping `result::err` — so the
-/// instance, and its resource table, stay alive. Each
-/// `create.local-agent-config[].value` and each request of the divergence of a
-/// `failed-update` is a live `schema-value-tree`. Capability handles are never
-/// permitted there, so any owned handle found is deleted from the resource
-/// table (rather than leaked) and the whole batch is rejected. A divergence
-/// request does not permit an owned stream either, and its streams are disposed
-/// of as a guest drop of the resource does. All entries are drained before the first error is
-/// surfaced, so a handle in a later entry cannot leak when an earlier entry is
-/// rejected.
+/// instance and its resource table stay alive. Capability handles are not
+/// permitted in the value trees of agent config, divergence requests or tool
+/// attachment entries. Divergence requests and tool attachment entries also
+/// reject owned streams, disposing of them as a guest drop does. Drain all
+/// relevant trees before returning the first error, even across entries.
 pub(crate) fn reject_quota_handles_in_oplog_entries<
     D: QuotaTokenHandleDropper
         + SecretHandleDropper
@@ -93,33 +89,42 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
                 if let Some(divergence) = params.divergence.as_mut() {
                     for step in [&mut divergence.expected, &mut divergence.actual] {
                         if let oplog::ReplayStep::HostCall(call) = step
-                            && let Some(mut request) = call.request.take()
+                            && let Some(request) = call.request.as_mut()
                         {
-                            let stream =
-                                drop_stream_handles_in_value_tree(&mut request.value, dropper);
-                            match (
-                                stream,
-                                reject_quota_handles_in_value_tree(request.value, dropper),
-                            ) {
-                                (None, Ok(tree)) => {
-                                    request.value = tree;
-                                    call.request = Some(request);
-                                }
-                                (_, Err(e)) => {
-                                    first_error.get_or_insert_with(|| {
-                                        format!("a divergence request must not contain an owned handle: {e}")
-                                    });
-                                }
-                                (Some(node), Ok(_)) => {
-                                    first_error.get_or_insert_with(|| {
-                                        format!("a divergence request must not contain an owned handle: stream at value node {node}")
-                                    });
-                                }
-                            }
+                            drain_owned_handles(
+                                &mut request.value,
+                                dropper,
+                                "a divergence request",
+                                &mut first_error,
+                            );
                         }
                     }
                 }
                 oplog::OplogEntry::FailedUpdate(params)
+            }
+            oplog::OplogEntry::ToolAttachmentRead(mut params) => {
+                drain_owned_handles(
+                    &mut params.observation.value,
+                    dropper,
+                    "an attachment observation",
+                    &mut first_error,
+                );
+                oplog::OplogEntry::ToolAttachmentRead(params)
+            }
+            oplog::OplogEntry::ToolAttachmentControl(mut params) => {
+                drain_owned_handles(
+                    &mut params.attachment.value,
+                    dropper,
+                    "an attachment",
+                    &mut first_error,
+                );
+                drain_owned_handles(
+                    &mut params.transition.value,
+                    dropper,
+                    "an attachment transition",
+                    &mut first_error,
+                );
+                oplog::OplogEntry::ToolAttachmentControl(params)
             }
             other => other,
         };
@@ -146,6 +151,37 @@ pub(super) fn requester_from_wit(
 ) -> Result<golem_common::model::caller::Caller, String> {
     golem_common::serialization::decode(bytes)
         .map_err(|error| format!("requester does not decode: {error}"))
+}
+
+fn drain_owned_handles<
+    D: QuotaTokenHandleDropper
+        + SecretHandleDropper
+        + PermissionCardHandleDropper
+        + SchemaValueStreamResolver,
+>(
+    tree: &mut wire::SchemaValueTree,
+    dropper: &mut D,
+    field: &str,
+    first_error: &mut Option<String>,
+) {
+    let stream = drop_stream_handles_in_value_tree(tree, dropper);
+    let owned = wire::SchemaValueTree {
+        value_nodes: std::mem::take(&mut tree.value_nodes),
+        root: tree.root,
+    };
+    match (stream, reject_quota_handles_in_value_tree(owned, dropper)) {
+        (None, Ok(clean)) => *tree = clean,
+        (_, Err(error)) => {
+            first_error.get_or_insert_with(|| {
+                format!("{field} must not contain an owned handle: {error}")
+            });
+        }
+        (Some(node), Ok(_)) => {
+            first_error.get_or_insert_with(|| {
+                format!("{field} must not contain an owned handle: stream at value node {node}")
+            });
+        }
+    }
 }
 
 /// Disposes of every owned stream of `tree` through the resolver, as a guest drop of the resource

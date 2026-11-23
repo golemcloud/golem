@@ -99,6 +99,7 @@ impl<Repo: AccountRepo> LoggedAccountRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: AccountRepo> AccountRepo for LoggedAccountRepo<Repo> {
     async fn create(
         &self,
@@ -252,6 +253,7 @@ impl DbAccountRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl AccountRepo for DbAccountRepo<PostgresPool> {
     async fn create(
         &self,

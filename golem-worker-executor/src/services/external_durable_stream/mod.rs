@@ -102,6 +102,7 @@ impl DefaultExternalDurableStreamService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ExternalDurableStreamService for DefaultExternalDurableStreamService {
     async fn read_batch(
         &self,

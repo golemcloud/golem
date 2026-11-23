@@ -79,6 +79,7 @@ pub(crate) fn tool_deployment_state(
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: Default::default(),
                 source: registration.source.clone(),
+                shell: false,
             };
             (
                 owner,

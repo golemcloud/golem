@@ -55,8 +55,6 @@ pub struct OplogViewerServer {
     pub page_size: u64,
     /// Show the entries that oplog pages omit in their omitted form instead of reading them.
     pub omit_payloads: bool,
-    /// Ask the server for the verified claims of the users among the callers.
-    pub show_claims: bool,
     /// The export session of `--serve --obfuscate`. It holds the `Start` functions for the whole
     /// server process, and the mutex serialises the page calls.
     pub export: Option<tokio::sync::Mutex<OplogExportSession<RestOplogReads>>>,
@@ -194,7 +192,9 @@ async fn oplog_page(
             count,
             cursor.as_ref(),
             query.as_deref(),
-            oplog_include(server.show_claims).as_ref(),
+            // The viewer never asks for the claims: the browser reads each number as a
+            // JavaScript number, which cannot hold every claim value.
+            None,
             None,
             None,
             None,
@@ -213,7 +213,7 @@ async fn oplog_page(
                 &server.agent_id,
                 page_entry,
                 server.omit_payloads,
-                server.show_claims,
+                false,
             )
             .await
             .map_err(upstream_error)?,
@@ -337,7 +337,6 @@ pub async fn serve_oplog_export_viewer(
             page,
             page_size,
             omit_payloads: false,
-            show_claims: false,
             export: Some(tokio::sync::Mutex::new(session)),
         },
         port,

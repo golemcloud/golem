@@ -123,6 +123,7 @@ impl CachedAgentTypes {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl AgentTypesService for CachedAgentTypes {
     async fn get_all(
         &self,
@@ -280,6 +281,7 @@ mod grpc {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl AgentTypesService for AgentTypesServiceGrpc {
         async fn get_all(
             &self,
@@ -573,6 +575,7 @@ mod local {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl AgentTypesService for AgentTypesServiceLocal {
         async fn get_all(
             &self,

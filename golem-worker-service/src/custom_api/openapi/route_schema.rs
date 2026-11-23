@@ -37,8 +37,9 @@ use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::unstructured::{binary_body_restrictions, text_body_restrictions};
 use golem_common::schema::{FieldSource, OutputSchema};
 use golem_service_base::custom_api::{
-    AgentRouteMode, CallAgentBehaviour, CompiledOutputSchema, DurableStreamRepresentation,
-    MethodParameter, PathSegment, PhantomSelection, QueryOrHeaderType, RequestBodySchema,
+    AgentRouteMode, AgentSelection, CallAgentBehaviour, CompiledOutputSchema,
+    DurableStreamRepresentation, MethodParameter, PathSegment, QueryOrHeaderType,
+    RequestBodySchema,
 };
 
 /// Schema-model view of an entire set of compiled routes, ready for the
@@ -103,6 +104,7 @@ pub struct NamedParamSchema {
 pub enum RequestBodyModel {
     Unused,
     Json(Box<SchemaType>),
+    CreateAgent(Box<SchemaType>),
     UnrestrictedBinary,
     RestrictedBinary { mime_types: Vec<String> },
     UnrestrictedText,
@@ -148,6 +150,23 @@ pub fn build_document_schema(
             }
             super::super::RichRouteBehaviour::WebhookCallback(_) => {
                 RequestBodyModel::UnrestrictedBinary
+            }
+            super::super::RichRouteBehaviour::CreateAgent(inner) => {
+                graphs.push(inner.agent.constructor_input.graph.clone());
+                let fields = inner
+                    .agent
+                    .constructor_input
+                    .input_schema
+                    .fields()
+                    .iter()
+                    .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                    .map(|field| golem_common::schema::NamedFieldType {
+                        name: field.name.clone(),
+                        body: field.schema.clone(),
+                        metadata: field.metadata.clone(),
+                    })
+                    .collect();
+                RequestBodyModel::CreateAgent(Box::new(SchemaType::record(fields)))
             }
             _ => RequestBodyModel::Unused,
         };
@@ -225,7 +244,7 @@ fn lower_call_agent(
         path,
         &inner.constructor_parameters,
         &inner.method_parameters,
-        &inner.phantom_selection,
+        &inner.agent_selection,
     )
     .into_iter()
     .map(|(name, is_catchall, pst)| {
@@ -286,11 +305,11 @@ fn lower_call_agent(
         })
         .collect::<Result<Vec<_>, String>>()?;
     graphs.push(inner.method_input.graph.clone());
-    if let PhantomSelection::Query { name, optional } = &inner.phantom_selection {
+    if let AgentSelection::Query { name } = &inner.agent_selection {
         query_params.push(NamedParamSchema {
             name: name.clone(),
             schema: SchemaType::uuid(),
-            required: !optional,
+            required: true,
         });
     }
 

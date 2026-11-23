@@ -1,6 +1,3 @@
-// The platform TLS verifier honours SSL_CERT_FILE on Linux.
-#![cfg(target_os = "linux")]
-
 use crate::app::{Output, TestContext, cmd, flag};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

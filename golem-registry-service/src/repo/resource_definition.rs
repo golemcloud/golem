@@ -93,6 +93,7 @@ impl<Repo> LoggedResourceDefinitionRepo<Repo> {
 static SPAN_NAME: &str = "resource_definition_repository";
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: ResourceDefinitionRepo> ResourceDefinitionRepo for LoggedResourceDefinitionRepo<Repo> {
     async fn create(
         &self,
@@ -340,6 +341,7 @@ impl DbResourceDefinitionRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ResourceDefinitionRepo for DbResourceDefinitionRepo<PostgresPool> {
     async fn create(
         &self,

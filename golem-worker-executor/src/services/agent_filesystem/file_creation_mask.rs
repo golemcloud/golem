@@ -42,7 +42,7 @@ pub(super) const PROBE_MASK: libc::mode_t = 0o077;
 /// [`PROBE_MASK`], which gives the current mask, and then to that mask without the owner write
 /// bit.
 pub(crate) fn keep_owner_write_permission() {
-    keep_owner_write_permission_with(current_file_creation_mask)
+    keep_owner_write_permission_with(platform::current_file_creation_mask)
 }
 
 /// Sets the file mode creation mask of the process to the mask that `current` gives, without the
@@ -55,27 +55,35 @@ pub(super) fn keep_owner_write_permission_with(current: impl FnOnce() -> libc::m
     }
 }
 
-/// Gives the current file mode creation mask of the calling thread. Where
-/// `/proc/thread-self/status` has no `Umask:` line, the mask is [`PROBE_MASK`] after the call.
-///
-/// The function reads `/proc/thread-self/status`, not `/proc/self/status`. `/proc/self` is the
-/// thread group leader, and a thread that does not share the filesystem attributes of the process
-/// has its own mask. All threads of the executor share one mask, so there the read gives the mask
-/// of the process.
 #[cfg(target_os = "linux")]
-fn current_file_creation_mask() -> libc::mode_t {
-    std::fs::read_to_string("/proc/thread-self/status")
-        .ok()
-        .as_deref()
-        .and_then(status_umask)
-        .unwrap_or_else(probed_file_creation_mask)
+pub(super) mod platform {
+    use super::probed_file_creation_mask;
+
+    /// Reads the mask of the calling thread, which need not share its mask with the thread group
+    /// leader. If the Umask line is unavailable, the probe leaves PROBE_MASK set after the call.
+    pub(super) fn current_file_creation_mask() -> libc::mode_t {
+        std::fs::read_to_string("/proc/thread-self/status")
+            .ok()
+            .as_deref()
+            .and_then(status_umask)
+            .unwrap_or_else(probed_file_creation_mask)
+    }
+
+    /// Gives the file mode creation mask on the `Umask:` line of a `/proc/<pid>/status` text.
+    pub(crate) fn status_umask(status: &str) -> Option<libc::mode_t> {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("Umask:"))
+            .and_then(|value| libc::mode_t::from_str_radix(value.trim(), 8).ok())
+    }
 }
 
-/// Gives the current file mode creation mask of the process. The mask is [`PROBE_MASK`] after the
-/// call.
 #[cfg(not(target_os = "linux"))]
-fn current_file_creation_mask() -> libc::mode_t {
-    probed_file_creation_mask()
+mod platform {
+    /// Gives the current file mode creation mask of the process, leaving PROBE_MASK set.
+    pub(super) fn current_file_creation_mask() -> libc::mode_t {
+        super::probed_file_creation_mask()
+    }
 }
 
 /// Sets the file mode creation mask of the process to [`PROBE_MASK`], and gives the mask before
@@ -88,13 +96,4 @@ pub(super) fn probed_file_creation_mask() -> libc::mode_t {
 /// Gives `mask` without the owner write bit. Every other bit stays as it is.
 pub(super) fn mask_without_owner_write(mask: libc::mode_t) -> libc::mode_t {
     mask & !OWNER_WRITE_BIT
-}
-
-/// Gives the file mode creation mask on the `Umask:` line of a `/proc/<pid>/status` text.
-#[cfg(target_os = "linux")]
-pub(super) fn status_umask(status: &str) -> Option<libc::mode_t> {
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix("Umask:"))
-        .and_then(|value| libc::mode_t::from_str_radix(value.trim(), 8).ok())
 }

@@ -95,7 +95,14 @@ async fn late_rejection_after_cancel(
     if cancel_first {
         assert!(
             worker
-                .cancel_scheduled_invocation(key, receipt, &owner.agent_id)
+                .cancel_scheduled_invocation(
+                    key,
+                    receipt,
+                    &callers::agent_principal(
+                        owner.agent_id,
+                        AgentTypeName("ScheduledInvocationClient".to_string())
+                    )
+                )
                 .await?
         );
     }
@@ -128,7 +135,14 @@ async fn late_rejection_after_cancel(
             .await?;
         assert!(
             worker
-                .cancel_scheduled_invocation(other, receipt, &owner.agent_id)
+                .cancel_scheduled_invocation(
+                    other,
+                    receipt,
+                    &callers::agent_principal(
+                        owner.agent_id,
+                        AgentTypeName("ScheduledInvocationClient".to_string())
+                    )
+                )
                 .await?
         );
     }
@@ -278,7 +292,14 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
         let receipt = worker.schedule_invocation(invocation(&key), due).await?;
         assert!(
             worker
-                .cancel_scheduled_invocation(key, receipt, &owner.agent_id)
+                .cancel_scheduled_invocation(
+                    key,
+                    receipt,
+                    &callers::agent_principal(
+                        owner.agent_id,
+                        AgentTypeName("ScheduledInvocationClient".to_string())
+                    )
+                )
                 .await?
         );
         cancelled.push(key);
@@ -432,7 +453,14 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
         let receipt = worker.schedule_invocation(invocation(&other), due).await?;
         assert!(
             worker
-                .cancel_scheduled_invocation(other, receipt, &owner.agent_id)
+                .cancel_scheduled_invocation(
+                    other,
+                    receipt,
+                    &callers::agent_principal(
+                        owner.agent_id,
+                        AgentTypeName("ScheduledInvocationClient".to_string())
+                    )
+                )
                 .await?
         );
     }

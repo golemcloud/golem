@@ -33,12 +33,12 @@ pub(in crate::custom_api) fn validate_query_parameters(
     behaviour: &golem_service_base::custom_api::CallAgentBehaviour,
     controls: &[&str],
 ) -> Result<(), RequestHandlerError> {
-    use golem_service_base::custom_api::{MethodParameter, PhantomSelection};
+    use golem_service_base::custom_api::{AgentSelection, MethodParameter};
     let mut names: Vec<_> = request.query_params().keys().collect();
     names.sort_unstable();
     for name in names {
         if controls.contains(&name.as_str())
-            || matches!(&behaviour.phantom_selection, PhantomSelection::Query { name: selector, .. } if selector == name)
+            || matches!(&behaviour.agent_selection, AgentSelection::Query { name: selector } if selector == name)
         {
             continue;
         }

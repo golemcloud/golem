@@ -122,6 +122,7 @@ impl<Repo: HttpApiDeploymentRepo> LoggedHttpApiDeploymentRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: HttpApiDeploymentRepo> HttpApiDeploymentRepo for LoggedHttpApiDeploymentRepo<Repo> {
     async fn create(
         &self,
@@ -269,6 +270,7 @@ impl<DBP: Pool> DbHttpApiDeploymentRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl HttpApiDeploymentRepo for DbHttpApiDeploymentRepo<PostgresPool> {
     async fn create(
         &self,
@@ -602,6 +604,7 @@ trait HttpApiDeploymentRepoInternal: HttpApiDeploymentRepo {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl HttpApiDeploymentRepoInternal for DbHttpApiDeploymentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;

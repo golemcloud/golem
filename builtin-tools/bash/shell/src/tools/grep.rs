@@ -1924,40 +1924,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
-    // a `-f` pattern file containing a raw, invalid-UTF-8 byte must match that literal
-    // byte in the input, not silently fail to match because the byte got lossily replaced with
-    // U+FFFD while the pattern file was being read (`printf '\xff\n' > p; printf '\xff\n' |
-    // grep -c -f p` gives GNU's 1, not 0). Verified against the oracle.
-    fn pattern_file_with_invalid_utf8_matches_the_raw_byte() {
-        // `tempfile::NamedTempFile` is native-only (see its dependency's own wasm32 exclusion);
-        // `test_scratch` is this crate's own path helper for a unit test's scratch file, which
-        // works under both the native test runner and the WASM one.
-        let file = crate::tools::test_scratch("grep-pattern-file");
-        std::fs::write(&file, b"\xff\n").unwrap();
-        let path = file.to_str().unwrap();
-        let (code, out, _) = grep(&["-c", "-f", path], "\u{ff}\n");
-        // A lossily-decoded pattern file would compile `\xff` as U+00FF and so match this
-        // line (its UTF-8 encoding, 2 bytes: 0xC3 0xBF) instead of the single raw byte —
-        // proving the fix actually changed *which* byte sequence is matched, not just that
-        // something now matches.
-        assert_eq!((code, out.as_str()), (1, "0\n"));
-        let (code, out, _) = grep(&["-c", "-f", path], "\u{100}\n");
-        assert_eq!((code, out.as_str()), (1, "0\n"));
-
-        // The real repro: the *input* line is the single raw byte too. `grep()`'s test helper
-        // takes `&str`, so build one whose bytes are deliberately invalid UTF-8 at runtime
-        // (never as a `b"..."` literal, which rustc's own lint refuses to accept here) — safe
-        // because the helper only ever calls `.as_bytes()` on it, never anything that assumes
-        // validity.
-        let raw_bytes: Vec<u8> = [0xffu8, b'\n'].to_vec();
-        let raw_line = unsafe { core::str::from_utf8_unchecked(&raw_bytes) };
-        let (code, out, _) = grep(&["-c", "-f", path], raw_line);
-        assert_eq!((code, out.as_str()), (0, "1\n"));
-        std::fs::remove_file(&file).unwrap();
-    }
-
-    #[test]
     // GNU's `-P` (PCRE) defaults `\d`/`\w`/`\s` (and their negations) to ASCII only,
     // unlike fancy_regex's own Unicode-aware default.
     fn perl_classes_are_ascii_only() {
@@ -2059,86 +2025,6 @@ mod tests {
         assert_eq!(
             grep(&["-A0", "-e", "foo 1", "-e", "foo 3"], input).1,
             "foo 1\n--\nfoo 3\n"
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    // The `--` group separator belongs between two *file operands* too, not just between two
-    // non-adjacent matches within one file: two different files' output is never "adjacent".
-    // `Search` is constructed fresh per target, so this needs carrying `printed()` forward as
-    // each target's `separator_owed` — verified against the oracle, which puts `--` here
-    // exactly where a single file with the same content, searched twice, would put it between
-    // its own two non-adjacent matches.
-    fn group_separator_appears_between_file_operands() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("a"), "a\nmatch\nb\n").unwrap();
-        std::fs::write(root.path().join("n"), "other\n").unwrap();
-        let resolve = |path: &str| root.path().join(path);
-        let block = "a-a\na:match\na-b\n";
-
-        let argv = [
-            "grep".to_owned(),
-            "-C1".to_owned(),
-            "match".to_owned(),
-            "a".to_owned(),
-            "a".to_owned(),
-        ];
-        let Ok(Parsed::Run(options)) = parse(&argv) else {
-            panic!("expected to parse");
-        };
-        let matcher = match compile(&options, true, &|path| std::fs::read(path)) {
-            Ok(matcher) => matcher,
-            Err(refusal) => panic!("expected to compile: {}", refusal.message),
-        };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let code = run_sync(
-            &options,
-            &matcher,
-            true,
-            &mut std::io::empty(),
-            &mut out,
-            &mut err,
-            &resolve,
-        )
-        .unwrap();
-        assert_eq!(
-            (code, String::from_utf8(out).unwrap()),
-            (0, format!("{block}--\n{block}"))
-        );
-
-        // A second target ("n", no match of its own) doesn't reset the flag: a third target
-        // that does match still gets the separator against the *first* target's output.
-        let argv = [
-            "grep".to_owned(),
-            "-C1".to_owned(),
-            "match".to_owned(),
-            "a".to_owned(),
-            "n".to_owned(),
-            "a".to_owned(),
-        ];
-        let Ok(Parsed::Run(options)) = parse(&argv) else {
-            panic!("expected to parse");
-        };
-        let matcher = match compile(&options, true, &|path| std::fs::read(path)) {
-            Ok(matcher) => matcher,
-            Err(refusal) => panic!("expected to compile: {}", refusal.message),
-        };
-        let mut out = Vec::new();
-        let code = run_sync(
-            &options,
-            &matcher,
-            true,
-            &mut std::io::empty(),
-            &mut out,
-            &mut err,
-            &resolve,
-        )
-        .unwrap();
-        assert_eq!(
-            (code, String::from_utf8(out).unwrap()),
-            (0, format!("{block}--\n{block}"))
         );
     }
 
@@ -2292,115 +2178,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
-    // `-r` against a single, explicit, non-directory file operand never actually walks
-    // anything — the filename prefix decision follows that (whether recursion *happened*), not
-    // whether `-r` was merely given. Verified against the oracle.
-    fn recursive_flag_alone_does_not_force_a_filename_prefix() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("nums"), "one\n").unwrap();
-        let resolve = |path: &str| root.path().join(path);
-
-        let argv = [
-            "grep".to_owned(),
-            "-r".to_owned(),
-            "one".to_owned(),
-            "nums".to_owned(),
-        ];
-        let Ok(Parsed::Run(options)) = parse(&argv) else {
-            panic!("expected to parse");
-        };
-        let (found, recursed) = targets(&options, &resolve);
-        assert!(!recursed, "a plain file operand must not set `recursed`");
-        assert!(!with_filename(&options, &found, recursed));
-
-        // The same flag against a directory operand *does* walk, and still prefixes even
-        // though exactly one file is found inside it.
-        std::fs::create_dir(root.path().join("d")).unwrap();
-        std::fs::write(root.path().join("d/nums"), "one\n").unwrap();
-        let argv = [
-            "grep".to_owned(),
-            "-r".to_owned(),
-            "one".to_owned(),
-            "d".to_owned(),
-        ];
-        let Ok(Parsed::Run(options)) = parse(&argv) else {
-            panic!("expected to parse");
-        };
-        let (found, recursed) = targets(&options, &resolve);
-        assert!(recursed);
-        assert!(with_filename(&options, &found, recursed));
-    }
-
-    #[test]
-    #[cfg(unix)]
-    // `--include`/`--exclude` filter every file target, including one named directly
-    // on the command line — not just files a recursive walk discovers — and regardless of
-    // whether `-r`/`-R` was given at all. Verified against the oracle.
-    fn include_exclude_filter_explicit_file_operands() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("nums.txt"), "one\n").unwrap();
-        let resolve = |path: &str| root.path().join(path);
-
-        let argv = [
-            "grep".to_owned(),
-            "--include=*.log".to_owned(),
-            "one".to_owned(),
-            "nums.txt".to_owned(),
-        ];
-        let Ok(Parsed::Run(options)) = parse(&argv) else {
-            panic!("expected to parse");
-        };
-        let (found, _) = targets(&options, &resolve);
-        assert!(
-            !found.iter().any(|t| matches!(t, Target::File(..))),
-            "--include=*.log must filter out nums.txt: {found:?}"
-        );
-
-        let argv = [
-            "grep".to_owned(),
-            "--exclude=*.txt".to_owned(),
-            "one".to_owned(),
-            "nums.txt".to_owned(),
-        ];
-        let Ok(Parsed::Run(options)) = parse(&argv) else {
-            panic!("expected to parse");
-        };
-        let (found, _) = targets(&options, &resolve);
-        assert!(
-            !found.iter().any(|t| matches!(t, Target::File(..))),
-            "--exclude=*.txt must filter out nums.txt: {found:?}"
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    // `--exclude-dir` also filters a directory named directly as an operand, not just
-    // subdirectories discovered while recursing. Verified against the oracle.
-    fn exclude_dir_filters_a_directory_operand() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir(root.path().join("sub")).unwrap();
-        std::fs::write(root.path().join("sub/f"), "one\n").unwrap();
-        let resolve = |path: &str| root.path().join(path);
-
-        let argv = [
-            "grep".to_owned(),
-            "-r".to_owned(),
-            "--exclude-dir=sub".to_owned(),
-            "one".to_owned(),
-            "sub".to_owned(),
-        ];
-        let Ok(Parsed::Run(options)) = parse(&argv) else {
-            panic!("expected to parse");
-        };
-        let (found, _) = targets(&options, &resolve);
-        assert!(
-            !found.iter().any(|t| matches!(t, Target::File(..))),
-            "--exclude-dir=sub must filter out the sub/ operand itself: {found:?}"
-        );
-    }
-
-    #[test]
     // `-I` (treat a binary match as no match) must win over `-q` (exit as soon as a
     // match is found) — `-qI` on a binary file exits 1, not 0, same as plain `-I` would print
     // nothing and exit 1 for the same input.
@@ -2409,45 +2186,268 @@ mod tests {
         assert_eq!((code, out.as_str(), err.as_str()), (1, "", ""));
     }
 
-    #[test]
     #[cfg(unix)]
-    // `-R` follows symlinks, so a symlink back to an ancestor directory must not
-    // make the walk match the same file repeatedly or never finish.
-    fn recursive_dereference_stops_at_a_symlink_loop() {
-        let root = tempfile::tempdir().unwrap();
-        let sub = root.path().join("a");
-        std::fs::create_dir(&sub).unwrap();
-        std::fs::write(sub.join("file"), "needle\n").unwrap();
-        std::os::unix::fs::symlink("..", sub.join("up1")).unwrap();
+    mod unix {
+        use super::*;
+        use std::os::unix::fs::symlink;
 
-        let argv = ["grep".to_owned(), "-R".to_owned(), "needle".to_owned()];
-        let Ok(Parsed::Run(options)) = parse(&argv) else {
-            panic!("expected -R needle to parse as Run");
-        };
-        let resolve = |path: &str| {
-            if path == "." {
-                root.path().to_path_buf()
-            } else {
-                PathBuf::from(path)
-            }
-        };
-        let (found, _recursed) = targets(&options, &resolve);
-        let files: Vec<_> = found
-            .iter()
-            .filter_map(|t| match t {
-                Target::File(name, _) => Some(name.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(files, vec!["a/file".to_owned()], "found: {files:?}");
-        let errors: Vec<_> = found
-            .iter()
-            .filter_map(|t| match t {
-                Target::Error(message) => Some(message.clone()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(errors.len(), 1, "errors: {errors:?}");
-        assert!(errors[0].contains("recursive directory loop"), "{errors:?}");
+        #[test]
+        // a `-f` pattern file containing a raw, invalid-UTF-8 byte must match that literal
+        // byte in the input, not silently fail to match because the byte got lossily replaced with
+        // U+FFFD while the pattern file was being read (`printf '\xff\n' > p; printf '\xff\n' |
+        // grep -c -f p` gives GNU's 1, not 0). Verified against the oracle.
+        fn pattern_file_with_invalid_utf8_matches_the_raw_byte() {
+            // `tempfile::NamedTempFile` is native-only (see its dependency's own wasm32 exclusion);
+            // `test_scratch` is this crate's own path helper for a unit test's scratch file, which
+            // works under both the native test runner and the WASM one.
+            let file = crate::tools::test_scratch("grep-pattern-file");
+            std::fs::write(&file, b"\xff\n").unwrap();
+            let path = file.to_str().unwrap();
+            let (code, out, _) = grep(&["-c", "-f", path], "\u{ff}\n");
+            // A lossily-decoded pattern file would compile `\xff` as U+00FF and so match this
+            // line (its UTF-8 encoding, 2 bytes: 0xC3 0xBF) instead of the single raw byte —
+            // proving the fix actually changed *which* byte sequence is matched, not just that
+            // something now matches.
+            assert_eq!((code, out.as_str()), (1, "0\n"));
+            let (code, out, _) = grep(&["-c", "-f", path], "\u{100}\n");
+            assert_eq!((code, out.as_str()), (1, "0\n"));
+
+            // The real repro: the *input* line is the single raw byte too. `grep()`'s test helper
+            // takes `&str`, so build one whose bytes are deliberately invalid UTF-8 at runtime
+            // (never as a `b"..."` literal, which rustc's own lint refuses to accept here) — safe
+            // because the helper only ever calls `.as_bytes()` on it, never anything that assumes
+            // validity.
+            let raw_bytes: Vec<u8> = [0xffu8, b'\n'].to_vec();
+            let raw_line = unsafe { core::str::from_utf8_unchecked(&raw_bytes) };
+            let (code, out, _) = grep(&["-c", "-f", path], raw_line);
+            assert_eq!((code, out.as_str()), (0, "1\n"));
+            std::fs::remove_file(&file).unwrap();
+        }
+
+        #[test]
+        // The `--` group separator belongs between two *file operands* too, not just between two
+        // non-adjacent matches within one file: two different files' output is never "adjacent".
+        // `Search` is constructed fresh per target, so this needs carrying `printed()` forward as
+        // each target's `separator_owed` — verified against the oracle, which puts `--` here
+        // exactly where a single file with the same content, searched twice, would put it between
+        // its own two non-adjacent matches.
+        fn group_separator_appears_between_file_operands() {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(root.path().join("a"), "a\nmatch\nb\n").unwrap();
+            std::fs::write(root.path().join("n"), "other\n").unwrap();
+            let resolve = |path: &str| root.path().join(path);
+            let block = "a-a\na:match\na-b\n";
+
+            let argv = [
+                "grep".to_owned(),
+                "-C1".to_owned(),
+                "match".to_owned(),
+                "a".to_owned(),
+                "a".to_owned(),
+            ];
+            let Ok(Parsed::Run(options)) = parse(&argv) else {
+                panic!("expected to parse");
+            };
+            let matcher = match compile(&options, true, &|path| std::fs::read(path)) {
+                Ok(matcher) => matcher,
+                Err(refusal) => panic!("expected to compile: {}", refusal.message),
+            };
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let code = run_sync(
+                &options,
+                &matcher,
+                true,
+                &mut std::io::empty(),
+                &mut out,
+                &mut err,
+                &resolve,
+            )
+            .unwrap();
+            assert_eq!(
+                (code, String::from_utf8(out).unwrap()),
+                (0, format!("{block}--\n{block}"))
+            );
+
+            // A second target ("n", no match of its own) doesn't reset the flag: a third target
+            // that does match still gets the separator against the *first* target's output.
+            let argv = [
+                "grep".to_owned(),
+                "-C1".to_owned(),
+                "match".to_owned(),
+                "a".to_owned(),
+                "n".to_owned(),
+                "a".to_owned(),
+            ];
+            let Ok(Parsed::Run(options)) = parse(&argv) else {
+                panic!("expected to parse");
+            };
+            let matcher = match compile(&options, true, &|path| std::fs::read(path)) {
+                Ok(matcher) => matcher,
+                Err(refusal) => panic!("expected to compile: {}", refusal.message),
+            };
+            let mut out = Vec::new();
+            let code = run_sync(
+                &options,
+                &matcher,
+                true,
+                &mut std::io::empty(),
+                &mut out,
+                &mut err,
+                &resolve,
+            )
+            .unwrap();
+            assert_eq!(
+                (code, String::from_utf8(out).unwrap()),
+                (0, format!("{block}--\n{block}"))
+            );
+        }
+
+        #[test]
+        // `-r` against a single, explicit, non-directory file operand never actually walks
+        // anything — the filename prefix decision follows that (whether recursion *happened*), not
+        // whether `-r` was merely given. Verified against the oracle.
+        fn recursive_flag_alone_does_not_force_a_filename_prefix() {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(root.path().join("nums"), "one\n").unwrap();
+            let resolve = |path: &str| root.path().join(path);
+
+            let argv = [
+                "grep".to_owned(),
+                "-r".to_owned(),
+                "one".to_owned(),
+                "nums".to_owned(),
+            ];
+            let Ok(Parsed::Run(options)) = parse(&argv) else {
+                panic!("expected to parse");
+            };
+            let (found, recursed) = targets(&options, &resolve);
+            assert!(!recursed, "a plain file operand must not set `recursed`");
+            assert!(!with_filename(&options, &found, recursed));
+
+            // The same flag against a directory operand *does* walk, and still prefixes even
+            // though exactly one file is found inside it.
+            std::fs::create_dir(root.path().join("d")).unwrap();
+            std::fs::write(root.path().join("d/nums"), "one\n").unwrap();
+            let argv = [
+                "grep".to_owned(),
+                "-r".to_owned(),
+                "one".to_owned(),
+                "d".to_owned(),
+            ];
+            let Ok(Parsed::Run(options)) = parse(&argv) else {
+                panic!("expected to parse");
+            };
+            let (found, recursed) = targets(&options, &resolve);
+            assert!(recursed);
+            assert!(with_filename(&options, &found, recursed));
+        }
+
+        #[test]
+        // `--include`/`--exclude` filter every file target, including one named directly
+        // on the command line — not just files a recursive walk discovers — and regardless of
+        // whether `-r`/`-R` was given at all. Verified against the oracle.
+        fn include_exclude_filter_explicit_file_operands() {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(root.path().join("nums.txt"), "one\n").unwrap();
+            let resolve = |path: &str| root.path().join(path);
+
+            let argv = [
+                "grep".to_owned(),
+                "--include=*.log".to_owned(),
+                "one".to_owned(),
+                "nums.txt".to_owned(),
+            ];
+            let Ok(Parsed::Run(options)) = parse(&argv) else {
+                panic!("expected to parse");
+            };
+            let (found, _) = targets(&options, &resolve);
+            assert!(
+                !found.iter().any(|t| matches!(t, Target::File(..))),
+                "--include=*.log must filter out nums.txt: {found:?}"
+            );
+
+            let argv = [
+                "grep".to_owned(),
+                "--exclude=*.txt".to_owned(),
+                "one".to_owned(),
+                "nums.txt".to_owned(),
+            ];
+            let Ok(Parsed::Run(options)) = parse(&argv) else {
+                panic!("expected to parse");
+            };
+            let (found, _) = targets(&options, &resolve);
+            assert!(
+                !found.iter().any(|t| matches!(t, Target::File(..))),
+                "--exclude=*.txt must filter out nums.txt: {found:?}"
+            );
+        }
+
+        #[test]
+        // `--exclude-dir` also filters a directory named directly as an operand, not just
+        // subdirectories discovered while recursing. Verified against the oracle.
+        fn exclude_dir_filters_a_directory_operand() {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join("sub")).unwrap();
+            std::fs::write(root.path().join("sub/f"), "one\n").unwrap();
+            let resolve = |path: &str| root.path().join(path);
+
+            let argv = [
+                "grep".to_owned(),
+                "-r".to_owned(),
+                "--exclude-dir=sub".to_owned(),
+                "one".to_owned(),
+                "sub".to_owned(),
+            ];
+            let Ok(Parsed::Run(options)) = parse(&argv) else {
+                panic!("expected to parse");
+            };
+            let (found, _) = targets(&options, &resolve);
+            assert!(
+                !found.iter().any(|t| matches!(t, Target::File(..))),
+                "--exclude-dir=sub must filter out the sub/ operand itself: {found:?}"
+            );
+        }
+
+        #[test]
+        // `-R` follows symlinks, so a symlink back to an ancestor directory must not
+        // make the walk match the same file repeatedly or never finish.
+        fn recursive_dereference_stops_at_a_symlink_loop() {
+            let root = tempfile::tempdir().unwrap();
+            let sub = root.path().join("a");
+            std::fs::create_dir(&sub).unwrap();
+            std::fs::write(sub.join("file"), "needle\n").unwrap();
+            symlink("..", sub.join("up1")).unwrap();
+
+            let argv = ["grep".to_owned(), "-R".to_owned(), "needle".to_owned()];
+            let Ok(Parsed::Run(options)) = parse(&argv) else {
+                panic!("expected -R needle to parse as Run");
+            };
+            let resolve = |path: &str| {
+                if path == "." {
+                    root.path().to_path_buf()
+                } else {
+                    PathBuf::from(path)
+                }
+            };
+            let (found, _recursed) = targets(&options, &resolve);
+            let files: Vec<_> = found
+                .iter()
+                .filter_map(|t| match t {
+                    Target::File(name, _) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(files, vec!["a/file".to_owned()], "found: {files:?}");
+            let errors: Vec<_> = found
+                .iter()
+                .filter_map(|t| match t {
+                    Target::Error(message) => Some(message.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(errors.len(), 1, "errors: {errors:?}");
+            assert!(errors[0].contains("recursive directory loop"), "{errors:?}");
+        }
     }
 }

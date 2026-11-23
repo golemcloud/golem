@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "golem-ai-contract",
     "golem-api-grpc",
+    "golem-async-trait",
     "golem-client",
     "golem-common",
     "test-components/human-approval-service",
@@ -48,6 +49,7 @@ license-file = "LICENSE"
 
 [workspace.dependencies]
 golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
+golem-async-trait = { version = "=0.0.0", path = "golem-async-trait" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
@@ -293,7 +295,7 @@ tap = "1.0.1"
 tar = "0.4.46"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
-test-r = { version = "3.0.15", default-features = true }
+test-r = { version = "3.0.16", default-features = true }
 testcontainers = { version = "0.27.1" }
 testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "mysql", ] }
 textwrap = { version = "0.16.1", default-features = false, features = ["unicode-linebreak", "unicode-width"] }

@@ -23,7 +23,6 @@ use crate::wasi_filesystem::{
     AgentOpenDecision, AgentOpenPolicyError, decide_agent_existing_open, decide_agent_open,
     flush_level, replay_time_changes, resize_attribute_changes,
 };
-use fs_set_times::{SystemTimeSpec, set_symlink_times, set_times};
 use golem_common::model::oplog::types::SerializableDateTime;
 use std::time::{Duration, SystemTime};
 use test_r::test;
@@ -628,9 +627,16 @@ fn p2_p3_cross_project_link_mapping_is_identical() {
         .unwrap();
     assert_eq!(p2, P2ErrorCode::CrossDevice);
     assert!(matches!(p3, types::ErrorCode::CrossDevice));
+}
 
-    #[cfg(target_os = "linux")]
-    {
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn p2_p3_native_cross_device_link_mapping_is_identical() {
+        use wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode as P2ErrorCode;
         let storage_error = || {
             FilesystemStorageError::io(
                 "hard link",
@@ -1513,99 +1519,104 @@ fn metadata_hash_from_stat_fails_with_overflow_for_pre_epoch_timestamps() {
 }
 
 #[cfg(unix)]
-#[test]
-async fn p3_fs_stat_at_follow_symlink_does_not_mutate_symlink_timestamps() {
-    let tempdir = tempfile::TempDir::new().unwrap();
-    let target = tempdir.path().join("target");
-    let link = tempdir.path().join("link");
-    std::fs::write(&target, b"target").unwrap();
-    std::os::unix::fs::symlink(&target, &link).unwrap();
+mod unix {
+    use super::*;
+    use fs_set_times::{SystemTimeSpec, set_symlink_times, set_times};
+    use test_r::test;
 
-    let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
-    let new = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
-    set_symlink_times(
-        &link,
-        Some(SystemTimeSpec::from(old)),
-        Some(SystemTimeSpec::from(old)),
-    )
-    .unwrap();
-    let before = std::fs::symlink_metadata(&link)
-        .unwrap()
-        .modified()
+    #[test]
+    async fn p3_fs_stat_at_follow_symlink_does_not_mutate_symlink_timestamps() {
+        let tempdir = tempfile::TempDir::new().unwrap();
+        let target = tempdir.path().join("target");
+        let link = tempdir.path().join("link");
+        std::fs::write(&target, b"target").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let new = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        set_symlink_times(
+            &link,
+            Some(SystemTimeSpec::from(old)),
+            Some(SystemTimeSpec::from(old)),
+        )
+        .unwrap();
+        let before = std::fs::symlink_metadata(&link)
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        let new_timestamp = SerializableDateTime::from(new);
+        apply_stat_response(
+            Ok(types::DescriptorStat {
+                type_: types::DescriptorType::RegularFile,
+                link_count: 1,
+                size: 6,
+                data_access_timestamp: Some(new_timestamp.clone().into()),
+                data_modification_timestamp: Some(new_timestamp.clone().into()),
+                status_change_timestamp: None,
+            }),
+            HostResponseP3FileSystemStat {
+                result: Ok(SerializableFileTimes {
+                    data_access_timestamp: Some(new_timestamp.clone()),
+                    data_modification_timestamp: Some(new_timestamp),
+                }),
+            },
+        )
+        .await
         .unwrap();
 
-    let new_timestamp = SerializableDateTime::from(new);
-    apply_stat_response(
-        Ok(types::DescriptorStat {
-            type_: types::DescriptorType::RegularFile,
-            link_count: 1,
-            size: 6,
-            data_access_timestamp: Some(new_timestamp.clone().into()),
-            data_modification_timestamp: Some(new_timestamp.clone().into()),
-            status_change_timestamp: None,
-        }),
-        HostResponseP3FileSystemStat {
-            result: Ok(SerializableFileTimes {
-                data_access_timestamp: Some(new_timestamp.clone()),
-                data_modification_timestamp: Some(new_timestamp),
-            }),
-        },
-    )
-    .await
-    .unwrap();
+        let after = std::fs::symlink_metadata(&link)
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(
+            after, before,
+            "stat-at with symlink-follow is a read-only operation and must not rewrite the symlink itself"
+        );
+    }
 
-    let after = std::fs::symlink_metadata(&link)
-        .unwrap()
-        .modified()
+    #[test]
+    async fn p3_fs_stat_at_follow_symlink_does_not_mutate_target_timestamps() {
+        let tempdir = tempfile::TempDir::new().unwrap();
+        let target = tempdir.path().join("target");
+        let link = tempdir.path().join("link");
+        std::fs::write(&target, b"target").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let new = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        set_times(
+            &target,
+            Some(SystemTimeSpec::from(old)),
+            Some(SystemTimeSpec::from(old)),
+        )
         .unwrap();
-    assert_eq!(
-        after, before,
-        "stat-at with symlink-follow is a read-only operation and must not rewrite the symlink itself"
-    );
-}
+        let before = std::fs::metadata(&target).unwrap().modified().unwrap();
 
-#[cfg(unix)]
-#[test]
-async fn p3_fs_stat_at_follow_symlink_does_not_mutate_target_timestamps() {
-    let tempdir = tempfile::TempDir::new().unwrap();
-    let target = tempdir.path().join("target");
-    let link = tempdir.path().join("link");
-    std::fs::write(&target, b"target").unwrap();
-    std::os::unix::fs::symlink(&target, &link).unwrap();
-
-    let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
-    let new = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
-    set_times(
-        &target,
-        Some(SystemTimeSpec::from(old)),
-        Some(SystemTimeSpec::from(old)),
-    )
-    .unwrap();
-    let before = std::fs::metadata(&target).unwrap().modified().unwrap();
-
-    let new_timestamp = SerializableDateTime::from(new);
-    apply_stat_response(
-        Ok(types::DescriptorStat {
-            type_: types::DescriptorType::RegularFile,
-            link_count: 1,
-            size: 6,
-            data_access_timestamp: Some(new_timestamp.clone().into()),
-            data_modification_timestamp: Some(new_timestamp.clone().into()),
-            status_change_timestamp: None,
-        }),
-        HostResponseP3FileSystemStat {
-            result: Ok(SerializableFileTimes {
-                data_access_timestamp: Some(new_timestamp.clone()),
-                data_modification_timestamp: Some(new_timestamp),
+        let new_timestamp = SerializableDateTime::from(new);
+        apply_stat_response(
+            Ok(types::DescriptorStat {
+                type_: types::DescriptorType::RegularFile,
+                link_count: 1,
+                size: 6,
+                data_access_timestamp: Some(new_timestamp.clone().into()),
+                data_modification_timestamp: Some(new_timestamp.clone().into()),
+                status_change_timestamp: None,
             }),
-        },
-    )
-    .await
-    .unwrap();
+            HostResponseP3FileSystemStat {
+                result: Ok(SerializableFileTimes {
+                    data_access_timestamp: Some(new_timestamp.clone()),
+                    data_modification_timestamp: Some(new_timestamp),
+                }),
+            },
+        )
+        .await
+        .unwrap();
 
-    let after = std::fs::metadata(&target).unwrap().modified().unwrap();
-    assert_eq!(
-        after, before,
-        "stat-at with symlink-follow is a read-only operation and must not rewrite the target"
-    );
+        let after = std::fs::metadata(&target).unwrap().modified().unwrap();
+        assert_eq!(
+            after, before,
+            "stat-at with symlink-follow is a read-only operation and must not rewrite the target"
+        );
+    }
 }

@@ -5596,7 +5596,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -9496,6 +9498,7 @@ components:
           type: string
           format: date-time
         claims:
+          type: object
           description: |-
             The verified claims, only when the reader asks for them (`include=claims`). The key is
             absent otherwise.
@@ -9671,7 +9674,9 @@ components:
             enum:
             - delimited
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind
@@ -9682,7 +9687,9 @@ components:
             enum:
             - either
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
     ReplayDivergence:
       type: object
       title: ReplayDivergence
@@ -10836,7 +10843,9 @@ components:
             enum:
             - char
           value:
-            type: char
+            type: string
+            maxLength: 1
+            minLength: 1
       - type: object
         required:
         - kind

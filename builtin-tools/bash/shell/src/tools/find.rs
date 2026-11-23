@@ -416,9 +416,9 @@ fn timestamp(time: std::io::Result<SystemTime>) -> Option<Ts> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(unix),
-    allow(dead_code, reason = "only unix exposes devices, FIFOs and sockets")
+#[allow(
+    dead_code,
+    reason = "not all platforms expose devices, FIFOs and sockets"
 )]
 enum Kind {
     File,
@@ -510,13 +510,13 @@ impl Stat {
     }
 }
 
+#[cfg(unix)]
 mod platform {
     use super::{Kind, Ts};
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
     use std::path::Path;
 
-    #[cfg(unix)]
     pub(super) fn special(file_type: std::fs::FileType) -> Kind {
-        use std::os::unix::fs::FileTypeExt;
         if file_type.is_block_device() {
             Kind::Block
         } else if file_type.is_char_device() {
@@ -530,14 +530,41 @@ mod platform {
         }
     }
 
-    #[cfg(not(unix))]
+    pub(super) fn kind(_: &Path, _: bool) -> Kind {
+        Kind::Unknown
+    }
+
+    /// Status-change time and permission bits, where the platform exposes them.
+    pub(super) fn extra(
+        meta: &std::fs::Metadata,
+        _: &Path,
+        _: bool,
+        _: bool,
+    ) -> (Option<Ts>, Option<u32>) {
+        let ctime = i128::from(meta.ctime()) * super::NANOS + i128::from(meta.ctime_nsec());
+        (Some(ctime), Some(meta.mode()))
+    }
+
+    /// Identity of a directory for `-L` loop detection.
+    pub(super) fn identity(path: &Path) -> Option<(u64, u64)> {
+        std::fs::metadata(path)
+            .ok()
+            .map(|meta| (meta.dev(), meta.ino()))
+    }
+}
+
+#[cfg(target_os = "wasi")]
+mod platform {
+    use super::{Kind, Ts};
+    use std::os::fd::AsRawFd;
+    use std::path::Path;
+
     pub(super) fn special(_: std::fs::FileType) -> Kind {
         Kind::Unknown
     }
 
     /// The kind of a file std cannot name (std keeps WASI's device types unstable): from the C
     /// library's stat, which answers for the virtual `/dev` (see `devices`).
-    #[cfg(target_os = "wasi")]
     pub(super) fn kind(path: &Path, follow: bool) -> Kind {
         match raw_stat(path, follow).map(|stat| stat.st_mode & libc::S_IFMT) {
             Some(libc::S_IFCHR) => Kind::Char,
@@ -548,25 +575,7 @@ mod platform {
         }
     }
 
-    #[cfg(not(target_os = "wasi"))]
-    pub(super) fn kind(_: &Path, _: bool) -> Kind {
-        Kind::Unknown
-    }
-
     /// Status-change time and permission bits, where the platform exposes them.
-    #[cfg(unix)]
-    pub(super) fn extra(
-        meta: &std::fs::Metadata,
-        _: &Path,
-        _: bool,
-        _: bool,
-    ) -> (Option<Ts>, Option<u32>) {
-        use std::os::unix::fs::MetadataExt;
-        let ctime = i128::from(meta.ctime()) * super::NANOS + i128::from(meta.ctime_nsec());
-        (Some(ctime), Some(meta.mode()))
-    }
-
-    #[cfg(target_os = "wasi")]
     pub(super) fn extra(
         _: &std::fs::Metadata,
         path: &Path,
@@ -586,29 +595,9 @@ mod platform {
         )
     }
 
-    #[cfg(not(any(unix, target_os = "wasi")))]
-    pub(super) fn extra(
-        _: &std::fs::Metadata,
-        _: &Path,
-        _: bool,
-        _: bool,
-    ) -> (Option<Ts>, Option<u32>) {
-        (None, None)
-    }
-
     /// Identity of a directory for `-L` loop detection.
-    #[cfg(unix)]
-    pub(super) fn identity(path: &Path) -> Option<(u64, u64)> {
-        use std::os::unix::fs::MetadataExt;
-        std::fs::metadata(path)
-            .ok()
-            .map(|meta| (meta.dev(), meta.ino()))
-    }
-
-    #[cfg(target_os = "wasi")]
     #[allow(unsafe_code, reason = "fstat of a descriptor the File owns")]
     pub(super) fn identity(path: &Path) -> Option<(u64, u64)> {
-        use std::os::fd::AsRawFd;
         // A path's own identity on WASI is that of its last component, even a symbolic link
         // stat follows: the directory it names is opened, and its descriptor tells.
         let directory = std::fs::File::open(path).ok()?;
@@ -619,13 +608,7 @@ mod platform {
         (status == 0).then_some((stat.st_dev, stat.st_ino))
     }
 
-    #[cfg(not(any(unix, target_os = "wasi")))]
-    pub(super) fn identity(_: &Path) -> Option<(u64, u64)> {
-        None
-    }
-
     /// wasi-libc's stat exposes the WASI link and status-change fields std keeps unstable.
-    #[cfg(target_os = "wasi")]
     fn raw_stat(path: &Path, follow: bool) -> Option<libc::stat> {
         let path = std::ffi::CString::new(path.to_str()?).ok()?;
         // SAFETY: `libc::stat` is plain old data; an all-zero value is a valid instance.
@@ -640,6 +623,33 @@ mod platform {
             }
         };
         (status == 0).then_some(stat)
+    }
+}
+
+#[cfg(not(any(unix, target_os = "wasi")))]
+mod platform {
+    use super::{Kind, Ts};
+    use std::path::Path;
+
+    pub(super) fn special(_: std::fs::FileType) -> Kind {
+        Kind::Unknown
+    }
+
+    pub(super) fn kind(_: &Path, _: bool) -> Kind {
+        Kind::Unknown
+    }
+
+    pub(super) fn extra(
+        _: &std::fs::Metadata,
+        _: &Path,
+        _: bool,
+        _: bool,
+    ) -> (Option<Ts>, Option<u32>) {
+        (None, None)
+    }
+
+    pub(super) fn identity(_: &Path) -> Option<(u64, u64)> {
+        None
     }
 }
 

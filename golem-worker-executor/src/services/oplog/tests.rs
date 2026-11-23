@@ -168,6 +168,7 @@ struct RecordingArchive {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchiveService for RecordingArchiveService {
     async fn open(
         &self,
@@ -233,6 +234,7 @@ impl OplogArchiveService for RecordingArchiveService {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for RecordingArchive {
     async fn read_source(
         &self,
@@ -363,6 +365,7 @@ impl Debug for BlockingArchiveService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchiveService for BlockingArchiveService {
     async fn open(
         &self,
@@ -484,6 +487,7 @@ impl Debug for BlockingArchive {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for BlockingArchive {
     async fn read_source(
         &self,
@@ -562,6 +566,7 @@ impl TransferTestArchive {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogArchive for TransferTestArchive {
     async fn read_source(
         &self,
@@ -857,6 +862,7 @@ impl ReadCountingIndexedStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl IndexedStorage for ReadCountingIndexedStorage {
     async fn set_key_epoch(
         &self,
@@ -1404,6 +1410,7 @@ impl<B> ReadCountingBlobStorage<B> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<B: BlobStorageBackend> BlobStorageBackend for ReadCountingBlobStorage<B> {
     async fn copy_between_at(
         &self,
@@ -12776,6 +12783,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
     struct NoPluginsOplogProcessorPlugin;
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl OplogProcessorPlugin for NoPluginsOplogProcessorPlugin {
         async fn resolve_target(
             &self,
@@ -12828,6 +12836,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
     struct NoComponentsComponentService;
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl ComponentService for NoComponentsComponentService {
         async fn get(
             &self,
@@ -12868,6 +12877,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
     struct UnlimitedResourceLimits;
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl ResourceLimits for UnlimitedResourceLimits {
         async fn initialize_account(
             &self,

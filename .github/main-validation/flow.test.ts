@@ -50,10 +50,15 @@ async function fixture(check: (directory: string, env: NodeJS.ProcessEnv) => Pro
     await writeFile(
       join(directory, "workload.ts"),
       `
-      import { appendFileSync } from 'node:fs';
+      import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
       const name = process.argv[2];
       appendFileSync('events', JSON.stringify({ name, event: 'start', time: Date.now(), jobs: process.env.CARGO_BUILD_JOBS }) + '\\n');
       await Bun.sleep(100);
+      if (name === 'main-validation-executor-native' && process.env.FAIL_TASK !== name) {
+        mkdirSync('snapshot', { recursive: true });
+        writeFileSync(process.env.MAIN_VALIDATION_REPORT_DIR + '/executor-snapshot-root.txt', process.cwd() + '/snapshot');
+        writeFileSync(process.env.MAIN_VALIDATION_REPORT_DIR + '/executor-selection.digest', 'sha256:fixture');
+      }
       appendFileSync('events', JSON.stringify({ name, event: 'end', time: Date.now() }) + '\\n');
       process.exit(process.env.FAIL_TASK === name ? 7 : 0);
     `
@@ -65,7 +70,13 @@ command = "bun"
 args = ["${directory}/workload.ts", "${name}"]
 `).join("")
     await writeFile(join(directory, "Makefile.toml"), `extend = "Flow.toml"\n${overrides}`)
-    await writeFile(join(directory, "bin/cargo-test-r"), "#!/bin/sh\necho --binaries-metadata\n", { mode: 0o755 })
+    await writeFile(
+      join(directory, "bin/cargo-test-r"),
+      `#!/bin/sh\nif [ "$1" = exec ]; then exec ${
+        JSON.stringify(Bun.which("cargo-test-r"))
+      } "$@"; fi\necho --selection --events --deadline --kill-grace --no-fail-fast --expect-digest --binary-id --cargo-metadata --expect-count --output --invocation-id --report-format\n`,
+      { mode: 0o755 }
+    )
     const env = Object.fromEntries(
       Object.entries(process.env).filter(([key]) =>
         !/^(CARGO_MAKE_|MAIN_VALIDATION_|CI_DASHBOARD_|TEST_R_|CARGO_TARGET_DIR)/.test(key)
@@ -114,7 +125,14 @@ test(
   "a final verdict failure preserves all independent work, joins and cleanup",
   async () =>
     fixture(async (dir, env) => {
-      for (const name of ["progress.ts", "process.ts", "progress-telemetry.ts", "tooling-io.ts"]) {
+      for (
+        const name of [
+          "progress.ts",
+          "process.ts",
+          "progress-telemetry.ts",
+          "tooling-io.ts"
+        ]
+      ) {
         const path = `.github/main-validation/${name}`
         await copyFile(join(root, path), join(dir, path))
       }
@@ -132,6 +150,7 @@ test(
           "worker-executor-tests-group1",
           "integration-tests-group4",
           "cli-integration-tests-core",
+          "main-validation-latency",
           "main-validation-xfs",
           "main-validation-docker"
         ]
@@ -178,6 +197,7 @@ test(
           "main-validation-js-guests",
           "worker-executor-tests-group1",
           "validate-sdk-ts",
+          "main-validation-latency",
           "main-validation-xfs"
         ]
       ) {

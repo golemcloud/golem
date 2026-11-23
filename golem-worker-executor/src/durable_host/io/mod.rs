@@ -57,6 +57,7 @@ impl StdinStream for ManagedStdIn {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Pollable for ManagedStdIn {
     async fn ready(&mut self) {}
 }
@@ -106,6 +107,7 @@ impl StdoutStream for ManagedStdOut {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Pollable for ManagedStdOut {
     async fn ready(&mut self) {
         self.state.stdout.p2_stream().ready().await
@@ -165,6 +167,7 @@ impl StdoutStream for ManagedStdErr {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Pollable for ManagedStdErr {
     async fn ready(&mut self) {
         self.state.stderr.p2_stream().ready().await

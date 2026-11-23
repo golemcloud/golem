@@ -705,7 +705,7 @@ pub enum GolemCliSubcommand {
         /// Path to the package archive
         file: PathBuf,
     },
-    /// Preview a package's OCI manifest digest without contacting a server
+    /// Preview a package's OCI manifest digest and omitted exports without contacting a server
     Publish {
         /// Compute the digest locally without saving an archive or publishing it
         #[arg(long, required = true)]
@@ -1048,6 +1048,8 @@ pub enum GolemCliSubcommand {
 #[derive(clap::Subcommand, Debug, Clone)]
 pub enum PackageSubcommand {
     /// Pack the application's built components into a local OCI archive
+    ///
+    /// HTTP API and MCP deployments are omitted and reported by kind and domain.
     Pack {
         /// Destination tar file
         #[arg(short, long, default_value = "golem-package.tar")]
@@ -1157,7 +1159,9 @@ pub mod shared_args {
     pub struct OplogExportArgs {
         /// Export an obfuscated report: customer values become tokens. Tokens are equal only inside
         /// one export, because each CLI process draws a new random key. The report is for reading,
-        /// not for replay.
+        /// not for replay. Agent IDs, the agent type name of the exported agent and fingerprints
+        /// are shown in clear. A reader who knows the environment ID can test a guessed key of a
+        /// keyed agent against its agent ID.
         #[arg(long)]
         pub obfuscate: bool,
         /// Show numbers, bools, datetimes, durations and the mantissa, scale and unit of quantities
@@ -1951,8 +1955,10 @@ pub mod worker {
             omit_payloads: bool,
             /// Show the verified claims of the users among the callers of each invocation. The
             /// server shows them only to a reader who may read the oplog. An obfuscated export
-            /// never shows claims.
-            #[arg(long, conflicts_with = "obfuscate")]
+            /// never shows claims, and the browser viewer (`--html`, `--serve`) never shows them:
+            /// a browser reads each number as a JavaScript number, which cannot hold every claim
+            /// value.
+            #[arg(long, conflicts_with_all = ["obfuscate", "html", "serve"])]
             show_claims: bool,
             /// Read one page of at most the HTTP batch size (50) entries and print it as one
             /// `agent.oplog-page` document, with the `cursor` of the next page when the oplog has
@@ -3627,15 +3633,27 @@ mod test {
     }
 
     #[test]
-    fn oplog_show_claims_conflicts_with_obfuscate() {
-        let error = parse_oplog(&["--show-claims", "--obfuscate"]).unwrap_err();
-        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
-        for extra in [
-            vec!["--show-claims"],
+    fn oplog_show_claims_conflicts_with_obfuscate_and_with_the_browser_viewer() {
+        // An obfuscated export never shows claims. The browser viewer reads each number as a
+        // JavaScript number, which cannot hold every claim value, so it never shows claims.
+        for conflict in [
+            vec!["--show-claims", "--obfuscate"],
             vec!["--show-claims", "--html", "report.html"],
             vec!["--show-claims", "--serve"],
         ] {
-            assert!(parse_oplog(&extra).is_ok(), "{extra:?}");
+            let error = parse_oplog(&conflict).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{conflict:?}"
+            );
+        }
+        for allowed in [
+            vec!["--show-claims"],
+            vec!["--show-claims", "--page"],
+            vec!["--show-claims", "--query", "error"],
+        ] {
+            assert!(parse_oplog(&allowed).is_ok(), "{allowed:?}");
         }
     }
 

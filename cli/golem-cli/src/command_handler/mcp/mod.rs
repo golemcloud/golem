@@ -1993,6 +1993,26 @@ mod tests {
         };
         assert!(page);
         assert_eq!(max_count, Some(50));
+    }
+
+    /// A management tool gives its result as a JSON value, and a JSON value cannot hold every
+    /// claim set: it rounds long numbers. So the oplog tool cannot ask for the claims. The CLI
+    /// and REST show them, because they write the recorded text.
+    #[test]
+    fn agent_oplog_tool_cannot_ask_for_the_claims() {
+        let properties = &tool("agent_oplog").tool.input_schema["properties"];
+        assert!(
+            properties.get("show_claims").is_none(),
+            "agent_oplog offers `show_claims`"
+        );
+        assert!(
+            argv(
+                "agent_oplog",
+                json!({"agent_id": "A(\"a\")", "show_claims": true})
+            )
+            .is_err(),
+            "agent_oplog takes `show_claims`"
+        );
 
         for name in ["agent_oplog", "agent_list"] {
             assert!(
@@ -2157,7 +2177,7 @@ mod tests {
         use crate::oplog_export::export::OplogExportError;
         use crate::oplog_export::model::{
             OplogExportCoverage, OplogExportHeader, OplogExportReport, OplogReportHeader,
-            ReportAgentRef, ReportToken,
+            ReportAgentRef,
         };
         // Escaped and non-ASCII text, so that bytes, characters and the text differ in length.
         let report = OplogExportReport {
@@ -2169,7 +2189,10 @@ mod tests {
                     keep_error_text: false,
                     filtered: false,
                     root: ReportAgentRef {
-                        token: ReportToken("agent:00".to_string()),
+                        agent_id: golem_common::model::AgentId::from_parts(7, 1),
+                        agent_type: Some(golem_common::model::agent::AgentTypeName(
+                            "Zähler \"quoted\"".to_string(),
+                        )),
                     },
                     cli_version: "1.0 \"quoted\"\n\u{1F600}".to_string(),
                     generated_at: "2026-11-18T00:00:00+00:00 Zürich".to_string(),

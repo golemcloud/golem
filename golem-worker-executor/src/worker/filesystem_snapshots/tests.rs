@@ -1767,6 +1767,7 @@ struct SpacedStore {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl crate::filesystem_snapshot::FilesystemSnapshotStore for SpacedStore {
     async fn save(
         &self,

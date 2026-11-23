@@ -158,8 +158,8 @@ object HttpValidation {
     val missing = mount.pathPrefix.zipWithIndex.collect {
       case (PathSegment.PathVariable(varName), idx)
           if !constructorParamNames.contains(varName) &&
-            !mount.phantomIdBinding.exists {
-              case PhantomIdBinding.Path(name, _) => name == varName; case _ => false
+            !mount.agentIdBinding.exists {
+              case AgentIdBinding.Path(name) => name == varName; case _ => false
             } =>
         (varName, idx)
     }
@@ -230,18 +230,33 @@ object HttpValidation {
     contextParamNames: Set[String]
   ): Either[String, Unit] =
     for {
-      _ <- mount.phantomIdBinding match {
-             case Some(binding) if binding.name.isEmpty => Left("Phantom selector name must not be empty")
-             case Some(PhantomIdBinding.Path(name, _))
-                 if (constructorParamNames ++ contextParamNames).contains(name) ||
-                   mount.pathPrefix.count { case PathSegment.PathVariable(n) => n == name; case _ => false } != 1 =>
-               Left("Phantom path selector must name exactly one mount capture, not a constructor parameter")
+      _ <- mount.agentIdBinding match {
+             case Some(binding) if binding.name.isEmpty => Left("Agent ID binding name must not be empty")
+             case Some(_) if mount.phantomAgent         => Left("Agent ID binding cannot be combined with phantomAgent")
+             case Some(AgentIdBinding.Path(name))
+                 if mount.pathPrefix.collect { case PathSegment.PathVariable(n) => n } != List(name) =>
+               Left("Agent ID path binding must name exactly one mount capture without constructor bindings")
+             case Some(AgentIdBinding.Query(_)) if mount.pathPrefix.exists(_.isInstanceOf[PathSegment.PathVariable]) =>
+               Left("Agent ID query binding cannot be combined with constructor captures")
+             case _ => Right(())
+           }
+      _ <- mount.createRoute match {
+             case Some(_) if mount.agentIdBinding.isEmpty => Left("Create route requires an agent ID binding")
+             case Some(path) if !path.forall {
+                   case PathSegment.Literal(_) | PathSegment.SystemVariable(_) => true
+                   case _                                                      => false
+                 } =>
+               Left("Create route allows only literal and system segments")
              case _ => Right(())
            }
       _ <- validateNoCatchAllInMount(agentName, mount)
-      _ <- validateMountVarsAreNotInvocationContext(agentName, mount, contextParamNames)
-      _ <- validateMountVarsExistInConstructor(mount, constructorParamNames)
-      _ <- validateConstructorVarsSatisfied(mount, constructorParamNames)
+      _ <- if (mount.agentIdBinding.nonEmpty) Right(())
+           else
+             for {
+               _ <- validateMountVarsAreNotInvocationContext(agentName, mount, contextParamNames)
+               _ <- validateMountVarsExistInConstructor(mount, constructorParamNames)
+               _ <- validateConstructorVarsSatisfied(mount, constructorParamNames)
+             } yield ()
     } yield ()
 
   /**

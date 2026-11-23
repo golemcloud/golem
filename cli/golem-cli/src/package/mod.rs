@@ -16,8 +16,23 @@ const LOCK_NAME: &str = "golem.lock";
 const MAX_LOCK_BYTES: u64 = 512 * 1024;
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct PackageDigest {
     pub digest: String,
+    pub omitted_exports: Vec<OmittedExport>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct OmittedExport {
+    pub kind: ExportKind,
+    pub name: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ExportKind {
+    HttpApi,
+    Mcp,
 }
 
 impl crate::model::cli_output::StructuredOutput for PackageDigest {
@@ -27,6 +42,13 @@ impl crate::model::cli_output::StructuredOutput for PackageDigest {
 impl crate::model::text_format::TextOutput for PackageDigest {
     fn log(&self) {
         crate::log::print_line(&self.digest);
+        for export in &self.omitted_exports {
+            let kind = match export.kind {
+                ExportKind::HttpApi => "HTTP API",
+                ExportKind::Mcp => "MCP",
+            };
+            crate::log::eprint_line(format!("Omitted {kind} export: {}", export.name));
+        }
     }
 }
 

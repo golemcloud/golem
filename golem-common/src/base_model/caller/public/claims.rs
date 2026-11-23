@@ -108,7 +108,7 @@ mod openapi {
     use poem_openapi::types::{ParseError, ParseFromJSON, ParseResult, ToJSON, Type};
     use std::borrow::Cow;
 
-    /// The OpenAPI schema is the same as the one of `serde_json::Value`: any JSON.
+    /// The OpenAPI schema is a JSON object with any members: the claim set of the user.
     impl Type for PublicClaims {
         const IS_REQUIRED: bool = true;
 
@@ -117,11 +117,11 @@ mod openapi {
         type RawElementValueType = Self;
 
         fn name() -> Cow<'static, str> {
-            "any".into()
+            "object".into()
         }
 
         fn schema_ref() -> MetaSchemaRef {
-            MetaSchemaRef::Inline(Box::new(MetaSchema::ANY))
+            MetaSchemaRef::Inline(Box::new(MetaSchema::new("object")))
         }
 
         fn as_raw_value(&self) -> Option<&Self::RawValueType> {

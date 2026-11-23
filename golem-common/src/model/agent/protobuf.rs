@@ -4,9 +4,9 @@ use super::{
     SnapshotAssistedUpdateMetadata, SuccessfulUpdate, TypedAgentConfigEntry, UpdateRecord,
 };
 use super::{
-    AgentConfigSource, AgentHttpAuthDetails, AgentInvocationMode, AgentMode, CachePolicy,
-    CachePolicyTtl, CorsOptions, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
-    PhantomIdBinding, PhantomIdBindingDetails, ReadOnlyConfig, RegisteredAgentType,
+    AgentConfigSource, AgentHttpAuthDetails, AgentIdBinding, AgentIdBindingDetails,
+    AgentInvocationMode, AgentMode, CachePolicy, CachePolicyTtl, CorsOptions, HttpEndpointDetails,
+    HttpMethod, HttpMountDetails, PathSegment, ReadOnlyConfig, RegisteredAgentType,
     RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
@@ -221,9 +221,16 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMountDetails> for Http
                 .collect::<Result<_, _>>()?,
             auth_details: value.auth_details.map(TryInto::try_into).transpose()?,
             phantom_agent: value.phantom_agent,
-            phantom_id_binding: value
-                .phantom_id_binding
-                .map(TryInto::try_into)
+            agent_id_binding: value.agent_id_binding.map(TryInto::try_into).transpose()?,
+            create_route: value
+                .create_route
+                .map(|route| {
+                    route
+                        .path
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<Vec<_>, _>>()
+                })
                 .transpose()?,
             cors_options: value
                 .cors_options
@@ -260,7 +267,12 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
             path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             phantom_agent: value.phantom_agent,
-            phantom_id_binding: value.phantom_id_binding.map(Into::into),
+            agent_id_binding: value.agent_id_binding.map(Into::into),
+            create_route: value.create_route.map(|path| {
+                golem_api_grpc::proto::golem::component::HttpCreateRoute {
+                    path: path.into_iter().map(Into::into).collect(),
+                }
+            }),
             cors_options: Some(value.cors_options.into()),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
             static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
@@ -279,41 +291,33 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::PhantomIdBinding> for PhantomIdBinding {
+impl TryFrom<golem_api_grpc::proto::golem::component::AgentIdBinding> for AgentIdBinding {
     type Error = String;
 
     fn try_from(
-        value: golem_api_grpc::proto::golem::component::PhantomIdBinding,
+        value: golem_api_grpc::proto::golem::component::AgentIdBinding,
     ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::component::phantom_id_binding::Source;
-        match value.source.ok_or("Missing PhantomIdBinding.source")? {
-            Source::Path(value) => Ok(Self::Path(PhantomIdBindingDetails {
-                name: value.name,
-                optional: value.optional,
-            })),
-            Source::Query(value) => Ok(Self::Query(PhantomIdBindingDetails {
-                name: value.name,
-                optional: value.optional,
-            })),
+        use golem_api_grpc::proto::golem::component::agent_id_binding::Source;
+        match value.source.ok_or("Missing AgentIdBinding.source")? {
+            Source::Path(value) => Ok(Self::Path(AgentIdBindingDetails { name: value.name })),
+            Source::Query(value) => Ok(Self::Query(AgentIdBindingDetails { name: value.name })),
         }
     }
 }
 
-impl From<PhantomIdBinding> for golem_api_grpc::proto::golem::component::PhantomIdBinding {
-    fn from(value: PhantomIdBinding) -> Self {
+impl From<AgentIdBinding> for golem_api_grpc::proto::golem::component::AgentIdBinding {
+    fn from(value: AgentIdBinding) -> Self {
         use golem_api_grpc::proto::golem::component::{
-            PhantomIdBindingDetails, phantom_id_binding::Source,
+            AgentIdBindingDetails, agent_id_binding::Source,
         };
         Self {
             source: Some(match value {
-                PhantomIdBinding::Path(value) => Source::Path(PhantomIdBindingDetails {
-                    name: value.name,
-                    optional: value.optional,
-                }),
-                PhantomIdBinding::Query(value) => Source::Query(PhantomIdBindingDetails {
-                    name: value.name,
-                    optional: value.optional,
-                }),
+                AgentIdBinding::Path(value) => {
+                    Source::Path(AgentIdBindingDetails { name: value.name })
+                }
+                AgentIdBinding::Query(value) => {
+                    Source::Query(AgentIdBindingDetails { name: value.name })
+                }
             }),
         }
     }

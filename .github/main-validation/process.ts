@@ -1,7 +1,9 @@
 import { Data, Effect } from "effect"
 import { type ChildProcess, spawn } from "node:child_process"
+import { write } from "node:fs"
 import * as fs from "node:fs/promises"
 import { constants } from "node:os"
+import type { Readable } from "node:stream"
 import { io } from "./tooling-io.ts"
 
 class ProcessError extends Data.TaggedError("ProcessError")<{
@@ -21,14 +23,21 @@ export function killGroup(pid: number, signal: NodeJS.Signals = "SIGKILL"): void
   }
 }
 
-export const cleanupGroup = (pid: number) =>
+export const cleanupGroup = (pid: number, graceSeconds = 0) =>
   Effect.gen(function*() {
     yield* Effect.try({
-      try: () => killGroup(pid),
+      try: () => killGroup(pid, graceSeconds ? "SIGTERM" : "SIGKILL"),
       catch: (cause) => new ProcessError({ message: "could not clean up process group", cause })
     })
-    const deadline = performance.now() + 2000
+    const escalateAt = performance.now() + graceSeconds * 1000
+    const deadline = escalateAt + 2000
     while (performance.now() < deadline) {
+      if (graceSeconds && performance.now() >= escalateAt) {
+        yield* Effect.try({
+          try: () => killGroup(pid),
+          catch: (cause) => new ProcessError({ message: "could not kill process group", cause })
+        })
+      }
       const alive = yield* io(async () => {
         const entries = await fs.readdir("/proc")
         const states = await Promise.all(
@@ -47,7 +56,7 @@ export const cleanupGroup = (pid: number) =>
       if (!alive) return
       yield* Effect.sleep("20 millis")
     }
-    console.log(`[validation] Process group ${pid} did not finish cleanup within 2s`)
+    console.log(`[validation] Process group ${pid} did not finish cleanup`)
   })
 
 export interface Supervision {
@@ -60,14 +69,25 @@ export interface Supervision {
   graceSeconds?: number
   published?: (pid: number) => Promise<void>
   tick?: () => Promise<void>
-  timedOut?: () => Promise<void>
 }
 
-// cargo-make owns scheduling and verdicts. This boundary owns process lifetimes,
-// including descendants that outlive their leader; it does not depend on test-r APIs.
+// cargo-make owns scheduling and verdicts. Nested native exec scopes keep a
+// cleanup owner alive if either supervisor dies. Publish the inner group before
+// releasing stdin; the adapter can drain it if the outer supervisor is killed.
 export const supervise = Effect.fn("Process.supervise")(function*(options: Supervision) {
-  let received: NodeJS.Signals | undefined, stopAt: number | undefined, timedOut = false
+  const started = performance.now(),
+    killGraceMs = Math.ceil(Math.max(0, (options.graceSeconds ?? 15) * 1000 - 2000)),
+    outerDeadlineMs = options.timeoutSeconds === undefined
+      ? undefined
+      : Math.ceil(options.timeoutSeconds * 1000) + killGraceMs + 4000,
+    startupDeadline = started + (options.timeoutSeconds ?? 30) * 1000,
+    // Outer cleanup has its own TERM grace and two-second KILL drain. Allow
+    // another two seconds for launch/observation, without resetting at handoff.
+    settlementDeadline = outerDeadlineMs === undefined ? undefined : started + outerDeadlineMs + killGraceMs + 4000
+  let startupExpired = false, settlementExpired = false, escalated = false
+  let received: NodeJS.Signals | undefined, stopAt: number | undefined
   let child: ChildProcess | undefined
+  let innerPid: number | undefined
   const signal = (name: NodeJS.Signals) => {
     received ??= name
     stopAt ??= performance.now()
@@ -86,15 +106,37 @@ export const supervise = Effect.fn("Process.supervise")(function*(options: Super
         process.off("SIGINT", int)
       })
   )
-  const started = performance.now()
   const handle = yield* Effect.acquireRelease(
     io(async () => {
       if (!options.command.length) throw new Error("missing command")
       const environment = { ...options.environment ?? process.env }
       delete environment.CI_DASHBOARD_PROGRESS_TOKEN
+      const native = [
+        "cargo-test-r",
+        "exec",
+        "--kill-grace",
+        `${killGraceMs}ms`
+      ]
+      // Allow the inner TERM grace and two-second KILL drain to preserve completed
+      // exits, plus two seconds for nested startup and observation. The later
+      // native ceiling also bounds a stopped or otherwise unresponsive inner owner.
       // EOF is failure. Privileged mode prevents BASH_ENV and exported functions
       // from executing selected-source code before the publication gate.
-      const launched = spawn("/bin/bash", [
+      const launched = spawn(native[0]!, [
+        ...native.slice(1),
+        ...(outerDeadlineMs === undefined ? [] : ["--deadline", `${outerDeadlineMs}ms`]),
+        "--",
+        "/bin/bash",
+        "-p",
+        "-c",
+        "printf '%s\\n' \"$$\" >&3; exec 3>&-; exec \"$@\"",
+        "validation-owner",
+        ...native,
+        ...(options.timeoutSeconds === undefined
+          ? []
+          : ["--deadline", `${Math.ceil(options.timeoutSeconds * 1000)}ms`]),
+        "--",
+        "/bin/bash",
         "-p",
         "-c",
         "IFS= read -r gate || exit 143; [ \"$gate\" = 1 ] || exit 143; shopt -s execfail; exec \"$@\"; exit 127",
@@ -103,7 +145,7 @@ export const supervise = Effect.fn("Process.supervise")(function*(options: Super
       ], {
         detached: true,
         env: environment,
-        stdio: ["pipe", options.output, options.output]
+        stdio: ["pipe", options.output, options.output, "pipe"]
       })
       child = launched
       launched.stdin?.on("error", () => {}) // A cancelled launcher can close the gate first.
@@ -113,24 +155,38 @@ export const supervise = Effect.fn("Process.supervise")(function*(options: Super
       })
       // Attach immediately, including when publication fails before the first wait.
       void exited.catch(() => {})
-      return { child: launched, exited }
+      const handoff = launched.stdio[3] as Readable | null
+      const identity = (async () => {
+        if (!handoff) {
+          await exited
+          throw new Error("missing native supervisor identity")
+        }
+        let text = ""
+        for await (const chunk of handoff) {
+          text += chunk.toString()
+          if (text.includes("\n")) break
+        }
+        const pid = Number(text.trim())
+        if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("missing native supervisor identity")
+        startupExpired ||= performance.now() >= startupDeadline
+        innerPid = pid
+        return pid
+      })()
+      void identity.catch(() => {})
+      return { child: launched, exited, identity, handoff }
     }),
-    ({ child, exited }) =>
+    ({ child, exited, identity, handoff }) =>
       Effect.gen(function*() {
         child.stdin?.destroy()
-        if (child.pid) yield* cleanupGroup(child.pid)
+        // Either native scope can drain the workload. If the outer scope died,
+        // the published inner scope still owns its descendants and deadline.
+        if (child.pid) yield* cleanupGroup(child.pid, options.graceSeconds ?? 15)
+        handoff?.destroy()
+        yield* io(() => identity).pipe(Effect.ignore)
+        if (innerPid) yield* cleanupGroup(innerPid, options.graceSeconds ?? 15)
         yield* io(() => exited).pipe(Effect.timeoutOption("1 second"), Effect.ignore)
       }).pipe(Effect.orDie)
   )
-  const pid = handle.child.pid
-  if (pid === undefined) return yield* Effect.fail(new ProcessError({ message: "could not start command" }))
-  // Filesystem publication cannot be cancelled. Join it before terminal evidence
-  // is written, while signal handlers terminate the still-gated launcher.
-  yield* io(async () => {
-    await options.published?.(pid)
-  }).pipe(Effect.uninterruptible)
-  if (!received) handle.child.stdin?.end("1\n")
-  else handle.child.stdin?.end()
   const outcome: {
     current?: { readonly _tag: "Exited"; readonly status: ProcessStatus } | {
       readonly _tag: "Failed"
@@ -142,41 +198,92 @@ export const supervise = Effect.fn("Process.supervise")(function*(options: Super
   }, (cause: unknown) => {
     outcome.current = { _tag: "Failed", error: new ProcessError({ message: "supervised command failed", cause }) }
   })
+  // Bound acquisition and final owner settlement independently of native
+  // responsiveness. Ordinary workload clocks and descendant discovery stay native.
+  yield* Effect.gen(function*() {
+    while (true) {
+      if (!received && innerPid === undefined && !startupExpired && performance.now() >= startupDeadline) {
+        startupExpired = true
+        stopAt ??= performance.now()
+        handle.child.stdin?.destroy()
+        yield* Effect.try({
+          try: () => {
+            if (handle.child.pid) killGroup(handle.child.pid, "SIGTERM")
+          },
+          catch: (cause) => new ProcessError({ message: "could not terminate startup launcher", cause })
+        })
+      }
+      if (
+        !received && !outcome.current && !settlementExpired && settlementDeadline !== undefined &&
+        performance.now() >= settlementDeadline
+      ) {
+        settlementExpired = true
+        stopAt ??= performance.now()
+        handle.child.stdin?.destroy()
+        yield* Effect.try({
+          try: () => {
+            if (handle.child.pid) killGroup(handle.child.pid, "SIGTERM")
+          },
+          catch: (cause) => new ProcessError({ message: "could not terminate unsettled native supervisor", cause })
+        })
+      }
+      if (stopAt !== undefined && performance.now() - stopAt >= (options.graceSeconds ?? 15) * 1000) {
+        yield* Effect.try({
+          try: () => {
+            if (handle.child.pid) killGroup(handle.child.pid)
+          },
+          catch: (cause) => new ProcessError({ message: "could not kill supervised command", cause })
+        })
+        yield* io(() => handle.exited).pipe(Effect.timeoutOption("1 second"), Effect.ignore)
+        handle.child.stdin?.destroy()
+        handle.handoff?.destroy()
+        escalated = true
+        return
+      }
+      yield* Effect.sleep("100 millis")
+    }
+  }).pipe(Effect.forkScoped)
+  const pid = yield* io(() => handle.identity).pipe(
+    Effect.catch((error) => received || startupExpired ? Effect.succeed(null) : Effect.fail(error)),
+    Effect.uninterruptible
+  )
+  // Never publish or release a handoff that arrived after startup expiry.
+  if (pid === null || startupExpired) {
+    return { code: received ? 128 + constants.signals[received] : 124, interrupted: received !== undefined }
+  }
+  // Filesystem publication cannot be cancelled. Join it before terminal evidence
+  // is written, while signal handlers terminate the still-gated launcher.
+  yield* io(async () => {
+    await options.published?.(pid)
+  }).pipe(Effect.uninterruptible)
+  if (!received) handle.child.stdin?.end("1\n")
+  else handle.child.stdin?.end()
   while (true) {
     const settled = outcome.current
-    if (settled) {
-      if (settled._tag === "Failed") return yield* Effect.fail(settled.error)
-      const final = settled.status
+    if (settled || settlementExpired && escalated) {
+      if (settled?._tag === "Failed") return yield* Effect.fail(settled.error)
+      if (settlementExpired) {
+        yield* io(() =>
+          new Promise<void>((resolve, reject) => {
+            write(
+              options.output,
+              "\n[validation] Native supervision settlement expired; terminating owners\n",
+              (error) => error ? reject(error) : resolve()
+            )
+          })
+        )
+      }
+      const final = settled?.status
       return {
         code: received
           ? 128 + constants.signals[received]
-          : timedOut
+          : settlementExpired
           ? 124
-          : final.signal
+          : final?.signal
           ? 128 + constants.signals[final.signal]
-          : final.code ?? 127,
+          : final?.code ?? 127,
         interrupted: received !== undefined
       }
-    }
-    if (
-      options.timeoutSeconds !== undefined && performance.now() - started >= options.timeoutSeconds * 1000 &&
-      stopAt === undefined
-    ) {
-      timedOut = true
-      stopAt = performance.now()
-      yield* io(async () => {
-        await options.timedOut?.()
-      })
-      yield* Effect.try({
-        try: () => killGroup(pid, "SIGTERM"),
-        catch: (cause) => new ProcessError({ message: "could not terminate supervised command", cause })
-      })
-    }
-    if (stopAt !== undefined && performance.now() - stopAt >= (options.graceSeconds ?? 15) * 1000) {
-      yield* Effect.try({
-        try: () => killGroup(pid),
-        catch: (cause) => new ProcessError({ message: "could not kill supervised command", cause })
-      })
     }
     if (options.tick) yield* io(options.tick)
     yield* Effect.sleep("100 millis")

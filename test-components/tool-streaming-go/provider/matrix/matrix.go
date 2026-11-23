@@ -58,8 +58,9 @@ var Inspect = Tool.Group("artifact").Command[InspectArgs, Result]("inspect", fun
 	s.Raises(ErrRejected)
 })
 
-// principalName is "<kind> <ref text>", or "anonymous".
-func principalName(p golem.Principal) string { return p.String() }
+// principalName is both roles of the caller, "<original>|<immediate>", each "<kind> <ref text>"
+// or "anonymous".
+func principalName(c golem.Caller) string { return c.Original.String() + "|" + c.Immediate.String() }
 
 var _ = Inspect.Handle(func(ctx *tool.Context, a InspectArgs) (Result, error) {
 	if a.Request.Source == "reject.me" {
@@ -73,7 +74,7 @@ var _ = Inspect.Handle(func(ctx *tool.Context, a InspectArgs) (Result, error) {
 		NormalizedSource: strings.ToUpper(a.Request.Source),
 		WeightedSize:     int64(a.Request.Dimensions.Width)*int64(a.Request.Dimensions.Height)*a.Multiplier + int64(len(a.Request.Labels)),
 		LabelSummary:     strings.Join(labels, "|"),
-		Principal:        principalName(ctx.Caller().Immediate),
+		Principal:        principalName(ctx.Caller()),
 		OwnerAgentID:     golem.MustGetSelfMetadata().AgentID.String(),
 	}, nil
 })
