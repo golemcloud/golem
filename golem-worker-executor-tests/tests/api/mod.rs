@@ -5369,7 +5369,12 @@ async fn delete_nonexistent_worker(
     let counter_id = agent_key!("Counter", "delete-nonexistent-1");
     let worker_id = crate::agent::keyed_agent_id(component.environment_id, &counter_id);
 
-    let result = executor.delete_worker(&worker_id).await;
+    let result = executor
+        .delete_worker_with_fingerprint(
+            &worker_id,
+            golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+        )
+        .await;
 
     let err = result.expect_err("Deleting a non-existent worker should fail");
     let err_msg = format!("{err:?}");
@@ -5762,6 +5767,7 @@ async fn concurrent_deletes_share_worker_owned_completion(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
     let owned_agent_id = worker_id.clone();
     let hook = Arc::new(DeletionStageHook::new(
         owned_agent_id.clone(),
@@ -5774,7 +5780,7 @@ async fn concurrent_deletes_share_worker_owned_completion(
     let initiating_worker_id = worker_id.clone();
     let initiator = tokio::spawn(async move {
         initiating_executor
-            .delete_worker(&initiating_worker_id)
+            .delete_worker_with_fingerprint(&initiating_worker_id, fingerprint)
             .await
     });
     hook.wait_until_gated().await;
@@ -5786,11 +5792,18 @@ async fn concurrent_deletes_share_worker_owned_completion(
 
     let first_executor = executor.clone();
     let first_worker_id = worker_id.clone();
-    let first = tokio::spawn(async move { first_executor.delete_worker(&first_worker_id).await });
+    let first = tokio::spawn(async move {
+        first_executor
+            .delete_worker_with_fingerprint(&first_worker_id, fingerprint)
+            .await
+    });
     let second_executor = executor.clone();
     let second_worker_id = worker_id.clone();
-    let second =
-        tokio::spawn(async move { second_executor.delete_worker(&second_worker_id).await });
+    let second = tokio::spawn(async move {
+        second_executor
+            .delete_worker_with_fingerprint(&second_worker_id, fingerprint)
+            .await
+    });
     hook.wait_for_claims(3).await;
     assert_eq!(hook.claims(), (3, 1));
     assert!(!first.is_finished());
@@ -12929,7 +12942,14 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
     ];
     let failures: Vec<_> = answers
         .iter()
-        .filter(|(_, answer)| !answer.contains("being deleted"))
+        .filter(|(operation, answer)| {
+            let refusal = if *operation == "cancel" {
+                "Cannot cancel invocation on a deleting worker"
+            } else {
+                "being deleted"
+            };
+            !answer.starts_with("Err(") || !answer.contains(refusal)
+        })
         .collect();
     assert!(failures.is_empty(), "{failures:#?}");
 

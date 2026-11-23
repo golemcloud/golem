@@ -759,12 +759,11 @@ impl WorkerService {
         }))
     }
 
-    /// Reads the agent that a request names by its ID; this never creates the agent. In an
-    /// existing environment, when the agent is missing, a caller that `permissions` would
-    /// allow on the type's current implementer gets not found, and every other caller gets
-    /// the denial that an existing agent gives, so the answer never tells an unauthorized
-    /// caller whether the agent exists. A missing environment or another incarnation gets
-    /// not found.
+    /// Reads the agent that a request names by its ID; this never creates the agent. When it
+    /// is missing, a caller that `permissions` would allow on the type's current implementer
+    /// gets not found, and every other caller gets the denial that an existing agent gives, so
+    /// the answer never tells an unauthorized caller whether the agent exists. A caller that
+    /// expects another incarnation gets not found.
     async fn read_agent(
         &self,
         agent_id: &OwnedAgentId,
@@ -837,10 +836,8 @@ impl WorkerService {
             .authorize_environment(agent_id.environment_id, auth_ctx)
             .await
             .map_err(|error| match error {
-                RegistryServiceError::NotFound(_) => {
-                    WorkerServiceError::AgentNotFound(agent_id.agent_id)
-                }
                 RegistryServiceError::Unauthorized(_)
+                | RegistryServiceError::NotFound(_)
                 | RegistryServiceError::CouldNotAuthenticate(_) => denied(),
                 other => other.into(),
             })?;
@@ -4278,9 +4275,6 @@ impl WorkerService {
         idempotency_key: Option<IdempotencyKey>,
         auth: AuthCtx,
     ) -> WorkerResult<AgentInvocationResult> {
-        let (registered, component) = self
-            .deployed_agent_type(environment_id, agent_type_name, &auth)
-            .await?;
         let method_name = request.method.clone();
         let proto_mode = match request.mode {
             AgentInvocationMode::Await => {
@@ -4300,7 +4294,19 @@ impl WorkerService {
         let (target, component, freshness_disposition) =
             match (request.agent_id, request.parameters) {
                 (Some(agent_id), None) => {
-                    if agent_id.type_id() != Some(registered.type_id) {
+                    let retained = self
+                        .retained_agent_types(environment_id, agent_type_name, &auth)
+                        .await
+                        .map_err(|error| match error {
+                            WorkerServiceError::RegistryServiceError(
+                                RegistryServiceError::NotFound(_),
+                            ) => WorkerServiceError::AgentNotFound(agent_id),
+                            other => other,
+                        })?;
+                    if !retained
+                        .iter()
+                        .any(|(registered, _)| agent_id.type_id() == Some(registered.type_id))
+                    {
                         return Err(WorkerServiceError::AgentNotFound(agent_id));
                     }
                     let agent = self
@@ -4311,6 +4317,9 @@ impl WorkerService {
                             &[permission],
                         )
                         .await?;
+                    if agent.metadata.agent_type_name.as_ref() != Some(agent_type_name) {
+                        return Err(WorkerServiceError::AgentNotFound(agent_id));
+                    }
                     (
                         agent.routed(),
                         agent.component,
@@ -4318,6 +4327,9 @@ impl WorkerService {
                     )
                 }
                 (None, Some(parameters)) => {
+                    let (registered, component) = self
+                        .deployed_agent_type(environment_id, agent_type_name, &auth)
+                        .await?;
                     let constructor = Self::rest_constructor(&registered, parameters)?;
                     let (target, freshness_disposition) = Self::invocation_target(
                         environment_id,
@@ -6515,6 +6527,27 @@ mod tests {
             .unwrap();
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].agent_id, reference.agent_id);
+        let mut request = harness.invoke_request();
+        request.agent_id = Some(reference.agent_id);
+        request.parameters = None;
+        let invocation = harness
+            .invoke_rest(request.clone(), None, AuthCtx::system())
+            .await
+            .unwrap();
+        assert_eq!(invocation.agent_id, reference.agent_id);
+        let wrong_name = harness
+            .worker_service
+            .invoke_agent_rest(
+                harness.environment_id,
+                &AgentTypeName("other-agent".into()),
+                request,
+                None,
+                AuthCtx::system(),
+            )
+            .await;
+        assert!(
+            matches!(wrong_name, Err(WorkerServiceError::AgentNotFound(id)) if id == reference.agent_id)
+        );
         assert!(
             harness
                 .worker_service
@@ -9072,6 +9105,31 @@ mod tests {
     }
 
     #[test]
+    async fn fresh_durable_binding_uses_distinct_targets_without_ephemeral_freshness() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let request_key = InvocationRequestKey::external(None, None);
+        let mut targets = HashSet::new();
+        for _ in 0..2 {
+            let (target, _, freshness) = harness
+                .worker_service
+                .bound_invocation_target(
+                    harness.component_id,
+                    &harness.agent_type_name,
+                    Some(&harness.constructor()),
+                    AgentBinding::Fresh,
+                    &request_key,
+                    "run",
+                    &AuthCtx::system(),
+                )
+                .await
+                .unwrap();
+            assert!(target.creates());
+            assert_eq!(freshness, InvocationFreshnessDisposition::MayExist);
+            assert!(targets.insert(target.agent_id));
+        }
+    }
+
+    #[test]
     async fn ephemeral_session_entry_is_stable_and_lookup_is_observation_only() {
         let harness = RestHarness::new(AgentMode::Ephemeral);
         let idempotency_key = IdempotencyKey::new("session-tool-call".to_string());
@@ -9547,7 +9605,7 @@ mod tests {
                 .await;
             for error in [read.unwrap_err(), delete.unwrap_err()] {
                 assert!(
-                    matches!(error, WorkerServiceError::AgentNotFound(id) if id == missing_environment_agent.agent_id),
+                    matches!(error, WorkerServiceError::AgentAccessDenied(id) if id == missing_environment_agent.agent_id),
                     "{error:?}"
                 );
             }

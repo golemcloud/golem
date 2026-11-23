@@ -20,11 +20,9 @@ use crate::filesystem_snapshot::backend::rustic::blob_io::LateWrites;
 use crate::filesystem_snapshot::backend::rustic::failure_classification::OperationCancelled;
 use crate::filesystem_snapshot::backend::rustic::pruning::PruneSettings;
 use crate::filesystem_snapshot::backend::rustic::publication::PublishBound;
-use crate::filesystem_snapshot::backend::rustic::repository::open_existing;
 use crate::filesystem_snapshot::backend::rustic::run_outcome::{
     OwnFile, Ran, RunEnd, RunResult, Settle, Settled,
 };
-use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::repository_snapshots;
 use crate::filesystem_snapshot::backend::rustic::store_policy::StorePolicy;
 use crate::filesystem_snapshot::backend::rustic::test_support::holding::holding_storage;
 use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
@@ -32,13 +30,13 @@ use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
 };
 use crate::filesystem_snapshot::backend::rustic::test_support::{
     LIMIT, LONG_DEADLINE, NEVER, REACH_LIMIT, SHORT_DEADLINE, SHORT_WRITE_DEADLINE, SharedSlots,
-    backend_of, blobs, calls_of,
+    blobs, calls_of,
 };
 use std::path::PathBuf;
 
 use crate::filesystem_snapshot::backend::rustic::test_support::{
     drop_when, dropped_within_limit, eventually, failed_at_deadline, fixture_tree,
-    holding_index_reads, is_failed, key, ledger, listed_names, mapping_failed_call,
+    holding_index_reads, is_failed, ledger, listed_names, mapping_failed_call,
     mapping_local_io_without_source, mapping_missing, mapping_refused, mapping_rustic, name,
     one_file_tree, policy, polled_until, refusing, restored_listing, runs_policy, save_each,
     save_numbered, scope_with_a_prune_to_come, snapshot_files, store, store_over,
@@ -562,6 +560,9 @@ fn a_save_time_is_the_first_whole_millisecond_that_is_not_before_the_call() {
 #[test]
 #[timeout("60s")]
 async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
+    use crate::filesystem_snapshot::backend::rustic::repository::open_existing;
+    use crate::filesystem_snapshot::backend::rustic::snapshot_catalog::repository_snapshots;
+    use crate::filesystem_snapshot::backend::rustic::test_support::{backend_of, key};
     use std::os::fd::AsRawFd;
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
