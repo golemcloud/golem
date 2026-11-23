@@ -96,16 +96,16 @@ belong to the final target; discarding a losing stage never deletes the target's
 
 Fork publication commits the exact prefix, `ForkCut`, and any synthetic guest result before
 exposing the target. The immutable marker binds the source generation, cut and request kind;
-retries reconcile it even if the target has advanced. Guest `fork()` derives its phantom ID from
-the source generation and durable call's idempotency key derived from its own `Start`.
+retries reconcile it even if the target has advanced. Guest `fork()` allocates the child's ID with
+`AgentId::allocated` from the source and the durable call's idempotency key derived from its own `Start`.
 The recorded `Start` anchors both the key and the pre-call cut, so
 skipped log hints cannot change either. A crash after child publication but before the caller's
-result resumes the same child; independent phantom siblings cannot collide.
+result resumes the same child; independent siblings without a key cannot collide.
 Tests: `guest_fork_retries_same_child_after_crash_before_caller_result`,
-`guest_fork_same_key_on_phantom_siblings_creates_distinct_children`.
+`guest_fork_same_key_on_unkeyed_siblings_creates_distinct_children`.
 
 Export forks use the same publication path (`services/worker_fork/export.rs`). The gateway maps
-`{base}/forks/{fork}/invocations/{session}/streams/{slot}` to a deterministic phantom agent and
+`{base}/forks/{fork}/invocations/{session}/streams/{slot}` to a fork agent at `AgentId::durable_stream_fork` and
 routes creation to the source executor. The executor pins one committed source horizon, resolves
 the opaque cursor plus message/byte sub-offset, and validates the cut against
 that horizon's skipped regions. JSON sub-offsets count flattened messages; binary sub-offsets
@@ -176,7 +176,7 @@ The target is pinned by `streaming_target_fingerprint`: `AgentFingerprint`
 restarts, so a deleted-and-recreated agent with the same `AgentId` is a different producer.
 For an ephemeral target, the first live preparation after the caller's `Start` commit uses
 `KnownFresh` with the call's derived idempotency key. Preparation validates the key-derived
-phantom identity and skips the creation-time existence lookup. Both remote routing layers
+target ID and skips the creation-time existence lookup. Both remote routing layers
 downgrade preparation retries to `MayExist`; replay repair also prepares with `MayExist`.
 The subsequent streaming invocation always uses `MayExist`, since preparation has already
 created the target whose fingerprint it carries. No second fresh creation is authorized.

@@ -121,7 +121,7 @@ owns the one replay/tool-generation reset. Acceptance and typed notification are
 |---|---|---|
 | Durable target before `PendingAgentInvocation` commits | Caller retry re-enqueues once | Acceptance after commit |
 | Durable target mid-invocation | Target replays its own prefix and finishes; caller retry attaches | Target oplog |
-| Ephemeral target lost after acceptance | Fail-stop: no resumption, same-key retry does not re-execute; caller receives an error, not a duplicate | `reconstructed_ephemeral`, deterministic phantom id |
+| Ephemeral target lost after acceptance | Fail-stop: no resumption, same-key retry does not re-execute; caller receives an error, not a duplicate | `reconstructed_ephemeral`, deterministic target ID |
 
 ## Snapshots and updates (`durable_host/mod.rs::prepare_instance`, `worker/lifecycle.rs`)
 
