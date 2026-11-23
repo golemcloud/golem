@@ -71,6 +71,7 @@ pub mod instance;
 mod interrupt;
 pub mod invocation;
 mod invocation_loop;
+pub mod invocations;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
@@ -91,6 +92,7 @@ pub(crate) mod tasks;
 
 #[cfg(test)]
 pub(crate) use invocation_loop::{MonthlyResourceAdmission, monthly_resource_admission};
+pub use lifecycle::CancelInvocationOutcome;
 pub use lifecycle::UpdateMode as WorkerUpdateMode;
 
 use self::agent_config::{
@@ -165,8 +167,8 @@ use crate::worker::lifecycle::state::{
 use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, StartSelection};
 use crate::worker::status::update_queue::is_unselected_automatic;
 use crate::worker::status::{
-    InvocationRequests, calculate_last_known_status_with_checkpoint,
-    fold_invocation_result_entries, revert_validation_regions, update_status_with_new_entries,
+    calculate_last_known_status_with_checkpoint, revert_validation_regions,
+    update_status_with_new_entries,
 };
 use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::{
@@ -189,6 +191,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::cache::PendingOrFinal;
 use golem_common::model::AgentStatus;
+use golem_common::model::InvocationEnd;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::model::agent::{
@@ -214,9 +217,10 @@ use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, InvocationResultPosition,
-    OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState,
-    ShardAssignment, ShardEpoch, ShardId, Timestamp,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, InvocationRequestOperation,
+    InvocationResultPosition, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, RetryPolicyState, ShardAssignment, ShardEpoch, ShardId,
+    StoredAgentInvocationPayload, Timestamp,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -825,7 +829,8 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
 /// unchanged for Started; lowering may transform only a separate invocation clone.
 pub struct HydratedInvocation {
     pub(crate) invocation: AgentInvocation,
-    pub(crate) payload: OplogPayload<AgentInvocationPayload>,
+    pub(crate) operation: InvocationRequestOperation,
+    pub(crate) payload: OplogPayload<StoredAgentInvocationPayload>,
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -946,7 +951,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         Principal::Agent(AgentPrincipal::of_agent(
             issuer.to_string(),
-            self.owned_agent_id.agent_id.clone(),
+            self.owned_agent_id.agent_id,
             metadata.fingerprint,
             agent_type,
             self.owned_agent_id.environment_id,
@@ -1483,7 +1488,10 @@ enum StopResult {
 mod resource_release_tests;
 
 pub use acquisition::merge_agent_env_with_default_env;
-pub(crate) use ingress::{await_scalar_invocation, require_expected_tool_deployment_revision};
+pub(crate) use ingress::{
+    await_scalar_invocation, require_canonical_command_path,
+    require_expected_tool_deployment_revision,
+};
 use ingress::{
     inactive_ephemeral_agent_error, replace_invocation_input, validate_resolved_invocation_identity,
 };

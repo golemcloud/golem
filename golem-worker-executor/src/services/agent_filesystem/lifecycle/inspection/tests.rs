@@ -57,94 +57,104 @@ async fn inspection_descriptor_metadata_and_selected_bytes() {
     delete(seal(resident)).await.unwrap();
 }
 
-#[test]
-#[timeout("30s")]
 #[cfg(unix)]
-async fn inspection_owned_corpus_rejects_symlinks_and_implicit_index() {
-    let corpus: serde_json::Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../golem-service-base/tests/fixtures/http-handlers/corpus.json"
-    )))
-    .unwrap();
-    for (id, expected) in [
-        ("file-no-final-symlink", FileReadHead::Symlink),
-        ("file-no-parent-symlink", FileReadHead::Symlink),
-        ("file-no-implicit-index", FileReadHead::NotRegular),
-    ] {
-        let case = corpus["cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["id"] == id)
-            .unwrap();
-        let parent = tempfile::tempdir().unwrap();
-        let (resident, root) = native_resident(parent.path()).await;
-        for (path, entry) in case["input"]["filesystem"].as_object().unwrap() {
-            let path = root.join(path.strip_prefix('/').unwrap());
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            if let Some(target) = entry["symlink"].as_str() {
-                std::os::unix::fs::symlink(root.join(target.strip_prefix('/').unwrap()), path)
-                    .unwrap();
-            } else if entry["directory"] == true {
-                std::fs::create_dir_all(path).unwrap();
-            } else {
-                std::fs::write(
-                    path,
-                    hex::decode(entry["body_hex"].as_str().unwrap()).unwrap(),
-                )
-                .unwrap();
-            }
-        }
-        let result = open_file_for_inspection(
-            &resident_generation_handle(&resident),
-            case["input"]["path"].as_str().unwrap(),
-            FileByteSelection::Full,
-        )
-        .await
+mod unix {
+    use super::*;
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("30s")]
+    async fn inspection_owned_corpus_rejects_symlinks_and_implicit_index() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        )))
         .unwrap();
-        let FileInspection::Rejected(head) = result else {
-            panic!("{id}: must reject");
-        };
-        assert_eq!(head, expected, "{id}");
-        delete(seal(resident)).await.unwrap();
+        for (id, expected) in [
+            ("file-no-final-symlink", FileReadHead::Symlink),
+            ("file-no-parent-symlink", FileReadHead::Symlink),
+            ("file-no-implicit-index", FileReadHead::NotRegular),
+        ] {
+            let case = corpus["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["id"] == id)
+                .unwrap();
+            let parent = tempfile::tempdir().unwrap();
+            let (resident, root) = native_resident(parent.path()).await;
+            for (path, entry) in case["input"]["filesystem"].as_object().unwrap() {
+                let path = root.join(path.strip_prefix('/').unwrap());
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                if let Some(target) = entry["symlink"].as_str() {
+                    std::os::unix::fs::symlink(root.join(target.strip_prefix('/').unwrap()), path)
+                        .unwrap();
+                } else if entry["directory"] == true {
+                    std::fs::create_dir_all(path).unwrap();
+                } else {
+                    std::fs::write(
+                        path,
+                        hex::decode(entry["body_hex"].as_str().unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                }
+            }
+            let result = open_file_for_inspection(
+                &resident_generation_handle(&resident),
+                case["input"]["path"].as_str().unwrap(),
+                FileByteSelection::Full,
+            )
+            .await
+            .unwrap();
+            let FileInspection::Rejected(head) = result else {
+                panic!("{id}: must reject");
+            };
+            assert_eq!(head, expected, "{id}");
+            delete(seal(resident)).await.unwrap();
+        }
     }
 }
 
-#[test]
-#[timeout("30s")]
 #[cfg(target_os = "linux")]
-async fn inspection_root_symlink_fifo_and_directories() {
-    let parent = tempfile::tempdir().unwrap();
-    let (resident, root) = native_resident(parent.path()).await;
-    std::fs::create_dir(root.join("public")).unwrap();
-    std::fs::write(root.join("public/file"), b"abc").unwrap();
-    std::os::unix::fs::symlink(root.join("public"), root.join("alias")).unwrap();
-    std::os::unix::fs::symlink("file", root.join("public/link-to-file")).unwrap();
-    std::os::unix::fs::symlink(".", root.join("public/link-dir")).unwrap();
-    let fifo =
-        std::ffi::CString::new(root.join("public/fifo").as_os_str().as_encoded_bytes()).unwrap();
-    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
-    let handle = resident_generation_handle(&resident);
-    for (path, expected) in [
-        ("/alias/file", FileReadHead::Symlink),
-        ("/public/link-to-file", FileReadHead::Symlink),
-        ("/public/link-dir/file", FileReadHead::Symlink),
-        ("/public/fifo", FileReadHead::NotRegular),
-        ("/public/fifo/child", FileReadHead::NotRegular),
-        ("/public", FileReadHead::NotRegular),
-        ("/public/missing", FileReadHead::Absent),
-        ("/", FileReadHead::NotRegular),
-    ] {
-        let FileInspection::Rejected(head) =
-            open_file_for_inspection(&handle, path, FileByteSelection::Full)
-                .await
-                .unwrap()
-        else {
-            panic!("must reject {path}");
-        };
-        assert_eq!(head, expected, "{path}");
+mod linux {
+    use super::*;
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("30s")]
+    async fn inspection_root_symlink_fifo_and_directories() {
+        let parent = tempfile::tempdir().unwrap();
+        let (resident, root) = native_resident(parent.path()).await;
+        std::fs::create_dir(root.join("public")).unwrap();
+        std::fs::write(root.join("public/file"), b"abc").unwrap();
+        std::os::unix::fs::symlink(root.join("public"), root.join("alias")).unwrap();
+        std::os::unix::fs::symlink("file", root.join("public/link-to-file")).unwrap();
+        std::os::unix::fs::symlink(".", root.join("public/link-dir")).unwrap();
+        let fifo = std::ffi::CString::new(root.join("public/fifo").as_os_str().as_encoded_bytes())
+            .unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let handle = resident_generation_handle(&resident);
+        for (path, expected) in [
+            ("/alias/file", FileReadHead::Symlink),
+            ("/public/link-to-file", FileReadHead::Symlink),
+            ("/public/link-dir/file", FileReadHead::Symlink),
+            ("/public/fifo", FileReadHead::NotRegular),
+            ("/public/fifo/child", FileReadHead::NotRegular),
+            ("/public", FileReadHead::NotRegular),
+            ("/public/missing", FileReadHead::Absent),
+            ("/", FileReadHead::NotRegular),
+        ] {
+            let FileInspection::Rejected(head) =
+                open_file_for_inspection(&handle, path, FileByteSelection::Full)
+                    .await
+                    .unwrap()
+            else {
+                panic!("must reject {path}");
+            };
+            assert_eq!(head, expected, "{path}");
+        }
+        delete(seal(resident)).await.unwrap();
     }
-    delete(seal(resident)).await.unwrap();
 }
 
 #[test]

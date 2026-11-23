@@ -32,11 +32,11 @@ impl Rpc for RemoteInvocationRpc {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &Principal,
         auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         self.worker_proxy
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
             .map_err(Into::into)
     }
@@ -48,72 +48,18 @@ impl Rpc for RemoteInvocationRpc {
         request_key: InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
-        let AgentInvocation::AgentMethod {
-            idempotency_key,
-            method_name,
-            input,
-            invocation_context,
-            caller,
-            scope_card,
-        } = invocation
-        else {
-            return Err(RpcError::ProtocolError {
-                details: "guest scheduling requires an agent method invocation".to_string(),
-            });
-        };
-        let parent = match &caller.immediate {
-            Principal::Agent(agent) => Some(agent.address.into()),
-            _ => None,
-        };
-        let start = InvocationStart {
-            target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
-                target: Some(
-                    golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
-                        owned_agent_id.agent_id().into(),
-                    ),
-                ),
-            }),
-            constructor: None,
-            component_id: None,
-            method_name: Some(method_name),
-            input: Some(input.try_into().map_err(|error| RpcError::ProtocolError {
-                details: format!(
-                    "scheduled input cannot cross the remote worker boundary: {error}"
-                ),
-            })?),
-            idempotency_key: Some(IdempotencyKey::from_uuid(idempotency_key.0).into()),
-            request_key: Some(request_key.into()),
-            context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
-                parent,
-                env: HashMap::new(),
-                tracing: Some(invocation_context.into()),
-            }),
-            auth_ctx: Some(auth_ctx.clone().into()),
-            caller: Some(caller.into()),
-            environment_id: Some(owned_agent_id.environment_id.into()),
-            config: Vec::new(),
-            component_owner_account_id: None,
-            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
-            schedule_at: Some(prost_types::Timestamp {
-                seconds: scheduled_at.timestamp(),
-                nanos: scheduled_at.timestamp_subsec_nanos() as i32,
-            }),
-            freshness_disposition:
-                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
-                    as i32,
-            attempt_id: None,
-            expected_callee_fingerprint: Some(expected_fingerprint.0.into()),
-            durable_input_mappings: Vec::new(),
-            origin_invocation: None,
-            scope_card: scope_card
-                .as_ref()
-                .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
-                .transpose()
-                .map_err(|details| RpcError::ProtocolError { details })?,
-            external_tool: None,
-        };
+        let (start, idempotency_key) = scheduled_invocation_start(
+            owned_agent_id,
+            expected_fingerprint,
+            request_key,
+            invocation,
+            scheduled_at,
+            self_agent_id,
+            auth_ctx,
+        )?;
         let request = InvocationRequest {
             request: Some(invocation_request::Request::Start(start.clone())),
         };
@@ -624,7 +570,15 @@ async fn confirm_terminal_response_is_last(
     }
 }
 
-fn rpc_error_from_rejection(rejected: InvocationRejected) -> RpcError {
+pub(super) fn rpc_error_from_rejection(rejected: InvocationRejected) -> RpcError {
+    // A reused key of a cancelled invocation is rejected before acceptance; it keeps the
+    // permanent `cancelled` error of a finished one.
+    if let Some(worker_error) = &rejected.worker_error
+        && let Ok(error @ WorkerExecutorError::InvocationCancelled) =
+            WorkerExecutorError::try_from(worker_error.clone())
+    {
+        return error.into();
+    }
     match InvocationRejectionReason::try_from(rejected.reason)
         .unwrap_or(InvocationRejectionReason::Internal)
     {
@@ -657,4 +611,76 @@ fn rpc_error_from_invocation_finished(
             details: "invocation completion has no outcome".to_string(),
         },
     }
+}
+
+/// The start request that schedules `invocation` on a target that another executor owns. The
+/// scheduling agent is the parent of the call, also when one of its tools scheduled it.
+pub(super) fn scheduled_invocation_start(
+    owned_agent_id: &OwnedAgentId,
+    expected_fingerprint: AgentFingerprint,
+    request_key: InvocationRequestKey,
+    invocation: AgentInvocation,
+    scheduled_at: chrono::DateTime<chrono::Utc>,
+    self_agent_id: &AgentId,
+    auth_ctx: &AuthCtx,
+) -> Result<(InvocationStart, golem_common::model::InvocationId), RpcError> {
+    let AgentInvocation::AgentMethod {
+        idempotency_key,
+        method_name,
+        input,
+        invocation_context,
+        caller,
+        scope_card,
+    } = invocation
+    else {
+        return Err(RpcError::ProtocolError {
+            details: "guest scheduling requires an agent method invocation".to_string(),
+        });
+    };
+    let parent = Some((*self_agent_id).into());
+    let start = InvocationStart {
+        target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
+            target: Some(
+                golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
+                    owned_agent_id.agent_id().into(),
+                ),
+            ),
+        }),
+        constructor: None,
+        component_id: None,
+        method_name: Some(method_name),
+        input: Some(input.try_into().map_err(|error| RpcError::ProtocolError {
+            details: format!("scheduled input cannot cross the remote worker boundary: {error}"),
+        })?),
+        idempotency_key: Some(IdempotencyKey::from_uuid(idempotency_key.0).into()),
+        request_key: Some(request_key.into()),
+        context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+            parent,
+            env: HashMap::new(),
+            tracing: Some(invocation_context.into()),
+        }),
+        auth_ctx: Some(auth_ctx.clone().into()),
+        caller: Some(caller.into()),
+        environment_id: Some(owned_agent_id.environment_id.into()),
+        config: Vec::new(),
+        component_owner_account_id: None,
+        mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+        schedule_at: Some(prost_types::Timestamp {
+            seconds: scheduled_at.timestamp(),
+            nanos: scheduled_at.timestamp_subsec_nanos() as i32,
+        }),
+        freshness_disposition:
+            golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+        attempt_id: None,
+        expected_callee_fingerprint: Some(expected_fingerprint.0.into()),
+        durable_input_mappings: Vec::new(),
+        origin_invocation: None,
+        scope_card: scope_card
+            .as_ref()
+            .map(golem_api_grpc::proto::golem::worker::EncodedScopeCard::try_from)
+            .transpose()
+            .map_err(|details| RpcError::ProtocolError { details })?,
+        external_tool: None,
+    };
+    Ok((start, idempotency_key))
 }

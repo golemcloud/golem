@@ -24,13 +24,18 @@ pub async fn request_async(
 ) -> (u16, Vec<u8>) {
     let url = format!("http://{authority}{path}");
     let client = wasi_fetch::Client::new();
+    let timeout = Duration::from_secs(
+        std::env::var("HTTP_TIMEOUT_SECS")
+            .map(|value| value.parse().expect("Invalid HTTP_TIMEOUT_SECS"))
+            .unwrap_or(5),
+    );
     let mut builder = match method {
         Method::Get => client.get(&url),
         Method::Post => client.post(&url),
         Method::Delete => client.delete(&url),
     }
-    .timeout(Duration::from_secs(5))
-    .between_bytes_timeout(Duration::from_secs(5));
+    .timeout(timeout)
+    .between_bytes_timeout(timeout);
 
     if let Some(content_type) = content_type {
         builder = builder.header("content-type", content_type);

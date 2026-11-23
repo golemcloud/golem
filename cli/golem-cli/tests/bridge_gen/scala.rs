@@ -2244,6 +2244,9 @@ fn generates_client_surface() {
         "_root_.golem.bridge.runtime.Bridge.createAgent(configuration, agentTypeName, parameters, keyed, agentConfig, env)"
     ));
     assert!(client.contains(
+        "bindRemote(_root_.golem.bridge.runtime.ResolvedAgent(configuration, agentTypeName, _root_.scala.None, _root_.scala.Some(__response)))"
+    ));
+    assert!(client.contains(
         "def getById(agentId: _root_.golem.bridge.runtime.AgentId): _root_.scala.concurrent.Future[Agent1Remote]"
     ));
     assert!(client.contains(

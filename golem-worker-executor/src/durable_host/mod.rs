@@ -88,6 +88,7 @@ mod input_observation;
 pub mod io;
 pub mod keyvalue;
 mod logging;
+pub(crate) mod outgoing_caller;
 pub mod p3;
 pub(crate) mod permissions;
 pub mod quota;
@@ -1186,7 +1187,6 @@ struct PrivateDurableWorkerState {
     /// oplog.
     file_stream_pollables: HashSet<u32>,
 
-    tcp_connect_replay: sockets::tcp::TcpConnectReplay,
     /// The hostnames that this Store's completed address lookups linked to addresses, for the
     /// grant check of socket connects and datagrams.
     resolved_names: sockets::resolved_names::SharedResolvedNames,

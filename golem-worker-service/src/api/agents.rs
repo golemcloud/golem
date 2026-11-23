@@ -18,7 +18,8 @@ use golem_common::model::invocation_session_public::{
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::tool::SerializableToolRpcError;
 use golem_common::model::{
-    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, InvocationId, ScanCursor,
+    AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, InvocationId, OwnedInvocationId,
+    ScanCursor,
 };
 use golem_common::recorded_http_api_request;
 use golem_common::schema::tool::Tool;
@@ -377,7 +378,7 @@ impl AgentsApi {
         request: Json<AgentInvocationRequest>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<AgentInvocationResult>> {
+    ) -> Result<InvokeAgentResponse> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let record = recorded_http_api_request!(
             "invoke_agent",
@@ -400,7 +401,10 @@ impl AgentsApi {
             .await
             .map_err(Into::into);
 
-        record.result(response).map(Json)
+        record.result(response).map(|result| {
+            let invocation_id = invocation_id_header(&result.agent_id, result.idempotency_key);
+            InvokeAgentResponse::Ok(Json(result), invocation_id, environment_id.0.to_string())
+        })
     }
 
     /// Invoke a tool on an existing agent or a fresh ephemeral component owner
@@ -418,7 +422,7 @@ impl AgentsApi {
         request: Json<NativeToolInvocationRequest>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<Option<IdempotencyKey>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<NativeToolInvocationResponse>> {
+    ) -> Result<InvokeToolResponse> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
         let record = recorded_http_api_request!(
             "invoke_tool",
@@ -426,13 +430,27 @@ impl AgentsApi {
             tool_name = %request.tool_name,
             idempotency_key = idempotency_key.0.as_ref().map(|key| key.value.clone())
         );
+        let accepting = !matches!(request.mode, NativeToolInvocationMode::Lookup);
         let response = self
             .worker_service
             .invoke_tool_rest(environment_id.0, request.0, idempotency_key.0, auth)
             .instrument(record.span.clone())
             .await
             .map_err(Into::into);
-        record.result(response).map(Json)
+        record.result(response).map(|result| {
+            let (invocation_id, environment_id) = if accepting {
+                (
+                    Some(invocation_id_header(
+                        &result.agent_id,
+                        result.idempotency_key,
+                    )),
+                    Some(environment_id.0.to_string()),
+                )
+            } else {
+                (None, None)
+            };
+            InvokeToolResponse::Ok(Json(result), invocation_id, environment_id)
+        })
     }
 
     /// Return the effective definition of a tool bound to an existing agent or component baseline.
@@ -547,6 +565,39 @@ impl AgentsApi {
 pub enum CreateAgentApiResponse {
     #[oai(status = 201)]
     Created(Json<AgentReference>),
+}
+
+/// The ID of an accepted invocation, as in the REST paths of invocations.
+fn invocation_id_header(agent_id: &AgentId, invocation_id: InvocationId) -> String {
+    OwnedInvocationId::new(*agent_id, invocation_id).to_string()
+}
+
+#[derive(ApiResponse)]
+pub enum InvokeAgentResponse {
+    /// The invocation was accepted. `Golem-Invocation-Id` is its invocation ID, as in the REST
+    /// paths of invocations, and `Golem-Environment-Id` the environment in which the ID
+    /// resolves. An awaited invocation that is accepted and then fails answers an error, which
+    /// carries neither header.
+    #[oai(status = 200)]
+    Ok(
+        Json<AgentInvocationResult>,
+        #[oai(header = "Golem-Invocation-Id")] String,
+        #[oai(header = "Golem-Environment-Id")] String,
+    ),
+}
+
+#[derive(ApiResponse)]
+pub enum InvokeToolResponse {
+    /// An accepted invocation carries `Golem-Invocation-Id`, its invocation ID as in the REST
+    /// paths of invocations, and `Golem-Environment-Id`, the environment in which the ID
+    /// resolves. A lookup carries neither. The ID of a standalone tool invocation, which runs on
+    /// a fresh owner, cannot be read through the invocation endpoints.
+    #[oai(status = 200)]
+    Ok(
+        Json<NativeToolInvocationResponse>,
+        #[oai(header = "Golem-Invocation-Id")] Option<String>,
+        #[oai(header = "Golem-Environment-Id")] Option<String>,
+    ),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Enum)]

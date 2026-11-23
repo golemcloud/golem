@@ -1869,7 +1869,7 @@ fn external_streaming_generation_compiles_recursive_streams() {
     assert!(source.contains(".validate(") && source.contains("'none'"));
     assert!(source.contains("'provisional'"));
     assert!(source.contains("\"stable\""));
-    assert!(source.contains("constructorParameters: this.__getPublicParameters(), config: [],"));
+    assert!(source.contains("target: this.__getPublicTarget(), config: [],"));
     assert!(!source.contains("publicConfig"));
     assert!(source.contains("path: [\"limits\",\"maximum\"]"));
     assert!(source.contains("base.UnstructuredText.toSchemaValue"));

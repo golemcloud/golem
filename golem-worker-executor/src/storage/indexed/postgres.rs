@@ -32,14 +32,11 @@ use sqlx::{Postgres, QueryBuilder};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
+use uuid::Uuid;
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/indexed");
 
 const DB_TYPE: &str = "postgres";
-const SCAN_INCLUSIVE_BOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key >= $2 AND key < $3 ORDER BY key LIMIT $4;";
-const SCAN_EXCLUSIVE_BOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 AND key < $3 ORDER BY key LIMIT $4;";
-const SCAN_INCLUSIVE_UNBOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key >= $2 ORDER BY key LIMIT $3;";
-const SCAN_EXCLUSIVE_UNBOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 ORDER BY key LIMIT $3;";
 
 #[derive(Debug, Clone)]
 pub struct PostgresIndexedStorage {
@@ -151,6 +148,77 @@ impl PostgresIndexedStorage {
         }
     }
 
+    fn key(namespace: &mut String, key: &str) -> Result<(Uuid, Uuid), IndexedStorageError> {
+        let (key, stage) = match key.split_once('#') {
+            Some((key, stage)) if namespace.ends_with("-worker-staged-oplog") => {
+                let parsed = Uuid::parse_str(stage).map_err(|_| {
+                    IndexedStorageError::Other("invalid Postgres staged oplog key".into())
+                })?;
+                if parsed.to_string() != stage {
+                    return Err(IndexedStorageError::Other(
+                        "noncanonical Postgres stage UUID".into(),
+                    ));
+                }
+                (key, Some(parsed))
+            }
+            _ => (key, None),
+        };
+        let owned = golem_common::model::OwnedAgentId::from_storage_key(key).ok_or_else(|| {
+            IndexedStorageError::Other(
+                "Postgres indexed storage requires a canonical env/agent key".into(),
+            )
+        })?;
+        if let Some(stage) = stage {
+            namespace.push('#');
+            namespace.push_str(&stage.to_string());
+        }
+        Ok((owned.environment_id.0, owned.agent_id.as_uuid()))
+    }
+
+    /// The first canonical key at or after an arbitrary text bound. Fixed separators and hex
+    /// digits make the canonical domain ordered exactly like the pair of UUID columns.
+    fn scan_bound(text: &str) -> Option<(Uuid, Uuid)> {
+        const HEX: &[u8] = b"0123456789abcdef";
+        const MIN: &[u8; 73] =
+            b"00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000";
+        let allowed = |i: usize| match MIN[i] {
+            b'-' => &b"-"[..],
+            b'/' => &b"/"[..],
+            _ => HEX,
+        };
+        let mut key = *MIN;
+        let input = text.as_bytes();
+        let mut i = 0;
+        while i < input.len().min(key.len()) {
+            if let Some(&digit) = allowed(i).iter().find(|&&digit| digit >= input[i]) {
+                key[i] = digit;
+                if digit > input[i] {
+                    break;
+                }
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if (i < input.len().min(key.len()) && key[i] < input[i])
+            || input.len() > key.len() && i == key.len()
+        {
+            loop {
+                if i == 0 {
+                    return None;
+                }
+                i -= 1;
+                if let Some(&next) = allowed(i).iter().find(|&&digit| digit > key[i]) {
+                    key[i] = next;
+                    key[i + 1..].copy_from_slice(&MIN[i + 1..]);
+                    break;
+                }
+            }
+        }
+        let key = std::str::from_utf8(&key).expect("canonical ASCII key");
+        Some((key[..36].parse().unwrap(), key[37..].parse().unwrap()))
+    }
+
     fn to_i64(value: u64, field_name: &'static str) -> Result<i64, IndexedStorageError> {
         i64::try_from(value).map_err(|_| {
             IndexedStorageError::Other(format!(
@@ -171,15 +239,17 @@ impl PostgresIndexedStorage {
     async fn stored_epoch(
         tx: &mut PostgresLabelledTransaction,
         namespace: &str,
-        key: &str,
+        env: Uuid,
+        agent: Uuid,
     ) -> Result<Option<i64>, RepoError> {
         let stored: Option<(i64,)> = tx
             .fetch_optional_as(
                 sqlx::query_as(
-                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
+                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND env = $2 AND agent = $3 FOR UPDATE;",
                 )
                 .bind(namespace.to_string())
-                .bind(key.to_string()),
+                .bind(env)
+                .bind(agent),
             )
             .await?;
         Ok(stored.map(|(epoch,)| epoch))
@@ -190,9 +260,11 @@ impl PostgresIndexedStorage {
         tx: &mut PostgresLabelledTransaction,
         namespace: &str,
         key: &str,
+        env: Uuid,
+        agent: Uuid,
         expected: ShardEpoch,
     ) -> Result<(), FencedTxError> {
-        let stored = Self::stored_epoch(tx, namespace, key).await?;
+        let stored = Self::stored_epoch(tx, namespace, env, agent).await?;
         FencedTxError::check_record(key, expected, stored, Self::negative_epoch_message)
     }
 
@@ -272,13 +344,15 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
     ) -> Result<bool, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
-        let namespace = Self::namespace(namespace);
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let query = sqlx::query_as::<_, (bool,)>(
-            "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN ($1, $2) AND key = $3);",
+            "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN ($1, $2) AND env = $3 AND agent = $4);",
         )
         .bind(format!("{namespace}-present"))
         .bind(namespace)
-        .bind(key);
+        .bind(env)
+        .bind(agent);
 
         self.pool
             .with_ro(svc_name, api_name)
@@ -299,35 +373,60 @@ impl IndexedStorage for PostgresIndexedStorage {
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         let count_i64 = Self::to_i64(count, "count")?;
-        let bounds = super::stable_scan_key_bounds(prefix, resume, "Postgres")?;
+        let mut bounds = super::stable_scan_key_bounds(prefix, resume, "Postgres")?;
         let namespace = Self::meta_namespace(namespace);
-        let query = match (bounds.inclusive, bounds.upper) {
-            (true, Some(upper)) => sqlx::query_as(SCAN_INCLUSIVE_BOUNDED_QUERY)
-                .bind(namespace)
-                .bind(bounds.lower)
-                .bind(upper)
-                .bind(count_i64),
-            (false, Some(upper)) => sqlx::query_as(SCAN_EXCLUSIVE_BOUNDED_QUERY)
-                .bind(namespace)
-                .bind(bounds.lower)
-                .bind(upper)
-                .bind(count_i64),
-            (true, None) => sqlx::query_as(SCAN_INCLUSIVE_UNBOUNDED_QUERY)
-                .bind(namespace)
-                .bind(bounds.lower)
-                .bind(count_i64),
-            (false, None) => sqlx::query_as(SCAN_EXCLUSIVE_UNBOUNDED_QUERY)
-                .bind(namespace)
-                .bind(bounds.lower)
-                .bind(count_i64),
+        if !bounds.inclusive {
+            bounds.lower.push('\0');
+        }
+        let Some(lower) = Self::scan_bound(&bounds.lower) else {
+            return Ok((None, Vec::new()));
         };
+        let upper = bounds.upper.as_deref().and_then(Self::scan_bound);
+        if upper.is_some_and(|upper| lower >= upper) {
+            return Ok((None, Vec::new()));
+        }
+        let mut query = QueryBuilder::<Postgres>::new(
+            "SELECT DISTINCT env, agent FROM index_storage WHERE namespace = ",
+        );
+        query.push_bind(namespace);
+        if let Some(upper) = upper.filter(|upper| upper.0 == lower.0) {
+            query
+                .push(" AND env = ")
+                .push_bind(lower.0)
+                .push(" AND agent >= ")
+                .push_bind(lower.1)
+                .push(" AND agent < ")
+                .push_bind(upper.1);
+        } else {
+            query
+                .push(" AND (env, agent) >= (")
+                .push_bind(lower.0)
+                .push(", ")
+                .push_bind(lower.1)
+                .push(")");
+            if let Some(upper) = upper {
+                query
+                    .push(" AND (env, agent) < (")
+                    .push_bind(upper.0)
+                    .push(", ")
+                    .push_bind(upper.1)
+                    .push(")");
+            }
+        }
+        query
+            .push(" ORDER BY env, agent LIMIT ")
+            .push_bind(count_i64);
 
         let keys = self
             .pool
             .with_ro(svc_name, api_name)
-            .fetch_all_as::<(String,), _>(query)
+            .fetch_all_as::<(Uuid, Uuid), _>(query.build_query_as())
             .await
-            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
+            .map(|keys| {
+                keys.into_iter()
+                    .map(|(env, agent)| format!("{env}/{agent}"))
+                    .collect::<Vec<String>>()
+            })
             .map_err(Self::classify_repo_error_general)?;
 
         Ok((super::last_key_resume(&keys, count), keys))
@@ -383,7 +482,8 @@ impl IndexedStorage for PostgresIndexedStorage {
             }
             IndexedStorageNamespace::CompressedOpLog { .. } => Self::classify_repo_error_general,
         };
-        let namespace = Self::namespace((*namespace).clone());
+        let mut namespace = Self::namespace((*namespace).clone());
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let key = key.to_string();
         for (id, value) in pairs.iter() {
             record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
@@ -398,10 +498,11 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .with_rw(svc_name, api_name)
                 .execute(
                     sqlx::query(
-                        "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, $3, $4);",
+                        "INSERT INTO index_storage (namespace, env, agent, id, value) VALUES ($1, $2, $3, $4, $5);",
                     )
                     .bind(namespace)
-                    .bind(key)
+                    .bind(env)
+                    .bind(agent)
                     .bind(i64::try_from(*id).expect("validated oplog index"))
                     .bind(value.as_ref()),
                 )
@@ -420,12 +521,16 @@ impl IndexedStorage for PostgresIndexedStorage {
             );
             query_builder
                 .push_bind(namespace.as_str())
-                .push(" AND key = ")
-                .push_bind(key.as_str())
-                .push(" FOR UPDATE), inserted AS (INSERT INTO index_storage (namespace, key, id, value) SELECT ")
+                .push(" AND env = ")
+                .push_bind(env)
+                .push(" AND agent = ")
+                .push_bind(agent)
+                .push(" FOR UPDATE), inserted AS (INSERT INTO index_storage (namespace, env, agent, id, value) SELECT ")
                 .push_bind(namespace.as_str())
                 .push(", ")
-                .push_bind(key.as_str())
+                .push_bind(env)
+                .push(", ")
+                .push_bind(agent)
                 .push(", data.id, data.value FROM locked_epoch CROSS JOIN (");
             query_builder.push_values(pairs.iter(), |mut builder, (id, value)| {
                 builder
@@ -461,18 +566,19 @@ impl IndexedStorage for PostgresIndexedStorage {
                     // lost the shard cannot slip a batch in between the check and the insert.
                     // `FOR UPDATE` is what serialises two executors racing over the same oplog.
                     if let Some(expected) = expected_epoch {
-                        Self::check_epoch(tx, &namespace, &key, expected).await?;
+                        Self::check_epoch(tx, &namespace, &key, env, agent, expected).await?;
                     }
 
                     for chunk in pairs.chunks(Self::APPEND_MANY_CHUNK_SIZE) {
                         let mut query_builder = QueryBuilder::<Postgres>::new(
-                            "INSERT INTO index_storage (namespace, key, id, value) ",
+                            "INSERT INTO index_storage (namespace, env, agent, id, value) ",
                         );
 
                         query_builder.push_values(chunk.iter(), |mut builder, (id, value)| {
                             builder
                                 .push_bind(namespace.as_str())
-                                .push_bind(key.as_str())
+                                .push_bind(env)
+                                .push_bind(agent)
                                 .push_bind(i64::try_from(*id).expect("validated oplog index"))
                                 .push_bind(value.as_ref());
                         });
@@ -505,19 +611,21 @@ impl IndexedStorage for PostgresIndexedStorage {
         new_epoch: ShardEpoch,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
-        let namespace = Self::namespace(namespace);
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let epoch = Self::to_i64(new_epoch.0, "epoch")?;
 
         let mut api = self.pool.with_rw(svc_name, api_name);
         let result = api
             .execute(
                 sqlx::query(
-                    r#"INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES ($1, $2, $3)
-                       ON CONFLICT (namespace, key) DO UPDATE SET epoch = EXCLUDED.epoch
+                    r#"INSERT INTO indexed_key_epoch (namespace, env, agent, epoch) VALUES ($1, $2, $3, $4)
+                       ON CONFLICT (namespace, env, agent) DO UPDATE SET epoch = EXCLUDED.epoch
                        WHERE indexed_key_epoch.epoch <= EXCLUDED.epoch;"#,
                 )
                 .bind(namespace.clone())
-                .bind(key)
+                .bind(env)
+                .bind(agent)
                 .bind(epoch),
             )
             .await
@@ -528,10 +636,11 @@ impl IndexedStorage for PostgresIndexedStorage {
             let stored: Option<(i64,)> = api
                 .fetch_optional_as(
                     sqlx::query_as(
-                        "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2;",
+                        "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND env = $2 AND agent = $3;",
                     )
                     .bind(namespace)
-                    .bind(key),
+                    .bind(env)
+                    .bind(agent),
                 )
                 .await
                 .map_err(Self::classify_repo_error_general)?;
@@ -561,7 +670,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
-        let namespace = Self::namespace(namespace);
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let key = key.to_string();
         self.pool
             .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
@@ -569,7 +679,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                     // Holding the row, as an append does: a writer taking the key over waits for
                     // this transaction, and then finds nothing left to take over.
                     if let Some(expected) = expected_epoch {
-                        let stored = Self::stored_epoch(tx, &namespace, &key).await?;
+                        let stored = Self::stored_epoch(tx, &namespace, env, agent).await?;
                         // Neither a record nor entries: the key is already gone, most often taken
                         // by an earlier attempt of this same deletion whose later steps failed, and
                         // a writer that lost the key has nothing here to destroy. Refusing would
@@ -578,11 +688,12 @@ impl IndexedStorage for PostgresIndexedStorage {
                             let (has_entries,): (bool,) = tx
                                 .fetch_one_as(
                                     sqlx::query_as(
-                                        "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN ($1, $2) AND key = $3);",
+                                        "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN ($1, $2) AND env = $3 AND agent = $4);",
                                     )
                                     .bind(format!("{namespace}-present"))
                                     .bind(namespace.clone())
-                                    .bind(key.clone()),
+                                    .bind(env)
+                                    .bind(agent),
                                 )
                                 .await?;
                             if !has_entries {
@@ -598,19 +709,21 @@ impl IndexedStorage for PostgresIndexedStorage {
                     }
                     tx.execute(
                         sqlx::query(
-                            "DELETE FROM index_storage WHERE namespace IN ($1, $2) AND key = $3;",
+                            "DELETE FROM index_storage WHERE namespace IN ($1, $2) AND env = $3 AND agent = $4;",
                         )
                         .bind(format!("{namespace}-present"))
                         .bind(namespace.clone())
-                        .bind(key.clone()),
+                        .bind(env)
+                        .bind(agent),
                     )
                     .await?;
                     tx.execute(
                         sqlx::query(
-                            "DELETE FROM indexed_key_epoch WHERE namespace = $1 AND key = $2;",
+                            "DELETE FROM indexed_key_epoch WHERE namespace = $1 AND env = $2 AND agent = $3;",
                         )
                         .bind(namespace)
-                        .bind(key),
+                        .bind(env)
+                        .bind(agent),
                     )
                     .await?;
                     Ok(())
@@ -630,7 +743,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<bool, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
-        let namespace = Self::namespace(namespace);
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let key = key.to_string();
         self.pool
             .with_tx_err::<bool, FencedTxError, _>(svc_name, api_name, |tx| {
@@ -638,24 +752,26 @@ impl IndexedStorage for PostgresIndexedStorage {
                     // Holding the row, as an append does: a writer adding entries waits for this
                     // transaction, so the emptiness seen below is the emptiness deleted.
                     if let Some(expected) = expected_epoch {
-                        Self::check_epoch(tx, &namespace, &key, expected).await?;
+                        Self::check_epoch(tx, &namespace, &key, env, agent, expected).await?;
                     }
                     let (has_entries,): (bool,) = tx
                         .fetch_one_as(
                             sqlx::query_as(
-                                "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace = $1 AND key = $2);",
+                                "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3);",
                             )
                             .bind(namespace.clone())
-                            .bind(key.clone()),
+                            .bind(env)
+                            .bind(agent),
                         )
                         .await?;
                     if has_entries {
                         return Ok(false);
                     }
                     tx.execute(
-                        sqlx::query("DELETE FROM index_storage WHERE namespace = $1 AND key = $2;")
+                        sqlx::query("DELETE FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3;")
                             .bind(format!("{namespace}-present"))
-                            .bind(key.clone()),
+                            .bind(env)
+                            .bind(agent),
                     )
                     .await?;
                     Ok(true)
@@ -682,30 +798,30 @@ impl IndexedStorage for PostgresIndexedStorage {
             ));
         }
         let expected = Self::to_i64(expected_last_id, "expected_last_id")?;
-        let source_namespace = Self::namespace(source_namespace);
-        let target_namespace = Self::namespace(target_namespace);
-        let source_key = source_key.to_string();
-        let target_key = target_key.to_string();
+        let mut source_namespace = Self::namespace(source_namespace);
+        let mut target_namespace = Self::namespace(target_namespace);
+        let (source_env, source_agent) = Self::key(&mut source_namespace, source_key)?;
+        let (target_env, target_agent) = Self::key(&mut target_namespace, target_key)?;
         let _permit = self.acquire_permit().await;
         let result = self.pool.with_tx(svc_name, api_name, |tx| async move {
             let target_exists: (bool,) = tx.fetch_one_as(
-                sqlx::query_as("SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN ($1, $2) AND key = $3);")
-                    .bind(&target_namespace).bind(format!("{target_namespace}-present")).bind(&target_key)).await?;
+                sqlx::query_as("SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN ($1, $2) AND env = $3 AND agent = $4);")
+                    .bind(&target_namespace).bind(format!("{target_namespace}-present")).bind(target_env).bind(target_agent)).await?;
             if target_exists.0 { return Ok(false); }
             let source: (i64, Option<i64>, Option<i64>) = tx.fetch_one_as(
-                sqlx::query_as("SELECT COUNT(*), MIN(id), MAX(id) FROM index_storage WHERE namespace = $1 AND key = $2;")
-                    .bind(&source_namespace).bind(&source_key)).await?;
+                sqlx::query_as("SELECT COUNT(*), MIN(id), MAX(id) FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3;")
+                    .bind(&source_namespace).bind(source_env).bind(source_agent)).await?;
             if source != (expected, Some(1), Some(expected)) {
                 return Err(RepoError::InternalError(anyhow::anyhow!("source index is missing, empty, gapped, or has an unexpected tip")));
             }
             tx.execute(sqlx::query(
-                "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, 0, ''::bytea);")
-                .bind(format!("{target_namespace}-present")).bind(&target_key)).await?;
+                "INSERT INTO index_storage (namespace, env, agent, id, value) VALUES ($1, $2, $3, 0, ''::bytea);")
+                .bind(format!("{target_namespace}-present")).bind(target_env).bind(target_agent)).await?;
             tx.execute(sqlx::query(
-                "UPDATE index_storage SET namespace = $1, key = $2 WHERE namespace = $3 AND key = $4;")
-                .bind(&target_namespace).bind(&target_key).bind(&source_namespace).bind(&source_key)).await?;
-            tx.execute(sqlx::query("DELETE FROM index_storage WHERE namespace = $1 AND key = $2;")
-                .bind(format!("{source_namespace}-present")).bind(&source_key)).await?;
+                "UPDATE index_storage SET namespace = $1, env = $2, agent = $3 WHERE namespace = $4 AND env = $5 AND agent = $6;")
+                .bind(&target_namespace).bind(target_env).bind(target_agent).bind(&source_namespace).bind(source_env).bind(source_agent)).await?;
+            tx.execute(sqlx::query("DELETE FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3;")
+                .bind(format!("{source_namespace}-present")).bind(source_env).bind(source_agent)).await?;
             Ok(true)
         }.boxed()).await;
         match result {
@@ -722,11 +838,14 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
     ) -> Result<u64, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let query = sqlx::query_as::<_, (i64,)>(
-            "SELECT COUNT(*) FROM index_storage WHERE namespace = $1 AND key = $2;",
+            "SELECT COUNT(*) FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3;",
         )
-        .bind(Self::namespace(namespace))
-        .bind(key);
+        .bind(namespace)
+        .bind(env)
+        .bind(agent);
 
         self.pool
             .with_ro(svc_name, api_name)
@@ -744,12 +863,15 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
-        let namespace = Self::namespace(namespace);
-        let query =
-            sqlx::query("DELETE FROM index_storage WHERE namespace IN ($1, $2) AND key = $3;")
-                .bind(format!("{namespace}-present"))
-                .bind(namespace)
-                .bind(key);
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
+        let query = sqlx::query(
+            "DELETE FROM index_storage WHERE namespace IN ($1, $2) AND env = $3 AND agent = $4;",
+        )
+        .bind(format!("{namespace}-present"))
+        .bind(namespace)
+        .bind(env)
+        .bind(agent);
 
         self.pool
             .with_rw(svc_name, api_name)
@@ -772,11 +894,14 @@ impl IndexedStorage for PostgresIndexedStorage {
         let _permit = self.acquire_permit().await;
         let start_id = Self::to_i64(start_id, "start_id")?;
         let end_id = Self::to_i64(end_id, "end_id")?;
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let query = sqlx::query_as::<_, DBIdValue>(
-            "SELECT id, value FROM index_storage WHERE namespace = $1 AND key = $2 AND id BETWEEN $3 AND $4 ORDER BY id ASC;",
+            "SELECT id, value FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3 AND id BETWEEN $4 AND $5 ORDER BY id ASC;",
         )
-        .bind(Self::namespace(namespace))
-        .bind(key)
+        .bind(namespace)
+        .bind(env)
+        .bind(agent)
         .bind(start_id)
         .bind(end_id);
 
@@ -797,11 +922,14 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let query = sqlx::query_as::<_, DBIdValue>(
-            "SELECT id, value FROM index_storage WHERE namespace = $1 AND key = $2 ORDER BY id ASC LIMIT 1;",
+            "SELECT id, value FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3 ORDER BY id ASC LIMIT 1;",
         )
-        .bind(Self::namespace(namespace))
-        .bind(key);
+        .bind(namespace)
+        .bind(env)
+        .bind(agent);
 
         self.pool
             .with_ro(svc_name, api_name)
@@ -820,11 +948,14 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let query = sqlx::query_as::<_, DBIdValue>(
-            "SELECT id, value FROM index_storage WHERE namespace = $1 AND key = $2 ORDER BY id DESC LIMIT 1;",
+            "SELECT id, value FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3 ORDER BY id DESC LIMIT 1;",
         )
-        .bind(Self::namespace(namespace))
-        .bind(key);
+        .bind(namespace)
+        .bind(env)
+        .bind(agent);
 
         self.pool
             .with_ro(svc_name, api_name)
@@ -843,11 +974,14 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let query = sqlx::query_as::<_, (i64,)>(
-            "SELECT id FROM index_storage WHERE namespace = $1 AND key = $2 ORDER BY id DESC LIMIT 1;",
+            "SELECT id FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3 ORDER BY id DESC LIMIT 1;",
         )
-        .bind(Self::namespace(namespace))
-        .bind(key);
+        .bind(namespace)
+        .bind(env)
+        .bind(agent);
 
         self.pool
             .with_ro(svc_name, api_name)
@@ -868,11 +1002,14 @@ impl IndexedStorage for PostgresIndexedStorage {
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         let id = Self::to_i64(id, "id")?;
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let query = sqlx::query_as::<_, DBIdValue>(
-            "SELECT id, value FROM index_storage WHERE namespace = $1 AND key = $2 AND id >= $3 ORDER BY id ASC LIMIT 1;",
+            "SELECT id, value FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3 AND id >= $4 ORDER BY id ASC LIMIT 1;",
         )
-        .bind(Self::namespace(namespace))
-        .bind(key)
+        .bind(namespace)
+        .bind(env)
+        .bind(agent)
         .bind(id);
 
         self.pool
@@ -898,7 +1035,8 @@ impl IndexedStorage for PostgresIndexedStorage {
             IndexedStorageNamespace::CompressedOpLog { .. }
                 | IndexedStorageNamespace::BlobOplogManifest { .. }
         );
-        let namespace = Self::namespace(namespace);
+        let mut namespace = Self::namespace(namespace);
+        let (env, agent) = Self::key(&mut namespace, key)?;
         let key = key.to_string();
         let last_dropped_id = Self::to_i64(last_dropped_id, "last_dropped_id")?;
         let batch_size_i64 = Self::to_i64(
@@ -913,19 +1051,20 @@ impl IndexedStorage for PostgresIndexedStorage {
                     // ownership generation, so a stale executor's archive transfer cannot
                     // destroy entries the new owner accepted.
                     if let Some(expected) = expected_epoch {
-                        Self::check_epoch(tx, &namespace, &key, expected).await?;
+                        Self::check_epoch(tx, &namespace, &key, env, agent, expected).await?;
                     }
                     tx.execute(sqlx::query(
-                        "INSERT INTO index_storage (namespace, key, id, value) SELECT $1, $2, 0, ''::bytea WHERE EXISTS (SELECT 1 FROM index_storage WHERE namespace = $3 AND key = $2) ON CONFLICT DO NOTHING;")
-                        .bind(format!("{namespace}-present")).bind(&key).bind(&namespace)).await?;
+                        "INSERT INTO index_storage (namespace, env, agent, id, value) SELECT $1, $2, $3, 0, ''::bytea WHERE EXISTS (SELECT 1 FROM index_storage WHERE namespace = $4 AND env = $2 AND agent = $3) ON CONFLICT DO NOTHING;")
+                        .bind(format!("{namespace}-present")).bind(env).bind(agent).bind(&namespace)).await?;
                     let mut deleted_rows = delete_batch_size;
 
                     while deleted_rows >= delete_batch_size {
                         let query = sqlx::query(
-                            "WITH rows AS (SELECT ctid FROM index_storage WHERE namespace = $1 AND key = $2 AND id <= $3 ORDER BY id LIMIT $4) DELETE FROM index_storage t USING rows WHERE t.ctid = rows.ctid;",
+                            "WITH rows AS (SELECT ctid FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3 AND id <= $4 ORDER BY id LIMIT $5) DELETE FROM index_storage t USING rows WHERE t.ctid = rows.ctid;",
                         )
                         .bind(&namespace)
-                        .bind(&key)
+                        .bind(env)
+                        .bind(agent)
                         .bind(last_dropped_id)
                         .bind(batch_size_i64);
 
@@ -935,10 +1074,11 @@ impl IndexedStorage for PostgresIndexedStorage {
                     if delete_if_empty {
                         tx.execute(
                             sqlx::query(
-                                "DELETE FROM index_storage WHERE namespace = $1 AND key = $2 AND NOT EXISTS (SELECT 1 FROM index_storage WHERE namespace = $3 AND key = $2);",
+                                "DELETE FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3 AND NOT EXISTS (SELECT 1 FROM index_storage WHERE namespace = $4 AND env = $2 AND agent = $3);",
                             )
                             .bind(format!("{namespace}-present"))
-                            .bind(&key)
+                            .bind(env)
+                            .bind(agent)
                             .bind(&namespace),
                         )
                         .await?;

@@ -1,0 +1,78 @@
+{
+  "tier": "pr",
+  "description": "Tilde expansion, with and without a home directory, and in assignment-like words.\n\nA Golem agent starts with no HOME and has no passwd entry. Bash then expands `~` to `/`, and so\ndoes this shell; `cd` with no operand still fails with `HOME not set`.\n\nOutside POSIX mode, bash also expands a tilde after the first `=` (and after each `:`) of any\ncommand-line word that looks like an assignment, as in `make DESTDIR=~/out`.",
+  "cases": [
+    {
+      "name": "tilde: no home directory expands to /",
+      "script": "unset HOME; echo ~ ~/x \"~\"; d=~/y; echo $d; p=a:~:b; echo $p; cd ~; echo cd=$? $PWD; echo \"${HOME-unset}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tilde: cd with no HOME fails and the script continues",
+      "script": "unset HOME; cd /tmp; cd 2>/dev/null; echo status=$? $PWD",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tilde: HOME set",
+      "script": "HOME=/tmp/h; mkdir -p ~/d; cd ~/d; pwd; echo ~ ~/x; cd; pwd; echo ~+ ~-",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tilde: empty HOME",
+      "script": "HOME=; echo \"[$(echo ~)]\" \"[~/x]\"; x=~/y; echo \"[$x]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tilde: unknown user stays literal",
+      "script": "echo ~nosuchuser ~nosuchuser/x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tilde: quoted and mid-word tildes stay literal",
+      "script": "HOME=/tmp/h; echo \"~\" '~' a~ \"~/x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tilde: assignment-like arguments",
+      "script": "HOME=/tmp/h; echo x=~/y x=~ x+=~ a[1]=~/z x=a:~/b:~ y=x=~",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tilde: arguments that are not assignment-like stay literal",
+      "script": "HOME=/tmp/h; echo --prefix=~/x 1x=~ x-y=~ \"x=~\" x=\"~\" x=a~ x=a:\"~\" {x=~,y}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tilde: assignment-like for, case and test words",
+      "script": "HOME=/tmp/h; for w in x=~ y=~/z; do echo \"$w\"; done; case x=/tmp/h in x=~) echo case-matched;; esac; [[ x=~ == x=/tmp/h ]] && echo double; [ x=~ = x=/tmp/h ] && echo single; f() { echo \"$1\"; }; f x=~; bash -c 'echo x=~/child'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tilde: values, array elements, parameter words and here-strings",
+      "script": "HOME=/tmp/h; y=x=~:~; echo \"$y\"; a=(x=~ q); echo \"${a[0]}\"; echo \"${u:-x=~}\"; cat <<< x=~",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tilde: assignment-like redirect target",
+      "script": "HOME=/tmp/h; cd /tmp; mkdir -p x=/tmp/h; echo hi > x=~/f; cat x=/tmp/h/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tilde: POSIX mode keeps arguments literal",
+      "script": "HOME=/tmp/h; set -o posix; echo x=~/y; export Z=~/z; echo $Z",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

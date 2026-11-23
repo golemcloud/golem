@@ -107,30 +107,35 @@ async fn shutdown_signal() {
 
     tokio::select! {
         _ = ctrl_c => {}
-        _ = terminate_signal() => {}
+        _ = platform::terminate_signal() => {}
     }
 }
 
 /// SIGTERM, which is what a container runtime sends first.
 #[cfg(unix)]
-async fn terminate_signal() {
+mod platform {
     use tokio::signal::unix::{SignalKind, signal};
+    use tracing::warn;
 
-    match signal(SignalKind::terminate()) {
-        Ok(mut terminate) => {
-            terminate.recv().await;
-        }
-        Err(err) => {
-            warn!(
-                error = %err,
-                "Cannot listen for SIGTERM; only Ctrl-C will release the leadership on shutdown"
-            );
-            std::future::pending::<()>().await
+    pub(super) async fn terminate_signal() {
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                terminate.recv().await;
+            }
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "Cannot listen for SIGTERM; only Ctrl-C will release the leadership on shutdown"
+                );
+                std::future::pending::<()>().await
+            }
         }
     }
 }
 
 #[cfg(not(unix))]
-async fn terminate_signal() {
-    std::future::pending::<()>().await
+mod platform {
+    pub(super) async fn terminate_signal() {
+        std::future::pending::<()>().await
+    }
 }

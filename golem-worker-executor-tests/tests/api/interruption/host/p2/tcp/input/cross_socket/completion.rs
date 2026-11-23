@@ -104,8 +104,8 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
         ensure!(
             join_request(&mut invocation, "invocation result")
                 .await??
-                .into_typed::<Result<u64, String>>()?
-                == Ok(1)
+                .into_typed::<Result<(u32, u64), String>>()?
+                == Ok((0, 1))
         );
         ensure!(matches!(
             tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
@@ -140,8 +140,8 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
                     data_value!(source_port, destination_port)
                 )
                 .await?
-                .into_typed::<Result<u64, String>>()?
-                == Ok(1)
+                .into_typed::<Result<(u32, u64), String>>()?
+                == Ok((0, 1))
         );
         ensure!(
             tokio::time::timeout(Duration::from_millis(100), source.accept())
@@ -165,9 +165,7 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
             data_value!(source_port, destination_port),
         );
         let peer_work = async {
-            // The completed historical raw splice re-executes against fresh sockets.
-            let (mut old_input, mut old_output) = peers(&source, &destination).await?;
-            echo(&mut old_input, &mut old_output).await?;
+            // The completed historical splice replays from the oplog without connecting.
             let (mut new_input, mut new_output) = peers(&source, &destination).await?;
             echo(&mut new_input, &mut new_output).await?;
             Ok::<_, anyhow::Error>(())
@@ -176,7 +174,7 @@ async fn durable_p2_cross_socket_splice_completion_before_stop_and_history_recon
             tokio::try_join!(fresh, peer_work)
         })
         .await??;
-        ensure!(fresh.into_typed::<Result<u64, String>>()? == Ok(1));
+        ensure!(fresh.into_typed::<Result<(u32, u64), String>>()? == Ok((0, 1)));
         ensure!(
             tokio::time::timeout(Duration::from_millis(100), source.accept())
                 .await

@@ -141,14 +141,24 @@ impl FilesystemStorageError {
     }
 }
 
+pub(in crate::filesystem::sandbox) use platform::is_terminal_storage_errno;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(in crate::filesystem::sandbox) fn is_terminal_storage_errno(error: &std::io::Error) -> bool {
-    matches!(error.raw_os_error(), Some(errno) if matches!(errno, libc::EIO | libc::ESTALE | libc::ENODEV))
+mod platform {
+    pub(in crate::filesystem::sandbox) fn is_terminal_storage_errno(
+        error: &std::io::Error,
+    ) -> bool {
+        matches!(error.raw_os_error(), Some(errno) if matches!(errno, libc::EIO | libc::ESTALE | libc::ENODEV))
+    }
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(in crate::filesystem::sandbox) fn is_terminal_storage_errno(_error: &std::io::Error) -> bool {
-    false
+mod platform {
+    pub(in crate::filesystem::sandbox) fn is_terminal_storage_errno(
+        _error: &std::io::Error,
+    ) -> bool {
+        false
+    }
 }
 
 impl Debug for FilesystemStorageError {

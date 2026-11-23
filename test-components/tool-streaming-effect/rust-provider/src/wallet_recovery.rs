@@ -1,6 +1,6 @@
 use golem_rust::bindings::golem::agent::host;
 use golem_rust::golem_schema::CardId;
-use golem_rust::{ComponentId, tool_definition, tool_implementation};
+use golem_rust::{AgentId, tool_definition, tool_implementation};
 use raw_permissions::golem::permissions::{revoke, types, wallet};
 
 /// Raw `golem:permissions` calls through this component's own bindings: the
@@ -36,24 +36,14 @@ fn wallet_cards() -> impl Iterator<Item = golem_rust::schema::wit::wire::Permiss
 
 #[tool_definition(version = "1.0.0")]
 pub trait WalletMutation {
-    async fn change(
-        &self,
-        card: CardId,
-        component: ComponentId,
-        target: String,
-    ) -> (bool, u64, bool, bool);
+    async fn change(&self, card: CardId, target: Option<AgentId>) -> (bool, u64, bool, bool);
 }
 
 struct WalletMutationImpl;
 
 #[tool_implementation]
 impl WalletMutation for WalletMutationImpl {
-    async fn change(
-        &self,
-        id: CardId,
-        component: ComponentId,
-        target: String,
-    ) -> (bool, u64, bool, bool) {
+    async fn change(&self, id: CardId, target: Option<AgentId>) -> (bool, u64, bool, bool) {
         let _ = wasi::clocks::wall_clock::now();
         let card = wallet_cards()
             .find(|card| CardId::from(types::id(card)) == id)
@@ -64,17 +54,11 @@ impl WalletMutation for WalletMutationImpl {
         )
         .unwrap();
         assert!(host::get_config_value(&["probe".to_string()], &expected).is_ok());
-        if target.is_empty() {
-            assert_eq!(revoke::revoke_card(card).expect("revoke installed card"), 1);
+        if let Some(target) = target {
+            wallet::install_card(card, types::Holder::Agent((&target).into()))
+                .expect("transfer installed concrete card");
         } else {
-            wallet::install_card(
-                card,
-                &types::Holder::Agent(golem_rust::schema::wit::wire::AgentId {
-                    component_id: component.into(),
-                    agent_id: target,
-                }),
-            )
-            .expect("transfer installed concrete card");
+            assert_eq!(revoke::revoke_card(card).expect("revoke installed card"), 1);
         }
         let present = wallet_cards().any(|card| CardId::from(types::id(&card)) == id);
         let generation = wallet::self_version().generation;

@@ -60,6 +60,14 @@ report deliveries before publishing success. Missing exit codes fail closed.
 Setup, upload, cancellation and runner timeout failures can still prevent saving.
 A green Linux job alone is not a green validation result.
 
+`cache-begin.json` and `cache-complete.json` retain each disk's key, visible cycle
+marker, device and capacity. The completion marker records the workload exit
+before the provider's post-job commit request; it is not a durable-save receipt.
+Compare the next run's visible marker with the previous completion evidence to
+detect missing or older snapshots. Provider generation/commit evidence is still
+needed to explain a discontinuity. Diagnostics are best effort and do not change
+the workload result or cache-saving policy.
+
 Completed WASMs are cached per application for every language, including benchmark
 builds. There is no separate application or output allowlist. Each successful build
 records the WASMs it exports. The key hashes the application's checked-in directory,
@@ -111,16 +119,21 @@ cycles, resource high-water marks and cancellation before finalizing them.
 
 `Makefile.main-validation.toml` prepares built-ins, native binaries, SDKs and
 fixtures before their consumers. A failed producer blocks dependent consumers;
-old cache contents never release them. General checks record ordinary failure
-and let the remaining prepared workloads run. Native producers share the Cargo
-target but keep their exact package and feature selections. After the executor
-producer succeeds, copy all its test executables and rewrite only their paths in
-the local metadata. Service compilation can then overlap workers without replacing
-live worker executables. Test consumers use local nextest binaries metadata, not
-cross-job archives.
+old cache contents never release them. Every producer records a current-cycle
+status. Preparation continues with independent producers after failure. SDK
+preparation builds templates and publishes local packages; SDK formatting, lint,
+drift and ordinary test verdicts run later and do not prevent that production.
+Unit and JS guest test failures also leave independent preparation admitted.
+Native producers share the Cargo target but keep their exact package and feature
+selections. The executor producer uses `cargo-test-r list`, `snapshot` and `verify`
+to freeze all its test executables and pin the native selection digest. Worker
+consumers pass that selection and digest directly to `run`, with their existing
+package and target filters. Service compilation can then overlap workers without
+replacing live worker executables. Other consumers use local nextest binaries
+metadata, not cross-job archives.
 
 Preparation runs `main-validation-js-guests` after TypeScript and Effect SDK
-validation. It uses their fresh local guest templates and the general native
+production. It uses their fresh local guest templates and the general native
 producer's metadata to run the in-process `golem-js-guest-tests` crate, which
 does not depend on the CLI.
 The task first runs `prepare-js-guest-tests` to bundle current SDK fixture sources
@@ -128,27 +141,53 @@ into the Cargo target directory. Bundles and maps are build outputs, not committ
 snapshots or byte-exact drift gates. Missing guests, failed bundling or failed smoke
 tests fail preparation; see `golem-js-guest-tests/README.md`.
 
-Executor snapshots use ordinary copies, not links. Dependency checks reject
+Executor snapshots use cargo-test-r's ordinary copies, not links. Dependency checks reject
 unresolved libraries and libraries from the mutable Cargo target, and require
 library resolution to remain unchanged after copying. The snapshot remains below
 the repository's target directory so managed-XFS Lima can access it through the
 repository mount. Verify its recorded hashes before XFS reuse and remove it after
-the final join. Preparation and interrupted runs can leave snapshots for the
-runner to reclaim. The retained manifest and task logs record dependency and hash
-evidence; sharing a cache is not a claim of measured speedup.
+the final join. Retain the native manifest and digest in the report directory
+after removing the executable copies. Every invocation verifies the complete
+snapshot before applying its package and target filters; excluded binaries cannot
+hide corruption. No rewritten metadata or TypeScript snapshot bridge remains.
+
+Lima does not assume its libraries match the host. The host verifies its snapshot
+and exports ordinary GNU `sha256sum` executable checksums. The guest checks the
+pinned source manifest and executable bytes before and after creating its own
+native snapshot. That snapshot records and verifies the guest loader and library
+hashes without skipping library checks or rebuilding the executables. Its manifest
+and digest remain in the shared report directory after guest cleanup. This is
+trusted CI artifact transfer, not an adversarial filesystem security boundary.
+Failure to resolve a compatible guest loader or library fails XFS preparation.
+When reusing binaries, the Lima launcher also mounts the checksum file's report
+directory writable at its original absolute path and exposes external symlink
+targets. Directories already covered by the checkout need no separate mount.
+Native snapshot provenance must read the original nextest
+metadata there, including when CI places reports under `RUNNER_TEMP`. Mount
+changes apply when a VM starts; stop an already-running VM before changing the
+report directory.
 
 Parallel execution is the default. Worker tests overlap service compilation,
-then service and CLI tests. Lint and Bash checks run in the exclusive tail,
-after all stateful lanes finish, including recovery. This keeps their compilation
-and filesystem traffic out of the database-backed test window. Ordinary lane
-failures still admit these independent checks. They run once per cycle and retain
-their existing progress identities. Lint and Bash limit Cargo, native test
-harnesses and Bash conformance to four workers; the Bash compatibility container
-also has a four-CPU quota.
-Bash uses a separate persistent Cargo target, including its conformance examples.
-It cannot overwrite native service or executor outputs. Lint skips the WIT sync
-already completed during preparation. Neither check overlaps a native producer.
-The four-worker cap applies in both parallel and serial modes.
+then service and CLI tests. All final-check lanes wait for every stateful lane,
+including recovery. This keeps compiler and filesystem traffic out of the
+database-backed test window. Ordinary lane failures still admit independent
+checks. Root-target writers run serially in one final lane; source checks, Rust
+SDK checks, Bash and language/tool checks have separate lanes. Rust SDK tool/UI
+tests remain serial because they share a target. Dev-tools compilation precedes
+Go binding generation in the language lane. Docs generators share the root lane
+because their format step writes the docs tree. Each lane collects failures.
+XFS and Docker run serially only after all these lanes join.
+
+Final-check lanes limit Cargo and native test harnesses to four workers in both
+parallel and serial modes; Bash conformance also uses four workers and its
+compatibility container has a four-CPU quota. These are separate concurrency
+controls, not a claim that each lane consumes only four CPUs. Bash keeps a
+separate persistent Cargo target, including its conformance examples. WIT and
+SDK producers are not rerun under consumers. Formatting/lint failures fail the
+final verdict without preventing independent checks or tests inside the mixed
+SDK, Bash and schema tasks when `CI=true`. Local invocations of these validators
+fail at the first failed check. The `ci` cargo-make profile selects build and test
+settings but does not set `CI`; GitHub Actions supplies it in CI.
 
 Groups within each stateful subflow remain serial. The ceiling is three stateful
 subflows, not another executor or a dynamic scheduler. Once workers finish,
@@ -173,17 +212,24 @@ does not extend the workflow's 300-minute budget. Compilation and exclusive
 checks retain the workflow deadline rather than the shorter test-task limit.
 
 General workers retain test-r's hardware-derived concurrency. Keep the dedicated
-storage-quota single-thread and tool-streaming eight-thread limits. Service
+storage-quota single-thread and tool-streaming eight-thread limits. The four
+`latency` tests run one at a time after the parallel workloads and checks join,
+before XFS and Docker validation. Their wall-clock assertions must not measure
+unrelated compilation, service tests or memory stress. Their internal fan-out,
+timer races and timing budgets are unchanged. Service
 invocations share fixed dependency ports and include cluster restarts, so their
 single-thread limits are not an invitation to remove them globally. PostgreSQL
 API group 2 uses two threads after repeated full-selection qualification with
 fresh dependencies; the SQLite API and recovery invocations stay single-threaded.
 CLI's four concurrent tests each start servers and can run parallel compilers.
 Evaluate any increase using CPU and memory samples, not the number of test threads alone.
-The current 20-job native Cargo cap is not the main observed bottleneck: general
-and executor compilation used fewer than 20 host CPUs in over 90% of samples in
-acceptance 44267744093. Keep heavy native producers ordered and preserve their
-different feature selections. Metadata listing uses `--tests`, not `--bins`, so
+Preparation producers can use 32 Cargo jobs through `MAIN_VALIDATION_BUILD_JOBS`.
+Acceptance exposes a `build-jobs` choice of 20 or 32 for same-source comparisons.
+The service producer retains 20 while it overlaps runtime worker tests. Neither
+limit is a CPU quota, and the larger solo-producer limit is not a measured
+speedup: general and executor compilation used fewer than 20 host CPUs in over
+90% of samples in acceptance 44267744093. Keep heavy native producers ordered and
+preserve their different feature selections. Metadata listing uses `--tests`, not `--bins`, so
 nextest does not force additional test-mode builds of `test = false` binaries.
 
 Offsets are 0 for worker tests, 10000 for the main service branch, 20000 for CLI
@@ -222,8 +268,13 @@ the real test identities or resource envelope.
 General unit and grouped worker/service/CLI tests use `--retry-failed 2` and
 disable suite-wide `--flaky-run` in this flow. Other direct test commands and
 standalone SDK/APFS/XFS runners keep their own retry/report behavior. Ordinary
-CI keeps its default arguments. test-r 3.0.15 and cargo-test-r 2.2.11 supply the
-required retry and local metadata support.
+CI keeps its default arguments. test-r 3.0.16 and cargo-test-r 2.2.14 supply the
+prebuilt selection, snapshots, lifecycle events and report indexing. Main
+validation explicitly uses `--no-fail-fast`; local tasks keep the runner's
+fail-fast default. Each prebuilt invocation has a 60-minute deadline and a
+10-second kill grace. This does not replace the separate 60-minute budget for
+each worker/service/CLI cargo-make group. Cleanup and evidence upload require
+headroom beyond either deadline.
 
 Collect all UUID-suffixed CTRF files, not just the requested logfile name. Linux
 and APFS artifacts upload even after failure. A green commit status requires both
@@ -235,10 +286,147 @@ remain visible in the job logs.
 
 ## Linux task progress and diagnostic logs
 
-Actions wraps the same cargo-make command with `progress.py observe`. The helper
+The validation helpers and observer use the explicitly typechecked Effect
+TypeScript package in this directory. Install with `npm ci --ignore-scripts
+--prefix .github/main-validation`; run `npm run check --prefix
+.github/main-validation` and `bun test ./.github/main-validation --timeout 180000`.
+`check` runs strict typechecking, oxlint and dprint. `npm run format --prefix
+.github/main-validation` applies the formatter. The formatter follows Effect's
+two-space, 120-column, double-quoted, semicolon-free style. The lint rules use
+Effect's native oxlint conventions plus a ban on explicit `any`; the unpublished
+Effect-specific plugin is not a dependency. The pre-existing Amp event plugin
+keeps its separate host-provided API and is outside this package's checks.
+CI installs dependencies separately for selected-source task helpers and the
+control-checkout observer wrapper. Never load helper imports from the other
+checkout. The standalone release-tooling tests run the contract fixtures; these
+execute local stubs, processes, temporary Git histories and real ELF fixtures,
+not the Golem workload or external reporting services.
+
+Python remains a prerequisite for shared tooling reached by validation, including
+Bash conformance and Docker archive inspection. Removing these flow-owned
+helpers does not authorize removal of the shared toolchain. Generic executable
+selection, snapshot verification, binary lifecycle, invocation deadlines and
+descendant cleanup now belong to cargo-test-r. APFS and standalone XFS builds
+provide `cargo metadata` authority to native Cargo-message selection, with exact
+binary IDs, exact-one count assertions and executable-path output. Native checks
+bind every selected raw artifact to its package, manifest, source and target
+before deduplication; stale executable timestamps never select a test binary.
+The adapter chooses whole-group deadlines and passes non-Rust commands to native
+`cargo-test-r exec`. It retains raw logs, task progress, resource sampling and
+dashboard transport. cargo-make still owns
+producer gating, lane joins and failure aggregation.
+
+Runner events are retained under `runner-events/`, joined to task IDs with a
+unique invocation suffix. The observer calls `cargo-test-r inspect-events` to
+validate lifecycle records and retain partial evidence. It uses indexed actual
+CTRF paths rather than guessing UUID report names from console output. Artifact
+confinement and actual CTRF file validation remain in the observer. A binary attempt is not a
+test retry: retry evidence remains in CTRF `extra.testR.attempts`. Null report
+identity, empty/missing/unreadable reports, skipped binaries and unfinished or
+truncated streams remain explicit evidence limits; they never change the
+workload exit status. Non-runner commands still use their existing log evidence.
+
+Upstream snapshot creation requires nextest metadata on Linux/glibc. Each preparation
+command has a ten-minute scoped budget for the complete pool's copying, hashing
+and loader inspection. This is a conservative preparation bound, not a measured
+production throughput guarantee or a per-loader timeout. Passing `--deadline 10m
+--kill-grace 10s` opts preparation commands into native supervision, including
+blocked metadata reads, hashing and loader inspection. Snapshots pin linked
+library hashes but do not copy libraries or freeze working-directory data; keep
+the loader environment stable. Verification is not a security boundary against
+concurrent writes. Unlike supervised `verify`, `run` loads and verifies its input
+synchronously before binary execution; its invocation deadline alone cannot
+interrupt a blocked verification operation. Linux cleanup covers adopted
+descendants, not processes launched by Docker or a service manager. macOS only
+has process-group containment. These limits do not remove the outer supervisor.
+
+On Linux, each supervised task runs under two nested native `exec` subreapers.
+The published PID identifies the inner supervisor. If it dies abruptly, the outer
+supervisor adopts and drains its descendants, including processes that changed
+sessions. If the outer supervisor dies, the adapter signals and joins the inner
+group before task completion and log compression. A short private PID handoff
+identifies that group before the command gate opens; the workload does not inherit
+the handoff descriptor. Generic supervision stays native, with no Bun FFI helper.
+
+The adapter bounds PID acquisition from entry to `supervise`, using the configured
+task budget or a 30-second fallback when the wrapper has no task deadline. Startup
+expiry closes the command gate, requests TERM and escalates to KILL after the
+adapter grace. It returns 124 and retains failed terminal evidence without running
+the workload. A handoff that arrives after expiry is retained only for cleanup;
+it is never published or released. The acquisition clock stops at a valid on-time
+handoff, not at command completion, so it cannot overwrite completed workload
+exits during native cleanup. External cancellation retains its signal status.
+
+The adapter keeps acquisition expiry, final settlement and cancellation escalation
+in a scoped fiber while the PID handoff or progress publication is pending. If the
+launcher does not respond to TERM or INT within the adapter grace, the fiber kills
+it, attempts a bounded exit join, and closes the command gate and handoff reader.
+Finalization also closes the reader before joining identity acquisition. This
+prevents a stopped startup owner or retained writer from blocking cancellation.
+After acquisition, the fiber bounds only final owner settlement, not the ordinary
+workload deadline or descendant discovery; native supervisors still own those
+operations. Progress publication remains joined before terminal task evidence is
+written.
+
+The inner supervisor enforces the 60-minute worker/service/CLI budget even if the
+outer supervisor dies. The outer supervisor drains immediately if the inner one
+dies, and has a later native safety ceiling if the inner one stops responding.
+That ceiling is the task budget plus the native TERM grace, two seconds for the
+inner KILL drain, and two seconds for nested startup and observation. With the
+default 15-second adapter grace, the native TERM grace is 13 seconds and the
+outer ceiling is 60 minutes plus 17 seconds. Outer cleanup can then take its own
+TERM grace and two-second KILL drain. These bounded allowances do not extend the
+ordinary task deadline. Giving both scopes the same deadline would incorrectly
+replace an established command exit status with a timeout while the inner scope
+drains descendants. Completed exits survive normal bounded cleanup; an inner
+scope that has not returned before the safety ceiling is forcibly timed out.
+The adapter reserves two seconds of the cleanup grace for draining children after
+escalation; ordinary runner cleanup retains its own ten-second grace. Neither
+scope selects or schedules binaries.
+
+Timed tasks also have an independent adapter settlement cutoff, measured once
+from entry to `supervise`. It is the outer native ceiling plus the native TERM
+grace, two seconds for outer KILL drain and two seconds for launch/observation.
+With task budget T and native TERM grace G, that is T + 2G + 8 seconds from entry;
+the default cutoff is 60 minutes plus 34 seconds. Handoff, gate release and owner
+failure do not restart it. Untimed commands get no final settlement cutoff.
+This fallback bounds waiting for a native owner that cannot respond, including
+a stopped outer owner after handoff. It does not replace the ordinary native
+deadline or infer a command result hidden inside a stopped supervisor.
+
+An outer result already observed wins over late cutoff observation, including
+0, 7 and unexpected-owner-death 137. Otherwise settlement expiry selects 124,
+records a supervision-settlement diagnostic in the task log, closes the gate
+and initiates bounded TERM/KILL teardown. The internal KILL cannot replace that
+124 with 137; external TERM/INT retains precedence. The existing finalizer drains
+the known owners and closes the handoff reader. Counting escalation and both
+owner finalizers conservatively adds at most three adapter grace periods plus
+six seconds after the cutoff, plus polling/scheduling latency. With the default
+15-second grace, this process-phase allowance ends at 61 minutes 25 seconds from
+entry. Joined filesystem publication/log I/O and uninterruptible kernel waits
+remain outside that process-phase bound.
+
+Simultaneously killing both native owners can still prevent cleanup. This is not
+kernel-enforced containment of the observer or processes launched by Docker or a
+service manager; macOS has process-group containment, not Linux orphan adoption.
+
+### Native command and event inspection tooling
+
+The Linux setup, APFS, release preparation and Lima tooling pin cargo-test-r
+2.2.14. This release supplies `exec` and `inspect-events`. Provision the same
+version on the observer host before updating its checkout. No test-r library
+bump is required by these CLI features. Main validation checks native
+capabilities and does not fall back to the removed TypeScript implementations.
+
+Local validation can put the published cargo-test-r executable first on `PATH`
+when running the tooling tests. The inspector is a read-only executable on the
+observer host; it does not require a Golem or Rust build toolchain there. An
+unavailable inspector records incomplete evidence instead of guessing from logs.
+
+Actions wraps the same cargo-make command with `bun progress.ts observe`. The helper
 does not select, schedule or retry tasks. The task lists in the Makefile drive
 both execution and the initial progress plan. Each existing task invocation runs
-through `progress.py run`, which records its PID, start, completion and exit code.
+through `bun progress.ts run`, which records its PID, start, completion and exit code.
 The console shows task transitions, counts, active elapsed times and a heartbeat
 every 30 seconds. Failure excerpts are bounded; the original output is not.
 Counts describe cargo-make tasks, not individual tests or an estimated time left.
@@ -278,8 +466,8 @@ processes are not a credential isolation boundary. Progress is untrusted telemet
 only observer evidence establishes the source for commit comparisons. Publication
 uses a bounded HTTPS request every 30 seconds and once at completion; a failed
 publication does not change the command result. Without these settings, local
-progress, the job summary and retained artifacts still work. The observer keeps
-its independent 30-minute schedule and never executes this helper. Enabling the
+progress, the job summary and retained artifacts still work. The observer's
+completion webhook never executes this helper. Enabling the
 credential and deploying the endpoint require operator authorization.
 
 ## Exact requests and releases

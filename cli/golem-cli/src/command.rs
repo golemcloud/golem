@@ -22,6 +22,7 @@ use crate::command::card::CardSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
+use crate::command::invocation::InvocationSubcommand;
 use crate::command::mcp::McpSubcommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
@@ -704,7 +705,7 @@ pub enum GolemCliSubcommand {
         /// Path to the package archive
         file: PathBuf,
     },
-    /// Preview a package's OCI manifest digest without contacting a server
+    /// Preview a package's OCI manifest digest and omitted exports without contacting a server
     Publish {
         /// Compute the digest locally without saving an archive or publishing it
         #[arg(long, required = true)]
@@ -957,6 +958,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: AgentSubcommand,
     },
+    /// Inspect and cancel agent invocations
+    Invocation {
+        #[clap(subcommand)]
+        subcommand: InvocationSubcommand,
+    },
     /// Manage deployed agent types
     AgentType {
         #[clap(subcommand)]
@@ -1042,6 +1048,8 @@ pub enum GolemCliSubcommand {
 #[derive(clap::Subcommand, Debug, Clone)]
 pub enum PackageSubcommand {
     /// Pack the application's built components into a local OCI archive
+    ///
+    /// HTTP API and MCP deployments are omitted and reported by kind and domain.
     Pack {
         /// Destination tar file
         #[arg(short, long, default_value = "golem-package.tar")]
@@ -1151,7 +1159,9 @@ pub mod shared_args {
     pub struct OplogExportArgs {
         /// Export an obfuscated report: customer values become tokens. Tokens are equal only inside
         /// one export, because each CLI process draws a new random key. The report is for reading,
-        /// not for replay.
+        /// not for replay. Agent IDs, the agent type name of the exported agent and fingerprints
+        /// are shown in clear. A reader who knows the environment ID can test a guessed key of a
+        /// keyed agent against its agent ID.
         #[arg(long)]
         pub obfuscate: bool,
         /// Show numbers, bools, datetimes, durations and the mantissa, scale and unit of quantities
@@ -1984,14 +1994,6 @@ pub mod worker {
             )]
             number_of_invocations: Option<u64>,
         },
-        /// Cancels an enqueued invocation if it has not started yet
-        #[command(after_help = crate::command_examples::AGENT_CANCEL_INVOCATION)]
-        CancelInvocation {
-            #[command(flatten)]
-            agent_id: AgentIdArgs,
-            /// Idempotency key of the invocation to be cancelled
-            idempotency_key: IdempotencyKey,
-        },
         /// List files in an agent's directory.
         ///
         /// The path is resolved inside the agent's guest filesystem (the
@@ -2688,6 +2690,115 @@ pub mod resource_definition {
         /// List quota resource definitions in the environment
         #[command(after_help = crate::command_examples::RESOURCE_LIST)]
         List,
+    }
+}
+
+pub mod invocation {
+    use crate::model::agent::RawAgentId;
+    use chrono::{DateTime, Utc};
+    use clap::{Args, Subcommand, ValueEnum};
+
+    #[derive(Debug, Subcommand)]
+    pub enum InvocationSubcommand {
+        /// Show an invocation, its state and its result
+        ///
+        /// Select the invocation by its ID, or by its agent and idempotency key. Exits with code
+        /// 130 when the invocation was cancelled.
+        #[command(after_help = crate::command_examples::INVOCATION_GET)]
+        Get {
+            #[command(flatten)]
+            selector: InvocationSelector,
+        },
+        /// List the invocations of an agent, newest change first
+        #[command(after_help = crate::command_examples::INVOCATION_LIST)]
+        List {
+            /// The agent whose invocations are listed
+            #[arg(
+                long,
+                help = crate::command_glossary::AGENT_ID_SHORT,
+                long_help = crate::command_glossary::AGENT_ID_LONG,
+                verbatim_doc_comment,
+            )]
+            agent: RawAgentId,
+            /// Only invocations of this method name, or of `tool:<tool>/<command path>`
+            #[arg(long)]
+            operation: Option<String>,
+            /// Only invocations in one of these states; can be repeated
+            #[arg(long, value_enum)]
+            status: Vec<InvocationStateArg>,
+            /// Only invocations of this kind
+            #[arg(long, value_enum)]
+            kind: Option<InvocationKindArg>,
+            /// Only invocations whose last change is at or after this time (RFC 3339)
+            #[arg(long)]
+            since: Option<DateTime<Utc>>,
+            /// Only invocations whose last change is at or before this time (RFC 3339)
+            #[arg(long)]
+            until: Option<DateTime<Utc>>,
+            /// Invocations per page, at most 1000; the server default is 100
+            #[arg(long)]
+            page_size: Option<u32>,
+            /// Continue from the cursor printed by an earlier page
+            #[arg(long)]
+            cursor: Option<String>,
+        },
+        /// Cancel a pending or scheduled invocation
+        ///
+        /// Select the invocation by its ID, or by its agent and idempotency key. A running
+        /// invocation cannot be cancelled. Prints the invocation's state after the cancel.
+        #[command(after_help = crate::command_examples::INVOCATION_CANCEL)]
+        Cancel {
+            #[command(flatten)]
+            selector: InvocationSelector,
+        },
+    }
+
+    #[derive(Debug, Args)]
+    pub struct InvocationSelector {
+        /// Invocation ID, `<agent ID>.<UUID>`, as listed by
+        /// `invocation list`. It is resolved in the current environment; select another one with
+        /// `--environment`. Mutually exclusive with `--agent` and `--idempotency-key`.
+        #[arg(
+            required_unless_present = "agent",
+            conflicts_with_all = ["agent", "idempotency_key", "method"]
+        )]
+        pub invocation_id: Option<String>,
+        /// The agent that received the invocation; requires `--idempotency-key`
+        #[arg(
+            long,
+            requires = "idempotency_key",
+            help = crate::command_glossary::AGENT_ID_SHORT,
+            long_help = crate::command_glossary::AGENT_ID_LONG,
+            verbatim_doc_comment,
+        )]
+        pub agent: Option<RawAgentId>,
+        /// The idempotency key the invocation was made with; requires `--agent`
+        #[arg(long, requires = "agent")]
+        pub idempotency_key: Option<String>,
+        /// The method or `tool:<tool>/<command path>`, when the same key was used for more than
+        /// one operation on the agent
+        #[arg(long, requires = "idempotency_key")]
+        pub method: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+    pub enum InvocationStateArg {
+        Scheduled,
+        Pending,
+        Running,
+        Waiting,
+        Retrying,
+        Interrupted,
+        Completed,
+        Failed,
+        Cancelled,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+    pub enum InvocationKindArg {
+        Method,
+        Constructor,
+        Tool,
     }
 }
 

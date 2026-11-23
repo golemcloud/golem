@@ -246,11 +246,31 @@ const createProgram = Effect.gen(function* () {
 `getById` never creates an agent: an unknown ID, or the ID of an agent of another type, rejects
 with a `GolemServiceError` of status 404. `create` takes the options
 `{ keyed?, config?, env? }` after the agent id values: `keyed: true` creates the keyed agent and
-rejects with status 409 when it exists, `config` sets local configuration values, and `env` adds
+rejects with `GolemConflictError` (a `GolemServiceError` subclass with status 409) when it exists,
+`config` sets local configuration values, and `env` adds
 environment variables. `upsert` takes no configuration. Ephemeral agents have only `upsert`. Read
 the generated declarations because configuration options reflect the agent's exact schema.
 
-Generated remote methods are callable Promises for invoke-and-await and expose
+The `bridge.ts.external` Promise client used above rejects with that error from
+`@golemcloud/golem-ts-bridge`. The shorthand `Effect.tryPromise(() => ...)` wraps the rejection in
+`UnknownError`; inspect its `cause` for the original `GolemConflictError`, or use the object form
+with an explicit `catch` mapper to preserve and type the conflict in the error channel.
+
+For a client generated with `bridge.effect.external`, `create` instead returns
+`Effect.Effect<MyAgent, GolemConflictError | Error>` and preserves the conflict directly in its
+typed error channel. Do not wrap this Effect in `Effect.tryPromise`. Handle the conflict with
+`Effect.catchTag`:
+
+```typescript
+// MyAgent is imported from the generated Effect client, not the Promise client.
+const createProgram = MyAgent.create("my-instance", { keyed: true }).pipe(
+  Effect.catchTag("GolemConflictError", (error) =>
+    Console.log("Keyed agent already exists:", error.status, error.body),
+  ),
+);
+```
+
+For the Promise client, generated remote methods are callable Promises for invoke-and-await and expose
 `abortable(signal, ...args)`. Durable non-streaming methods also expose `trigger(...args)` and
 `schedule(isoTimestamp, ...args)`, which return `void`. Ephemeral trigger/schedule operations return
 `Promise<InvocationReceipt>`. Streaming methods do not expose trigger or schedule variants.

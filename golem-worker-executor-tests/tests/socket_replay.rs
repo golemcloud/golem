@@ -22,6 +22,24 @@
 //! the durable sockets plan, the test says so and names the ticket that changes it.
 
 use crate::Tracing;
+#[cfg(target_os = "linux")]
+mod platform {
+    pub(super) fn assert_write_reset(error: &str) {
+        assert_ne!(error, "closed", "Linux reports the reset");
+    }
+
+    pub(super) fn assert_read_reset(read: &Result<Vec<u8>, String>) {
+        assert!(read.is_err(), "the read reports the reset: {read:?}");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    pub(super) fn assert_write_reset(_error: &str) {}
+
+    pub(super) fn assert_read_reset(_read: &Result<Vec<u8>, String>) {}
+}
+
 use golem_common::model::agent::{
     ParsedAgentKey, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
 };
@@ -907,51 +925,861 @@ async fn p3_udp_completed_exchange_replays_without_contacting_the_peer(
     session.finish().await
 }
 
-/// P2 TCP records only the permission check of a connect, and the reads and writes run
-/// natively also on replay. Replay therefore connects again and sends again, and the replayed
-/// read gets whatever the peer answers now. This replay succeeds only because the peer answers
-/// the same and the agent returns no address: a different answer or a returned local port makes
-/// the replayed invocation diverge. SK-09 and SK-10 (GOL-1182, GOL-1183) replace this with
-/// recorded results and a visible loss.
+/// A completed P2 TCP connect replays from its recorded `finish-connect` result. Replay does not
+/// connect again, and `local-address` returns the recorded address, so an invocation that
+/// returned it replays without divergence. A second socket, created after the first replayed
+/// `finish-connect`, keeps its own address too. The streams of a replayed connection are lost:
+/// the next write fails with `connection-reset`, the P2 code for a lost connection, and the peer
+/// gets nothing.
 #[test]
 #[timeout("3m")]
-async fn p2_tcp_replay_connects_and_sends_again(
+async fn p2_tcp_completed_connect_replays_without_connecting_again(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"", Reply::Fixed("pong")).await?;
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
     let mut session =
         Session::start(deps, &context, host_api_tests, sockets(), "p2-tcp-replay").await?;
 
-    let _: Result<(), String> = session
-        .call("p2_tcp_connect", data_value!("a".to_string(), peer.port))
+    let mut addresses = Vec::new();
+    for slot in ["a", "b"] {
+        let connected: Result<(), String> = session
+            .call("p2_tcp_connect", data_value!(slot.to_string(), peer.port))
+            .await?;
+        assert_eq!(connected, Ok(()));
+        let address: Result<String, String> = session
+            .call("p2_tcp_local_address", data_value!(slot.to_string()))
+            .await?;
+        addresses.push(address.map_err(anyhow::Error::msg)?);
+    }
+    assert_ne!(addresses[0], addresses[1]);
+    peer.wait_until("two connections", |connections| connections.len() == 2)
         .await?;
+
+    session.restart_executor().await?;
+    for (slot, before) in ["a", "b"].into_iter().zip(&addresses) {
+        let after: Result<String, String> = session
+            .call("p2_tcp_local_address", data_value!(slot.to_string()))
+            .await?;
+        assert_eq!(after.as_ref(), Ok(before), "local address of slot {slot}");
+    }
+    assert_eq!(peer.connections().len(), 2, "replay does not connect again");
+    assert_eq!(
+        session.starts("sockets::tcp::finish_connect").await?,
+        2,
+        "replay records no new finish-connect"
+    );
+
     let sent: Result<(), String> = session
         .call(
             "p2_tcp_send",
             data_value!("a".to_string(), b"ping\n".to_vec()),
         )
         .await?;
-    assert_eq!(sent, Ok(()));
-    let answer: Result<Vec<u8>, String> = session
-        .call("p2_tcp_receive", data_value!("a".to_string(), 5u32))
+    assert_eq!(
+        sent,
+        Err("last-operation-failed: connection reset".to_string()),
+        "the lost connection reports connection-reset"
+    );
+    let received: Result<Vec<u8>, String> = session
+        .call("p2_tcp_receive", data_value!("b".to_string(), 1u32))
         .await?;
-    assert_eq!(answer, Ok(b"pong\n".to_vec()));
-    assert_eq!(peer.connections().len(), 1);
+    assert_eq!(
+        received,
+        Err("last-operation-failed: connection reset".to_string()),
+        "the lost connection reports connection-reset"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        peer.connections()
+            .iter()
+            .all(|connection| connection.received.is_empty()),
+        "a lost connection sends nothing"
+    );
+    session.finish().await
+}
+
+/// The End entries of the durable calls named `function_name`, rendered.
+fn ends_of(entries: &[PublicOplogEntry], function_name: &str) -> Vec<String> {
+    let starts: Vec<_> = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| match entry {
+            PublicOplogEntry::Start(start) if start.function_name == function_name => {
+                Some(OplogIndex::from_u64(index as u64 + 1))
+            }
+            _ => None,
+        })
+        .collect();
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            PublicOplogEntry::End(end) if starts.contains(&end.start_index) => {
+                Some(format!("{end:?}"))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A P2 write right after the connect, with `blocking-write-and-flush`, reaches the peer once.
+/// The oplog records only the count of the written bytes. After a restart, replay returns the
+/// recorded result without sending again, and the peer still has one copy on one connection.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_sent_bytes_reach_the_peer_once_across_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-tcp-send-once",
+    )
+    .await?;
+
+    let connected: Result<(), String> = session
+        .call("p2_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let sent: Result<(), String> = session
+        .call(
+            "p2_tcp_send_blocking",
+            data_value!("a".to_string(), b"hello".to_vec()),
+        )
+        .await?;
+    assert_eq!(
+        sent,
+        Ok(()),
+        "the first write after the connect needs no budget wait"
+    );
+    peer.wait_until("the peer received hello", |connections| {
+        connections.len() == 1 && connections[0].received == b"hello"
+    })
+    .await?;
+    let write = "sockets::tcp::output_stream::blocking_write_and_flush";
+    let ends = ends_of(&session.oplog().await?, write);
+    assert_eq!(ends.len(), 1, "one recorded write");
+    assert!(
+        !ends[0].contains("104, 101, 108, 108, 111"),
+        "the write records no bytes: {}",
+        ends[0]
+    );
+
+    session.restart_executor().await?;
+    let sends: Vec<Result<(), String>> = session.call("sends", data_value!()).await?;
+    assert_eq!(sends, vec![Ok(())], "replay returns the recorded write");
+    assert_eq!(session.starts(write).await?, 1, "replay writes nothing");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let connections = peer.connections();
+    assert_eq!(connections.len(), 1, "replay does not connect again");
+    assert_eq!(connections[0].received, b"hello", "the peer got one copy");
+    session.finish().await
+}
+
+/// A P2 `blocking-splice` into a TCP output sends its bytes before it returns, as Wasmtime's
+/// does. The agent splices a file of 1 MiB into a connection with a small send buffer and drops
+/// the socket right after the last splice. The peer has a receive buffer of 4 KiB and reads 4 KiB
+/// every 10 ms, so the last write is still in progress at the drop unless the splice waited for it.
+/// The peer gets every byte.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_blocking_splice_sends_all_bytes_before_it_returns(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const LEN: usize = 1024 * 1024;
+    let context = TestContext::new(last_unique_id);
+    let listener = tokio::net::TcpSocket::new_v4()?;
+    listener.set_recv_buffer_size(4096)?;
+    listener.bind("127.0.0.1:0".parse()?)?;
+    let listener = listener.listen(1)?;
+    let port = listener.local_addr()?.port();
+    let peer = AbortOnDropHandle::new(tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let mut received = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            match stream.read(&mut buffer).await? {
+                0 => break,
+                n => received.extend_from_slice(&buffer[..n]),
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        anyhow::Ok(received)
+    }));
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-tcp-splice-flush",
+    )
+    .await?;
+
+    let spliced: Result<u64, String> = session
+        .call("p2_tcp_blocking_splice_file", data_value!(port, LEN as u32))
+        .await?;
+    assert_eq!(spliced, Ok(LEN as u64));
+    let received = tokio::time::timeout(WAIT, peer).await???;
+    let expected: Vec<u8> = (0..LEN).map(|i| (i % 251) as u8).collect();
+    assert_eq!(received.len(), LEN, "the peer got every spliced byte");
+    assert!(received == expected, "the peer got the bytes in order");
+    session.finish().await
+}
+
+/// A completed P2 read replays from the oplog with the peer gone: the agent gets back the bytes
+/// it read, and replay starts no read and no connection.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_completed_read_replays_with_the_peer_silent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"abc", Reply::Silent).await?;
+    let port = peer.port;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-tcp-read-replay",
+    )
+    .await?;
+
+    let _: Result<(), String> = session
+        .call("p2_tcp_connect", data_value!("a".to_string(), port))
+        .await?;
+    let first: Result<Vec<u8>, String> = session
+        .call("p2_tcp_receive", data_value!("a".to_string(), 3u32))
+        .await?;
+    assert_eq!(first, Ok(b"abc".to_vec()));
+    let read = "sockets::tcp::input_stream::blocking_read";
+    let reads = session.starts(read).await?;
+    assert!(reads >= 1, "the read is recorded");
+    drop(peer);
 
     session.restart_executor().await?;
     let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
-    assert_eq!(log, vec![received("a", b"pong\n")]);
-    let connections = peer.connections();
-    assert_eq!(connections.len(), 2, "replay connects again");
     assert_eq!(
-        connections[1].received,
-        b"ping\n".to_vec(),
-        "replay sends again"
+        log,
+        vec![received("a", b"abc")],
+        "replay returns the bytes read"
     );
+    assert_eq!(session.starts(read).await?, reads, "replay reads nothing");
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_err(),
+        "the peer is gone"
+    );
+    session.finish().await
+}
+
+/// A write error is recorded and returned. After the peer resets the connection, a write fails,
+/// and the oplog records the socket error code of the native stream; replay after a restart
+/// returns the same results, with the same error, and the peer saw the first message once and
+/// nothing after it.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_write_error_replays_and_is_not_sent_again(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let peer = AbortOnDropHandle::new(tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let mut first = [0u8; 3];
+        stream.read_exact(&mut first).await?;
+        // Linger zero: the close resets the connection.
+        stream.set_zero_linger()?;
+        drop(stream);
+        let again = tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
+        Ok::<_, anyhow::Error>((first.to_vec(), again.is_ok()))
+    }));
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-tcp-write-error",
+    )
+    .await?;
+
+    let _: Result<(), String> = session
+        .call("p2_tcp_connect", data_value!("a".to_string(), port))
+        .await?;
+    let first: Result<(), String> = session
+        .call(
+            "p2_tcp_send_blocking",
+            data_value!("a".to_string(), b"one".to_vec()),
+        )
+        .await?;
+    assert_eq!(first, Ok(()));
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let next: Result<(), String> = session
+            .call(
+                "p2_tcp_send_blocking",
+                data_value!("a".to_string(), b"two".to_vec()),
+            )
+            .await?;
+        if next.is_err() {
+            break;
+        }
+        assert!(attempts < 20, "a write after the reset fails");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let live: Vec<Result<(), String>> = session.call("sends", data_value!()).await?;
+    let error = live.last().unwrap().clone().unwrap_err();
+    let (got, reconnected) = peer.await??;
+    assert_eq!(got, b"one".to_vec());
+    assert!(!reconnected, "no second connection");
+    let ends = ends_of(
+        &session.oplog().await?,
+        "sockets::tcp::output_stream::blocking_write_and_flush",
+    );
+    let failed = ends
+        .iter()
+        .find(|end| end.contains("Result(Err {"))
+        .expect("the failed write is recorded");
+    // Linux reports the reset to the next write; macOS may report the stream closed instead,
+    // which has no code.
+    platform::assert_write_reset(&error);
+    if error != "closed" {
+        assert!(
+            error.starts_with("last-operation-failed: "),
+            "the write error is returned: {error}"
+        );
+        assert_records_reset_code(failed);
+    }
+
+    session.restart_executor().await?;
+    let replayed: Vec<Result<(), String>> = session.call("sends", data_value!()).await?;
+    assert_eq!(replayed, live, "replay returns the same results and error");
+    session.finish().await
+}
+
+/// Asserts that a rendered End records `connection-reset` or `connection-aborted`, the cases 15
+/// and 16 of the socket error code; `None` would mean that only the message was recorded.
+fn assert_records_reset_code(end: &str) {
+    assert!(
+        end.contains("Enum { case: 15 }") || end.contains("Enum { case: 16 }"),
+        "the failure records the socket error code of the native stream: {end}"
+    );
+}
+
+/// A read error is recorded with the socket error code of the native stream. The peer resets
+/// the connection while the agent waits in a read. A restart replays the recorded failure, so
+/// the next read of the lost stream reports it closed, as the native stream did.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_read_error_records_its_code_and_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let _peer = AbortOnDropHandle::new(tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        // Linger zero: the close resets the connection.
+        stream.set_zero_linger()?;
+        drop(stream);
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        Ok::<_, anyhow::Error>(())
+    }));
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-tcp-read-error",
+    )
+    .await?;
+
+    let connected: Result<(), String> = session
+        .call("p2_tcp_connect", data_value!("a".to_string(), port))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let read: Result<Vec<u8>, String> = session
+        .call("p2_tcp_receive", data_value!("a".to_string(), 3u32))
+        .await?;
+    // Linux reports the reset to the read; another OS may report the end of the stream, which
+    // the component returns as the bytes read so far.
+    platform::assert_read_reset(&read);
+    if read.is_err() {
+        let ends = ends_of(
+            &session.oplog().await?,
+            "sockets::tcp::input_stream::blocking_read",
+        );
+        let failed = ends
+            .iter()
+            .find(|end| end.contains("Result(Err {"))
+            .expect("the failed read is recorded");
+        assert_records_reset_code(failed);
+    }
+
+    session.restart_executor().await?;
+    let replayed: Result<Vec<u8>, String> = session
+        .call("p2_tcp_receive", data_value!("a".to_string(), 3u32))
+        .await?;
+    // The component returns a closed stream as the bytes read so far.
+    assert_eq!(
+        replayed,
+        Ok(Vec::new()),
+        "after the restart the replayed read failure leaves the lost stream closed"
+    );
+    session.finish().await
+}
+
+/// A `write` beyond the permit of `check-write` is a bug of the guest. The native stream traps,
+/// and the trap fails the invocation permanently: no retry replays the connect into a lost
+/// stream that would turn the bug into a lost connection.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_write_beyond_the_permit_fails_the_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-tcp-unpermitted",
+    )
+    .await?;
+
+    let connected: Result<(), String> = session
+        .call("p2_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let result = session
+        .executor()
+        .invoke_and_await_agent(
+            &session.component,
+            &session.agent_id,
+            "p2_tcp_write_unpermitted",
+            data_value!("a".to_string(), b"hello".to_vec()),
+        )
+        .await;
+    let error = format!(
+        "{:?}",
+        result.expect_err("the unpermitted write fails the invocation")
+    );
+    assert!(
+        error.contains("not permitted to write 5 bytes"),
+        "the invocation fails with the trap: {error}"
+    );
+    let ends = ends_of(
+        &session.oplog().await?,
+        "sockets::tcp::output_stream::write",
+    );
+    assert!(
+        ends.is_empty(),
+        "the unpermitted write completes with no recorded result: {ends:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        peer.connections()
+            .iter()
+            .all(|connection| connection.received.is_empty()),
+        "the peer gets nothing"
+    );
+    session.finish().await
+}
+
+/// Each `finish-connect` result is recorded, `would-block` too. Replay returns the same results
+/// in the same order, so the agent counts the same number of `would-block` results, with no native
+/// connect.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_connect_with_would_block_results_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-tcp-would-block",
+    )
+    .await?;
+
+    let would_block: Result<u32, String> = session
+        .call(
+            "p2_tcp_connect_counting",
+            data_value!("a".to_string(), peer.port),
+        )
+        .await?;
+    let would_block = would_block.map_err(anyhow::Error::msg)?;
+    assert!(would_block >= 1, "the first finish-connect would block");
+    let finishes = session.starts("sockets::tcp::finish_connect").await?;
+    assert_eq!(finishes, would_block as usize + 1);
+    let before: Result<String, String> = session
+        .call("p2_tcp_local_address", data_value!("a".to_string()))
+        .await?;
+    let before = before.map_err(anyhow::Error::msg)?;
+
+    session.restart_executor().await?;
+    let after: Result<String, String> = session
+        .call("p2_tcp_local_address", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(after, Ok(before));
+    assert_eq!(
+        session.starts("sockets::tcp::finish_connect").await?,
+        finishes
+    );
+    assert_eq!(peer.connections().len(), 1, "replay does not connect again");
+    session.finish().await
+}
+
+/// A peer that resets a P2 connection after the native connect and before `finish-connect` does
+/// not trap the call. The guest waits on the pollable in one invocation and calls `finish-connect`
+/// in the next, after the peer reset the connection with a zero linger. `finish-connect` returns
+/// the connection with the recorded connect target as its remote address, and the reset reaches
+/// the guest as an error of the connection, without an `Error` entry. Another P2 connection of the
+/// agent keeps working.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_peer_reset_before_finish_connect_does_not_trap(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let other = TcpPeer::start(b"", Reply::Silent).await?;
+    let resetting = TcpListener::bind("127.0.0.1:0").await?;
+    let resetting_port = resetting.local_addr()?.port();
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-reset-before-finish",
+    )
+    .await?;
+
+    let connected: Result<(), String> = session
+        .call(
+            "p2_tcp_connect",
+            data_value!("other".to_string(), other.port),
+        )
+        .await?;
+    assert_eq!(connected, Ok(()));
+
+    let started: Result<(), String> = session
+        .call(
+            "p2_tcp_start_connect",
+            data_value!("reset".to_string(), resetting_port),
+        )
+        .await?;
+    assert_eq!(started, Ok(()));
+    let (stream, _) = tokio::time::timeout(WAIT, resetting.accept()).await??;
+    stream.set_zero_linger()?;
+    drop(stream);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let finished: Result<(), String> = session
+        .call("p2_tcp_finish_connect", data_value!("reset".to_string()))
+        .await?;
+    if finished.is_ok() {
+        let received: Result<Vec<u8>, String> = session
+            .call("p2_tcp_receive", data_value!("reset".to_string(), 1u32))
+            .await?;
+        assert!(
+            received.is_err(),
+            "the reset reaches the guest: {received:?}"
+        );
+    }
+    assert!(
+        !session
+            .oplog()
+            .await?
+            .iter()
+            .any(|entry| matches!(entry, PublicOplogEntry::Error(_))),
+        "finish-connect after a peer reset does not trap"
+    );
+
+    let sent: Result<(), String> = session
+        .call(
+            "p2_tcp_send",
+            data_value!("other".to_string(), b"still-here\n".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(()), "the other connection keeps working");
+    other
+        .wait_until("the other peer gets the bytes", |connections| {
+            connections.len() == 1 && connections[0].received == b"still-here\n"
+        })
+        .await?;
+    session.finish().await
+}
+
+fn no_error_entry(oplog: &[PublicOplogEntry]) -> bool {
+    !oplog
+        .iter()
+        .any(|entry| matches!(entry, PublicOplogEntry::Error(_)))
+}
+
+/// A `finish-connect` whose connect started in an earlier Store completes with `connection-reset`,
+/// and that result replays: a further restart records no new `finish-connect` and does not
+/// connect.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_connect_started_before_a_restart_finishes_with_connection_reset(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-connect-across-restart",
+    )
+    .await?;
+    let started: Result<(), String> = session
+        .call(
+            "p2_tcp_start_connect",
+            data_value!("c".to_string(), peer.port),
+        )
+        .await?;
+    assert_eq!(started, Ok(()));
+    peer.wait_until("one connection", |connections| connections.len() == 1)
+        .await?;
+
+    session.restart_executor().await?;
+    let finished: Result<(), String> = session
+        .call("p2_tcp_finish_connect", data_value!("c".to_string()))
+        .await?;
+    assert!(
+        finished
+            .as_ref()
+            .is_err_and(|error| error.contains("connection-reset")),
+        "expected connection-reset, got {finished:?}"
+    );
+    assert!(no_error_entry(&session.oplog().await?));
+    let finishes = session.starts("sockets::tcp::finish_connect").await?;
+
+    session.restart_executor().await?;
+    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(log.is_empty());
+    assert_eq!(
+        session.starts("sockets::tcp::finish_connect").await?,
+        finishes,
+        "replay records no new finish-connect"
+    );
+    assert_eq!(peer.connections().len(), 1, "replay does not connect");
+    assert!(no_error_entry(&session.oplog().await?));
+    session.finish().await
+}
+
+/// The first operation on a stand-in stream of a replayed connection fails with
+/// `connection-reset`, and the next ones report `closed`. A further restart replays that sequence
+/// and a later operation still reports `closed`.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_lost_stream_reports_closed_after_its_first_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-lost-stream-closed",
+    )
+    .await?;
+    let connected: Result<(), String> = session
+        .call("p2_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    assert_eq!(connected, Ok(()));
+
+    session.restart_executor().await?;
+    let mut results = Vec::new();
+    for _ in 0..2 {
+        let sent: Result<(), String> = session
+            .call("p2_tcp_send", data_value!("a".to_string(), b"x".to_vec()))
+            .await?;
+        results.push(sent);
+    }
+    assert_eq!(
+        results,
+        vec![
+            Err("last-operation-failed: connection reset".to_string()),
+            Err("closed".to_string())
+        ]
+    );
+
+    session.restart_executor().await?;
+    let third: Result<(), String> = session
+        .call("p2_tcp_send", data_value!("a".to_string(), b"x".to_vec()))
+        .await?;
+    assert_eq!(third, Err("closed".to_string()));
+    assert!(no_error_entry(&session.oplog().await?));
+    assert_eq!(peer.connections().len(), 1, "replay does not connect");
+    session.finish().await
+}
+
+/// `start-bind` records the selected address and replay binds nothing. After a restart, the
+/// local addresses of a finished and of a pending bind do not change, `finish-bind` of the
+/// replayed pending bind succeeds once, a replayed bound socket refuses `start-connect` with
+/// `connection-reset`, and a replayed pending bind refuses it with `concurrency-conflict`. The
+/// peer sees no connection, and a further restart replays all of it.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_bind_replays_and_reconstructed_states_refuse_connect(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-bind-replay").await?;
+    let mut bound = Vec::new();
+    for (slot, finish) in [("done", true), ("pending", false), ("pending2", false)] {
+        let address: Result<String, String> = session
+            .call("p2_tcp_bind", data_value!(slot.to_string(), finish))
+            .await?;
+        bound.push((slot, address.map_err(anyhow::Error::msg)?));
+    }
+
+    session.restart_executor().await?;
+    for (slot, expected) in &bound {
+        let after: Result<String, String> = session
+            .call("p2_tcp_bound_local_address", data_value!(slot.to_string()))
+            .await?;
+        assert_eq!(after.as_ref(), Ok(expected), "local address of {slot}");
+    }
+    let finish_bind: Result<(), String> = session
+        .call("p2_tcp_finish_bind", data_value!("pending".to_string()))
+        .await?;
+    assert_eq!(
+        finish_bind,
+        Ok(()),
+        "finish-bind of a replayed pending bind"
+    );
+    let again: Result<(), String> = session
+        .call("p2_tcp_finish_bind", data_value!("pending".to_string()))
+        .await?;
+    assert!(
+        again
+            .as_ref()
+            .is_err_and(|error| error.contains("not-in-progress")),
+        "a second finish-bind: {again:?}"
+    );
+
+    let connect_done: Result<(), String> = session
+        .call(
+            "p2_tcp_connect_bound",
+            data_value!("done".to_string(), peer.port),
+        )
+        .await?;
+    assert!(
+        connect_done
+            .as_ref()
+            .is_err_and(|error| error.contains("connection-reset")),
+        "connect on a replayed bound socket: {connect_done:?}"
+    );
+    let connect_pending: Result<(), String> = session
+        .call(
+            "p2_tcp_connect_bound",
+            data_value!("pending2".to_string(), peer.port),
+        )
+        .await?;
+    assert!(
+        connect_pending
+            .as_ref()
+            .is_err_and(|error| error.contains("concurrency-conflict")),
+        "connect on a replayed pending bind: {connect_pending:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(peer.connections().len(), 0, "no native connect");
+
+    session.restart_executor().await?;
+    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(log.is_empty());
+    assert!(no_error_entry(&session.oplog().await?));
+    session.finish().await
+}
+
+/// S10 on P2: a read-only method cannot connect a P2 TCP socket. `start-connect` is a recorded
+/// write, so the read-only guard refuses it before any poll can drive the native connect.
+#[test]
+#[timeout("3m")]
+async fn s10_p2_connect_in_a_read_only_method_is_refused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let session = Session::start(deps, &context, host_api_tests, sockets(), "s10-p2").await?;
+    let result = session
+        .executor()
+        .invoke_and_await_agent(
+            &session.component,
+            &session.agent_id,
+            "p2_tcp_connect_read_only",
+            data_value!(peer.port),
+        )
+        .await;
+    let error = format!(
+        "{:?}",
+        result.expect_err("the read-only connect is refused")
+    );
+    assert!(
+        error.contains("sockets::tcp::start_connect"),
+        "the refusal names the host function: {error}"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(peer.connections().len(), 0, "the peer sees no connection");
     session.finish().await
 }
 
