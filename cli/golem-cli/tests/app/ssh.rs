@@ -115,68 +115,81 @@ impl BlockingCli {
         );
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
+}
 
-    // Runs the CLI with `input` on stdin and a stdout that takes nothing more: a socket that is
-    // full and does not wait. Gives the exit status and what was written to stderr.
-    #[cfg(unix)]
-    fn run_with_full_stdout(&self, args: &[&str], input: &str) -> anyhow::Result<(i32, String)> {
-        use std::io::Write;
-        use std::os::fd::OwnedFd;
-        use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+mod unix_process {
+    use super::*;
 
-        // The other end stays open and unread until the CLI has exited.
-        let (mut full, _unread) = UnixStream::pair()?;
-        full.set_nonblocking(true)?;
-        for size in [4096, 1] {
-            while full.write(&vec![0u8; size]).is_ok() {}
+    impl BlockingCli {
+        // Runs the CLI with `input` on stdin and a stdout that takes nothing more: a socket that is
+        // full and does not wait. Gives the exit status and what was written to stderr.
+        pub(super) fn run_with_full_stdout(
+            &self,
+            args: &[&str],
+            input: &str,
+        ) -> anyhow::Result<(i32, String)> {
+            use std::io::Write;
+            use std::os::fd::OwnedFd;
+            use std::os::unix::net::UnixStream;
+
+            // The other end stays open and unread until the CLI has exited.
+            let (mut full, _unread) = UnixStream::pair()?;
+            full.set_nonblocking(true)?;
+            for size in [4096, 1] {
+                while full.write(&vec![0u8; size]).is_ok() {}
+            }
+            let mut child = std::process::Command::new(&self.path)
+                .arg("--config-dir")
+                .arg(&self.config_dir)
+                .args(args)
+                .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+                .envs(&self.env)
+                .current_dir(&self.working_dir)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::from(OwnedFd::from(full)))
+                .stderr(Stdio::piped())
+                .spawn()?;
+            child
+                .stdin
+                .take()
+                .expect("stdin is piped")
+                .write_all(input.as_bytes())?;
+            let output = child.wait_with_output()?;
+            Ok((
+                output.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            ))
         }
-        let mut child = std::process::Command::new(&self.path)
-            .arg("--config-dir")
-            .arg(&self.config_dir)
-            .args(args)
-            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
-            .envs(&self.env)
-            .current_dir(&self.working_dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::from(OwnedFd::from(full)))
-            .stderr(Stdio::piped())
-            .spawn()?;
-        child
-            .stdin
-            .take()
-            .expect("stdin is piped")
-            .write_all(input.as_bytes())?;
-        let output = child.wait_with_output()?;
-        Ok((
-            output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ))
-    }
 
-    // Runs the CLI, sends it an interrupt after `wait`, and gives its exit status and stdout.
-    #[cfg(unix)]
-    fn run_and_interrupt(&self, args: &[&str], wait: Duration) -> anyhow::Result<(i32, String)> {
-        let child = std::process::Command::new(&self.path)
-            .arg("--config-dir")
-            .arg(&self.config_dir)
-            .args(args)
-            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
-            .envs(&self.env)
-            .current_dir(&self.working_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        std::thread::sleep(wait);
-        let sent = std::process::Command::new("kill")
-            .args(["-INT", &child.id().to_string()])
-            .status()?;
-        anyhow::ensure!(sent.success(), "the interrupt was not sent");
-        let output = child.wait_with_output()?;
-        Ok((
-            output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stdout).into_owned(),
-        ))
+        // Runs the CLI, sends it an interrupt after `wait`, and gives its exit status and stdout.
+        pub(super) fn run_and_interrupt(
+            &self,
+            args: &[&str],
+            wait: Duration,
+        ) -> anyhow::Result<(i32, String)> {
+            let child = std::process::Command::new(&self.path)
+                .arg("--config-dir")
+                .arg(&self.config_dir)
+                .args(args)
+                .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+                .envs(&self.env)
+                .current_dir(&self.working_dir)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            std::thread::sleep(wait);
+            let sent = std::process::Command::new("kill")
+                .args(["-INT", &child.id().to_string()])
+                .status()?;
+            anyhow::ensure!(sent.success(), "the interrupt was not sent");
+            let output = child.wait_with_output()?;
+            Ok((
+                output.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&output.stdout).into_owned(),
+            ))
+        }
     }
 }
 
@@ -503,25 +516,30 @@ async fn ssh_piped_input_stops_when_its_directory_is_refused() {
 }
 
 #[cfg(unix)]
-#[test]
-#[timeout("20 minutes")]
-async fn ssh_piped_input_does_not_report_success_after_losing_output() {
-    let ctx = context().await;
-    let cli = BlockingCli::new(&ctx);
+mod full_stdout_tests {
+    use super::*;
+    use test_r::test;
 
-    // The first command's output cannot be written. The second writes nothing and succeeds,
-    // and the session still does not end with success, and says why on stderr.
-    let (status, stderr) = tokio::task::spawn_blocking(move || {
-        cli.run_with_full_stdout(&["ssh", OWNER], "echo first\ntrue\n")
-    })
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(status, 1, "{stderr}");
-    assert!(
-        stderr.contains("the command's output could not be written"),
-        "{stderr}"
-    );
+    #[test]
+    #[timeout("20 minutes")]
+    async fn ssh_piped_input_does_not_report_success_after_losing_output() {
+        let ctx = context().await;
+        let cli = BlockingCli::new(&ctx);
+
+        // The first command's output cannot be written. The second writes nothing and succeeds,
+        // and the session still does not end with success, and says why on stderr.
+        let (status, stderr) = tokio::task::spawn_blocking(move || {
+            cli.run_with_full_stdout(&["ssh", OWNER], "echo first\ntrue\n")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(status, 1, "{stderr}");
+        assert!(
+            stderr.contains("the command's output could not be written"),
+            "{stderr}"
+        );
+    }
 }
 
 #[test]
@@ -974,101 +992,105 @@ async fn ssh_prompt_feels_like_a_shell() {
 // oplog, the stopped call included. Each agent then answers, and the files that its stopped script
 // wrote are as the first run left them.
 #[cfg(unix)]
-#[test]
-#[timeout("20 minutes")]
-async fn ssh_stopped_commands_survive_a_rebuild() {
-    const SLEEPING: &str = r#"BashOwner("rebuild-sleeping")"#;
-    const TWO_SLEEPS: &str = r#"BashOwner("rebuild-two-sleeps")"#;
-    const COMPUTING: &str = r#"BashOwner("rebuild-computing")"#;
-    const COUNTING: &str = r#"BashOwner("rebuild-counting")"#;
-    const PIPELINE: &str = r#"BashOwner("rebuild-pipeline")"#;
-    const JOB: &str = r#"BashOwner("rebuild-job")"#;
-    const SUBSTITUTION: &str = r#"BashOwner("rebuild-substitution")"#;
-    const STATE: &str = "cat /tmp/rebuild/*";
+mod interruption_tests {
+    use super::*;
+    use test_r::test;
 
-    let mut ctx = context().await;
-    let agents = [
-        SLEEPING,
-        TWO_SLEEPS,
-        COMPUTING,
-        COUNTING,
-        PIPELINE,
-        JOB,
-        SUBSTITUTION,
-    ];
-    for agent in agents {
-        let made = ctx.cli(["--yes", "agent", "invoke", agent, "name"]).await;
-        assert!(made.success_or_dump());
-    }
+    #[test]
+    #[timeout("20 minutes")]
+    async fn ssh_stopped_commands_survive_a_rebuild() {
+        const SLEEPING: &str = r#"BashOwner("rebuild-sleeping")"#;
+        const TWO_SLEEPS: &str = r#"BashOwner("rebuild-two-sleeps")"#;
+        const COMPUTING: &str = r#"BashOwner("rebuild-computing")"#;
+        const COUNTING: &str = r#"BashOwner("rebuild-counting")"#;
+        const PIPELINE: &str = r#"BashOwner("rebuild-pipeline")"#;
+        const JOB: &str = r#"BashOwner("rebuild-job")"#;
+        const SUBSTITUTION: &str = r#"BashOwner("rebuild-substitution")"#;
+        const STATE: &str = "cat /tmp/rebuild/*";
 
-    // A command that waits.
-    stop_a_command(
-        &ctx,
-        SLEEPING,
-        "mkdir -p /tmp/rebuild && echo before >/tmp/rebuild/state && sleep 300; \
+        let mut ctx = context().await;
+        let agents = [
+            SLEEPING,
+            TWO_SLEEPS,
+            COMPUTING,
+            COUNTING,
+            PIPELINE,
+            JOB,
+            SUBSTITUTION,
+        ];
+        for agent in agents {
+            let made = ctx.cli(["--yes", "agent", "invoke", agent, "name"]).await;
+            assert!(made.success_or_dump());
+        }
+
+        // A command that waits.
+        stop_a_command(
+            &ctx,
+            SLEEPING,
+            "mkdir -p /tmp/rebuild && echo before >/tmp/rebuild/state && sleep 300; \
          echo after >/tmp/rebuild/state",
-        None,
-        STATE,
-        "before\r\n",
-    )
-    .await;
-    // Waits that end, output, and a wait that the stop ends.
-    stop_a_command(
-        &ctx,
-        TWO_SLEEPS,
-        "mkdir -p /tmp/rebuild; sleep 0.5; echo first; sleep 0.5; \
+            None,
+            STATE,
+            "before\r\n",
+        )
+        .await;
+        // Waits that end, output, and a wait that the stop ends.
+        stop_a_command(
+            &ctx,
+            TWO_SLEEPS,
+            "mkdir -p /tmp/rebuild; sleep 0.5; echo first; sleep 0.5; \
          echo second >/tmp/rebuild/state; sleep 300; echo after >/tmp/rebuild/state",
-        Some("first\r\n"),
-        STATE,
-        "second\r\n",
-    )
-    .await;
-    // A command that computes and never waits.
-    stop_a_command(
-        &ctx,
-        COMPUTING,
-        "mkdir -p /tmp/rebuild && echo started >/tmp/rebuild/state && while :; do :; done",
-        None,
-        STATE,
-        "started\r\n",
-    )
-    .await;
-    // A command that computes and writes where it is: what it wrote last depends on where the
-    // stop met it.
-    stop_a_command(
-        &ctx,
-        COUNTING,
-        "mkdir -p /tmp/rebuild; n=0; while :; do n=$((n+1)); \
+            Some("first\r\n"),
+            STATE,
+            "second\r\n",
+        )
+        .await;
+        // A command that computes and never waits.
+        stop_a_command(
+            &ctx,
+            COMPUTING,
+            "mkdir -p /tmp/rebuild && echo started >/tmp/rebuild/state && while :; do :; done",
+            None,
+            STATE,
+            "started\r\n",
+        )
+        .await;
+        // A command that computes and writes where it is: what it wrote last depends on where the
+        // stop met it.
+        stop_a_command(
+            &ctx,
+            COUNTING,
+            "mkdir -p /tmp/rebuild; n=0; while :; do n=$((n+1)); \
          if [ $((n % 500)) -eq 0 ]; then echo $n >/tmp/rebuild/state; fi; done",
-        None,
-        "true",
-        "",
-    )
-    .await;
-    // A pipeline whose stages compute.
-    stop_a_command(
-        &ctx,
-        PIPELINE,
-        "mkdir -p /tmp/rebuild; n=0; while :; do n=$((n+1)); echo $n; done | \
+            None,
+            "true",
+            "",
+        )
+        .await;
+        // A pipeline whose stages compute.
+        stop_a_command(
+            &ctx,
+            PIPELINE,
+            "mkdir -p /tmp/rebuild; n=0; while :; do n=$((n+1)); echo $n; done | \
          while read -r x; do if [ $((x % 200)) -eq 0 ]; then echo $x >/tmp/rebuild/state; fi; done",
-        None,
-        "true",
-        "",
-    )
-    .await;
-    // A job in the background that ends before the stop, next to a command that waits.
-    stop_a_command(
-        &ctx,
-        JOB,
-        "mkdir -p /tmp/rebuild; (sleep 1; echo job >/tmp/rebuild/state) & \
+            None,
+            "true",
+            "",
+        )
+        .await;
+        // A job in the background that ends before the stop, next to a command that waits.
+        stop_a_command(
+            &ctx,
+            JOB,
+            "mkdir -p /tmp/rebuild; (sleep 1; echo job >/tmp/rebuild/state) & \
          echo front >/tmp/rebuild/front; sleep 300",
-        None,
-        STATE,
-        "front\r\njob\r\n",
-    )
-    .await;
-    // A command substitution that waits, then a wait that the stop ends.
-    stop_a_command(
+            None,
+            STATE,
+            "front\r\njob\r\n",
+        )
+        .await;
+        // A command substitution that waits, then a wait that the stop ends.
+        stop_a_command(
         &ctx,
         SUBSTITUTION,
         "mkdir -p /tmp/rebuild; x=$(sleep 0.5; echo sub); echo $x >/tmp/rebuild/state; sleep 300",
@@ -1078,211 +1100,210 @@ async fn ssh_stopped_commands_survive_a_rebuild() {
     )
     .await;
 
-    // What each stopped script left, before the rebuild.
-    let mut before = HashMap::new();
-    for agent in agents {
-        let state = ssh(&ctx, &[agent, "-c", STATE], "").await;
-        assert_eq!(status(&state), 0, "{agent}: {}", state.stderr_text());
-        assert!(!state.stdout_text().is_empty(), "{agent} wrote nothing");
-        before.insert(agent, state.stdout_text());
+        // What each stopped script left, before the rebuild.
+        let mut before = HashMap::new();
+        for agent in agents {
+            let state = ssh(&ctx, &[agent, "-c", STATE], "").await;
+            assert_eq!(status(&state), 0, "{agent}: {}", state.stderr_text());
+            assert!(!state.stdout_text().is_empty(), "{agent} wrote nothing");
+            before.insert(agent, state.stdout_text());
+        }
+
+        ctx.stop_server().await;
+        ctx.start_server().await;
+
+        // The first command on each agent rebuilds it, the stopped call included.
+        for agent in agents {
+            let state = ssh(&ctx, &[agent, "-c", STATE], "").await;
+            assert_eq!(status(&state), 0, "{agent}: {}", state.stderr_text());
+            assert_eq!(
+                state.stdout_text(),
+                before[agent],
+                "{agent}: the files after the rebuild"
+            );
+        }
     }
 
-    ctx.stop_server().await;
-    ctx.start_server().await;
+    // Starts an interactive session, runs `script`, and presses Ctrl+C when the command runs. The
+    // command must stop: the session prints `printed`, the prompt shows status 130, and `next` runs
+    // at once and prints `expected`. The command itself would run for minutes.
+    async fn stop_a_command(
+        ctx: &TestContext,
+        agent: &'static str,
+        script: &'static str,
+        printed: Option<&'static str>,
+        next: &'static str,
+        expected: &'static str,
+    ) {
+        ctx.cli_interactive(["ssh", agent], move |session| {
+            session.set_expect_timeout(Some(Duration::from_secs(120)));
+            // Leave the cursor query unanswered to select plain input. Cancellation and rebuilds
+            // do not need the editor, and a late terminal reply must not change these assertions.
+            session.expect_str(MARKER)?;
+            // A quick command first settles the session's own fetch of the command names.
+            enter(session, "true")?;
+            session.expect_str(MARKER)?;
 
-    // The first command on each agent rebuilds it, the stopped call included.
-    for agent in agents {
-        let state = ssh(&ctx, &[agent, "-c", STATE], "").await;
-        assert_eq!(status(&state), 0, "{agent}: {}", state.stderr_text());
-        assert_eq!(
-            state.stdout_text(),
-            before[agent],
-            "{agent}: the files after the rebuild"
+            enter(session, script)?;
+            // The whole running line: "Ctrl+C to stop waiting" is the line of a command that cannot
+            // be stopped.
+            session.expect_str("Ctrl+C to stop\x1b[K")?;
+            // The command has started when the stop arrives: a command that is stopped before it
+            // starts prints nothing.
+            std::thread::sleep(Duration::from_secs(3));
+            session.send("\u{3}")?;
+            // A stopped command returns within a second. The command itself would run for minutes,
+            // so this limit is far from both.
+            session.set_expect_timeout(Some(Duration::from_secs(30)));
+            if let Some(printed) = printed {
+                session.expect_str(printed)?;
+            }
+            session.expect_str("[130]")?;
+            session.expect_str(MARKER)?;
+
+            // The next command does not wait behind the stopped one.
+            enter(session, next)?;
+            session.expect_str(expected)?;
+            session.expect_str(MARKER)?;
+            enter(session, "exit")?;
+            session.expect_eof()
+        })
+        .await;
+    }
+
+    #[test]
+    #[timeout("20 minutes")]
+    async fn ssh_ctrl_c_stops_the_command() {
+        const WAITING: &str = r#"BashOwner("stop-waiting")"#;
+        const COMPUTING: &str = r#"BashOwner("stop-computing")"#;
+        const DIRECTORY: &str = r#"BashOwner("stop-directory")"#;
+        const COMMAND_MODE: &str = r#"BashOwner("stop-command-mode")"#;
+        const INPUT_END: &str = r#"BashOwner("input-end")"#;
+        const QUEUED: &str = r#"BashOwner("stop-queued")"#;
+
+        let ctx = context().await;
+
+        // Each case has its own agent.
+        for agent in [
+            WAITING,
+            COMPUTING,
+            DIRECTORY,
+            COMMAND_MODE,
+            INPUT_END,
+            QUEUED,
+        ] {
+            let made = ctx.cli(["--yes", "agent", "invoke", agent, "name"]).await;
+            assert!(made.success_or_dump());
+        }
+
+        // A command that waits: the output before the stop is printed, and the rest of the script
+        // does not run.
+        stop_a_command(
+            &ctx,
+            WAITING,
+            "printf 'sta%s\\n' rt; sleep 300; echo end",
+            Some("start\r\n"),
+            "printf 'aft%s\\n' er",
+            "after\r\n",
+        )
+        .await;
+
+        // A command that computes and never waits.
+        stop_a_command(
+            &ctx,
+            COMPUTING,
+            "while :; do :; done",
+            None,
+            "printf 'aft%s\\n' er",
+            "after\r\n",
+        )
+        .await;
+
+        // A stopped command still gives its directory to the session.
+        stop_a_command(
+            &ctx,
+            DIRECTORY,
+            "mkdir -p /tmp/ssh-stop && cd /tmp/ssh-stop && sleep 300",
+            None,
+            "printf 'in-%s\\n' \"$PWD\"",
+            "in-/tmp/ssh-stop\r\n",
+        )
+        .await;
+
+        // `-c` passes the output of the stopped command through and exits with its status. A first
+        // run has loaded the agent, so the second one reaches its command well inside the wait.
+        let made = ssh(&ctx, &[COMMAND_MODE, "-c", "true"], "").await;
+        assert_output(&made, 0, "", "");
+        let cli = BlockingCli::new(&ctx);
+        let (code, stdout) = tokio::task::spawn_blocking(move || {
+            cli.run_and_interrupt(
+                &["ssh", COMMAND_MODE, "-c", "printf 'sta%s\\n' rt; sleep 300"],
+                Duration::from_secs(8),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!((code, stdout.as_str()), (130, "start\n"));
+
+        // A command that waits behind another call of the agent has not started, so the stop cannot
+        // reach it. Ctrl+C cancels it at once, well inside the five seconds that the session gives
+        // a started command.
+        let made = ssh(&ctx, &[QUEUED, "-c", "true"], "").await;
+        assert_output(&made, 0, "", "");
+        let cli = BlockingCli::new(&ctx);
+        let busy = tokio::task::spawn_blocking(move || {
+            cli.run(&[
+                "--yes", "tool", "invoke", "--agent", QUEUED, "bash", "--", "run", "--", "sleep 20",
+            ])
+        });
+        ctx.cli_interactive(["ssh", QUEUED], move |session| {
+            session.set_expect_timeout(Some(Duration::from_secs(120)));
+            answer_cursor_query(session)?;
+            session.expect_str(MARKER)?;
+            // The other call has started when this command is sent.
+            std::thread::sleep(Duration::from_secs(5));
+            enter(session, "printf 'ne%s\\n' ver")?;
+            session.expect_str("Ctrl+C to stop\x1b[K")?;
+            session.send("\u{3}")?;
+            session.set_expect_timeout(Some(Duration::from_secs(3)));
+            session.expect_str("Cancelled before it started.")?;
+            session.set_expect_timeout(Some(Duration::from_secs(120)));
+            answer_cursor_query(session)?;
+            session.expect_str("[130]")?;
+            enter(session, "exit")?;
+            session.expect_eof()
+        })
+        .await;
+        busy.await.unwrap().unwrap();
+
+        // The end of the input does not stop a command: only a cancelled input does.
+        let output = tokio::time::timeout(
+            Duration::from_secs(90),
+            ctx.cli([
+                "--yes",
+                "--format",
+                "json",
+                "tool",
+                "invoke",
+                "--stdin",
+                "/dev/null",
+                "--agent",
+                INPUT_END,
+                "bash",
+                "--",
+                "run",
+                "--",
+                "sleep 2; printf 'do%s\\n' ne",
+            ]),
+        )
+        .await
+        .expect("the tool call did not finish");
+        assert!(output.success_or_dump());
+        assert!(
+            output.stdout_text().contains("done\\n"),
+            "{}",
+            output.stdout_text()
         );
     }
-}
-
-// Starts an interactive session, runs `script`, and presses Ctrl+C when the command runs. The
-// command must stop: the session prints `printed`, the prompt shows status 130, and `next` runs
-// at once and prints `expected`. The command itself would run for minutes.
-#[cfg(unix)]
-async fn stop_a_command(
-    ctx: &TestContext,
-    agent: &'static str,
-    script: &'static str,
-    printed: Option<&'static str>,
-    next: &'static str,
-    expected: &'static str,
-) {
-    ctx.cli_interactive(["ssh", agent], move |session| {
-        session.set_expect_timeout(Some(Duration::from_secs(120)));
-        // Leave the cursor query unanswered to select plain input. Cancellation and rebuilds
-        // do not need the editor, and a late terminal reply must not change these assertions.
-        session.expect_str(MARKER)?;
-        // A quick command first settles the session's own fetch of the command names.
-        enter(session, "true")?;
-        session.expect_str(MARKER)?;
-
-        enter(session, script)?;
-        // The whole running line: "Ctrl+C to stop waiting" is the line of a command that cannot
-        // be stopped.
-        session.expect_str("Ctrl+C to stop\x1b[K")?;
-        // The command has started when the stop arrives: a command that is stopped before it
-        // starts prints nothing.
-        std::thread::sleep(Duration::from_secs(3));
-        session.send("\u{3}")?;
-        // A stopped command returns within a second. The command itself would run for minutes,
-        // so this limit is far from both.
-        session.set_expect_timeout(Some(Duration::from_secs(30)));
-        if let Some(printed) = printed {
-            session.expect_str(printed)?;
-        }
-        session.expect_str("[130]")?;
-        session.expect_str(MARKER)?;
-
-        // The next command does not wait behind the stopped one.
-        enter(session, next)?;
-        session.expect_str(expected)?;
-        session.expect_str(MARKER)?;
-        enter(session, "exit")?;
-        session.expect_eof()
-    })
-    .await;
-}
-
-#[cfg(unix)]
-#[test]
-#[timeout("20 minutes")]
-async fn ssh_ctrl_c_stops_the_command() {
-    const WAITING: &str = r#"BashOwner("stop-waiting")"#;
-    const COMPUTING: &str = r#"BashOwner("stop-computing")"#;
-    const DIRECTORY: &str = r#"BashOwner("stop-directory")"#;
-    const COMMAND_MODE: &str = r#"BashOwner("stop-command-mode")"#;
-    const INPUT_END: &str = r#"BashOwner("input-end")"#;
-    const QUEUED: &str = r#"BashOwner("stop-queued")"#;
-
-    let ctx = context().await;
-
-    // Each case has its own agent.
-    for agent in [
-        WAITING,
-        COMPUTING,
-        DIRECTORY,
-        COMMAND_MODE,
-        INPUT_END,
-        QUEUED,
-    ] {
-        let made = ctx.cli(["--yes", "agent", "invoke", agent, "name"]).await;
-        assert!(made.success_or_dump());
-    }
-
-    // A command that waits: the output before the stop is printed, and the rest of the script
-    // does not run.
-    stop_a_command(
-        &ctx,
-        WAITING,
-        "printf 'sta%s\\n' rt; sleep 300; echo end",
-        Some("start\r\n"),
-        "printf 'aft%s\\n' er",
-        "after\r\n",
-    )
-    .await;
-
-    // A command that computes and never waits.
-    stop_a_command(
-        &ctx,
-        COMPUTING,
-        "while :; do :; done",
-        None,
-        "printf 'aft%s\\n' er",
-        "after\r\n",
-    )
-    .await;
-
-    // A stopped command still gives its directory to the session.
-    stop_a_command(
-        &ctx,
-        DIRECTORY,
-        "mkdir -p /tmp/ssh-stop && cd /tmp/ssh-stop && sleep 300",
-        None,
-        "printf 'in-%s\\n' \"$PWD\"",
-        "in-/tmp/ssh-stop\r\n",
-    )
-    .await;
-
-    // `-c` passes the output of the stopped command through and exits with its status. A first
-    // run has loaded the agent, so the second one reaches its command well inside the wait.
-    let made = ssh(&ctx, &[COMMAND_MODE, "-c", "true"], "").await;
-    assert_output(&made, 0, "", "");
-    let cli = BlockingCli::new(&ctx);
-    let (code, stdout) = tokio::task::spawn_blocking(move || {
-        cli.run_and_interrupt(
-            &["ssh", COMMAND_MODE, "-c", "printf 'sta%s\\n' rt; sleep 300"],
-            Duration::from_secs(8),
-        )
-    })
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!((code, stdout.as_str()), (130, "start\n"));
-
-    // A command that waits behind another call of the agent has not started, so the stop cannot
-    // reach it. Ctrl+C cancels it at once, well inside the five seconds that the session gives
-    // a started command.
-    let made = ssh(&ctx, &[QUEUED, "-c", "true"], "").await;
-    assert_output(&made, 0, "", "");
-    let cli = BlockingCli::new(&ctx);
-    let busy = tokio::task::spawn_blocking(move || {
-        cli.run(&[
-            "--yes", "tool", "invoke", "--agent", QUEUED, "bash", "--", "run", "--", "sleep 20",
-        ])
-    });
-    ctx.cli_interactive(["ssh", QUEUED], move |session| {
-        session.set_expect_timeout(Some(Duration::from_secs(120)));
-        answer_cursor_query(session)?;
-        session.expect_str(MARKER)?;
-        // The other call has started when this command is sent.
-        std::thread::sleep(Duration::from_secs(5));
-        enter(session, "printf 'ne%s\\n' ver")?;
-        session.expect_str("Ctrl+C to stop\x1b[K")?;
-        session.send("\u{3}")?;
-        session.set_expect_timeout(Some(Duration::from_secs(3)));
-        session.expect_str("Cancelled before it started.")?;
-        session.set_expect_timeout(Some(Duration::from_secs(120)));
-        answer_cursor_query(session)?;
-        session.expect_str("[130]")?;
-        enter(session, "exit")?;
-        session.expect_eof()
-    })
-    .await;
-    busy.await.unwrap().unwrap();
-
-    // The end of the input does not stop a command: only a cancelled input does.
-    let output = tokio::time::timeout(
-        Duration::from_secs(90),
-        ctx.cli([
-            "--yes",
-            "--format",
-            "json",
-            "tool",
-            "invoke",
-            "--stdin",
-            "/dev/null",
-            "--agent",
-            INPUT_END,
-            "bash",
-            "--",
-            "run",
-            "--",
-            "sleep 2; printf 'do%s\\n' ne",
-        ]),
-    )
-    .await
-    .expect("the tool call did not finish");
-    assert!(output.success_or_dump());
-    assert!(
-        output.stdout_text().contains("done\\n"),
-        "{}",
-        output.stdout_text()
-    );
 }

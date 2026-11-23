@@ -45,7 +45,7 @@ use golem_worker_executor::storage::scheduler::{
 use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    WorkerExecutorTestDependencies, callers, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::sync::{Arc, Mutex};
@@ -163,11 +163,11 @@ impl SchedulerStorage for DuplicateWakes {
 
 /// Holds every scheduler claim until released, and observes acknowledgement of the invocation wake.
 #[derive(Debug)]
-struct PausedScheduler {
-    inner: Arc<dyn SchedulerStorage + Send + Sync>,
-    release: tokio_util::sync::CancellationToken,
-    invocation_wake: Mutex<Option<ScheduleId>>,
-    acknowledged: Arc<tokio::sync::Notify>,
+pub(crate) struct PausedScheduler {
+    pub(crate) inner: Arc<dyn SchedulerStorage + Send + Sync>,
+    pub(crate) release: tokio_util::sync::CancellationToken,
+    pub(crate) invocation_wake: Mutex<Option<ScheduleId>>,
+    pub(crate) acknowledged: Arc<tokio::sync::Notify>,
 }
 
 #[async_trait]
@@ -288,11 +288,11 @@ impl Rpc for HoldFirstSchedule {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -303,6 +303,7 @@ impl Rpc for HoldFirstSchedule {
         request_key: golem_common::model::InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: DateTime<Utc>,
+        self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<ScheduleId, RpcError> {
         let first = {
@@ -325,6 +326,7 @@ impl Rpc for HoldFirstSchedule {
                 request_key,
                 invocation,
                 scheduled_at,
+                self_agent_id,
                 auth_ctx,
             )
             .await;
@@ -794,8 +796,15 @@ async fn scheduled_ephemeral_cancellation_behind_its_start_cancels_nothing(
         .await
         .expect("the starting target must be active")
         .primary();
-    let mut cancellation =
-        Box::pin(worker.cancel_scheduled_invocation(key, receipt, &owner.agent_id));
+    // The client that scheduled the call, as the target recorded it.
+    let canceller = callers::agent_in(
+        owner.agent_id,
+        golem_common::model::agent::AgentTypeName("ScheduledInvocationClient".to_string()),
+        executor.get_worker_metadata(&owner).await?.fingerprint,
+        component.environment_id,
+    )
+    .immediate;
+    let mut cancellation = Box::pin(worker.cancel_scheduled_invocation(key, receipt, &canceller));
     assert!(futures::poll!(&mut cancellation).is_pending());
     drop(restart);
     assert!(

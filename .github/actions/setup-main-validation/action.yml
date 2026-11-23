@@ -65,4 +65,4 @@ runs:
     - name: Install Cargo tools
       shell: bash
       run: |
-        cargo binstall --no-confirm --force --locked cargo-nextest cargo-test-r@2.2.11 cargo-deny wasm-tools@1.248.0 wit-bindgen-cli@0.40.0
+        cargo binstall --no-confirm --force --locked cargo-nextest cargo-test-r@2.2.14 cargo-deny wasm-tools@1.248.0 wit-bindgen-cli@0.40.0

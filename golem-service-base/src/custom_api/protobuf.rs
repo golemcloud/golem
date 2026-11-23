@@ -18,12 +18,12 @@ use super::{
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
-    CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema,
-    ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
+    AgentSelection, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema,
+    ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy, CreateAgentBehaviour,
     DurableStreamRepresentation, DurableStreamRouteLoadPolicy, DurableStreamRoutePolicy,
     DurableStreamSlot, DurableStreamSlotDirection, MethodParameter, MountAgent, MountAgentMethod,
-    MountBehaviour, MountFileSource, MountTarget, OriginPattern, PhantomSelection,
-    QueryOrHeaderType, RouteMatch, RouterFileIndexEntry, RouterMethod, SecuritySchemeRouteSecurity,
+    MountBehaviour, MountFileSource, MountTarget, OriginPattern, QueryOrHeaderType, RouteMatch,
+    RouterFileIndexEntry, RouterMethod, SecuritySchemeRouteSecurity,
     SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
@@ -252,9 +252,9 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .into_iter()
                     .map(TryInto::try_into)
                     .collect::<Result<_, _>>()?,
-                phantom_selection: call_agent
-                    .phantom_selection
-                    .ok_or("Missing phantom_selection")?
+                agent_selection: call_agent
+                    .agent_selection
+                    .ok_or("Missing agent_selection")?
                     .try_into()?,
                 method_name: call_agent.method_name,
                 method_input: call_agent
@@ -334,6 +334,14 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     scheme,
                 }))
             }
+            Kind::CreateAgent(value) => Ok(RouteBehaviour::CreateAgent(CreateAgentBehaviour {
+                agent: value.agent.ok_or("Missing create agent")?.try_into()?,
+                location: value
+                    .location
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            })),
             Kind::Mount(value) => Ok(RouteBehaviour::Mount(MountBehaviour {
                 handler: value.handler.map(TryInto::try_into).transpose()?,
                 openapi_provider: value.openapi_provider.map(TryInto::try_into).transpose()?,
@@ -366,6 +374,10 @@ impl TryFrom<proto::golem::customapi::route_behaviour::MountAgent> for MountAgen
                 .try_into()?,
             component_revision: value.component_revision.try_into()?,
             agent_type: AgentTypeName(value.agent_type),
+            agent_selection: value
+                .agent_selection
+                .ok_or("Missing mount agent_selection")?
+                .try_into()?,
             constructor_input: value
                 .constructor_input
                 .ok_or("Missing constructor_input")?
@@ -385,6 +397,7 @@ impl From<MountAgent> for proto::golem::customapi::route_behaviour::MountAgent {
             component_id: Some(value.component_id.into()),
             component_revision: value.component_revision.into(),
             agent_type: value.agent_type.0,
+            agent_selection: Some(value.agent_selection.into()),
             constructor_input: Some(value.constructor_input.into()),
             constructor_parameters: value
                 .constructor_parameters
@@ -517,50 +530,43 @@ fn decode_file_index(
         .collect()
 }
 
-impl TryFrom<proto::golem::customapi::route_behaviour::PhantomSelection> for PhantomSelection {
+impl TryFrom<proto::golem::customapi::route_behaviour::AgentSelection> for AgentSelection {
     type Error = String;
 
     fn try_from(
-        value: proto::golem::customapi::route_behaviour::PhantomSelection,
+        value: proto::golem::customapi::route_behaviour::AgentSelection,
     ) -> Result<Self, Self::Error> {
-        use proto::golem::customapi::route_behaviour::phantom_selection::Selection;
+        use proto::golem::customapi::route_behaviour::agent_selection::Selection;
         Ok(
-            match value
-                .selection
-                .ok_or("Missing PhantomSelection.selection")?
-            {
-                Selection::Policy(phantom) => Self::Policy { phantom },
-                Selection::Original(_) => Self::Original,
+            match value.selection.ok_or("Missing AgentSelection.selection")? {
+                Selection::Key(_) => Self::Key,
+                Selection::Fresh(_) => Self::Fresh,
                 Selection::PathIndex(index) => Self::Path {
                     index: index.into(),
                 },
                 Selection::Query(query) => {
-                    if query.name.is_empty() {
-                        return Err("Phantom query selector name cannot be empty".into());
+                    if query.is_empty()
+                        || query.trim() != query
+                        || query.chars().any(char::is_control)
+                    {
+                        return Err("Agent query selector name must be nonempty and contain no surrounding whitespace or control characters".into());
                     }
-                    Self::Query {
-                        name: query.name,
-                        optional: query.optional,
-                    }
+                    Self::Query { name: query }
                 }
             },
         )
     }
 }
 
-impl From<PhantomSelection> for proto::golem::customapi::route_behaviour::PhantomSelection {
-    fn from(value: PhantomSelection) -> Self {
-        use proto::golem::customapi::route_behaviour::{
-            PhantomQuery, phantom_selection::Selection,
-        };
+impl From<AgentSelection> for proto::golem::customapi::route_behaviour::AgentSelection {
+    fn from(value: AgentSelection) -> Self {
+        use proto::golem::customapi::route_behaviour::agent_selection::Selection;
         Self {
             selection: Some(match value {
-                PhantomSelection::Policy { phantom } => Selection::Policy(phantom),
-                PhantomSelection::Original => Selection::Original(Default::default()),
-                PhantomSelection::Path { index } => Selection::PathIndex(index.into()),
-                PhantomSelection::Query { name, optional } => {
-                    Selection::Query(PhantomQuery { name, optional })
-                }
+                AgentSelection::Key => Selection::Key(Default::default()),
+                AgentSelection::Fresh => Selection::Fresh(Default::default()),
+                AgentSelection::Path { index } => Selection::PathIndex(index.into()),
+                AgentSelection::Query { name } => Selection::Query(name),
             }),
         }
     }
@@ -581,7 +587,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 agent_mode,
                 constructor_input,
                 constructor_parameters,
-                phantom_selection,
+                agent_selection,
                 method_name,
                 method_input,
                 body,
@@ -604,7 +610,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                             .into_iter()
                             .map(Into::into)
                             .collect(),
-                        phantom_selection: Some(phantom_selection.into()),
+                        agent_selection: Some(agent_selection.into()),
                         method_name,
                         method_input: Some(method_input.into()),
                         body: Some(body.into()),
@@ -666,6 +672,11 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     )),
                 }
             }
+            RouteBehaviour::CreateAgent(value) => Self { kind: Some(Kind::CreateAgent(
+                proto::golem::customapi::route_behaviour::CreateAgent {
+                    agent: Some(value.agent.into()),
+                    location: value.location.into_iter().map(Into::into).collect(),
+                })) },
             RouteBehaviour::Mount(value) => Self { kind: Some(Kind::Mount(
                 proto::golem::customapi::route_behaviour::Mount {
                     handler: value.handler.map(Into::into), openapi_provider: value.openapi_provider.map(Into::into),
@@ -1480,40 +1491,31 @@ mod tests {
     }
 
     #[test]
-    fn phantom_selection_roundtrips_and_rejects_missing_wire_selection() {
+    fn agent_selection_roundtrips_and_rejects_missing_wire_selection() {
         for selection in [
-            PhantomSelection::Policy { phantom: false },
-            PhantomSelection::Policy { phantom: true },
-            PhantomSelection::Original,
-            PhantomSelection::Path { index: 3.into() },
-            PhantomSelection::Query {
+            AgentSelection::Key,
+            AgentSelection::Fresh,
+            AgentSelection::Path { index: 3.into() },
+            AgentSelection::Query {
                 name: "instance".into(),
-                optional: false,
-            },
-            PhantomSelection::Query {
-                name: "other-instance".into(),
-                optional: true,
             },
         ] {
             let bytes = desert_rust::serialize_to_byte_vec(&selection).unwrap();
-            let decoded: PhantomSelection = desert_rust::deserialize(&bytes).unwrap();
+            let decoded: AgentSelection = desert_rust::deserialize(&bytes).unwrap();
             assert_eq!(decoded, selection);
-            let proto: proto::golem::customapi::route_behaviour::PhantomSelection =
+            let proto: proto::golem::customapi::route_behaviour::AgentSelection =
                 selection.clone().into();
-            assert_eq!(PhantomSelection::try_from(proto).unwrap(), selection);
+            assert_eq!(AgentSelection::try_from(proto).unwrap(), selection);
         }
         assert!(
-            PhantomSelection::try_from(
-                proto::golem::customapi::route_behaviour::PhantomSelection { selection: None }
-            )
+            AgentSelection::try_from(proto::golem::customapi::route_behaviour::AgentSelection {
+                selection: None
+            })
             .is_err()
         );
-        let empty_query = PhantomSelection::Query {
-            name: "".into(),
-            optional: false,
-        };
-        let proto: proto::golem::customapi::route_behaviour::PhantomSelection = empty_query.into();
-        assert!(PhantomSelection::try_from(proto).is_err());
+        let empty_query = AgentSelection::Query { name: "".into() };
+        let proto: proto::golem::customapi::route_behaviour::AgentSelection = empty_query.into();
+        assert!(AgentSelection::try_from(proto).is_err());
     }
 
     #[test]
@@ -1595,11 +1597,394 @@ mod tests {
         }
     }
 
+    fn id_agent(selection: AgentSelection) -> MountAgent {
+        let constructor_input = if matches!(
+            selection,
+            AgentSelection::Path { .. } | AgentSelection::Query { .. }
+        ) {
+            CompiledInputSchema {
+                graph: SchemaGraph::anonymous(SchemaType::record(vec![
+                    golem_common::schema::NamedFieldType {
+                        name: "owner".into(),
+                        body: SchemaType::string(),
+                        metadata: Default::default(),
+                    },
+                ])),
+                input_schema: InputSchema::Parameters(vec![
+                    golem_common::schema::NamedField::user_supplied("owner", SchemaType::string()),
+                ]),
+            }
+        } else {
+            input()
+        };
+        MountAgent {
+            component_id: ComponentId(uuid::Uuid::from_u128(17)),
+            component_revision: ComponentRevision::try_from(23u64).unwrap(),
+            agent_type: AgentTypeName("files".into()),
+            constructor_input,
+            constructor_parameters: vec![],
+            agent_selection: selection,
+        }
+    }
+
+    #[test]
+    fn call_agent_selections_roundtrip_and_reject_invalid_bindings() {
+        use prost::Message;
+        for (selection, session) in [
+            (AgentSelection::Key, false),
+            (AgentSelection::Fresh, false),
+            (AgentSelection::Path { index: 0.into() }, false),
+            (AgentSelection::Path { index: 1.into() }, false),
+            (AgentSelection::Query { name: "id".into() }, false),
+            (AgentSelection::Fresh, true),
+        ] {
+            let second_capture =
+                matches!(selection, AgentSelection::Path { index } if usize::from(index) == 1);
+            let durable_streams = session.then(|| DurableStreamRoutePolicy {
+                family_id: 37,
+                slots: vec![
+                    DurableStreamSlot {
+                        canonical_name: "input".into(),
+                        public_name: "requests".into(),
+                        direction: DurableStreamSlotDirection::Input,
+                        content_type: "application/json".into(),
+                        representation: DurableStreamRepresentation::Json,
+                    },
+                    DurableStreamSlot {
+                        canonical_name: "$result".into(),
+                        public_name: "responses".into(),
+                        direction: DurableStreamSlotDirection::Output,
+                        content_type: "application/octet-stream".into(),
+                        representation: DurableStreamRepresentation::Bytes,
+                    },
+                ],
+                allow_external_writes: true,
+                allow_stream_delete: false,
+                allow_invocation_delete: true,
+                load: Some(DurableStreamRouteLoadPolicy {
+                    max_concurrent_readers_per_stream: Some(7),
+                    max_append_requests_per_second_per_stream: Some(11),
+                }),
+            });
+            let agent = id_agent(selection);
+            let call = CallAgentBehaviour {
+                route_mode: if session {
+                    crate::custom_api::AgentRouteMode::DurableStreams
+                } else {
+                    crate::custom_api::AgentRouteMode::Plain
+                },
+                base_path_variables: if second_capture { 2 } else { 1 },
+                durable_streams: durable_streams.clone(),
+                component_id: agent.component_id,
+                component_revision: agent.component_revision,
+                agent_type: agent.agent_type,
+                agent_mode: if session {
+                    golem_common::model::agent::AgentMode::Ephemeral
+                } else {
+                    golem_common::model::agent::AgentMode::Durable
+                },
+                constructor_input: agent.constructor_input,
+                constructor_parameters: agent.constructor_parameters,
+                agent_selection: agent.agent_selection,
+                method_name: "get".into(),
+                method_input: input(),
+                body: RequestBodySchema::Unused,
+                method_parameters: vec![],
+                expected_agent_response: CompiledOutputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                    output_schema: OutputSchema::Unit,
+                },
+                method_description: None,
+                read_only: None,
+            };
+            let mut compiled = route(RouteBehaviour::CallAgent(call));
+            compiled.route_match =
+                HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default())).into();
+            compiled.path.push(PathSegment::Variable {
+                display_name: if second_capture || session {
+                    "tenant"
+                } else {
+                    "id"
+                }
+                .into(),
+            });
+            if second_capture {
+                compiled.path.extend([
+                    PathSegment::Literal {
+                        value: "agents".into(),
+                    },
+                    PathSegment::Variable {
+                        display_name: "id".into(),
+                    },
+                    PathSegment::Literal {
+                        value: "get".into(),
+                    },
+                ]);
+            }
+            if session {
+                compiled.path.extend([
+                    PathSegment::Literal {
+                        value: "sessions".into(),
+                    },
+                    PathSegment::Variable {
+                        display_name: "session".into(),
+                    },
+                    PathSegment::Literal {
+                        value: "streams".into(),
+                    },
+                    PathSegment::Variable {
+                        display_name: "slot".into(),
+                    },
+                ]);
+            }
+            let expected: proto::golem::customapi::CompiledRoute = compiled.into();
+            let expected_bytes = expected.encode_to_vec();
+            let decoded =
+                proto::golem::customapi::CompiledRoute::decode(expected_bytes.as_slice()).unwrap();
+            let mut decoded = CompiledRoute::try_from(decoded).unwrap();
+            let binary = desert_rust::serialize_to_byte_vec(&decoded.behavior).unwrap();
+            decoded.behavior = desert_rust::deserialize(&binary).unwrap();
+            let RouteBehaviour::CallAgent(call) = &decoded.behavior else {
+                unreachable!()
+            };
+            assert_eq!(call.durable_streams, durable_streams);
+            if session {
+                assert_eq!(call.agent_selection, AgentSelection::Fresh);
+                assert_eq!(
+                    call.agent_mode,
+                    golem_common::model::agent::AgentMode::Ephemeral
+                );
+                assert_eq!(
+                    call.route_mode,
+                    crate::custom_api::AgentRouteMode::DurableStreams
+                );
+                assert_eq!(call.base_path_variables, 1);
+                assert_eq!(
+                    decoded
+                        .path
+                        .iter()
+                        .filter(|segment| matches!(segment, PathSegment::Variable { .. }))
+                        .count(),
+                    3
+                );
+            }
+            if second_capture {
+                assert_eq!(
+                    call.agent_selection,
+                    AgentSelection::Path { index: 1.into() }
+                );
+                assert_eq!(call.base_path_variables, 2);
+            }
+            let actual: proto::golem::customapi::CompiledRoute = decoded.into();
+            assert_eq!(actual, expected);
+            assert_eq!(actual.encode_to_vec(), expected_bytes);
+            let mut missing = expected.clone();
+            let Some(proto::golem::customapi::route_behaviour::Kind::CallAgent(call)) =
+                missing.behavior.as_mut().unwrap().kind.as_mut()
+            else {
+                unreachable!()
+            };
+            call.agent_selection = None;
+            assert!(CompiledRoute::try_from(missing).is_err());
+
+            let mut invalid = expected;
+            let Some(proto::golem::customapi::route_behaviour::Kind::CallAgent(call)) =
+                invalid.behavior.as_mut().unwrap().kind.as_mut()
+            else {
+                unreachable!()
+            };
+            call.agent_selection = Some(AgentSelection::Query { name: "id".into() }.into());
+            call.method_parameters.push(
+                MethodParameter::Query {
+                    query_parameter_name: "id".into(),
+                    parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+                }
+                .into(),
+            );
+            assert!(CompiledRoute::try_from(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn id_mount_and_create_transport_roundtrip_and_validation() {
+        use prost::Message;
+        for (selection, location) in [
+            (
+                AgentSelection::Path { index: 0.into() },
+                vec![
+                    PathSegment::Literal {
+                        value: "files".into(),
+                    },
+                    PathSegment::Variable {
+                        display_name: "id".into(),
+                    },
+                ],
+            ),
+            (
+                AgentSelection::Query { name: "id".into() },
+                vec![PathSegment::Literal {
+                    value: "files".into(),
+                }],
+            ),
+            (AgentSelection::Query { name: "id".into() }, vec![]),
+        ] {
+            for create in [false, true] {
+                let agent = id_agent(selection.clone());
+                let mut compiled = route(if create {
+                    RouteBehaviour::CreateAgent(CreateAgentBehaviour {
+                        agent,
+                        location: location.clone(),
+                    })
+                } else {
+                    RouteBehaviour::Mount(MountBehaviour {
+                        handler: None,
+                        openapi_provider: None,
+                        files: MountFileSource::Live { agent },
+                        file_bindings: vec![],
+                        file_response_headers: vec![],
+                    })
+                });
+                compiled.path = if create {
+                    vec![PathSegment::Literal {
+                        value: "create".into(),
+                    }]
+                } else {
+                    location.clone()
+                };
+                if create {
+                    compiled.route_match = HttpMethod::Method(
+                        golem_schema::http::HttpMethod::Post(Default::default()),
+                    )
+                    .into();
+                }
+                let expected: proto::golem::customapi::CompiledRoute = compiled.into();
+                let bytes = expected.encode_to_vec();
+                let wire =
+                    proto::golem::customapi::CompiledRoute::decode(bytes.as_slice()).unwrap();
+                let decoded = CompiledRoute::try_from(wire).unwrap();
+                let binary = desert_rust::serialize_to_byte_vec(&decoded.behavior).unwrap();
+                let behavior: RouteBehaviour = desert_rust::deserialize(&binary).unwrap();
+                if let RouteBehaviour::CreateAgent(create) = &behavior {
+                    assert_eq!(create.location, location);
+                }
+                decoded
+                    .route_match
+                    .validate(&decoded.path, &behavior)
+                    .unwrap();
+                let actual: proto::golem::customapi::CompiledRoute = decoded.into();
+                assert_eq!(actual, expected);
+
+                let mut missing = expected.clone();
+                let agent = match missing.behavior.as_mut().unwrap().kind.as_mut().unwrap() {
+                    proto::golem::customapi::route_behaviour::Kind::CreateAgent(value) => {
+                        value.agent.as_mut().unwrap()
+                    }
+                    proto::golem::customapi::route_behaviour::Kind::Mount(value) => {
+                        let proto::golem::customapi::route_behaviour::mount_file_source::Kind::Live(
+                            agent,
+                        ) = value.files.as_mut().unwrap().kind.as_mut().unwrap()
+                        else {
+                            unreachable!()
+                        };
+                        agent
+                    }
+                    _ => unreachable!(),
+                };
+                agent.agent_selection = None;
+                assert!(CompiledRoute::try_from(missing).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn id_selection_and_create_reject_malformed_shapes() {
+        let literal = vec![PathSegment::Literal {
+            value: "files".into(),
+        }];
+        let captured = vec![PathSegment::Variable {
+            display_name: "id".into(),
+        }];
+        let parameter = ConstructorParameter::Path {
+            path_segment_index: 0.into(),
+            parameter_type: PathSegmentType::Str,
+        };
+        for selection in [
+            AgentSelection::Path { index: 0.into() },
+            AgentSelection::Query { name: "id".into() },
+        ] {
+            assert!(
+                selection
+                    .validate(&captured, std::slice::from_ref(&parameter))
+                    .is_err()
+            );
+        }
+        assert!(
+            AgentSelection::Path { index: 1.into() }
+                .validate(&captured, &[])
+                .is_err()
+        );
+        assert!(
+            AgentSelection::Path { index: 0.into() }
+                .validate(&literal, &[])
+                .is_err()
+        );
+        for name in ["", " id", "id\n"] {
+            assert!(
+                AgentSelection::Query { name: name.into() }
+                    .validate(&literal, &[])
+                    .is_err()
+            );
+        }
+        let post: RouteMatch =
+            HttpMethod::Method(golem_schema::http::HttpMethod::Post(Default::default())).into();
+        let get: RouteMatch =
+            HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default())).into();
+        for (selection, location) in [
+            (AgentSelection::Key, literal.clone()),
+            (AgentSelection::Fresh, literal.clone()),
+            (AgentSelection::Path { index: 0.into() }, vec![]),
+            (AgentSelection::Path { index: 0.into() }, literal.clone()),
+            (AgentSelection::Path { index: 1.into() }, captured.clone()),
+            (
+                AgentSelection::Query { name: "id".into() },
+                captured.clone(),
+            ),
+            (
+                AgentSelection::Path { index: 0.into() },
+                vec![captured[0].clone(), captured[0].clone()],
+            ),
+            (
+                AgentSelection::Path { index: 0.into() },
+                vec![PathSegment::CatchAll {
+                    display_name: "id".into(),
+                }],
+            ),
+        ] {
+            let behavior = RouteBehaviour::CreateAgent(CreateAgentBehaviour {
+                agent: id_agent(selection),
+                location,
+            });
+            assert!(post.validate(&literal, &behavior).is_err());
+        }
+        let behavior = RouteBehaviour::CreateAgent(CreateAgentBehaviour {
+            agent: id_agent(AgentSelection::Query { name: "id".into() }),
+            location: literal.clone(),
+        });
+        assert!(get.validate(&literal, &behavior).is_err());
+        assert!(
+            RouteMatch::MountPrefix
+                .validate(&literal, &behavior)
+                .is_err()
+        );
+        assert!(post.validate(&captured, &behavior).is_err());
+    }
+
     fn router() -> RouteBehaviour {
         let agent = MountAgent {
             component_id: ComponentId(uuid::Uuid::from_u128(17)),
             component_revision: ComponentRevision::try_from(23u64).unwrap(),
             agent_type: AgentTypeName("site".into()),
+            agent_selection: AgentSelection::Key,
             constructor_input: input(),
             constructor_parameters: vec![],
         };
@@ -1680,6 +2065,7 @@ mod tests {
                             component_id: ComponentId(uuid::Uuid::from_u128(42)),
                             component_revision: ComponentRevision::try_from(31u64).unwrap(),
                             agent_type: AgentTypeName("files".into()),
+                            agent_selection: AgentSelection::Key,
                             constructor_input: input(),
                             constructor_parameters: vec![],
                         },
@@ -1752,6 +2138,7 @@ mod tests {
                     component_id: ComponentId(uuid::Uuid::from_u128(42)),
                     component_revision: ComponentRevision::try_from(31u64).unwrap(),
                     agent_type: AgentTypeName("files".into()),
+                    agent_selection: AgentSelection::Key,
                     constructor_input: input(),
                     constructor_parameters: vec![ConstructorParameter::Path {
                         path_segment_index: 0u32.into(),

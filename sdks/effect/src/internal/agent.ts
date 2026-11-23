@@ -18,6 +18,8 @@ import {
   validateAgentHttp,
   type CompiledHttp,
   type MethodHttpInput,
+  type MountDef,
+  type AgentIdSpec,
 } from "../Http.js"
 import type { BindableKeys, MountDefCovering, WebhookVarsValid } from "./httpTypes.js"
 import { isMultimodal } from "../Multimodal.js"
@@ -188,10 +190,11 @@ type AgentHttpRequirement<
   Methods extends Record<string, AnyMethodSpec>,
   MV extends string,
   WV extends string,
-> =
-  AnyMethodHasHttp<Methods> extends true
-    ? { readonly http: MountDefCovering<C, MV, WV> & WebhookVarsValid<C, WV> }
-    : unknown
+> = AnyMethodHasHttp<Methods> extends true ? { readonly http: AgentHttpMount<C, MV, WV> } : unknown
+
+type AgentHttpMount<C, MV extends string, WV extends string> =
+  | (MountDefCovering<C, MV, WV> & WebhookVarsValid<C, WV>)
+  | (MountDef<never, never> & { readonly agentIdBinding: AgentIdSpec })
 
 /**
  * Per-instance handlers derived from a record of method specs. Each
@@ -355,10 +358,11 @@ export interface AgentMetadata<
    * via the Golem host's HTTP server under the declared path prefix.
    *
    * Type-level constraints:
-   * - Every `{var}` in the mount path must be a constructor parameter
+   * - On key mounts, every `{var}` must be a constructor parameter
    *   name AND must be statically eligible for path binding (i.e. not
    *   a {@link Multimodal} or {@link ElementSpec} carrier — see
    *   {@link BindableKeys}); enforced via {@link MountDefCovering}.
+   * - ID mounts bind only the required agent ID, not constructor input.
    * - Every `{var}` in the optional `webhookSuffix` must likewise be a
    *   bindable constructor-parameter name; enforced via
    *   {@link WebhookVarsValid}.
@@ -367,7 +371,7 @@ export interface AgentMetadata<
    * full constructor-coverage are enforced at registration time by
    * the runtime validators in `Http.ts`.
    */
-  readonly http?: MountDefCovering<C, MV, WV> & WebhookVarsValid<C, WV>
+  readonly http?: AgentHttpMount<C, MV, WV>
   /**
    * Optional Effect-Context-based config service. Built with
    * {@link defineConfig}. When present, the dispatcher fetches each
@@ -490,7 +494,7 @@ export type ImplementedAgent<
  * When `http` IS supplied, two additional type-level constraints
  * apply to it:
  *
- * - Every constructor parameter in `constructorParams` must appear as
+ * - On key mounts, every constructor parameter in `id` must appear as
  *   a `{var}` segment in the mount path; missing vars surface as an
  *   `Invalid<"mount path missing var '…'">` carrier on the assigned
  *   {@link MountDefCovering} type.
@@ -768,13 +772,17 @@ export const registerAgent = <
         stringBindableParams: collectStringBindableParams(spec.input),
         queryOrHeaderBindableParams: collectQueryOrHeaderBindableParams(spec.input),
         ...collectHttpQueryParams(mc.inputCodec.graph),
+        usesStreams: mc.schemaGraph.typeNodes.some((node) => node.body.tag === "stream-type"),
       })
     }
 
     // Validate + compile HTTP routes (mount + per-method endpoints).
-    if (metadata.http?.phantomId && metadata.mode === "ephemeral") {
+    if (
+      metadata.http?.agentIdBinding &&
+      (metadata.mode === "ephemeral" || metadata.http.phantomAgent)
+    ) {
       return yield* Effect.fail(
-        new HttpRouteError("Phantom selectors require a regular durable agent"),
+        new HttpRouteError("Agent ID bindings require a regular durable agent"),
       )
     }
     if (
@@ -1455,7 +1463,7 @@ const saveSnapshotState = async (agent: ActiveAgent, compiled: CompiledAgent): P
  * agent from a snapshot. We:
  *
  * 1. Read the agent's type name from `GOLEM_AGENT_TYPE`.
- * 2. Decode the envelope to recover principal + user-state bytes, and
+ * 2. Decode the envelope to recover user-state bytes, and
  *    decode `constructor` against the constructor schema, as `initialize`
  *    decodes its input.
  * 3. Decode state or run the strategy's restore effect, skipping `init`.

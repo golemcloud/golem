@@ -459,7 +459,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     async fn set_current_idempotency_key(&mut self, key: golem_common::model::InvocationId) {
         self.state.set_current_idempotency_key(key)
@@ -504,7 +503,6 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         {
@@ -646,7 +644,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
@@ -655,6 +652,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> Result<bool, WorkerExecutorError> {
         let crate::worker::HydratedInvocation {
             invocation,
+            operation,
             payload,
         } = hydrated;
         if !self.state.durability_is_suppressed() {
@@ -707,6 +705,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .worker()
                 .start_pending_invocation(
                     idempotency_key,
+                    operation,
                     payload,
                     stack,
                     InvocationWalletPin {
@@ -849,16 +848,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let decision = terminal_decision;
 
         let entity_parent_start_index = self.entity_parent_start_index();
+        // A rejected invocation is recorded as its cancellation followed by the rejection error,
+        // so the status fold keeps the rejection as its result even when it never started.
         let rejection_persisted = if let (
             Some(idempotency_key),
             TrapType::Error {
-                error: error @ (AgentError::PermissionDenied(_) | AgentError::InvalidRequest(_)),
-                retry_from,
-                ..
+                error, retry_from, ..
             },
         ) = (&current_idempotency_key, trap_type)
+            && trap_type.is_invocation_rejection()
         {
-            let rejection_persisted = self
+            let rejection_recorded = self
                 .state
                 .oplog
                 .add_pair(
@@ -883,7 +883,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     }),
                 )
                 .await;
-            if let Err(error) = rejection_persisted {
+            if let Err(error) = rejection_recorded {
                 if let OplogError::Fenced(fence) = error {
                     // The shard moved while this failure was being recorded. The fence retires the
                     // agent exactly as the `ShardLost` arm above does: nothing further may be
@@ -1289,7 +1289,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if &self.state.invocation_state().current_span_id == span_id {

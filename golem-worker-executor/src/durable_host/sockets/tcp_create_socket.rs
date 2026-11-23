@@ -14,6 +14,7 @@
 
 use wasmtime::component::Resource;
 
+use crate::durable_host::sockets::SocketEntry;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use wasmtime_wasi::p2::SocketError;
@@ -26,6 +27,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         address_family: IpAddressFamily,
     ) -> Result<Resource<TcpSocket>, SocketError> {
         self.observe_function_call("sockets::tcp_create_socket", "create_tcp_socket");
-        Host::create_tcp_socket(&mut self.as_wasi_view().sockets(), address_family)
+        let socket = Host::create_tcp_socket(&mut self.as_wasi_view().sockets(), address_family)?;
+        self.state.socket_entries.insert(
+            socket.rep(),
+            SocketEntry::new(super::tcp::p3_family(address_family)),
+        );
+        Ok(socket)
     }
 }

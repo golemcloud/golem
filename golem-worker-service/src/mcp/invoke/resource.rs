@@ -97,7 +97,8 @@ pub async fn invoke_resource(
         let (target, component, freshness_disposition) = worker_service
             .bound_invocation_target(
                 mcp_resource.component_id,
-                &constructor,
+                &mcp_resource.agent_type_name,
+                Some(&constructor),
                 AgentBinding::Constructor,
                 &request_key,
                 &mcp_resource.method.name,

@@ -289,13 +289,60 @@ impl RegistryService for HarnessRegistryService {
     }
 }
 
+/// The definition of the harness's native tool `native`: one command without input or output
+/// streams.
+fn native_tool_definition() -> golem_common::schema::tool::Tool {
+    use golem_common::schema::tool::{
+        CommandBody, CommandNode, CommandTree, Doc, Positionals, Tool,
+    };
+    Tool {
+        version: "1.0.0".to_string(),
+        requires_filesystem: false,
+        http_mount: None,
+        schema: SchemaGraph::empty(),
+        commands: CommandTree {
+            nodes: vec![CommandNode {
+                name: "native".to_string(),
+                aliases: vec![],
+                doc: Doc::default(),
+                http: None,
+                globals: Default::default(),
+                subcommands: vec![],
+                body: Some(CommandBody {
+                    positionals: Positionals::default(),
+                    options: vec![],
+                    flags: vec![],
+                    constraints: vec![],
+                    stdin: None,
+                    stdout: None,
+                    stderr: None,
+                    result: None,
+                    errors: vec![],
+                    annotations: None,
+                }),
+            }],
+        },
+    }
+}
+
 struct StaticComponentService {
     component: Component,
+    tool_state: golem_common::model::tool::ToolDeploymentState,
 }
 
 #[async_trait]
 impl ComponentService for StaticComponentService {
     async fn invalidate_current(&self) {}
+
+    async fn get_tool_deployment_state(
+        &self,
+        _: EnvironmentId,
+        component_id: ComponentId,
+        _: ComponentRevision,
+    ) -> Result<Option<Arc<golem_common::model::tool::ToolDeploymentState>>, ComponentServiceError>
+    {
+        Ok((self.component.id == component_id).then(|| Arc::new(self.tool_state.clone())))
+    }
 
     async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
         (self.component.id == component_id).then(|| self.component.clone())
@@ -378,6 +425,23 @@ pub(crate) struct FileReadMock {
     pub responses: Mutex<VecDeque<BoxFuture<'static, WorkerResult<FileReadResponse>>>>,
 }
 
+pub(crate) struct CreateCall {
+    pub target: RoutedTarget,
+    pub auth: AuthCtx,
+    pub caller: Caller,
+    pub idempotency_key: Option<IdempotencyKey>,
+    pub environment_id: EnvironmentId,
+    pub environment_variables: HashMap<String, String>,
+    pub config: Vec<AgentConfigEntryDto>,
+    pub ignore_already_existing: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct CreateMock {
+    pub calls: Mutex<Vec<CreateCall>>,
+    pub responses: Mutex<VecDeque<BoxFuture<'static, WorkerResult<AgentFingerprint>>>>,
+}
+
 pub(crate) struct RecordedInvocationContext {
     pub auth: AuthCtx,
     pub caller: golem_api_grpc::proto::golem::component::Caller,
@@ -436,6 +500,7 @@ struct RecordingWorkerClient {
     contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
     invocation_output: AgentInvocationOutput,
     file_reads: Arc<FileReadMock>,
+    creates: Arc<CreateMock>,
     native_sessions: Arc<Mutex<NativeSessionLog>>,
 }
 
@@ -473,19 +538,38 @@ impl WorkerClient for RecordingWorkerClient {
 
     async fn create(
         &self,
-        _: &RoutedTarget,
-        _: HashMap<String, String>,
-        _: Vec<AgentConfigEntryDto>,
-        _: bool,
+        target: &RoutedTarget,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
         _: AccountId,
-        _: EnvironmentId,
-        _: AuthCtx,
+        environment_id: EnvironmentId,
+        auth: AuthCtx,
         _: Option<InvocationContext>,
-        _: golem_api_grpc::proto::golem::component::Caller,
-        _: Option<IdempotencyKey>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
+        idempotency_key: Option<IdempotencyKey>,
         _: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
-        unimplemented!()
+        self.creates.calls.lock().unwrap().push(CreateCall {
+            target: target.clone(),
+            auth,
+            caller: Caller::try_from(caller).unwrap(),
+            idempotency_key,
+            environment_id,
+            environment_variables,
+            config,
+            ignore_already_existing,
+        });
+        let response = self
+            .creates
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("a scripted worker create response");
+        response
+            .await
+            .map(|fingerprint| (target.agent_id, fingerprint))
     }
 
     async fn connect(
@@ -744,6 +828,40 @@ impl WorkerClient for RecordingWorkerClient {
         unimplemented!()
     }
 
+    async fn get_invocation(
+        &self,
+        _: &AgentId,
+        _: &golem_common::model::InvocationId,
+        _: EnvironmentId,
+        _: AuthCtx,
+    ) -> WorkerResult<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+    {
+        unimplemented!()
+    }
+
+    async fn list_invocations(
+        &self,
+        _: &AgentId,
+        _: golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+        _: EnvironmentId,
+        _: AuthCtx,
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsSuccess>
+    {
+        unimplemented!()
+    }
+
+    async fn lookup_invocations(
+        &self,
+        _: &AgentId,
+        _: &IdempotencyKey,
+        _: Option<String>,
+        _: EnvironmentId,
+        _: AuthCtx,
+    ) -> WorkerResult<Vec<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+    {
+        unimplemented!()
+    }
+
     async fn invoke_agent(
         &self,
         target: &RoutedTarget,
@@ -953,6 +1071,7 @@ pub(crate) struct InvocationHarness {
     pub(crate) account_id: AccountId,
     pub(crate) account_email: AccountEmail,
     pub(crate) file_reads: Arc<FileReadMock>,
+    pub(crate) creates: Arc<CreateMock>,
     pub(crate) metadata: Arc<Mutex<HashMap<AgentId, AgentMetadataDto>>>,
     pub(crate) metadata_reads: Arc<Mutex<Vec<AgentId>>>,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
@@ -978,6 +1097,42 @@ pub(crate) struct InvocationHarness {
 }
 
 impl InvocationHarness {
+    pub(crate) fn add_keyed_agent(&self, key: &golem_common::model::agent::AgentKey) -> AgentId {
+        let agent_id = AgentId::keyed(self.environment_id, self.type_id, key);
+        self.metadata.lock().unwrap().insert(
+            agent_id,
+            AgentMetadataDto {
+                agent_id,
+                owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
+                agent_type_name: Some(key.agent_type().clone()),
+                canonical_key: Some(key.to_string()),
+                constructor_parameters: Some(key.canonical_params().to_string()),
+                environment_id: self.environment_id,
+                created_by: self.account_id,
+                env: Default::default(),
+                config: vec![],
+                status: golem_common::model::AgentStatus::Idle,
+                underlying_status: None,
+                component_revision: ComponentRevision::INITIAL,
+                retry_count: 0,
+                pending_invocation_count: 0,
+                updates: vec![],
+                created_at: golem_common::model::Timestamp::now_utc(),
+                last_error: None,
+                last_error_kind: None,
+                component_size: 0,
+                total_linear_memory_size: 0,
+                exported_resource_instances: vec![],
+                active_plugins: Default::default(),
+                skipped_regions: vec![],
+                deleted_regions: vec![],
+                last_oplog_index: OplogIndex::INITIAL,
+                fingerprint: AgentFingerprint::new(),
+            },
+        );
+        agent_id
+    }
+
     pub(crate) fn new(
         invocation_output: AgentInvocationOutput,
         constructor: AgentConstructorSchema,
@@ -1092,6 +1247,7 @@ impl InvocationHarness {
         let durable_stream_fork_result = Arc::new(Mutex::new(None));
         let durable_stream_reads = Arc::new(Mutex::new(VecDeque::new()));
         let file_reads = Arc::new(FileReadMock::default());
+        let creates = Arc::new(CreateMock::default());
         let contexts = Arc::new(Mutex::new(Vec::new()));
         let native_sessions = Arc::new(Mutex::new(NativeSessionLog {
             mode: NativeSessions::Refuse,
@@ -1117,6 +1273,7 @@ impl InvocationHarness {
             contexts: contexts.clone(),
             invocation_output,
             file_reads: file_reads.clone(),
+            creates: creates.clone(),
             native_sessions: native_sessions.clone(),
         });
 
@@ -1138,7 +1295,19 @@ impl InvocationHarness {
 
         Self {
             worker_service: Arc::new(WorkerService::new(
-                Arc::new(StaticComponentService { component }),
+                Arc::new(StaticComponentService {
+                    tool_state: crate::service::component::tests::tool_deployment_state(
+                        &component,
+                        "native",
+                        native_tool_definition(),
+                        [
+                            golem_common::model::tool::ToolBindingOwner::ComponentBaseline {
+                                component_id,
+                            },
+                        ],
+                    ),
+                    component,
+                }),
                 Arc::new(AllowAllAuthService),
                 Arc::new(NoopLimitService),
                 worker_client,
@@ -1161,6 +1330,7 @@ impl InvocationHarness {
             account_id,
             account_email,
             file_reads,
+            creates,
             metadata,
             metadata_reads,
             agent_ids,
@@ -1215,42 +1385,11 @@ impl InvocationHarness {
 
     /// A native tool `native` of the harness's component, without input or output streams.
     fn native_export(&self) -> golem_service_base::mcp::CompiledMcpToolExport {
-        use golem_common::schema::tool::{
-            CommandBody, CommandNode, CommandTree, Doc, Positionals, Tool,
-        };
-        let definition = Tool {
-            version: "1.0.0".to_string(),
-            requires_filesystem: false,
-            http_mount: None,
-            schema: SchemaGraph::empty(),
-            commands: CommandTree {
-                nodes: vec![CommandNode {
-                    name: "native".to_string(),
-                    aliases: vec![],
-                    doc: Doc::default(),
-                    http: None,
-                    globals: Default::default(),
-                    subcommands: vec![],
-                    body: Some(CommandBody {
-                        positionals: Positionals::default(),
-                        options: vec![],
-                        flags: vec![],
-                        constraints: vec![],
-                        stdin: None,
-                        stdout: None,
-                        stderr: None,
-                        result: None,
-                        errors: vec![],
-                        annotations: None,
-                    }),
-                }],
-            },
-        };
         let mut export = golem_service_base::mcp::native_tool::compile_native_tool_exports(
             self.component_id,
             "test:owner".try_into().unwrap(),
             "native".try_into().unwrap(),
-            &definition,
+            &native_tool_definition(),
             None,
             None,
         )

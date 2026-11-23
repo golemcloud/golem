@@ -311,6 +311,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else if let Some(index) = accepted_index {
             let OplogEntry::PendingAgentInvocation {
                 invocation_id: accepted_key,
+                operation,
                 payload,
                 ..
             } = self.oplog.read(index).await?
@@ -324,9 +325,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "native session references a different invocation key",
                 ));
             }
-            let payload: AgentInvocationPayload = self
+            let payload = self
                 .oplog
-                .download_payload(payload)
+                .download_request(*operation, payload)
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
             let AgentInvocationPayload::ExternalTool { activation, .. } = payload else {
@@ -386,6 +387,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 expected_deployment_revision,
                 activation.registered_tool.deployment_revision,
             )?;
+            require_canonical_command_path(&activation, &tool_name, &command_path)?;
             if let Some(scope_card) = &scope_card {
                 crate::services::card::validate_scope_card(
                     self.card_service().as_ref(),
@@ -1060,15 +1062,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         match entry {
             OplogEntry::PendingAgentInvocation {
                 invocation_id: idempotency_key,
+                operation,
                 payload,
                 trace_id,
                 trace_states,
                 invocation_context,
                 ..
             } => {
+                let operation = *operation;
                 let agent_payload = self
                     .oplog
-                    .download_payload_classified(payload.clone())
+                    .download_request_classified(operation.clone(), payload.clone())
                     .await
                     .map_err(|error| match error {
                         OplogPayloadDownloadError::Backend(error) => {
@@ -1096,6 +1100,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     AgentInvocation::from_parts(idempotency_key, agent_payload, invocation_context);
                 Ok(HydratedInvocation {
                     invocation,
+                    operation,
                     payload,
                 })
             }
@@ -1135,31 +1140,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             into_pending_invocation_parts(invocation);
         let invocation_context = invocation_context
             .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
-        let payload = match invocation_payload {
-            // A manual update invocation stays in the oplog whatever the payload limit, so every
-            // reader of the oplog tells it from other invocations without a download.
-            payload @ AgentInvocationPayload::ManualUpdate { .. } => {
-                OplogPayload::SerializedInline {
-                    bytes: golem_common::serialization::serialize(&payload).map_err(|e| {
-                        WorkerExecutorError::invalid_request(format!(
-                            "Failed to serialize invocation payload: {e}"
-                        ))
-                    })?,
-                    cached: Some(Arc::new(payload)),
-                }
-            }
-            payload => oplog.upload_payload_owned(payload).await.map_err(|e| {
+        let (operation, payload) = oplog
+            .upload_request(invocation_payload)
+            .await
+            .map_err(|e| {
                 WorkerExecutorError::invalid_request(format!(
                     "Failed to upload invocation payload: {e}"
                 ))
-            })?,
-        };
+            })?;
         let invocation_context_spans = invocation_context.to_oplog_data();
         Ok((
             semantic_key,
             OplogEntry::pending_agent_invocation(
                 not_before,
                 idempotency_key,
+                Box::new(operation),
                 payload,
                 invocation_context.trace_id,
                 invocation_context.trace_states,
@@ -1707,6 +1702,27 @@ pub(crate) fn require_expected_tool_deployment_revision(
         ))
     } else {
         Ok(())
+    }
+}
+
+/// The invocation ID is derived from the command path, so only the canonical path of a declared
+/// command is accepted: an alias would give the same command a second ID.
+pub(crate) fn require_canonical_command_path(
+    activation: &golem_common::model::tool::ToolActivationSnapshot,
+    tool_name: &ToolName,
+    command_path: &[String],
+) -> Result<(), WorkerExecutorError> {
+    if activation
+        .effective_definition()
+        .canonical_command_path(command_path)
+        .as_deref()
+        == Some(command_path)
+    {
+        Ok(())
+    } else {
+        Err(WorkerExecutorError::invalid_request(format!(
+            "command path {command_path:?} of tool '{tool_name}' does not name a declared command by its canonical names"
+        )))
     }
 }
 

@@ -454,16 +454,21 @@ async fn assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
 /// The invocation writes its first byte and then waits. Only the watch of stdout can end it
 /// after the reader has left, because the command writes nothing more.
 #[cfg(unix)]
-#[test]
-#[timeout("15 minutes")]
-async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
- {
-    let ctx = streaming_invocation_context().await;
-    assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
-        &ctx,
-        &["produce_byte_then_wait"],
-    )
-    .await;
+mod reader_watch_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    #[timeout("15 minutes")]
+    async fn test_reader_that_leaves_after_the_first_byte_ends_agent_invoke_with_the_exit_code_of_sigpipe()
+     {
+        let ctx = streaming_invocation_context().await;
+        assert_agent_invoke_cancels_its_output_when_the_reader_leaves(
+            &ctx,
+            &["produce_byte_then_wait"],
+        )
+        .await;
+    }
 }
 
 /// The invocation goes on writing after the reader has left, so a failed write of the output
@@ -525,30 +530,120 @@ async fn test_rejected_agent_invoke_ends_with_the_exit_code_of_sigpipe_when_stde
 }
 
 #[cfg(unix)]
+mod idle_stream_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    #[timeout("15 minutes")]
+    async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
+        let ctx = streaming_invocation_context().await;
+        let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+
+        let created = ctx
+            .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
+            .await;
+        assert!(created.success_or_dump());
+
+        let stream = tokio::time::timeout(
+            Duration::from_secs(40),
+            ctx.cli_closing_stdout_when_quiet([cmd::AGENT, "stream", &agent]),
+        )
+        .await
+        .expect("an idle agent stream kept running with a closed stdout");
+        assert_eq!(
+            stream.exit_code(),
+            Some(CLOSED_OUTPUT_EXIT),
+            "the idle agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
+            stream.stderr_text()
+        );
+        assert!(!stream.stderr_text().contains("panicked"));
+    }
+}
+
 #[test]
-#[timeout("15 minutes")]
-async fn test_idle_agent_stream_ends_when_stdout_is_closed() {
+#[timeout("10 minutes")]
+async fn test_streaming_invocation_cli_identity_and_fingerprint() {
     let ctx = streaming_invocation_context().await;
-    let agent = format!(r#"RpcGlobalState("{}")"#, Uuid::new_v4());
+    let key = streaming_agent(&Uuid::new_v4().to_string());
+    let mut previous_reference: Option<(String, String)> = None;
 
-    let created = ctx
-        .cli([cmd::AGENT, cmd::INVOKE, &agent, "inc_global_by", "1"])
-        .await;
-    assert!(created.success_or_dump());
+    for _ in 0..2 {
+        let created = ctx
+            .cli([
+                flag::YES,
+                flag::FORMAT,
+                "json",
+                cmd::AGENT,
+                cmd::CREATE,
+                &key,
+                "--keyed",
+            ])
+            .await;
+        assert!(created.success_or_dump());
+        let reference = created
+            .stdout_json::<serde_json::Value>()
+            .into_iter()
+            .find(|document| document["$type"] == "agent.create")
+            .unwrap();
+        let id = reference["agentId"].as_str().unwrap();
+        let fingerprint = reference["agentFingerprint"].as_str().unwrap();
+        let by_id = format!("StreamingRpcTarget[{id}]");
 
-    let stream = tokio::time::timeout(
-        Duration::from_secs(40),
-        ctx.cli_closing_stdout_when_quiet([cmd::AGENT, "stream", &agent]),
-    )
-    .await
-    .expect("an idle agent stream kept running with a closed stdout");
-    assert_eq!(
-        stream.exit_code(),
-        Some(CLOSED_OUTPUT_EXIT),
-        "the idle agent stream with a closed stdout did not end with the exit code of SIGPIPE: {}",
-        stream.stderr_text()
-    );
-    assert!(!stream.stderr_text().contains("panicked"));
+        if let Some((previous_id, previous_fingerprint)) = &previous_reference {
+            assert_eq!(id, previous_id);
+            assert_ne!(fingerprint, previous_fingerprint);
+            for address in [&key, &by_id] {
+                let stale = ctx
+                    .cli_with_input(
+                        [
+                            cmd::AGENT,
+                            cmd::INVOKE,
+                            address,
+                            "produce",
+                            "[3, 7]",
+                            "--expected-fingerprint",
+                            previous_fingerprint,
+                        ],
+                        b"",
+                    )
+                    .await;
+                assert!(
+                    !stale.success(),
+                    "a stale fingerprint must reject {address}"
+                );
+                assert!(
+                    stale.stderr_text().contains("not-found"),
+                    "{}",
+                    stale.stderr_text()
+                );
+            }
+        }
+
+        for (address, expected) in [
+            (&by_id, None),
+            (&by_id, Some(fingerprint)),
+            (&key, Some(fingerprint)),
+        ] {
+            let mut args = vec![
+                cmd::AGENT,
+                cmd::INVOKE,
+                address.as_str(),
+                "produce",
+                "[3, 7]",
+            ];
+            if let Some(expected) = expected {
+                args.extend(["--expected-fingerprint", expected]);
+            }
+            let output = ctx.cli_with_input(args, b"").await;
+            assert!(output.success(), "{}", output.stderr_text());
+            assert!(output.stdout_text().contains("3\n7\n"));
+        }
+
+        previous_reference = Some((id.to_string(), fingerprint.to_string()));
+        let deleted = ctx.cli([flag::YES, cmd::AGENT, "delete", &key]).await;
+        assert!(deleted.success_or_dump());
+    }
 }
 
 #[test]
@@ -1353,67 +1448,74 @@ async fn test_streaming_invocation_cli_end_to_end() {
 
     let interrupted_agent = streaming_agent(&Uuid::new_v4().to_string());
     #[cfg(unix)]
-    {
-        let exit_code = ctx
-            .cli_ctrl_c_after(
+    mod interruption {
+        use super::*;
+        pub(super) async fn run(ctx: &TestContext, interrupted_agent: &str) {
+            let exit_code = ctx
+                .cli_ctrl_c_after(
+                    [
+                        cmd::AGENT,
+                        cmd::INVOKE,
+                        interrupted_agent,
+                        "transform",
+                        "-",
+                        flag::FORMAT,
+                        "json",
+                        "--no-stream",
+                    ],
+                    "\"kind\":\"accepted\"",
+                    Duration::ZERO,
+                )
+                .await;
+            assert_eq!(exit_code, 130);
+
+            let backpressured_agent = streaming_agent(&Uuid::new_v4().to_string());
+            let exit_code = ctx
+                .cli_ctrl_c_after(
+                    [
+                        cmd::AGENT,
+                        cmd::INVOKE,
+                        &backpressured_agent,
+                        "produce_many_bytes",
+                        "200000",
+                        flag::FORMAT,
+                        "json",
+                        "--no-stream",
+                    ],
+                    "\"kind\":\"accepted\"",
+                    Duration::from_secs(1),
+                )
+                .await;
+            assert_eq!(exit_code, 130);
+        }
+    }
+    #[cfg(not(unix))]
+    mod interruption {
+        use super::*;
+        pub(super) async fn run(ctx: &TestContext, interrupted_agent: &str) {
+            let interactive_agent = interrupted_agent.to_string();
+            ctx.cli_interactive(
                 [
                     cmd::AGENT,
                     cmd::INVOKE,
-                    &interrupted_agent,
+                    &interactive_agent,
                     "transform",
                     "-",
                     flag::FORMAT,
                     "json",
                     "--no-stream",
                 ],
-                "\"kind\":\"accepted\"",
-                Duration::ZERO,
+                |session| {
+                    session.set_expect_timeout(Some(Duration::from_secs(30)));
+                    session.expect_str("\"kind\":\"accepted\"")?;
+                    session.send("\u{3}")?;
+                    session.expect_eof()
+                },
             )
             .await;
-        assert_eq!(exit_code, 130);
-
-        let backpressured_agent = streaming_agent(&Uuid::new_v4().to_string());
-        let exit_code = ctx
-            .cli_ctrl_c_after(
-                [
-                    cmd::AGENT,
-                    cmd::INVOKE,
-                    &backpressured_agent,
-                    "produce_many_bytes",
-                    "200000",
-                    flag::FORMAT,
-                    "json",
-                    "--no-stream",
-                ],
-                "\"kind\":\"accepted\"",
-                Duration::from_secs(1),
-            )
-            .await;
-        assert_eq!(exit_code, 130);
+        }
     }
-    #[cfg(not(unix))]
-    {
-        let interactive_agent = interrupted_agent.clone();
-        ctx.cli_interactive(
-            [
-                cmd::AGENT,
-                cmd::INVOKE,
-                &interactive_agent,
-                "transform",
-                "-",
-                flag::FORMAT,
-                "json",
-                "--no-stream",
-            ],
-            |session| {
-                session.set_expect_timeout(Some(Duration::from_secs(30)));
-                session.expect_str("\"kind\":\"accepted\"")?;
-                session.send("\u{3}")?;
-                session.expect_eof()
-            },
-        )
-        .await;
-    }
+    interruption::run(&ctx, &interrupted_agent).await;
 
     let after_interrupt = ctx
         .cli([
@@ -4757,7 +4859,10 @@ async fn test_moonbit_tool_guest_bridge_e2e() {
         String::from_utf8_lossy(&wit.stderr)
     );
     let wit = String::from_utf8_lossy(&wit.stdout);
-    assert!(wit.contains("golem:agent/host@2.0.0"), "{wit}");
+    assert!(
+        wit.contains("golem:agent/invocation-context@2.0.0"),
+        "{wit}"
+    );
     assert!(wit.contains("golem:tool/host@0.1.0"), "{wit}");
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
@@ -5699,10 +5804,9 @@ async fn test_naming_extremes() {
 }
 
 // Runs `agent list --mode <mode> --format json` against the live server and
-// returns the rendered agent-name strings from the response. The JSON view's
-// `agentName` is the rendered, language-specific agent id, e.g.
-// `DurableListAgent("…")`. Panics on non-zero exit or non-JSON output so test
-// failures point at the listing step that broke.
+// returns the agent type names from the response. Ephemeral agents have no key.
+// Panics on non-zero exit or non-JSON output so test failures point at the
+// listing step that broke.
 async fn list_agent_names(ctx: &TestContext, mode: &str) -> Vec<String> {
     let outputs = ctx
         .cli([
@@ -5726,7 +5830,15 @@ async fn list_agent_names(ctx: &TestContext, mode: &str) -> Vec<String> {
         .into_iter()
         .next()
         .unwrap_or_else(|| panic!("`agent list --mode {mode}` produced no JSON output"));
-    response.agents.into_iter().map(|a| a.agent_id).collect()
+    response
+        .agents
+        .into_iter()
+        .map(|a| {
+            a.agent_type
+                .expect("listed agent must have a type")
+                .to_string()
+        })
+        .collect()
 }
 
 // Scaffolds a fresh Rust app with two agent types: `DurableListAgent` (durable
@@ -5896,13 +6008,13 @@ async fn test_agent_list_mode_filter() {
     let count_durable = |names: &[String]| {
         names
             .iter()
-            .filter(|n| n.starts_with("DurableListAgent("))
+            .filter(|n| n.as_str() == "DurableListAgent")
             .count()
     };
     let count_ephemeral = |names: &[String]| {
         names
             .iter()
-            .filter(|n| n.starts_with("EphemeralListAgent("))
+            .filter(|n| n.as_str() == "EphemeralListAgent")
             .count()
     };
 
@@ -6197,7 +6309,7 @@ async fn assert_queued_manual_update_before_pending(ctx: &TestContext, agent: &s
         .expect("agent list must produce structured output")
         .agents
         .into_iter()
-        .find(|listed| listed.agent_id == agent)
+        .find(|listed| listed.agent_key == agent)
         .expect("queued agent must be listed");
     assert_eq!(listed_agent.updates.len(), 1);
     let pending = &listed_agent.updates[0];
@@ -6374,15 +6486,19 @@ async fn test_agent_update_await_correlates_exact_admitted_attempts() {
         .iter()
         .map(|agent| agent.agent_id.as_str())
         .collect::<std::collections::HashSet<_>>();
-    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"bulk\")"));
-    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"queued\")"));
-    assert!(!bulk_agent_ids.contains("UpdateAwaitAgent(\"automatic\")"));
+    let bulk_id = get_update_await_metadata(&ctx, r#"UpdateAwaitAgent("bulk")"#)
+        .await
+        .agent_id;
+    let queued_id = get_update_await_metadata(&ctx, queued_agent).await.agent_id;
+    let automatic_id = get_update_await_metadata(&ctx, automatic_agent)
+        .await
+        .agent_id;
+    assert!(bulk_agent_ids.contains(bulk_id.as_str()));
+    assert!(bulk_agent_ids.contains(queued_id.as_str()));
+    assert!(!bulk_agent_ids.contains(automatic_id.as_str()));
     assert_eq!(bulk_agent_ids.len(), 2);
     assert_eq!(bulk_result.errors.len(), 1);
-    assert_eq!(
-        bulk_result.errors[0].agent_id,
-        "UpdateAwaitAgent(\"queued\")"
-    );
+    assert_eq!(bulk_result.errors[0].agent_id, queued_id);
     assert!(
         bulk_result.errors[0]
             .error
@@ -6474,13 +6590,14 @@ struct UpdateAwaitAgentListView {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateAwaitListedAgent {
-    agent_id: String,
+    agent_key: String,
     updates: Vec<UpdateAwaitRecord>,
 }
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateAwaitAgentMetadata {
+    agent_id: String,
     status: String,
     updates: Vec<UpdateAwaitRecord>,
 }
@@ -6516,19 +6633,11 @@ struct UpdateAwaitBulkError {
     error: String,
 }
 
-// JSON view of the `agent list` structured output. We only need the `agents`
-// array and the rendered `agentId` field; serde ignores the `outputType`
-// discriminator injected by the CLI's structured-output wrapper.
+// JSON view of the `agent list` structured output.
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentListResponseView {
-    agents: Vec<AgentListView>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentListView {
-    agent_id: String,
+    agents: Vec<golem_cli::model::agent::AgentMetadataView>,
 }
 
 // Use UPDATE_GOLDENFILES=1 or `cargo make cli-integration-tests-update-golden-files` to update files

@@ -149,6 +149,7 @@ impl PostgresKeyValueStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl KeyValueStorage for PostgresKeyValueStorage {
     async fn set(
         &self,

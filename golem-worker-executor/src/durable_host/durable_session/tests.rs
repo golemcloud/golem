@@ -33,11 +33,14 @@ use golem_common::base_model::durable_stream::{
 };
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::TraceId;
-use golem_common::model::{AgentInvocationPayload, OplogIndex, OwnedAgentId};
+use golem_common::model::oplog::OplogPayload;
+use golem_common::model::{OplogIndex, OwnedAgentId};
 use golem_schema::proto::golem::schema::{ListValue, SchemaValueStreamReference, schema_value};
 use golem_schema::schema::schema_value::UnionValuePayload;
 use golem_schema::schema::tool::compatibility::{
@@ -1780,6 +1783,7 @@ fn system_durable_stream_cancellation_is_a_permanent_stream_error() {
 struct TestConsumerJournal(Arc<dyn Oplog>);
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl DurableStreamConsumerJournal for TestConsumerJournal {
     async fn commit(&self) -> Result<(), SessionError> {
         self.0.commit(CommitLevel::Always).await.unwrap();
@@ -1863,7 +1867,8 @@ async fn append_prepared_pending(
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -3355,6 +3360,7 @@ impl LagRecordingSource {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl AttachedStreamSegmentSource for LagRecordingSource {
     async fn journal_lag_events(
         &self,
@@ -3413,6 +3419,7 @@ struct AttachedProducerRpc {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl Rpc for AttachedProducerRpc {
     async fn create_and_initialize(
         &self,
@@ -3435,7 +3442,7 @@ impl Rpc for AttachedProducerRpc {
         _target: &OwnedAgentId,
         _key: golem_common::model::InvocationId,
         _receipt: golem_common::model::ScheduleId,
-        _owner: &golem_common::model::AgentId,
+        _canceller: &golem_common::model::caller::Principal,
         _auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         Err(RpcError::ProtocolError {
@@ -3450,6 +3457,7 @@ impl Rpc for AttachedProducerRpc {
         _request_key: golem_common::model::InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
         _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
         Err(RpcError::ProtocolError {
@@ -6825,6 +6833,7 @@ async fn root_union_stream_coordinates_use_the_selected_branch_and_survive_reloa
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl DurableStreamConsumerJournal for RecordingConsumerJournal {
     async fn commit(&self) -> Result<(), SessionError> {
         self.oplog.commit(CommitLevel::Always).await.unwrap();
@@ -10946,7 +10955,8 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -11626,7 +11636,8 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         .add(OplogEntry::pending_agent_invocation(
             None,
             consumer.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -12170,7 +12181,8 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -12596,7 +12608,8 @@ async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_with
         .add(OplogEntry::pending_agent_invocation(
             None,
             session_key.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -12828,7 +12841,8 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         .add(OplogEntry::pending_agent_invocation(
             None,
             session_key.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -13374,7 +13388,8 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         .add(OplogEntry::pending_agent_invocation(
             None,
             consumer.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            Box::new(InvocationRequestOperation::SaveSnapshot),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                 caller: golem_common::model::caller::Caller::anonymous(),
             })),
             TraceId::generate(),
@@ -13830,6 +13845,7 @@ async fn finalization_after_retirement_requires_matching_committed_finished() {
     }
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl DurableStreamConsumerJournal for FinishedJournal {
         async fn commit(&self) -> Result<(), SessionError> {
             panic!("a repeated finalization must not commit buffered entries")

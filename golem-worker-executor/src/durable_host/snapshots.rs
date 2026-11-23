@@ -687,7 +687,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
     fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
         self.state.snapshot_boundary_blocker()

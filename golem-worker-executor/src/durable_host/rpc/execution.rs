@@ -233,7 +233,7 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
             let rpc = ctx.rpc();
             let created_by = ctx.created_by();
             let agent_id = *ctx.agent_id();
-            let caller = Caller::entry(ctx.self_principal());
+            let caller = ctx.outgoing_caller();
             let dispatch_freshness = freshness_disposition;
             freshness_disposition = InvocationFreshnessDisposition::MayExist;
 
@@ -380,7 +380,7 @@ pub(super) async fn run_invoke<Ctx: WorkerCtx>(
                     ctx.agent_id(),
                     &prepared.env,
                     stack,
-                    &Caller::entry(ctx.self_principal()),
+                    &ctx.outgoing_caller(),
                     prepared.config.clone(),
                     &auth_ctx,
                 )
@@ -691,7 +691,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
         input,
         ctx.created_by(),
         *ctx.agent_id(),
-        Caller::entry(ctx.self_principal()),
+        ctx.outgoing_caller(),
         env,
         config,
         ctx.clone_as_inherited_stack(span_id),
@@ -778,7 +778,7 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
     let rpc = ctx.rpc();
     let created_by = ctx.created_by();
     let agent_id = *ctx.agent_id();
-    let caller = Caller::entry(ctx.self_principal());
+    let caller = ctx.outgoing_caller();
     let stack = ctx.clone_as_inherited_stack(span_id);
     let activity = ctx.runtime_suspension.as_ref().map(|runtime| {
         runtime.rpc_activity(

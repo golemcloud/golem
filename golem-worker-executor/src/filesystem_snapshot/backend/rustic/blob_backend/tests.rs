@@ -1310,6 +1310,7 @@ mod value_rules {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl BlobStorageBackend for FailingBlobStorage {
         async fn copy_between_at(
             &self,

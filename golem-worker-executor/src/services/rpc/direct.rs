@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, Principal};
 
 impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
     fn clone(&self) -> Self {
@@ -377,13 +377,14 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &Principal,
         auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         if !matches!(auth, AuthCtx::System | AuthCtx::Agent(_)) {
@@ -395,7 +396,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         if self.shard_service().check_worker(&target.agent_id).is_err() {
             return self
                 .remote_rpc
-                .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+                .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
                 .await;
         }
         let worker =
@@ -405,7 +406,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 Err(error) => return Err(error.into()),
             };
         worker
-            .cancel_scheduled_invocation(key, receipt, owner)
+            .cancel_scheduled_invocation(key, receipt, canceller)
             .await
             .map_err(Into::into)
     }
@@ -417,6 +418,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         request_key: InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
         if self
@@ -432,6 +434,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     request_key,
                     invocation,
                     scheduled_at,
+                    self_agent_id,
                     auth_ctx,
                 )
                 .await;

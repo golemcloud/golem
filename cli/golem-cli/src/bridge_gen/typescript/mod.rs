@@ -1602,7 +1602,6 @@ impl TypeScriptBridgeGenerator {
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        self.write_public_constructor_parameters(&mut method, &names)?;
         self.write_config_option_locals(
             &mut method,
             &names.options,
@@ -1633,14 +1632,10 @@ impl TypeScriptBridgeGenerator {
         method.write_line(format!("env: {}?.env ?? {{}},", names.options));
         method.unindent();
         method.write_line("});");
-        let public_parameters =
-            format!("{} ? {} : undefined", names.keyed, names.public_parameters);
         method.write_line(format!(
-            "return new {class_name}({} ? {} : undefined, {}{});",
-            names.keyed,
-            names.parameters,
+            "return new {class_name}(undefined, {}{});",
             names.create_response,
-            self.external_public_constructor_args(&public_parameters)
+            self.external_public_constructor_args("undefined")
         ));
         Ok(())
     }

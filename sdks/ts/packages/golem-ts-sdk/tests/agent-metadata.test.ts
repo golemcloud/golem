@@ -539,9 +539,10 @@ describe('agent metadata (Phase 3)', () => {
     expect(restoredIds).toEqual([{ region: 'eu-west', tenant: 'acme' }]);
     const saved = await isolatedGuest.saveSnapshot.save();
     expect(saved.payload[0]).toBe(3);
-    expect(
-      JSON.parse(new TextDecoder().decode(saved.payload.slice(1))),
-    ).toEqual({ region: 'eu-west', tenant: 'acme:stored' });
+    expect(JSON.parse(new TextDecoder().decode(saved.payload.slice(1)))).toEqual({
+      region: 'eu-west',
+      tenant: 'acme:stored',
+    });
   });
 
   it('strictly validates JSON, multipart, and binary snapshot envelopes', async () => {

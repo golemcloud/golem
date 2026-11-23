@@ -1421,6 +1421,7 @@ fn activation_with_policy(
             }
         },
         source,
+        shell: false,
     };
 
     EntityActivation::new(

@@ -62,7 +62,7 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{
     AgentError as ModelAgentError, AgentInvocationMode, InvocationFreshnessDisposition,
 };
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, Principal};
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, ScopeCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -112,20 +112,22 @@ where
 #[async_trait]
 pub trait Rpc: Send + Sync {
     /// Routes cancellation to the target executor, which validates the incarnation-bound receipt
-    /// and scheduling owner and commits pending removal before returning true. Removing only the
-    /// scheduler wake does not withdraw work already accepted in the target oplog.
+    /// and that `canceller` is the immediate caller recorded for the scheduled call, and commits
+    /// pending removal before returning true. Removing only the scheduler wake does not withdraw
+    /// work already accepted in the target oplog.
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &Principal,
         auth: &AuthCtx,
     ) -> Result<bool, RpcError>;
 
     /// Routes acceptance to the target executor, which commits the invocation and deadline in
     /// the expected incarnation's oplog without running guest code, then registers its wake.
-    /// The scheduler stores only the wake, not a second invocation payload.
+    /// The scheduler stores only the wake, not a second invocation payload. `self_agent_id` is
+    /// the scheduling agent, the parent of the call, also when one of its tools scheduled it.
     async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -133,6 +135,7 @@ pub trait Rpc: Send + Sync {
         request_key: InvocationRequestKey,
         invocation: AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError>;
 
@@ -436,6 +439,13 @@ impl From<WorkerExecutorError> for RpcError {
                 details: "Invalid account".to_string(),
             },
             WorkerExecutorError::PermissionDenied { details } => RpcError::Denied { details },
+            // Permanent: every retry under the same key is cancelled again. The detail string
+            // identifies a cancelled callee until the agent `rpc-error` gains a `cancelled` case.
+            error @ WorkerExecutorError::InvocationCancelled => RpcError::RemoteAgentError {
+                error: Box::new(ModelAgentError::InvalidInput(format!(
+                    "invocation-cancelled: {error}"
+                ))),
+            },
             WorkerExecutorError::InvalidRequest { details } => RpcError::RemoteAgentError {
                 error: Box::new(ModelAgentError::InvalidInput(details)),
             },

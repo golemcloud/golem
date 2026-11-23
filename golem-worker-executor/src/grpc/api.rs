@@ -37,6 +37,7 @@ use super::{
 };
 
 #[tonic::async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutor for WorkerExecutorImpl<Ctx, Svcs>
 {
@@ -831,6 +832,102 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             err.clone().into(),
                         ),
                     ),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn get_invocation(
+        &self,
+        request: Request<golem::workerexecutor::v1::GetInvocationRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::GetInvocationResponse>, Status> {
+        use golem::workerexecutor::v1::{
+            GetInvocationResponse, GetInvocationSuccess, get_invocation_response,
+        };
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_invocation",
+            agent_id = proto_agent_id_string(&request.agent_id),
+            invocation_id = request
+                .invocation_id
+                .map(|id| uuid::Uuid::from(id).to_string()),
+        );
+        let result = self
+            .get_invocation_internal(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(invocation) => record.succeed(Ok(Response::new(GetInvocationResponse {
+                result: Some(get_invocation_response::Result::Success(
+                    GetInvocationSuccess { invocation },
+                )),
+            }))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(GetInvocationResponse {
+                    result: Some(get_invocation_response::Result::Failure(err.clone().into())),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn list_invocations(
+        &self,
+        request: Request<golem::workerexecutor::v1::ListInvocationsRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::ListInvocationsResponse>, Status> {
+        use golem::workerexecutor::v1::{ListInvocationsResponse, list_invocations_response};
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "list_invocations",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+        let result = self
+            .list_invocations_internal(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(success) => record.succeed(Ok(Response::new(ListInvocationsResponse {
+                result: Some(list_invocations_response::Result::Success(success)),
+            }))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(ListInvocationsResponse {
+                    result: Some(list_invocations_response::Result::Failure(
+                        err.clone().into(),
+                    )),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn lookup_invocations(
+        &self,
+        request: Request<golem::workerexecutor::v1::LookupInvocationsRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::LookupInvocationsResponse>, Status> {
+        use golem::workerexecutor::v1::{
+            LookupInvocationsResponse, LookupInvocationsSuccess, lookup_invocations_response,
+        };
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "lookup_invocations",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+        let result = self
+            .lookup_invocations_internal(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(invocations) => record.succeed(Ok(Response::new(LookupInvocationsResponse {
+                result: Some(lookup_invocations_response::Result::Success(
+                    LookupInvocationsSuccess { invocations },
+                )),
+            }))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(LookupInvocationsResponse {
+                    result: Some(lookup_invocations_response::Result::Failure(
+                        err.clone().into(),
+                    )),
                 })),
                 &mut err,
             ),

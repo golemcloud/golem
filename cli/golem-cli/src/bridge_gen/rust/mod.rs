@@ -809,15 +809,14 @@ impl RustBridgeGenerator {
                     let reference = crate::__golem_bridge_runtime::create_agent(
                         config,
                         #agent_type_name,
-                        constructor_parameters.clone(),
+                        constructor_parameters,
                         options.keyed,
                         agent_config,
                         options.env,
                     ).await?;
                     let agent_id = golem_common::model::AgentId(reference.agent_id);
                     Ok(Self {
-                        // Only the keyed agent stays reachable by its constructor parameters.
-                        constructor_parameters: options.keyed.then_some(constructor_parameters),
+                        constructor_parameters: None,
                         target: Some((agent_id, reference.agent_fingerprint)),
                         agent_id: std::sync::Arc::new(std::sync::OnceLock::from(agent_id)),
                     })
@@ -855,8 +854,7 @@ impl RustBridgeGenerator {
         });
         let client_fields = if durable {
             quote! {
-                /// The constructor parameters of a keyed agent, which a client of `upsert` and of a
-                /// keyed `create` has.
+                /// The constructor parameters used by a client of `upsert` to address the agent by key.
                 constructor_parameters: Option<crate::__golem_bridge_runtime::schema::SchemaValue>,
                 /// The ID and the fingerprint of the agent of a client of `create` or `get_by_id`;
                 /// its invocations name the agent by them.

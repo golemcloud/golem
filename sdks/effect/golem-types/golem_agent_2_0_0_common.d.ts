@@ -67,18 +67,17 @@ declare module 'golem:agent/common@2.0.0' {
   export type ReadOnlyConfig = {
     cachePolicy: CachePolicy;
   };
-  export type PhantomIdBindingDetails = {
+  export type AgentIdBindingDetails = {
     name: string;
-    optional: boolean;
   };
-  export type PhantomIdBinding =
+  export type AgentIdBinding =
   {
     tag: 'path'
-    val: PhantomIdBindingDetails
+    val: AgentIdBindingDetails
   } |
   {
     tag: 'query'
-    val: PhantomIdBindingDetails
+    val: AgentIdBindingDetails
   };
   export type CorsOptions = {
     allowedPatterns: string[];
@@ -108,7 +107,8 @@ declare module 'golem:agent/common@2.0.0' {
     pathPrefix: PathSegment[];
     authDetails?: AuthDetails;
     phantomAgent: boolean;
-    phantomIdBinding?: PhantomIdBinding;
+    agentIdBinding?: AgentIdBinding;
+    createRoute?: PathSegment[];
     corsOptions: CorsOptions;
     webhookSuffix: PathSegment[];
     staticBindings: FileMapping[];

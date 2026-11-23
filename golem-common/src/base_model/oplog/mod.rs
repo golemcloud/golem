@@ -49,7 +49,9 @@ mod raw_imports {
 
     pub use crate::model::oplog::raw_types::*;
     pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
-    pub use crate::model::{AgentInvocationPayload, AgentInvocationResult};
+    pub use crate::model::{
+        AgentInvocationResult, InvocationRequestOperation, StoredAgentInvocationPayload,
+    };
     pub use crate::resource_runtime::ResourceTypeId;
 
     pub use std::collections::HashSet;
@@ -194,7 +196,8 @@ oplog_entry! {
         wit_public_type: "agent-invocation-started-parameters"
         raw {
             invocation_id: InvocationId,
-            payload: payload::OplogPayload<AgentInvocationPayload>,
+            operation: Box<InvocationRequestOperation>,
+            payload: payload::OplogPayload<StoredAgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
             invocation_context: Vec<SpanData>,
@@ -333,7 +336,8 @@ oplog_entry! {
         raw {
             not_before: Option<Timestamp>,
             invocation_id: InvocationId,
-            payload: payload::OplogPayload<AgentInvocationPayload>,
+            operation: Box<InvocationRequestOperation>,
+            payload: payload::OplogPayload<StoredAgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
             invocation_context: Vec<SpanData>,

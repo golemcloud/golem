@@ -1514,12 +1514,14 @@ impl WorkerService {
             .await
     }
 
-    /// Reads a path selected by an authorized HTTP filesystem mount from the keyed agent of
-    /// `constructor`, whose type `component_id` implements, as the mount's trusted owner.
+    /// Reads a path from an existing agent selected by an authorized HTTP filesystem mount.
+    /// Key selection verifies ownership before reading and never creates the agent.
     pub(crate) async fn read_mounted_file(
         &self,
         component_id: ComponentId,
-        constructor: &ParsedAgentKey,
+        agent_type: &AgentTypeName,
+        constructor: Option<&ParsedAgentKey>,
+        binding: AgentBinding,
         path: &str,
         selection: FileByteSelection,
         environment_id: EnvironmentId,
@@ -1529,15 +1531,69 @@ impl WorkerService {
         let path =
             CanonicalFilePath::from_abs_str(path).map_err(|_| FileReadError::InvalidTarget)?;
         let (registered, component) = self
-            .implementing_component(component_id, &constructor.agent_type)
+            .implementing_component(component_id, agent_type)
             .await?;
         if component.environment_id != environment_id {
             return Err(WorkerServiceError::TypeChecker(
                 "The component does not belong to the route's environment".to_string(),
             ));
         }
-        let target =
-            RoutedTarget::keyed(environment_id, registered.type_id, &component, constructor)?;
+        let (target, key) = match (binding, constructor) {
+            (AgentBinding::Constructor, Some(constructor)) => {
+                let key = constructor
+                    .canonical_key(&component.metadata)
+                    .map_err(WorkerServiceError::TypeChecker)?;
+                (
+                    RoutedTarget::keyed(
+                        environment_id,
+                        registered.type_id,
+                        &component,
+                        constructor,
+                    )?,
+                    Some(key),
+                )
+            }
+            (AgentBinding::Id(agent_id), None) => (
+                RoutedTarget::existing(agent_id, Some(agent_type.clone())),
+                None,
+            ),
+            _ => {
+                return Err(WorkerServiceError::TypeChecker(
+                    "Mounted files require a key or ID selection".into(),
+                ));
+            }
+        };
+        let agent_id = target.agent_id;
+        if agent_id.type_id() != Some(registered.type_id) {
+            return Err(WorkerServiceError::AgentNotFound(agent_id));
+        }
+        let agent = self
+            .managed_agent(
+                &OwnedAgentId::new(environment_id, &agent_id),
+                None,
+                &AuthCtx::System,
+                &[AgentPermission::filesystem(FilesystemVerb::Read, &path)?],
+            )
+            .await
+            .map_err(|error| {
+                if is_agent_not_found(&error) {
+                    WorkerServiceError::AgentNotFound(agent_id)
+                } else {
+                    error
+                }
+            })?;
+        if agent.metadata.agent_type_name.as_ref() != Some(agent_type) {
+            return Err(WorkerServiceError::AgentNotFound(agent_id));
+        }
+        if let Some(key) = &key
+            && agent.metadata.canonical_key.as_deref() != Some(key.to_string().as_str())
+        {
+            return Err(WorkerExecutorError::AgentKeyCollision {
+                agent_id,
+                requested_key: key.to_string(),
+            }
+            .into());
+        }
         self.worker_client
             .get_file_contents(
                 &target,
@@ -1548,6 +1604,13 @@ impl WorkerService {
                 AuthCtx::System,
             )
             .await
+            .map_err(|error| {
+                if is_agent_not_found(&error) {
+                    WorkerServiceError::AgentNotFound(agent_id)
+                } else {
+                    error
+                }
+            })
     }
 
     pub async fn get_file_contents(
@@ -1897,13 +1960,14 @@ impl WorkerService {
             .await
     }
 
-    /// Internal token control uses the recorded scheduling caller, not operator permission.
+    /// Internal token control uses the recorded scheduling caller, not operator permission: the
+    /// target cancels only when `canceller` is the immediate caller recorded for the call.
     pub async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
         key: &golem_common::model::InvocationId,
         receipt: ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: AuthCtx,
     ) -> WorkerResult<bool> {
         if !matches!(&auth, AuthCtx::System | AuthCtx::Agent(_)) {
@@ -1920,9 +1984,9 @@ impl WorkerService {
                 auth,
                 Some(
                     golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
-                        owner_agent_id: Some((*owner).into()),
                         schedule_id: Some(receipt.id.into()),
                         target_environment_id: Some(target.environment_id.into()),
+                        canceller: Some(canceller.clone().into()),
                     },
                 ),
                 None,
@@ -2248,18 +2312,19 @@ impl WorkerService {
     pub async fn bound_invocation_target(
         &self,
         component_id: ComponentId,
-        constructor: &ParsedAgentKey,
+        agent_type: &AgentTypeName,
+        constructor: Option<&ParsedAgentKey>,
         binding: AgentBinding,
         request_key: &InvocationRequestKey,
         operation: &str,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<(RoutedTarget, Component, InvocationFreshnessDisposition)> {
         let (registered, component) = self
-            .implementing_component(component_id, &constructor.agent_type)
+            .implementing_component(component_id, agent_type)
             .await?;
         let environment_id = component.environment_id;
-        let (target, freshness_disposition) = match binding {
-            AgentBinding::Constructor => Self::invocation_target(
+        let (target, freshness_disposition) = match (binding, constructor) {
+            (AgentBinding::Constructor, Some(constructor)) => Self::invocation_target(
                 environment_id,
                 &registered,
                 &component,
@@ -2267,15 +2332,19 @@ impl WorkerService {
                 request_key,
                 operation,
             )?,
-            AgentBinding::Fresh if registered.agent_type.mode == AgentMode::Durable => (
-                RoutedTarget::unkeyed(
-                    AgentId::random(registered.type_id),
-                    &component,
-                    constructor,
-                )?,
-                InvocationFreshnessDisposition::KnownFresh,
-            ),
-            AgentBinding::Fresh => Self::invocation_target(
+            (AgentBinding::Fresh, Some(constructor))
+                if registered.agent_type.mode == AgentMode::Durable =>
+            {
+                (
+                    RoutedTarget::unkeyed(
+                        AgentId::random(registered.type_id),
+                        &component,
+                        constructor,
+                    )?,
+                    InvocationFreshnessDisposition::MayExist,
+                )
+            }
+            (AgentBinding::Fresh, Some(constructor)) => Self::invocation_target(
                 environment_id,
                 &registered,
                 &component,
@@ -2283,10 +2352,13 @@ impl WorkerService {
                 request_key,
                 operation,
             )?,
-            AgentBinding::StreamSession {
-                route_scope,
-                session,
-            } => (
+            (
+                AgentBinding::StreamSession {
+                    route_scope,
+                    session,
+                },
+                Some(constructor),
+            ) => (
                 RoutedTarget::unkeyed(
                     AgentId::durable_stream_session(
                         environment_id,
@@ -2299,14 +2371,19 @@ impl WorkerService {
                 )?,
                 InvocationFreshnessDisposition::MayExist,
             ),
-            AgentBinding::Id(agent_id) => {
+            (AgentBinding::Id(agent_id), _) => {
                 if agent_id.type_id() != Some(registered.type_id) {
                     return Err(WorkerServiceError::AgentNotFound(agent_id));
                 }
                 (
-                    RoutedTarget::existing(agent_id, Some(constructor.agent_type.clone())),
+                    RoutedTarget::existing(agent_id, Some(agent_type.clone())),
                     InvocationFreshnessDisposition::MayExist,
                 )
+            }
+            _ => {
+                return Err(WorkerServiceError::TypeChecker(
+                    "A key or fresh target requires constructor parameters".into(),
+                ));
             }
         };
         authorize_target(
@@ -2480,11 +2557,21 @@ impl WorkerService {
             let component = self
                 .creating_component(environment_id, component_id)
                 .await?;
-            let owner_key = request_key.owner_key(&format!(
-                "tool:{}/{}",
-                tool.tool_name,
-                tool.command_path.join("/")
-            ));
+            let command_path = self
+                .canonical_tool_command_path(
+                    &component,
+                    &ToolBindingOwner::ComponentBaseline {
+                        component_id: component.id,
+                    },
+                    &tool.tool_name,
+                    &tool.command_path,
+                )
+                .await?;
+            let owner_key =
+                request_key.owner_key(&golem_common::model::InvocationOperation::tool_operation(
+                    &tool.tool_name,
+                    &command_path,
+                ));
             let target = RoutedTarget::fresh_tool_owner(
                 AgentId::external_tool_owner(environment_id, component.id, &owner_key),
                 component.id,
@@ -2494,6 +2581,9 @@ impl WorkerService {
                 &agent_owner(&component, target.agent_id, None),
                 &[permission],
             )?;
+            if let Some(tool) = start.external_tool.as_mut() {
+                tool.command_path = command_path;
+            }
             (target, component)
         } else {
             let constructor = start
@@ -3107,20 +3197,20 @@ impl WorkerService {
         let env_name = EnvironmentName::try_from(start.environment)
             .map_err(WorkerServiceError::TypeChecker)?;
         let idempotency_key = IdempotencyKey::new(start.idempotency_key);
-        let operation = format!("tool:{}/{}", start.tool_name, start.command_path.join("/"));
         let (agent_id, component_id) = match start.target {
             PublicNativeToolTarget::Agent { agent_id } => (Some(agent_id), None),
             PublicNativeToolTarget::Component { component_id } => {
                 (None, Some(ComponentId(component_id)))
             }
         };
-        let (routed, component, expected_callee_fingerprint, fresh_owner) = self
+        let (routed, component, expected_callee_fingerprint, fresh_owner, command_path) = self
             .tool_target(
                 start.environment_id,
                 agent_id,
                 component_id,
                 &request_key,
-                &operation,
+                &start.tool_name,
+                &start.command_path,
                 false,
                 AgentVerb::Invoke,
                 &auth,
@@ -3151,7 +3241,7 @@ impl WorkerService {
         };
         let target = SessionInvocationTarget::ExternalTool {
             tool_name: start.tool_name.clone(),
-            command_path: start.command_path.clone(),
+            command_path: command_path.clone(),
         };
         let identity = SessionAgentIdentity {
             component_id: component_id.0,
@@ -3189,7 +3279,7 @@ impl WorkerService {
             origin_invocation: None,
             external_tool: Some(ExternalToolInvocation {
                 tool_name: start.tool_name,
-                command_path: start.command_path,
+                command_path,
                 input: Some(input),
                 stdin: start.stdin,
                 stdout: start.stdout,
@@ -3448,6 +3538,41 @@ impl WorkerService {
         ))
     }
 
+    /// Creates an unkeyed agent for an authenticated mount using the shared REST create policy.
+    /// HTTP route authentication does not provide an idempotency scope.
+    pub(crate) async fn create_mounted_agent(
+        &self,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+        agent_type: &AgentTypeName,
+        request: CreateAgentRequest,
+        idempotency_key: Option<IdempotencyKey>,
+        caller: Caller,
+    ) -> WorkerResult<AgentReference> {
+        if request.keyed {
+            return Err(WorkerServiceError::TypeChecker(
+                "HTTP create routes require an unkeyed create".into(),
+            ));
+        }
+        let (registered, component) = self
+            .implementing_component(component_id, agent_type)
+            .await?;
+        if component.environment_id != environment_id {
+            return Err(WorkerServiceError::TypeChecker(
+                "The component does not belong to the route's environment".into(),
+            ));
+        }
+        self.create_resolved_agent(
+            &registered,
+            &component,
+            request,
+            idempotency_key,
+            AuthCtx::System,
+            caller,
+        )
+        .await
+    }
+
     /// REST create of an agent of a durable type. A keyed create makes the keyed agent of the
     /// parameters and fails with a conflict when that key is current. A create without a key
     /// makes an agent at a new ID;
@@ -3464,16 +3589,39 @@ impl WorkerService {
         let (registered, component) = self
             .deployed_agent_type(environment_id, agent_type_name, &auth)
             .await?;
+        let caller = self.rest_caller(&auth);
+        self.create_resolved_agent(
+            &registered,
+            &component,
+            request,
+            idempotency_key,
+            auth,
+            caller,
+        )
+        .await
+    }
+
+    async fn create_resolved_agent(
+        &self,
+        registered: &RegisteredAgentType,
+        component: &Component,
+        request: CreateAgentRequest,
+        idempotency_key: Option<IdempotencyKey>,
+        auth: AuthCtx,
+        caller: Caller,
+    ) -> WorkerResult<AgentReference> {
+        let environment_id = component.environment_id;
         if registered.agent_type.mode == AgentMode::Ephemeral {
             return Err(WorkerServiceError::TypeChecker(format!(
-                "Create needs a durable agent type, and {agent_type_name} is ephemeral"
+                "Create needs a durable agent type, and {} is ephemeral",
+                registered.agent_type.type_name
             )));
         }
-        let constructor = Self::rest_constructor(&registered, request.parameters)?;
+        let constructor = Self::rest_constructor(registered, request.parameters)?;
         let request_key =
             InvocationRequestKey::external(auth.idempotency_scope(), idempotency_key.as_ref());
         let target = if request.keyed {
-            RoutedTarget::keyed(environment_id, registered.type_id, &component, &constructor)?
+            RoutedTarget::keyed(environment_id, registered.type_id, component, &constructor)?
         } else {
             let agent_id = match &request_key {
                 InvocationRequestKey::External { scope, key } => AgentId::idempotent_create(
@@ -3484,20 +3632,19 @@ impl WorkerService {
                 ),
                 _ => AgentId::random(registered.type_id),
             };
-            RoutedTarget::unkeyed(agent_id, &component, &constructor)?
+            RoutedTarget::unkeyed(agent_id, component, &constructor)?
         };
 
-        let caller = self.rest_caller(&auth).into();
         let (agent_id, _, agent_fingerprint) = self
             .create(
                 &target,
-                &component,
+                component,
                 request.env,
                 request.config,
                 false,
                 auth,
                 None,
-                caller,
+                caller.into(),
                 Some(request_key.owner_key("create")),
                 AgentResourcePattern::Any,
             )
@@ -3616,7 +3763,8 @@ impl WorkerService {
 
     /// The target of a tool call: an existing agent, or a fresh owner on a component of the
     /// environment. Returns the target, the component, the expected fingerprint of an
-    /// existing agent, and whether the owner is fresh.
+    /// existing agent, whether the owner is fresh, and the canonical form of the command path,
+    /// from which the invocation ID and a fresh owner's agent ID are derived.
     #[allow(clippy::too_many_arguments)]
     async fn tool_target(
         &self,
@@ -3624,11 +3772,18 @@ impl WorkerService {
         agent_id: Option<AgentId>,
         component_id: Option<ComponentId>,
         request_key: &InvocationRequestKey,
-        operation: &str,
+        tool_name: &str,
+        command_path: &[String],
         lookup: bool,
         verb: AgentVerb,
         auth: &AuthCtx,
-    ) -> WorkerResult<(RoutedTarget, Component, Option<AgentFingerprint>, bool)> {
+    ) -> WorkerResult<(
+        RoutedTarget,
+        Component,
+        Option<AgentFingerprint>,
+        bool,
+        Vec<String>,
+    )> {
         match (agent_id, component_id) {
             (Some(agent_id), None) => {
                 let agent = self
@@ -3645,18 +3800,47 @@ impl WorkerService {
                             .to_string(),
                     ));
                 }
+                let owner = match (&agent.metadata.owner_kind, &agent.metadata.agent_type_name) {
+                    (OwnerKind::ComponentAgent, Some(agent_type_name)) => {
+                        ToolBindingOwner::AgentType {
+                            agent_type_name: agent_type_name.clone(),
+                        }
+                    }
+                    _ => ToolBindingOwner::ComponentBaseline {
+                        component_id: agent.component.id,
+                    },
+                };
+                let command_path = self
+                    .canonical_tool_command_path(&agent.component, &owner, tool_name, command_path)
+                    .await?;
                 let fingerprint = agent.metadata.fingerprint;
-                Ok((agent.routed(), agent.component, Some(fingerprint), false))
+                Ok((
+                    agent.routed(),
+                    agent.component,
+                    Some(fingerprint),
+                    false,
+                    command_path,
+                ))
             }
             (None, Some(component_id)) if !lookup => {
                 let component = self
                     .creating_component(environment_id, Some(component_id))
                     .await?;
+                let command_path = self
+                    .canonical_tool_command_path(
+                        &component,
+                        &ToolBindingOwner::ComponentBaseline { component_id },
+                        tool_name,
+                        command_path,
+                    )
+                    .await?;
+                let operation =
+                    golem_common::model::InvocationOperation::tool_operation(&tool_name, &command_path);
                 let target = RoutedTarget::fresh_tool_owner(
                     AgentId::external_tool_owner(
                         environment_id,
                         component_id,
-                        &request_key.owner_key(operation),
+                        &request_key.owner_key(&operation),
                     ),
                     component_id,
                 );
@@ -3665,7 +3849,7 @@ impl WorkerService {
                     &agent_owner(&component, target.agent_id, None),
                     &[AgentPermission::Agent(verb, AgentResourcePattern::Any)],
                 )?;
-                Ok((target, component, None, true))
+                Ok((target, component, None, true, command_path))
             }
             _ => Err(WorkerServiceError::TypeChecker(
                 "exactly one of agent_id and component_id is required, and a lookup names the agent"
@@ -3725,18 +3909,14 @@ impl WorkerService {
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32
             }
         };
-        let operation = format!(
-            "tool:{}/{}",
-            request.tool_name,
-            request.command_path.join("/")
-        );
-        let (target, component, expected_callee_fingerprint, fresh_owner) = self
+        let (target, component, expected_callee_fingerprint, fresh_owner, command_path) = self
             .tool_target(
                 environment_id,
                 request.agent_id,
                 request.component_id,
                 &request_key,
-                &operation,
+                &request.tool_name,
+                &request.command_path,
                 lookup,
                 agent_verb_for_invocation_mode(proto_mode),
                 &auth,
@@ -3786,7 +3966,7 @@ impl WorkerService {
             origin_invocation: None,
             external_tool: Some(ExternalToolInvocation {
                 tool_name: request.tool_name,
-                command_path: request.command_path,
+                command_path,
                 input,
                 stdin: false,
                 stdout: false,
@@ -3807,30 +3987,7 @@ impl WorkerService {
             .ok_or_else(|| WorkerServiceError::Internal("Missing idempotency key".to_string()))?;
         let result = match output.result {
             golem_common::model::AgentInvocationResult::ExternalTool { result } => {
-                Some(match result {
-                    Ok(success) => NativeToolResult::Success(NativeToolSuccess {
-                        result: success
-                            .result
-                            .map(|value| (*value).try_into().map(Box::new))
-                            .transpose()
-                            .map_err(|error| {
-                                WorkerServiceError::Internal(format!(
-                                    "external tool result cannot cross the external JSON boundary: {error}"
-                                ))
-                            })?,
-                    }),
-                    Err(error) => {
-                        if let golem_common::model::tool::SerializableToolRpcError::RemoteToolError(tool_error) = &error
-                            && let golem_common::model::tool::SerializableToolError::CustomError(value) = tool_error.as_ref()
-                        {
-                            golem_common::schema::ExternalTypedSchemaValue::try_from(value.payload.clone())
-                                .map_err(|error| WorkerServiceError::Internal(format!(
-                                    "external tool error cannot cross the external JSON boundary: {error}"
-                                )))?;
-                        }
-                        NativeToolResult::Failure(NativeToolFailure { error })
-                    }
-                })
+                Some(native_tool_result(result)?)
             }
             _ if proto_mode
                 != golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32 =>
@@ -3911,6 +4068,24 @@ impl WorkerService {
                 ));
             }
         };
+        let (definition, deployment_revision) = self
+            .effective_tool_definition(&component, &owner, &request.tool_name)
+            .await?;
+        Ok(NativeToolDefinition {
+            definition,
+            component_revision: component.revision,
+            deployment_revision,
+        })
+    }
+
+    /// The definition of the tool named `tool_name` as `owner` of `component` sees it, with the
+    /// deployment revision that selected it.
+    async fn effective_tool_definition(
+        &self,
+        component: &Component,
+        owner: &ToolBindingOwner,
+        tool_name: &str,
+    ) -> WorkerResult<(golem_common::schema::tool::Tool, DeploymentRevision)> {
         let state = self
             .component_service
             .get_tool_deployment_state(component.environment_id, component.id, component.revision)
@@ -3920,14 +4095,13 @@ impl WorkerService {
                     "no tool deployment is active for the target".to_string(),
                 )
             })?;
-        let tool_name = ToolName::try_from(request.tool_name.as_str())
-            .map_err(WorkerServiceError::TypeChecker)?;
+        let tool_name = ToolName::try_from(tool_name).map_err(WorkerServiceError::TypeChecker)?;
         let registered = state.registered_tools.get(&tool_name).ok_or_else(|| {
             WorkerServiceError::TypeChecker(format!("tool '{tool_name}' is not registered"))
         })?;
         if !state
             .tool_bindings
-            .get(&owner)
+            .get(owner)
             .is_some_and(|bindings| bindings.contains_key(&tool_name))
         {
             return Err(WorkerServiceError::TypeChecker(format!(
@@ -3936,15 +4110,33 @@ impl WorkerService {
         }
         let definition = state
             .tool_middleware_chains
-            .get(&owner)
+            .get(owner)
             .and_then(|chains| chains.get(&tool_name))
             .map(|chain| chain.effective_definition.clone())
             .unwrap_or_else(|| registered.registration.definition.clone());
-        Ok(NativeToolDefinition {
-            definition,
-            component_revision: component.revision,
-            deployment_revision: state.deployment_revision,
-        })
+        Ok((definition, state.deployment_revision))
+    }
+
+    /// The canonical form of `command_path` in the tool named `tool_name` as `owner` of
+    /// `component` sees it. Invocation IDs are derived from the canonical form, so an alias and
+    /// the name of a command give the same ID.
+    async fn canonical_tool_command_path(
+        &self,
+        component: &Component,
+        owner: &ToolBindingOwner,
+        tool_name: &str,
+        command_path: &[String],
+    ) -> WorkerResult<Vec<String>> {
+        let (definition, _) = self
+            .effective_tool_definition(component, owner, tool_name)
+            .await?;
+        definition
+            .canonical_command_path(command_path)
+            .ok_or_else(|| {
+                WorkerServiceError::TypeChecker(format!(
+                    "command path {command_path:?} does not name a command of tool '{tool_name}'"
+                ))
+            })
     }
 
     /// REST invoke: on the agent with `agentId`, which must have the type, or on the agent of
@@ -3958,9 +4150,6 @@ impl WorkerService {
         idempotency_key: Option<IdempotencyKey>,
         auth: AuthCtx,
     ) -> WorkerResult<AgentInvocationResult> {
-        let (registered, component) = self
-            .deployed_agent_type(environment_id, agent_type_name, &auth)
-            .await?;
         let method_name = request.method.clone();
         let proto_mode = match request.mode {
             AgentInvocationMode::Await => {
@@ -3980,7 +4169,19 @@ impl WorkerService {
         let (target, component, freshness_disposition) =
             match (request.agent_id, request.parameters) {
                 (Some(agent_id), None) => {
-                    if agent_id.type_id() != Some(registered.type_id) {
+                    let retained = self
+                        .retained_agent_types(environment_id, agent_type_name, &auth)
+                        .await
+                        .map_err(|error| match error {
+                            WorkerServiceError::RegistryServiceError(
+                                RegistryServiceError::NotFound(_),
+                            ) => WorkerServiceError::AgentNotFound(agent_id),
+                            other => other,
+                        })?;
+                    if !retained
+                        .iter()
+                        .any(|(registered, _)| agent_id.type_id() == Some(registered.type_id))
+                    {
                         return Err(WorkerServiceError::AgentNotFound(agent_id));
                     }
                     let agent = self
@@ -3991,6 +4192,9 @@ impl WorkerService {
                             &[permission],
                         )
                         .await?;
+                    if agent.metadata.agent_type_name.as_ref() != Some(agent_type_name) {
+                        return Err(WorkerServiceError::AgentNotFound(agent_id));
+                    }
                     (
                         agent.routed(),
                         agent.component,
@@ -3998,6 +4202,9 @@ impl WorkerService {
                     )
                 }
                 (None, Some(parameters)) => {
+                    let (registered, component) = self
+                        .deployed_agent_type(environment_id, agent_type_name, &auth)
+                        .await?;
                     let constructor = Self::rest_constructor(&registered, parameters)?;
                     let (target, freshness_disposition) = Self::invocation_target(
                         environment_id,
@@ -4082,39 +4289,15 @@ impl WorkerService {
                 let decode_revision = output.component_revision.ok_or_else(|| {
                     WorkerServiceError::Internal("method result has no execution revision".into())
                 })?;
-                let component_metadata_for_decode = self
-                    .component_service
-                    .get_revision(component.id, decode_revision)
+                let typed_output = self
+                    .agent_method_output_to_external(
+                        component.id,
+                        decode_revision,
+                        agent_type_name,
+                        &method_name,
+                        output_value,
+                    )
                     .await?;
-                let decode_agent_type = component_metadata_for_decode
-                    .metadata
-                    .find_agent_type_by_name_ref(agent_type_name)
-                    .ok_or_else(|| {
-                        WorkerServiceError::Internal(format!(
-                            "Agent type {agent_type_name} not found in component metadata at revision {decode_revision}",
-                        ))
-                    })?;
-                let decode_method = decode_agent_type
-                    .methods
-                    .iter()
-                    .find(|m| m.name == method_name)
-                    .ok_or_else(|| {
-                        WorkerServiceError::Internal(format!(
-                            "Agent method {method_name} not found in agent type {agent_type_name} at revision {decode_revision}",
-                        ))
-                    })?;
-                let mut output_graph = decode_agent_type.schema.clone();
-                output_graph.root = decode_method
-                    .output_schema
-                    .schema()
-                    .cloned()
-                    .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
-                let typed_output = TypedSchemaValue::new(output_graph, output_value);
-                let typed_output = typed_output.try_into().map_err(|error| {
-                    WorkerServiceError::Internal(format!(
-                        "Agent method result cannot cross the external JSON boundary: {error}"
-                    ))
-                })?;
                 Ok(AgentInvocationResult {
                     agent_id: response_agent_id,
                     idempotency_key: response_idempotency_key,
@@ -4130,7 +4313,94 @@ impl WorkerService {
             }),
         }
     }
+
+    /// Decodes an agent method's result with the method's output schema at the revision that
+    /// produced it, so a method that a later revision removed still decodes.
+    async fn agent_method_output_to_external(
+        &self,
+        component_id: ComponentId,
+        revision: ComponentRevision,
+        agent_type_name: &AgentTypeName,
+        method_name: &str,
+        output_value: golem_common::schema::SchemaValue,
+    ) -> WorkerResult<golem_common::schema::ExternalTypedSchemaValue> {
+        let component = self
+            .component_service
+            .get_revision(component_id, revision)
+            .await?;
+        let agent_type = component
+            .metadata
+            .find_agent_type_by_name_ref(agent_type_name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Agent type {agent_type_name} not found in component metadata at revision {revision}",
+                ))
+            })?;
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|m| m.name == method_name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Agent method {method_name} not found in agent type {agent_type_name} at revision {revision}",
+                ))
+            })?;
+        let mut output_graph = agent_type.schema.clone();
+        output_graph.root = method
+            .output_schema
+            .schema()
+            .cloned()
+            .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
+        TypedSchemaValue::new(output_graph, output_value)
+            .try_into()
+            .map_err(|error| {
+                WorkerServiceError::Internal(format!(
+                    "Agent method result cannot cross the external JSON boundary: {error}"
+                ))
+            })
+    }
 }
+
+/// Converts a tool invocation's result to its REST form.
+fn native_tool_result(
+    result: Result<
+        golem_common::model::tool::SerializableToolInvocationResult,
+        golem_common::model::tool::SerializableToolRpcError,
+    >,
+) -> WorkerResult<NativeToolResult> {
+    Ok(match result {
+        Ok(success) => NativeToolResult::Success(NativeToolSuccess {
+            result: success
+                .result
+                .map(|value| (*value).try_into().map(Box::new))
+                .transpose()
+                .map_err(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "external tool result cannot cross the external JSON boundary: {error}"
+                    ))
+                })?,
+        }),
+        Err(error) => {
+            if let golem_common::model::tool::SerializableToolRpcError::RemoteToolError(tool_error) =
+                &error
+                && let golem_common::model::tool::SerializableToolError::CustomError(value) =
+                    tool_error.as_ref()
+            {
+                golem_common::schema::ExternalTypedSchemaValue::try_from(value.payload.clone())
+                    .map_err(|error| {
+                        WorkerServiceError::Internal(format!(
+                            "external tool error cannot cross the external JSON boundary: {error}"
+                        ))
+                    })?;
+            }
+            NativeToolResult::Failure(NativeToolFailure { error })
+        }
+    })
+}
+
+mod invocations;
+
+pub use invocations::InvocationListQuery;
 
 #[cfg(test)]
 mod tests {
@@ -4581,9 +4851,11 @@ mod tests {
         components: Vec<Component>,
         tool_state: Option<golem_common::model::tool::ToolDeploymentState>,
         tool_queries: Mutex<Vec<(EnvironmentId, ComponentId, ComponentRevision)>>,
+        revision_gate: Mutex<Option<Arc<crate::service::component::tests::LookupGate>>>,
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ComponentService for StaticComponentService {
         async fn invalidate_current(&self) {}
 
@@ -4592,13 +4864,15 @@ mod tests {
             environment_id: EnvironmentId,
             component_id: ComponentId,
             revision: ComponentRevision,
-        ) -> Result<Option<golem_common::model::tool::ToolDeploymentState>, ComponentServiceError>
-        {
+        ) -> Result<
+            Option<Arc<golem_common::model::tool::ToolDeploymentState>>,
+            ComponentServiceError,
+        > {
             self.tool_queries
                 .lock()
                 .unwrap()
                 .push((environment_id, component_id, revision));
-            Ok(self.tool_state.clone())
+            Ok(self.tool_state.clone().map(Arc::new))
         }
 
         async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
@@ -4623,6 +4897,11 @@ mod tests {
             component_id: ComponentId,
             component_revision: ComponentRevision,
         ) -> Result<Component, ComponentServiceError> {
+            let gate = self.revision_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.started.add_permits(1);
+                gate.release.acquire().await.unwrap().forget();
+            }
             self.components
                 .iter()
                 .find(|component| {
@@ -4703,9 +4982,12 @@ mod tests {
         invocation_output: Mutex<AgentInvocationOutput>,
         metadata_component_revision: Mutex<Option<ComponentRevision>>,
         listed_agents: Mutex<(Option<ScanCursor>, Vec<ExistingAgent>)>,
+        file_read_missing: Mutex<bool>,
         deleted_agent_ids: Mutex<Vec<AgentId>>,
         fingerprint: AgentFingerprint,
         oplog_entry_reads: Mutex<Vec<(OplogIndex, Option<ComponentRevision>)>>,
+        invocation_summary:
+            Mutex<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>,
         revert_resolution_error: Mutex<Option<String>>,
     }
 
@@ -4738,9 +5020,11 @@ mod tests {
                 invocation_output: Mutex::new(invocation_output),
                 metadata_component_revision: Mutex::new(None),
                 listed_agents: Mutex::new((None, Vec::new())),
+                file_read_missing: Mutex::new(false),
                 deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
                 oplog_entry_reads: Mutex::new(Vec::new()),
+                invocation_summary: Mutex::new(None),
                 revert_resolution_error: Mutex::new(None),
             }
         }
@@ -5113,7 +5397,7 @@ mod tests {
 
         async fn get_file_contents(
             &self,
-            _: &RoutedTarget,
+            target: &RoutedTarget,
             _: CanonicalFilePath,
             _: FileByteSelection,
             _: EnvironmentId,
@@ -5121,6 +5405,9 @@ mod tests {
             _: AuthCtx,
         ) -> WorkerResult<golem_service_base::model::FileReadResponse> {
             self.effects.lock().unwrap().push("file-contents");
+            if *self.file_read_missing.lock().unwrap() {
+                return Err(WorkerExecutorError::worker_not_found(target.agent_id).into());
+            }
             Ok(golem_service_base::model::FileReadResponse {
                 head: FileReadHead::File(golem_common::model::filesystem::FileReadMetadata {
                     total_size: 0,
@@ -5220,6 +5507,40 @@ mod tests {
             assert_eq!(expected_fingerprint, Some(self.fingerprint));
             self.effects.lock().unwrap().push("cancel-invocation");
             Ok(true)
+        }
+
+        async fn get_invocation(
+            &self,
+            _: &AgentId,
+            _: &golem_common::model::InvocationId,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+        {
+            Ok(self.invocation_summary.lock().unwrap().clone())
+        }
+
+        async fn list_invocations(
+            &self,
+            _: &AgentId,
+            _: golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsSuccess>
+        {
+            unimplemented!()
+        }
+
+        async fn lookup_invocations(
+            &self,
+            _: &AgentId,
+            _: &IdempotencyKey,
+            _: Option<String>,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<Vec<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+        {
+            unimplemented!()
         }
 
         async fn invoke_agent(
@@ -5326,7 +5647,12 @@ mod tests {
                 let operation = start
                     .external_tool
                     .as_ref()
-                    .map(|tool| format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/")))
+                    .map(|tool| {
+                        golem_common::model::InvocationOperation::tool_operation(
+                            &tool.tool_name,
+                            &tool.command_path,
+                        )
+                    })
                     .unwrap_or_else(|| start.method_name.clone().unwrap_or_default());
                 prepared
                     .finalize(*agent_id, self.fingerprint, &operation)
@@ -5406,6 +5732,53 @@ mod tests {
         ))
     }
 
+    /// The harness's tool `weather`: one subcommand `current`, with the alias `now`.
+    fn weather_tool_definition() -> golem_common::schema::tool::Tool {
+        use golem_common::schema::tool::{
+            CommandBody, CommandIndex, CommandNode, CommandTree, Doc, Tool,
+        };
+        let body = CommandBody {
+            positionals: Default::default(),
+            options: vec![],
+            flags: vec![],
+            constraints: vec![],
+            stdin: None,
+            stdout: None,
+            stderr: None,
+            result: None,
+            errors: vec![],
+            annotations: None,
+        };
+        Tool {
+            version: "1.0.0".into(),
+            requires_filesystem: false,
+            http_mount: None,
+            schema: SchemaGraph::empty(),
+            commands: CommandTree {
+                nodes: vec![
+                    CommandNode {
+                        name: "weather".into(),
+                        aliases: vec![],
+                        doc: Doc::default(),
+                        http: None,
+                        globals: Default::default(),
+                        subcommands: vec![CommandIndex(1)],
+                        body: None,
+                    },
+                    CommandNode {
+                        name: "current".into(),
+                        aliases: vec!["now".into()],
+                        doc: Doc::default(),
+                        http: None,
+                        globals: Default::default(),
+                        subcommands: vec![],
+                        body: Some(body),
+                    },
+                ],
+            },
+        }
+    }
+
     impl RestHarness {
         fn new(mode: AgentMode) -> Self {
             Self::new_with_method_schema(mode, InputSchema::Parameters(vec![]), OutputSchema::Unit)
@@ -5479,13 +5852,25 @@ mod tests {
                 Duration::from_secs(60),
             ));
             let agent_types = agent_type_resolver(registry);
+            let tool_state = crate::service::component::tests::tool_deployment_state(
+                &component,
+                "weather",
+                weather_tool_definition(),
+                [
+                    ToolBindingOwner::ComponentBaseline { component_id },
+                    ToolBindingOwner::AgentType {
+                        agent_type_name: agent_type_name.clone(),
+                    },
+                ],
+            );
 
             Self {
                 worker_service: WorkerService::new(
                     Arc::new(StaticComponentService {
                         components: vec![component],
-                        tool_state: None,
+                        tool_state: Some(tool_state),
                         tool_queries: Mutex::new(vec![]),
+                        revision_gate: Mutex::new(None),
                     }),
                     Arc::new(AllowAllAuthService),
                     Arc::new(NoopLimitService),
@@ -5581,6 +5966,7 @@ mod tests {
                         components: vec![pinned_component, latest_component],
                         tool_state: None,
                         tool_queries: Mutex::new(vec![]),
+                        revision_gate: Mutex::new(None),
                     }),
                     Arc::new(AllowAllAuthService),
                     Arc::new(NoopLimitService),
@@ -5980,6 +6366,27 @@ mod tests {
             .unwrap();
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].agent_id, reference.agent_id);
+        let mut request = harness.invoke_request();
+        request.agent_id = Some(reference.agent_id);
+        request.parameters = None;
+        let invocation = harness
+            .invoke_rest(request.clone(), None, AuthCtx::system())
+            .await
+            .unwrap();
+        assert_eq!(invocation.agent_id, reference.agent_id);
+        let wrong_name = harness
+            .worker_service
+            .invoke_agent_rest(
+                harness.environment_id,
+                &AgentTypeName("other-agent".into()),
+                request,
+                None,
+                AuthCtx::system(),
+            )
+            .await;
+        assert!(
+            matches!(wrong_name, Err(WorkerServiceError::AgentNotFound(id)) if id == reference.agent_id)
+        );
         assert!(
             harness
                 .worker_service
@@ -6026,6 +6433,7 @@ mod tests {
             components: vec![current_component, previous_component],
             tool_state: None,
             tool_queries: Mutex::new(vec![]),
+            revision_gate: Mutex::new(None),
         });
         let cursor = Some(ScanCursor::new("next-page".into()));
         *harness.worker_client.listed_agents.lock().unwrap() =
@@ -6807,6 +7215,214 @@ mod tests {
             *harness.worker_client.effects.lock().unwrap(),
             vec!["process-oplog-entries"],
             "a non-system request must not reach the executor client"
+        );
+    }
+
+    #[test]
+    async fn mounted_files_lookup_existing_key_and_id_without_creation() {
+        for id_binding in [false, true] {
+            for state in [
+                "existing",
+                "retained-owner",
+                "missing",
+                "deleted-during-read",
+                "wrong-environment",
+                "wrong-type",
+                "key-collision",
+            ] {
+                let mut harness = RestHarness::new(AgentMode::Durable);
+                let mut route_component_id = harness.component_id;
+                if state == "retained-owner" {
+                    let original = harness
+                        .worker_service
+                        .component_service
+                        .get_current_by_id(harness.component_id)
+                        .await
+                        .unwrap();
+                    let mut current = original.clone();
+                    current.id = ComponentId::new();
+                    route_component_id = current.id;
+                    harness.worker_service.agent_types =
+                        agent_type_resolver(Arc::new(TestRegistryService {
+                            removed: false,
+                            resolved: ResolvedAgentType {
+                                registered_agent_type: RegisteredAgentType {
+                                    type_id: harness.type_id,
+                                    agent_type: current.metadata.agent_types()[0].clone(),
+                                    implemented_by: RegisteredAgentTypeImplementer {
+                                        component_id: current.id,
+                                        component_revision: current.revision,
+                                        component_name: current.component_name.0.clone(),
+                                        account_id: current.account_id,
+                                        account_email: current.account_email.clone(),
+                                    },
+                                },
+                                environment_id: harness.environment_id,
+                                deployment_revision: DeploymentRevision::INITIAL,
+                                current_deployment_revision: Some(
+                                    CurrentDeploymentRevision::INITIAL,
+                                ),
+                            },
+                        }));
+                    harness.worker_service.component_service = Arc::new(StaticComponentService {
+                        components: vec![original, current],
+                        tool_state: None,
+                        tool_queries: Mutex::new(vec![]),
+                        revision_gate: Mutex::new(None),
+                    });
+                }
+                if state != "missing" {
+                    harness
+                        .worker_client
+                        .set_metadata_component_revision(harness.component_revision);
+                }
+                if state == "wrong-environment" {
+                    *harness
+                        .worker_client
+                        .metadata_environment_id
+                        .lock()
+                        .unwrap() = Some(EnvironmentId::new());
+                }
+                if state == "wrong-type" {
+                    *harness
+                        .worker_client
+                        .metadata_agent_type_name
+                        .lock()
+                        .unwrap() = Some(AgentTypeName("other".into()));
+                }
+                *harness.worker_client.file_read_missing.lock().unwrap() =
+                    state == "deleted-during-read";
+                *harness.worker_client.metadata_canonical_key.lock().unwrap() =
+                    Some(if matches!(state, "key-collision" | "wrong-type") {
+                        "another-key".into()
+                    } else {
+                        harness.agent_key().to_string()
+                    });
+                let constructor = harness.constructor();
+                let result = harness
+                    .worker_service
+                    .read_mounted_file(
+                        route_component_id,
+                        &harness.agent_type_name,
+                        (!id_binding).then_some(&constructor),
+                        if id_binding {
+                            AgentBinding::Id(harness.keyed_agent_id())
+                        } else {
+                            AgentBinding::Constructor
+                        },
+                        "/public/file.txt",
+                        FileByteSelection::Full,
+                        harness.environment_id,
+                        AccountId::new(),
+                    )
+                    .await;
+                let readable = matches!(state, "existing" | "retained-owner")
+                    || (id_binding && state == "key-collision");
+                assert_eq!(
+                    result.is_ok(),
+                    readable,
+                    "{state}, ID binding: {id_binding}"
+                );
+                if state == "key-collision" && !id_binding {
+                    assert!(matches!(
+                        &result,
+                        Err(WorkerServiceError::GolemError(WorkerExecutorError::AgentKeyCollision {
+                            agent_id,
+                            requested_key,
+                        })) if *agent_id == harness.keyed_agent_id()
+                            && requested_key == &harness.agent_key().to_string()
+                    ));
+                } else if !readable {
+                    assert!(
+                        matches!(result, Err(WorkerServiceError::AgentNotFound(_))),
+                        "{state}"
+                    );
+                }
+                assert_eq!(
+                    harness
+                        .worker_client
+                        .effects
+                        .lock()
+                        .unwrap()
+                        .contains(&"file-contents"),
+                    readable || state == "deleted-during-read"
+                );
+                assert!(harness.worker_client.created_targets().is_empty());
+                assert!(harness.worker_client.invoked_targets().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn mounted_create_keeps_its_resolved_component_across_a_deployment_change() {
+        use crate::service::component::tests::{LookupGate, TestRegistry};
+
+        let mut harness = RestHarness::new(AgentMode::Durable);
+        let original = harness
+            .worker_service
+            .component_service
+            .get_current_by_id(harness.component_id)
+            .await
+            .unwrap();
+        let mut replacement = original.clone();
+        replacement.id = ComponentId::new();
+        let registered = |component: &Component| RegisteredAgentType {
+            type_id: harness.type_id,
+            agent_type: component.metadata.agent_types()[0].clone(),
+            implemented_by: RegisteredAgentTypeImplementer {
+                component_id: component.id,
+                component_revision: component.revision,
+                component_name: component.component_name.0.clone(),
+                account_id: component.account_id,
+                account_email: component.account_email.clone(),
+            },
+        };
+        let registry = Arc::new(TestRegistry::new(
+            vec![original.clone(), replacement.clone()],
+            Some(original.clone()),
+        ));
+        *registry.deployed_agent_type.lock().unwrap() = Some(registered(&original));
+        let resolver = Arc::new(AgentTypeResolver::new(
+            registry.clone(),
+            1,
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        ));
+        harness.worker_service.agent_types = resolver.clone();
+        let gate = LookupGate::new();
+        harness.worker_service.component_service = Arc::new(StaticComponentService {
+            components: vec![original.clone(), replacement.clone()],
+            tool_state: None,
+            tool_queries: Mutex::new(Vec::new()),
+            revision_gate: Mutex::new(Some(gate.clone())),
+        });
+        let creation = harness.worker_service.create_mounted_agent(
+            harness.component_id,
+            harness.environment_id,
+            &harness.agent_type_name,
+            harness.create_request(false),
+            None,
+            Caller::anonymous(),
+        );
+        let deploy = async {
+            gate.started.acquire().await.unwrap().forget();
+            *registry.deployed_agent_type.lock().unwrap() = Some(registered(&replacement));
+            resolver
+                .invalidate_environment(harness.environment_id)
+                .await;
+            gate.release.add_permits(1);
+        };
+        let (result, ()) = tokio::join!(creation, deploy);
+        let reference = result.unwrap();
+        let targets = harness.worker_client.created_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].component_id(), Some(original.id));
+        assert_eq!(targets[0].agent_id, reference.agent_id);
+        assert_ne!(targets[0].component_id(), Some(replacement.id));
+        assert_eq!(
+            *harness.worker_client.created_callers.lock().unwrap(),
+            vec![Caller::anonymous()]
         );
     }
 
@@ -7658,12 +8274,40 @@ mod tests {
 
     #[test]
     async fn trusted_resume_preserves_the_pinned_caller() {
+        use golem_common::model::caller::{
+            AgentPrincipal, Claims, Pair, TokenProvenance, UserPrincipal,
+        };
+
+        // A user's call that an agent made on the user's behalf, with a token: both roles and the
+        // token must reach the executor as recorded, the claims byte for byte.
+        let claims = r#"{"sub":"user-1", "nested":{"list":[1,2.50,{"deep":null}]},"n":1e3}"#;
+        let pinned = Caller {
+            original: Principal::User(UserPrincipal {
+                pair: Pair::new("https://idp.example/", "user-1"),
+                claims: Claims::from_json(claims.to_string()).unwrap(),
+                authenticated_at: "2026-01-02T03:04:05.678Z".parse().unwrap(),
+            }),
+            immediate: Principal::Agent(AgentPrincipal::of_agent(
+                "https://golem.example".to_string(),
+                AgentId::from_parts(7, 0xc0),
+                golem_common::model::AgentFingerprint(Uuid::from_u128(0xf1)),
+                AgentTypeName("Relay".to_string()),
+                EnvironmentId(Uuid::from_u128(0xe0)),
+            )),
+            tokens: vec![TokenProvenance {
+                id: Uuid::from_u128(0x70c1),
+                maker: Some(golem_common::model::caller::PrincipalRef::new(Pair::new(
+                    "https://golem.example",
+                    "account:1",
+                ))),
+            }],
+        };
         let harness = RestHarness::new(AgentMode::Durable);
         harness
             .worker_client
             .set_metadata_component_revision(harness.component_revision);
         let mut resume = harness.public_resume();
-        let pinned_caller = Some(Default::default());
+        let pinned_caller = Some(pinned.clone().into());
         resume.caller = pinned_caller.clone();
 
         let _responses = harness
@@ -7674,6 +8318,12 @@ mod tests {
 
         let (_, routed) = harness.worker_client.invocation_session_resume();
         assert_eq!(routed.caller, pinned_caller);
+        let routed = Caller::try_from(routed.caller.unwrap()).unwrap();
+        assert_eq!(routed, pinned);
+        match &routed.original {
+            Principal::User(user) => assert_eq!(user.claims.as_json(), claims),
+            other => panic!("the original caller is not the user: {other:?}"),
+        }
     }
 
     #[test]
@@ -8106,8 +8756,8 @@ mod tests {
         use golem_common::model::domain_registration::Domain;
         use golem_schema::http::HttpRequestTarget;
         use golem_service_base::custom_api::{
-            AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
-            MethodParameter, PathSegmentType, PhantomSelection, QueryOrHeaderType,
+            AgentRouteMode, AgentSelection, CallAgentBehaviour, CompiledInputSchema,
+            CompiledOutputSchema, MethodParameter, PathSegmentType, QueryOrHeaderType,
             RequestBodySchema,
         };
 
@@ -8189,7 +8839,7 @@ mod tests {
                     input_schema: InputSchema::Parameters(vec![]),
                 },
                 constructor_parameters: vec![],
-                phantom_selection: PhantomSelection::Policy { phantom: false },
+                agent_selection: AgentSelection::Key,
                 method_name: "run".into(),
                 method_input: CompiledInputSchema {
                     graph: SchemaGraph::anonymous(SchemaType::record(vec![
@@ -8505,6 +9155,31 @@ mod tests {
     }
 
     #[test]
+    async fn fresh_durable_binding_uses_distinct_targets_without_ephemeral_freshness() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let request_key = InvocationRequestKey::external(None, None);
+        let mut targets = HashSet::new();
+        for _ in 0..2 {
+            let (target, _, freshness) = harness
+                .worker_service
+                .bound_invocation_target(
+                    harness.component_id,
+                    &harness.agent_type_name,
+                    Some(&harness.constructor()),
+                    AgentBinding::Fresh,
+                    &request_key,
+                    "run",
+                    &AuthCtx::system(),
+                )
+                .await
+                .unwrap();
+            assert!(target.creates());
+            assert_eq!(freshness, InvocationFreshnessDisposition::MayExist);
+            assert!(targets.insert(target.agent_id));
+        }
+    }
+
+    #[test]
     async fn ephemeral_session_entry_is_stable_and_lookup_is_observation_only() {
         let harness = RestHarness::new(AgentMode::Ephemeral);
         let idempotency_key = IdempotencyKey::new("session-tool-call".to_string());
@@ -8522,7 +9197,8 @@ mod tests {
                 .worker_service
                 .bound_invocation_target(
                     harness.component_id,
-                    &harness.constructor(),
+                    &harness.agent_type_name,
+                    Some(&harness.constructor()),
                     AgentBinding::Constructor,
                     &request_key,
                     "run",
@@ -8737,7 +9413,8 @@ mod tests {
                 .worker_service
                 .bound_invocation_target(
                     harness.component_id,
-                    &harness.constructor(),
+                    &harness.agent_type_name,
+                    Some(&harness.constructor()),
                     AgentBinding::Constructor,
                     &prepared,
                     method,
@@ -8963,6 +9640,26 @@ mod tests {
                 }
             }
         }
+        let missing_environment_agent = OwnedAgentId {
+            environment_id: EnvironmentId::new(),
+            agent_id: AgentId::from_parts(42, 123),
+        };
+        for auth in [authorized, auth_ctx_with_permissions(vec![])] {
+            let read = harness
+                .worker_service
+                .get_metadata(&missing_environment_agent, None, auth.clone())
+                .await;
+            let delete = harness
+                .worker_service
+                .delete(&missing_environment_agent, None, auth)
+                .await;
+            for error in [read.unwrap_err(), delete.unwrap_err()] {
+                assert!(
+                    matches!(error, WorkerServiceError::AgentAccessDenied(id) if id == missing_environment_agent.agent_id),
+                    "{error:?}"
+                );
+            }
+        }
         assert!(
             harness
                 .worker_client
@@ -9135,6 +9832,7 @@ mod tests {
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: Default::default(),
                 source: registered.registration.source.clone(),
+                shell: false,
             };
             let mut effective_definition = definition.clone();
             effective_definition.commands.nodes[0].doc.summary = summary.into();
@@ -9160,6 +9858,7 @@ mod tests {
             components,
             tool_state: Some(state),
             tool_queries: Mutex::new(vec![]),
+            revision_gate: Mutex::new(None),
         });
         harness.worker_service.component_service = service.clone();
         (harness, service)
@@ -9270,6 +9969,7 @@ mod tests {
             components: components.components.clone(),
             tool_state: Some(state),
             tool_queries: Mutex::new(vec![]),
+            revision_gate: Mutex::new(None),
         });
         request.agent_id = None;
         request.component_id = Some(harness.component_id);
@@ -9293,7 +9993,8 @@ mod tests {
     #[test]
     async fn native_tool_fresh_owner_uses_reserved_identity_and_native_wire_shape() {
         let harness = RestHarness::new(AgentMode::Durable);
-        let request = harness.tool_request();
+        let mut request = harness.tool_request();
+        request.command_path = vec!["now".to_string()];
         let key = RestHarness::tool_key();
         harness
             .worker_client
@@ -9357,6 +10058,7 @@ mod tests {
         assert!(tool.fresh_owner);
         assert!(!tool.stdin && !tool.stdout);
         assert_eq!(tool.tool_name, "weather");
+        assert_eq!(tool.command_path, ["current"]);
         assert!(matches!(
             response.result,
             Some(NativeToolResult::Success(_))
@@ -9526,5 +10228,71 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    fn invocation_summary_proto(
+        invocation_id: golem_common::model::InvocationId,
+        state: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationLifecycleState,
+        kind: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationKind,
+        operation: Option<String>,
+    ) -> golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary {
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary {
+            invocation_id: Some(invocation_id.0.into()),
+            state: state as i32,
+            kind: kind as i32,
+            operation,
+            changed_at: Some(::prost_types::Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A completed method result whose operation is not known cannot be decoded, so the read
+    /// answers the summary with no result instead of failing.
+    #[test]
+    async fn a_completed_invocation_with_an_unknown_operation_keeps_its_summary() {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            InvocationKind as ProtoKind, InvocationLifecycleState as ProtoState,
+        };
+        let harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let invocation_id = golem_common::model::InvocationId(Uuid::new_v4());
+        let owned = golem_common::model::OwnedInvocationId::new(
+            harness.some_agent_id().agent_id,
+            invocation_id,
+        );
+        *harness.worker_client.invocation_summary.lock().unwrap() = Some(invocation_summary_proto(
+            invocation_id,
+            ProtoState::Completed,
+            ProtoKind::Unspecified,
+            None,
+        ));
+        harness
+            .worker_client
+            .set_invocation_output(AgentInvocationOutput {
+                result: golem_common::model::AgentInvocationResult::AgentMethod {
+                    output: SchemaValue::Tuple { elements: vec![] },
+                },
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: Some(harness.component_revision),
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+            });
+
+        let got = harness
+            .worker_service
+            .get_invocation(harness.environment_id, &owned, AuthCtx::system())
+            .await;
+        let got = got.unwrap_or_else(|error| {
+            panic!("get of a completed invocation with unknown operation failed: {error}")
+        });
+        assert!(got.result.is_none());
     }
 }

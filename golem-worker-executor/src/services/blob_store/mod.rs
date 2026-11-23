@@ -502,6 +502,7 @@ impl DefaultBlobStoreService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl BlobStoreService for DefaultBlobStoreService {
     async fn clear(
         &self,

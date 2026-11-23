@@ -199,12 +199,21 @@ fn http_mount_str(mount : HttpMountInfo?) -> String {
           )
       }
       let path_prefix = path_segments_str(segments)
-      let phantom_id_binding = match info.phantom_id_binding {
+      let agent_id_binding = match info.agent_id_binding {
         None => "None"
-        Some(Path(name, optional)) =>
-          "Some(@common.PhantomIdBinding::Path({ name: \"\{escape_string_lit(name)}\", optional: \{optional} }))"
-        Some(Query(name, optional)) =>
-          "Some(@common.PhantomIdBinding::Query({ name: \"\{escape_string_lit(name)}\", optional: \{optional} }))"
+        Some(Path(name)) =>
+          "Some(@common.AgentIdBinding::Path({ name: \"\{escape_string_lit(name)}\" }))"
+        Some(Query(name)) =>
+          "Some(@common.AgentIdBinding::Query({ name: \"\{escape_string_lit(name)}\" }))"
+      }
+      let create_route = match info.create_route {
+        None => "None"
+        Some(path) => {
+          let segments = parse_path_only(path) catch {
+            e => abort("Invalid create path: \{@debug.to_string(e)}")
+          }
+          "Some(\{path_segments_str(segments)})"
+        }
       }
       let webhook_suffix = match info.webhook_suffix {
         None => "[]"
@@ -218,7 +227,7 @@ fn http_mount_str(mount : HttpMountInfo?) -> String {
           path_segments_str(s)
         }
       }
-      "Some({ path_prefix: \{path_prefix}, auth_details: \{auth_details_str(info.auth)}, phantom_agent: \{info.phantom}, cors_options: \{cors_options_str(info.cors)}, webhook_suffix: \{webhook_suffix}, static_bindings: \{file_mappings_str(info.static_bindings)}, filesystem_bindings: \{file_mappings_str(info.filesystem_bindings)}, file_response_headers: \{file_response_headers_str(info.file_response_headers)}, openapi_provider_method: \{opt_string_lit(info.openapi_provider_method)}, phantom_id_binding: \{phantom_id_binding} })"
+      "Some({ path_prefix: \{path_prefix}, auth_details: \{auth_details_str(info.auth)}, phantom_agent: \{info.phantom}, cors_options: \{cors_options_str(info.cors)}, webhook_suffix: \{webhook_suffix}, static_bindings: \{file_mappings_str(info.static_bindings)}, filesystem_bindings: \{file_mappings_str(info.filesystem_bindings)}, file_response_headers: \{file_response_headers_str(info.file_response_headers)}, openapi_provider_method: \{opt_string_lit(info.openapi_provider_method)}, agent_id_binding: \{agent_id_binding}, create_route: \{create_route} })"
     }
   }
 }

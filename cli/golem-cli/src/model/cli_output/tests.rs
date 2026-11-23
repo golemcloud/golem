@@ -110,9 +110,24 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_agent_type_list_result
     ),
     registry_entry!(
-        "AgentCancelInvocationResult",
-        "agent.cancel-invocation",
-        arb_agent_cancel_invocation_result
+        "InvocationCancelView",
+        "invocation.cancel",
+        arb_invocation_cancel_result
+    ),
+    registry_entry!(
+        "InvocationGetView",
+        "invocation.get",
+        arb_invocation_get_result
+    ),
+    registry_entry!(
+        "InvocationGetMatchesView",
+        "invocation.get-matches",
+        arb_invocation_get_matches_result
+    ),
+    registry_entry!(
+        "InvocationListView",
+        "invocation.list",
+        arb_invocation_list_result
     ),
     registry_entry!("AgentDeleteView", "agent.delete", arb_agent_delete_result),
     registry_entry!(
@@ -1837,6 +1852,50 @@ fn cli_output_schema_validates_schema_native_component_and_agent_outputs() {
                 .collect::<Vec<_>>()
         );
     }
+}
+
+#[test]
+fn cli_output_schema_validates_agent_id_mounts_and_rejects_old_selectors() {
+    use golem_common::model::agent::{AgentIdBinding, AgentIdBindingDetails};
+
+    let schema = load_command_output_schema();
+    let mount_schema = json!({
+        "$ref": "#/definitions/HttpMountDetails",
+        "definitions": schema["definitions"],
+    });
+    let validator = jsonschema::options().build(&mount_schema).unwrap();
+    let mut runner = proptest::test_runner::TestRunner::deterministic();
+    let mut mount = arb_http_mount_details()
+        .new_tree(&mut runner)
+        .unwrap()
+        .current();
+    for binding in [
+        AgentIdBinding::Path(AgentIdBindingDetails { name: "id".into() }),
+        AgentIdBinding::Query(AgentIdBindingDetails { name: "id".into() }),
+    ] {
+        mount.agent_id_binding = Some(binding);
+        for create_route in [None, Some(vec![])] {
+            mount.create_route = create_route;
+            let value = serde_json::to_value(&mount).unwrap();
+            assert!(validator.is_valid(&value));
+
+            let mut optional_selector = value.clone();
+            optional_selector["agentIdBinding"]["optional"] = json!(false);
+            assert!(!validator.is_valid(&optional_selector));
+
+            let mut old_selector = value.clone();
+            let object = old_selector.as_object_mut().unwrap();
+            let binding = object.remove("agentIdBinding").unwrap();
+            object.insert("phantomIdBinding".into(), binding);
+            assert!(!validator.is_valid(&old_selector));
+
+            let mut display_path = value;
+            display_path["createRoute"] = json!("/create");
+            assert!(!validator.is_valid(&display_path));
+        }
+    }
+    mount.agent_id_binding = None;
+    assert!(validator.is_valid(&serde_json::to_value(&mount).unwrap()));
 }
 
 #[test]
@@ -3572,17 +3631,17 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                 .prop_map(|required| golem_common::model::agent::AgentHttpAuthDetails { required }),
         ),
         any::<bool>(),
-        proptest::option::of((any::<bool>(), arb_small_string(), any::<bool>()).prop_map(
-            |(path, name, optional)| {
-                let details =
-                    golem_common::model::agent::PhantomIdBindingDetails { name, optional };
+        proptest::option::of(
+            (any::<bool>(), arb_small_string()).prop_map(|(path, name)| {
+                let details = golem_common::model::agent::AgentIdBindingDetails { name };
                 if path {
-                    golem_common::model::agent::PhantomIdBinding::Path(details)
+                    golem_common::model::agent::AgentIdBinding::Path(details)
                 } else {
-                    golem_common::model::agent::PhantomIdBinding::Query(details)
+                    golem_common::model::agent::AgentIdBinding::Query(details)
                 }
-            },
-        )),
+            }),
+        ),
+        proptest::option::of(proptest::collection::vec(arb_path_segment(), 0..3)),
         proptest::collection::vec(arb_small_string(), 0..2),
         proptest::collection::vec(arb_path_segment(), 0..2),
         proptest::collection::vec(arb_file_mapping(), 1..3),
@@ -3595,7 +3654,8 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                 path_prefix,
                 auth_details,
                 phantom_agent,
-                phantom_id_binding,
+                agent_id_binding,
+                create_route,
                 allowed_patterns,
                 webhook_suffix,
                 static_bindings,
@@ -3607,7 +3667,8 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                     path_prefix,
                     auth_details,
                     phantom_agent,
-                    phantom_id_binding,
+                    agent_id_binding,
+                    create_route,
                     cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
                     webhook_suffix,
                     static_bindings,
@@ -4064,17 +4125,35 @@ fn oplog_export_key() -> crate::oplog_export::obfuscator::TokenKey {
     crate::oplog_export::obfuscator::TokenKey::from_bytes([42; 32])
 }
 
+/// The own agent of the generated exports: the agent of the sample `Create` entry.
+fn oplog_export_own_agent() -> crate::oplog_export::obfuscator::OwnAgent {
+    crate::oplog_export::obfuscator::OwnAgent {
+        agent_id: golem_common::model::AgentId::from_parts(7, 1),
+        agent_type: Some(golem_common::model::agent::AgentTypeName(
+            "GeneratedAgent".to_string(),
+        )),
+    }
+}
+
 fn arb_agent_oplog_export_header() -> OutputDocumentStrategy {
-    use crate::oplog_export::obfuscator::{ObfuscationContext, agent_reference};
+    use crate::oplog_export::obfuscator::{ObfuscationContext, OwnAgent, own_agent_reference};
     serialized_output(
-        (arb_keep_flags(), any::<bool>(), "[A-Za-z0-9-]{1,24}").prop_map(
-            |(keep, filtered, name)| {
+        (
+            arb_keep_flags(),
+            any::<bool>(),
+            "[A-Za-z0-9-]{1,24}",
+            proptest::option::of("[A-Za-z][A-Za-z0-9-]{0,23}"),
+        )
+            .prop_map(|(keep, filtered, name, agent_type)| {
                 let key = oplog_export_key();
-                let ctx = ObfuscationContext::new(&key, keep);
                 let h = name
                     .bytes()
                     .fold(0u128, |h, b| (h << 8 | u128::from(b)) % (1 << 90));
-                let agent_id = golem_common::model::AgentId::from_parts(7, h);
+                let own_agent = OwnAgent {
+                    agent_id: golem_common::model::AgentId::from_parts(7, h),
+                    agent_type: agent_type.map(golem_common::model::agent::AgentTypeName),
+                };
+                let ctx = ObfuscationContext::new(&key, keep, own_agent);
                 crate::model::agent::oplog_export_view::AgentOplogExportHeaderView(
                     crate::oplog_export::model::OplogExportHeader {
                         obfuscate: true,
@@ -4082,13 +4161,12 @@ fn arb_agent_oplog_export_header() -> OutputDocumentStrategy {
                         keep_shape: keep.shape,
                         keep_error_text: keep.error_text,
                         filtered,
-                        root: agent_reference(&ctx, &agent_id),
+                        root: own_agent_reference(&ctx),
                         cli_version: "1.0.0".to_string(),
                         generated_at: "2026-01-01T00:00:00+00:00".to_string(),
                     },
                 )
-            },
-        ),
+            }),
     )
 }
 
@@ -4109,7 +4187,7 @@ fn arb_agent_oplog_export_entry() -> OutputDocumentStrategy {
     )
         .prop_map(|(index, attribution, entry, keep, start_function)| {
             let key = oplog_export_key();
-            let ctx = ObfuscationContext::new(&key, keep);
+            let ctx = ObfuscationContext::new(&key, keep, oplog_export_own_agent());
             let entry = PublicOplogEntryWithIndex {
                 oplog_index: golem_common::model::OplogIndex::from_u64(index + 1),
                 attribution,
@@ -4127,7 +4205,7 @@ fn arb_agent_oplog_export_entry() -> OutputDocumentStrategy {
     )
         .prop_map(|(index, attribution, entry_type, size, keep, too_large)| {
             let key = oplog_export_key();
-            let ctx = ObfuscationContext::new(&key, keep);
+            let ctx = ObfuscationContext::new(&key, keep, oplog_export_own_agent());
             let omitted = OmittedOplogEntry {
                 oplog_index: golem_common::model::OplogIndex::from_u64(index + 1),
                 attribution,
@@ -5408,17 +5486,131 @@ fn arb_card_managed_by() -> BoxedStrategy<golem_client::model::CardManagedBy> {
     .boxed()
 }
 
-fn arb_agent_cancel_invocation_result() -> OutputDocumentStrategy {
-    serialized_output(
-        (any::<bool>(), arb_small_string(), arb_small_string()).prop_map(
-            |(canceled, agent, idempotency_key)| {
-                crate::model::agent::action_result::AgentCancelInvocationResult {
-                    canceled,
-                    agent_id: generated_agent_id(&agent),
-                    idempotency_key,
-                }
+fn arb_invocation_summary() -> BoxedStrategy<golem_client::model::InvocationSummary> {
+    use golem_client::model::{InvocationKind, InvocationState, InvocationSummary};
+
+    (
+        arb_uuid(),
+        arb_uuid(),
+        prop_oneof![
+            Just(InvocationState::Scheduled),
+            Just(InvocationState::Pending),
+            Just(InvocationState::Running),
+            Just(InvocationState::Waiting),
+            Just(InvocationState::Retrying),
+            Just(InvocationState::Interrupted),
+            Just(InvocationState::Completed),
+            Just(InvocationState::Failed),
+            Just(InvocationState::Cancelled),
+        ],
+        proptest::option::of(prop_oneof![
+            Just(InvocationKind::Method),
+            Just(InvocationKind::Constructor),
+            Just(InvocationKind::Tool),
+        ]),
+        proptest::option::of(arb_small_string()),
+        proptest::option::of(arb_datetime()),
+        arb_datetime(),
+    )
+        .prop_map(
+            |(uuid, agent, state, kind, operation, accepted_at, changed_at)| InvocationSummary {
+                invocation_id: format!("{agent}.{uuid}"),
+                agent_id: agent,
+                environment_id: uuid,
+                state,
+                kind,
+                operation,
+                accepted_at,
+                changed_at,
             },
-        ),
+        )
+        .boxed()
+}
+
+fn arb_external_typed_schema_value() -> BoxedStrategy<golem_common::schema::ExternalTypedSchemaValue>
+{
+    arb_value_and_type()
+        .prop_filter_map("value has an external form", |typed| {
+            golem_common::schema::ExternalTypedSchemaValue::try_from(typed).ok()
+        })
+        .boxed()
+}
+
+fn arb_invocation_outcome() -> BoxedStrategy<golem_client::model::InvocationOutcome> {
+    use golem_client::model::{
+        InvocationFailure, InvocationMethodResult, InvocationOutcome, InvocationToolResult,
+        NativeToolFailure, NativeToolResult, NativeToolSuccess,
+    };
+    use golem_common::model::tool::SerializableToolRpcError;
+
+    prop_oneof![
+        arb_external_typed_schema_value()
+            .prop_map(|value| InvocationOutcome::Method(InvocationMethodResult { value })),
+        proptest::option::of(arb_external_typed_schema_value()).prop_map(|result| {
+            InvocationOutcome::Tool(InvocationToolResult {
+                result: NativeToolResult::Success(NativeToolSuccess { result }),
+            })
+        }),
+        arb_small_string().prop_map(|message| {
+            InvocationOutcome::Tool(InvocationToolResult {
+                result: NativeToolResult::Failure(NativeToolFailure {
+                    error: SerializableToolRpcError::Denied(message),
+                }),
+            })
+        }),
+        arb_small_string()
+            .prop_map(|error| InvocationOutcome::Failure(InvocationFailure { error })),
+    ]
+    .boxed()
+}
+
+fn arb_invocation_get_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            arb_invocation_summary(),
+            proptest::option::of(arb_invocation_outcome()),
+        )
+            .prop_map(|(summary, result)| {
+                crate::model::invocation::InvocationGetView(golem_client::model::Invocation {
+                    summary,
+                    result,
+                })
+            }),
+    )
+}
+
+fn arb_invocation_get_matches_result() -> OutputDocumentStrategy {
+    serialized_output(
+        proptest::collection::vec(
+            (
+                arb_invocation_summary(),
+                proptest::option::of(arb_invocation_outcome()),
+            )
+                .prop_map(|(summary, result)| golem_client::model::Invocation { summary, result }),
+            2..4,
+        )
+        .prop_map(|invocations| crate::model::invocation::InvocationGetMatchesView { invocations }),
+    )
+}
+
+fn arb_invocation_list_result() -> OutputDocumentStrategy {
+    serialized_output(
+        (
+            proptest::collection::vec(arb_invocation_summary(), 0..4),
+            proptest::option::of(arb_small_string()),
+        )
+            .prop_map(|(invocations, next_cursor)| {
+                crate::model::invocation::InvocationListView(golem_client::model::InvocationPage {
+                    invocations,
+                    next_cursor,
+                })
+            }),
+    )
+}
+
+fn arb_invocation_cancel_result() -> OutputDocumentStrategy {
+    serialized_output(
+        arb_invocation_summary().prop_map(crate::model::invocation::InvocationCancelView),
     )
 }
 
@@ -5852,12 +6044,29 @@ fn arb_new_app_result() -> OutputDocumentStrategy {
 }
 
 fn arb_package_digest() -> OutputDocumentStrategy {
-    serialized_output(any::<[u8; 32]>().prop_map(|bytes| {
-        use sha2::{Digest, Sha256};
-        crate::package::PackageDigest {
-            digest: format!("sha256:{:x}", Sha256::digest(bytes)),
-        }
-    }))
+    use crate::package::{ExportKind, OmittedExport, PackageDigest};
+    serialized_output(
+        (any::<[u8; 32]>(), any::<bool>()).prop_map(|(bytes, has_exports)| {
+            use sha2::{Digest, Sha256};
+            PackageDigest {
+                digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+                omitted_exports: if has_exports {
+                    vec![
+                        OmittedExport {
+                            kind: ExportKind::HttpApi,
+                            name: "api.example.com".into(),
+                        },
+                        OmittedExport {
+                            kind: ExportKind::Mcp,
+                            name: "mcp.example.com".into(),
+                        },
+                    ]
+                } else {
+                    vec![]
+                },
+            }
+        }),
+    )
 }
 
 fn arb_template_list_result() -> OutputDocumentStrategy {

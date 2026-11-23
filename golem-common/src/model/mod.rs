@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod account;
+pub mod account_path;
 pub mod account_usage;
 pub mod agent;
 pub mod application;
@@ -43,6 +44,7 @@ pub mod oplog;
 pub mod parsed_function_name;
 pub mod permission_share;
 pub mod plan;
+pub mod plan_dimension;
 pub mod plugin_registration;
 pub mod poem;
 pub mod protobuf;
@@ -70,12 +72,13 @@ pub use agent::{
     DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY, DURABLE_STREAM_SESSION_RECENT_CAPACITY,
     DurableStreamPublicBinding, DurableStreamSessionIndex, DurableStreamSessionStatus,
     EntityReplayBoundary, EntityReplayProgress, ExportForkAdmissions, ExportForkReservation,
-    FailedUpdateRecord, InvocationResultBloom, InvocationResultMembership,
-    InvocationResultPosition, InvocationStatus, LogLevel, OpenEntityReplayScope,
-    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, RedactedAgentInvocationResult, ScheduleId,
-    ScheduledAction, SnapshotFiles, SuccessfulUpdateRecord, TimestampedAgentInvocation,
-    UsableAutomaticSnapshot,
+    FailedUpdateRecord, InvocationEnd, InvocationOperation, InvocationRequestOperation,
+    InvocationRequestRef, InvocationResultBloom, InvocationResultMembership,
+    InvocationResultPosition, InvocationStatus, LogLevel, MAX_INVOCATION_OPERATION_BYTES,
+    OpenEntityReplayScope, OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RedactedAgentInvocationResult,
+    RunningInvocation, ScheduleId, ScheduledAction, SnapshotFiles, StoredAgentInvocationPayload,
+    SuccessfulUpdateRecord, TimestampedAgentInvocation, UsableAutomaticSnapshot,
 };
 pub use card::{
     ReceivedCardTransferIndex, ReceivedCardTransferState, SourceCardTransferIndex,

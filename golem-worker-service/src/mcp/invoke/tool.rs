@@ -105,7 +105,8 @@ pub async fn invoke_tool(
         let (target, component, freshness_disposition) = worker_service
             .bound_invocation_target(
                 mcp_tool.component_id,
-                &constructor,
+                &mcp_tool.agent_type_name,
+                Some(&constructor),
                 AgentBinding::Constructor,
                 &request_key,
                 &mcp_tool.method.name,

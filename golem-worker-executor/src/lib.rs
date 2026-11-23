@@ -243,7 +243,6 @@ async fn start_active_agents<
     initial_files_service: Arc<InitialAgentFilesService>,
     shutdown_token: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
-    #[cfg(unix)]
     services::agent_filesystem::keep_owner_write_permission();
     bootstrap
         .create_active_agents(golem_config, initial_files_service, shutdown_token)
@@ -1553,12 +1552,6 @@ async fn build_inner_key_value_storage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(target_os = "linux")]
-    use crate::services::NoAdditionalDeps;
-    #[cfg(target_os = "linux")]
-    use crate::services::agent_filesystem::file_creation_mask_for_test::{
-        thread_file_creation_mask, with_private_file_creation_mask,
-    };
     use crate::services::golem_config::FilesystemStorageMode;
     use crate::workerctx::default::Context;
     use std::time::Duration;
@@ -1608,32 +1601,71 @@ mod tests {
         caller_tasks.join_next().await.unwrap().unwrap().unwrap();
     }
 
-    /// Records the file mode creation mask of the thread when bootstrap starts the active agents,
-    /// and starts none.
     #[cfg(target_os = "linux")]
-    #[derive(Default)]
-    struct MaskRecordingBootstrap {
-        mask: std::sync::Mutex<Option<libc::mode_t>>,
-    }
+    mod linux {
+        use super::*;
+        use crate::services::NoAdditionalDeps;
+        use crate::services::agent_filesystem::file_creation_mask_for_test::{
+            thread_file_creation_mask, with_private_file_creation_mask,
+        };
+        use test_r::test;
 
-    #[cfg(target_os = "linux")]
-    #[async_trait]
-    impl Bootstrap<Context> for MaskRecordingBootstrap {
-        fn create_additional_deps(
-            &self,
-            _registry_service: Arc<dyn RegistryService>,
-        ) -> NoAdditionalDeps {
-            NoAdditionalDeps {}
+        /// Records the file mode creation mask of the thread when bootstrap starts the active agents,
+        /// and starts none.
+        #[derive(Default)]
+        struct MaskRecordingBootstrap {
+            mask: std::sync::Mutex<Option<libc::mode_t>>,
         }
 
-        async fn create_active_agents(
-            &self,
-            _golem_config: &GolemConfig,
-            _initial_files_service: Arc<InitialAgentFilesService>,
-            _shutdown_token: tokio_util::sync::CancellationToken,
-        ) -> anyhow::Result<Arc<ActiveAgents<Context>>> {
-            *self.mask.lock().unwrap() = Some(thread_file_creation_mask());
-            Err(anyhow!("the test starts no active agents"))
+        #[async_trait]
+        #[golem_async_trait::region_simple]
+        impl Bootstrap<Context> for MaskRecordingBootstrap {
+            fn create_additional_deps(
+                &self,
+                _registry_service: Arc<dyn RegistryService>,
+            ) -> NoAdditionalDeps {
+                NoAdditionalDeps {}
+            }
+
+            async fn create_active_agents(
+                &self,
+                _golem_config: &GolemConfig,
+                _initial_files_service: Arc<InitialAgentFilesService>,
+                _shutdown_token: tokio_util::sync::CancellationToken,
+            ) -> anyhow::Result<Arc<ActiveAgents<Context>>> {
+                *self.mask.lock().unwrap() = Some(thread_file_creation_mask());
+                Err(anyhow!("the test starts no active agents"))
+            }
+        }
+
+        /// Bootstrap runs on a thread with its own filesystem attributes and the mask 0o227. The mask
+        /// must be 0o027 when the active agents start, and stay 0o027 after.
+        #[test]
+        fn executor_bootstrap_clears_only_bit_0o200_before_the_agent_filesystems_start() {
+            let (started, recorded, after) = with_private_file_creation_mask(0o227, || {
+                let bootstrap = MaskRecordingBootstrap::default();
+                let started = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(start_active_agents(
+                        &bootstrap,
+                        &GolemConfig::default(),
+                        in_memory_initial_files_service(),
+                        tokio_util::sync::CancellationToken::new(),
+                    ))
+                    .is_ok();
+                let recorded = *bootstrap.mask.lock().unwrap();
+                (started, recorded, thread_file_creation_mask())
+            });
+
+            assert!(!started, "the recording bootstrap starts no active agents");
+            assert_eq!(
+                recorded,
+                Some(0o027),
+                "the mask 227 must be 27 when the agent filesystems start"
+            );
+            assert_eq!(after, 0o027, "the mask must stay 27, and it is {after:o}");
         }
     }
 
@@ -1796,36 +1828,5 @@ mod tests {
             "{error:#}"
         );
         shutdown.token().cancel();
-    }
-
-    /// Bootstrap runs on a thread with its own filesystem attributes and the mask 0o227. The mask
-    /// must be 0o027 when the active agents start, and stay 0o027 after.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn executor_bootstrap_clears_only_bit_0o200_before_the_agent_filesystems_start() {
-        let (started, recorded, after) = with_private_file_creation_mask(0o227, || {
-            let bootstrap = MaskRecordingBootstrap::default();
-            let started = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(start_active_agents(
-                    &bootstrap,
-                    &GolemConfig::default(),
-                    in_memory_initial_files_service(),
-                    tokio_util::sync::CancellationToken::new(),
-                ))
-                .is_ok();
-            let recorded = *bootstrap.mask.lock().unwrap();
-            (started, recorded, thread_file_creation_mask())
-        });
-
-        assert!(!started, "the recording bootstrap starts no active agents");
-        assert_eq!(
-            recorded,
-            Some(0o027),
-            "the mask 227 must be 27 when the agent filesystems start"
-        );
-        assert_eq!(after, 0o027, "the mask must stay 27, and it is {after:o}");
     }
 }

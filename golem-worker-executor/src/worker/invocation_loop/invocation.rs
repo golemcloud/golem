@@ -99,7 +99,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         match self
                             .parent
                             .owner_retirement_requested
-                            .run_until_cancelled(self.parent.cancel_invocation(*idempotency_key))
+                            .run_until_cancelled(
+                                self.parent.discard_pending_duplicate(*idempotency_key),
+                            )
                             .await
                         {
                             Some(Ok(())) => CommandOutcome::Continue,

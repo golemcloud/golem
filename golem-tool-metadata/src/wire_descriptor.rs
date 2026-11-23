@@ -55,10 +55,15 @@ impl WireToolSchema {
     }
 
     pub fn finish(self) -> wire::SchemaGraph {
-        let mut builder = Rc::try_unwrap(self.0)
+        let root =
+            self.with_builder(|builder| builder.push(wire::SchemaTypeBody::RecordType(Vec::new())));
+        self.finish_at(root)
+    }
+
+    pub fn finish_at(self, root: wire::TypeNodeIndex) -> wire::SchemaGraph {
+        let builder = Rc::try_unwrap(self.0)
             .unwrap_or_else(|_| panic!("tool schema references must be lowered before finishing"))
             .into_inner();
-        let root = builder.push(wire::SchemaTypeBody::RecordType(Vec::new()));
         builder.finish(root)
     }
 }
@@ -540,7 +545,132 @@ fn numeric_bound(bound: golem_schema::schema::schema_type::NumericBound) -> wire
     }
 }
 
+/// A command's canonical wire record and the aliases of each record field,
+/// in the same order. Only input-reachable schema nodes are retained.
+pub struct WireCanonicalInputModel {
+    pub graph: wire::SchemaGraph,
+    pub aliases: Vec<Vec<String>>,
+}
+
 impl ExtendedToolType<WireTypeRef> {
+    /// Projects a generated descriptor without decoding recursive native schemas.
+    /// Field ordering and inherited-global shadowing use the host's projection;
+    /// the type nodes and refinements stay in the descriptor's wire arena.
+    pub fn canonical_wire_input_model(
+        &self,
+        schema: &WireToolSchema,
+        command_path: &[String],
+    ) -> Result<WireCanonicalInputModel, String> {
+        use golem_schema::schema::tool::canonical::CanonicalSurfaceRef;
+        use golem_schema::schema::wit::direct::empty_metadata;
+        use wire::SchemaTypeBody;
+
+        let index = self.command_index_by_path(command_path).ok_or_else(|| {
+            format!(
+                "tool descriptor has no command body at path `{}`",
+                command_path.join(" ")
+            )
+        })?;
+        let body = self.commands[index]
+            .body
+            .as_ref()
+            .expect("command has a body");
+        let mut arena = schema.0.borrow_mut();
+        let optional = |arena: &mut WireSchemaBuilder, index, required: bool, has_default: bool| {
+            if !required
+                && !has_default
+                && !matches!(
+                    arena.node(index).map(|n| &n.body),
+                    Some(SchemaTypeBody::OptionType(_))
+                )
+            {
+                arena.push(SchemaTypeBody::OptionType(index))
+            } else {
+                index
+            }
+        };
+        let option =
+            |arena: &mut WireSchemaBuilder, option: &ExtendedOptionSpec<WireTypeRef>| match &option
+                .shape
+            {
+                ExtendedOptionShape::Scalar(t) | ExtendedOptionShape::OptionalScalar(t) => {
+                    optional(arena, t.index, option.required, option.default.is_some())
+                }
+                ExtendedOptionShape::RepeatableList(list) => {
+                    arena.push(SchemaTypeBody::ListType(list.item_type.index))
+                }
+                ExtendedOptionShape::RepeatableMap(map) => map.map_type.index,
+            };
+        let flag = |arena: &mut WireSchemaBuilder, flag: &FlagSpec| {
+            arena.push(match flag.shape {
+                FlagShape::BoolFlag(_) => SchemaTypeBody::BoolType,
+                FlagShape::CountFlag(_) => SchemaTypeBody::U32Type(None),
+            })
+        };
+        let mut fields = Vec::new();
+        let mut aliases = Vec::new();
+        for surface in self.canonical_input_surfaces(index) {
+            let (name, field_aliases, type_) = match surface {
+                CanonicalSurfaceRef::GlobalOption { node, index } => {
+                    let value = &self.commands[node].globals.options[index];
+                    (
+                        &value.long,
+                        value.aliases.clone(),
+                        option(&mut arena, value),
+                    )
+                }
+                CanonicalSurfaceRef::GlobalFlag { node, index } => {
+                    let value = &self.commands[node].globals.flags[index];
+                    (&value.long, value.aliases.clone(), flag(&mut arena, value))
+                }
+                CanonicalSurfaceRef::BodyPositional { index } => {
+                    let value = &body.positionals.fixed[index];
+                    (
+                        &value.name,
+                        Vec::new(),
+                        optional(
+                            &mut arena,
+                            value.type_.index,
+                            value.required,
+                            value.default.is_some(),
+                        ),
+                    )
+                }
+                CanonicalSurfaceRef::BodyTail => {
+                    let value = body.positionals.tail.as_ref().expect("tail exists");
+                    (
+                        &value.name,
+                        Vec::new(),
+                        arena.push(SchemaTypeBody::ListType(value.item_type.index)),
+                    )
+                }
+                CanonicalSurfaceRef::BodyOption { index } => {
+                    let value = &body.options[index];
+                    (
+                        &value.long,
+                        value.aliases.clone(),
+                        option(&mut arena, value),
+                    )
+                }
+                CanonicalSurfaceRef::BodyFlag { index } => {
+                    let value = &body.flags[index];
+                    (&value.long, value.aliases.clone(), flag(&mut arena, value))
+                }
+            };
+            fields.push(wire::NamedFieldType {
+                name: name.clone(),
+                body: type_,
+                metadata: empty_metadata(),
+            });
+            aliases.push(field_aliases);
+        }
+        let root = arena.push(SchemaTypeBody::RecordType(fields));
+        Ok(WireCanonicalInputModel {
+            graph: arena.project(root),
+            aliases,
+        })
+    }
+
     pub fn into_wire(self, schema: WireToolSchema) -> Result<tool::Tool, ToolBuildError> {
         let nodes = self
             .commands

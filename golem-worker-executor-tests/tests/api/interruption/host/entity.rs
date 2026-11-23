@@ -160,6 +160,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                         component_revision: component.revision,
                         component_name: ComponentName("test:monthly-scoped-entity".to_string()),
                     },
+                    shell: false,
                 }),
                 mcp_import: None,
             },

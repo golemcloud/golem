@@ -504,6 +504,7 @@ fn test_tool_definition() -> Tool {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for PanicComponentService {
     async fn get(
         &self,
@@ -585,6 +586,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
     struct RevisionComponentService(Component);
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ComponentService for RevisionComponentService {
         async fn get(
             &self,
@@ -783,6 +785,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
     struct MetadataComponentService(Component);
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ComponentService for MetadataComponentService {
         async fn get(
             &self,
@@ -1072,6 +1075,7 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
                     component_revision,
                     component_name: ComponentName("tools".to_string()),
                 },
+                shell: false,
             }),
         },
         AgentEntity::ToolMiddleware(middleware_name) => EntityActivationPolicy::ToolMiddleware {
@@ -2632,19 +2636,19 @@ async fn pending_and_started_methods_expose_original_input_without_component_met
     let key = InvocationId(Uuid::new_v4());
     let context = InvocationContextStack::fresh();
     let input = JsonMethodInput::capture(br#"{"rejected":1e400,"signedZero":-0.0}"#).unwrap();
-    let payload = oplog
-        .upload_payload(&AgentInvocationPayload::AgentMethod {
-            method_name: "removed_method".into(),
-            allow_streams: false,
-            input: AgentMethodInput::PublicJson(input.clone()),
-            caller: Caller::anonymous(),
-            scope_card: None,
-        })
-        .await
-        .unwrap();
+    let (operation, payload) = AgentInvocationPayload::AgentMethod {
+        method_name: "removed_method".into(),
+        allow_streams: false,
+        input: AgentMethodInput::PublicJson(input.clone()),
+        caller: Caller::anonymous(),
+        scope_card: None,
+    }
+    .into_stored();
+    let payload = oplog.upload_payload(&payload).await.unwrap();
     let pending = OplogEntry::pending_agent_invocation(
         None,
         key,
+        Box::new(operation.clone()),
         payload.clone(),
         context.trace_id.clone(),
         context.trace_states.clone(),
@@ -2653,6 +2657,7 @@ async fn pending_and_started_methods_expose_original_input_without_component_met
     let started = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc(),
         invocation_id: key,
+        operation: Box::new(operation),
         payload,
         trace_id: context.trace_id.clone(),
         trace_states: context.trace_states.clone(),

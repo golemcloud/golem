@@ -34,7 +34,7 @@ pub use errors::*;
 pub use exports::Component;
 pub use extended_agent_type::*;
 pub use extended_tool_type::*;
-pub use golem_tool_metadata::{WireToolSchema, WireTypeRef};
+pub use golem_tool_metadata::{WireCanonicalInputModel, WireToolSchema, WireTypeRef};
 pub use http::*;
 #[doc(hidden)]
 pub use identity::{

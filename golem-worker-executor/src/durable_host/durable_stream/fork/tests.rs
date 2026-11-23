@@ -28,7 +28,9 @@ use golem_common::base_model::durable_stream::{
     StreamSessionRecord, StreamSourceUnavailableRecord,
 };
 use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
+use golem_common::model::InvocationRequestOperation;
 use golem_common::model::OwnedAgentId;
+use golem_common::model::StoredAgentInvocationPayload;
 use test_r::test;
 use uuid::Uuid;
 
@@ -942,7 +944,6 @@ async fn fork_cut_validation_rejects_a_malformed_request_hash() {
 async fn streaming_acceptance_cuts_preserve_the_whole_batch() {
     use crate::durable_host::durable_stream::tests::TestOplog;
     use crate::services::worker_fork::lineage::tests::prepared;
-    use golem_common::model::AgentInvocationPayload;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::OplogPayload;
     use std::sync::Arc;
@@ -970,7 +971,8 @@ async fn streaming_acceptance_cuts_preserve_the_whole_batch() {
     let pending = OplogEntry::pending_agent_invocation(
         None,
         identity.invocation.idempotency_key,
-        OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+        Box::new(InvocationRequestOperation::SaveSnapshot),
+        OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
             caller: golem_common::model::caller::Caller::anonymous(),
         })),
         TraceId::generate(),

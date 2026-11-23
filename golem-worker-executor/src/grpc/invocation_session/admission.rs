@@ -110,7 +110,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .deleted_incarnation_as_not_found(expected_fingerprint, bound)
                         .await?;
                     match worker.lookup_invocation_result(&ik).await {
-                        crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
+                        crate::model::LookupResult::Complete(Ok(mut output)) => {
+                            publish_acceptance(
+                                acceptance_committed,
+                                accepted,
+                                &final_agent_id,
+                                &ik,
+                                None,
+                            )?;
+                            output.agent_id = Some(final_agent_id);
+                            output.idempotency_key = Some(ik);
+                            output.invocation_status = Some(InvocationStatus::Complete);
+                            return Ok(output);
+                        }
+                        crate::model::LookupResult::Complete(Err(
+                            WorkerExecutorError::InvocationCancelled,
+                        )) => InvocationStatus::Cancelled,
                         crate::model::LookupResult::Complete(Err(err)) => return Err(err),
                         crate::model::LookupResult::Pending => InvocationStatus::Pending,
                         crate::model::LookupResult::New

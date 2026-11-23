@@ -2146,6 +2146,7 @@ where
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<T> RemoteTransactionHandler<RdbmsTransactionState<T>, RdbmsError>
     for RdbmsRemoteTransactionHandler<T>
 where

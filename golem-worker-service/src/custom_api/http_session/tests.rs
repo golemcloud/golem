@@ -48,6 +48,7 @@ struct ScriptTransport {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SessionTransport for ScriptTransport {
     async fn start(
         &self,

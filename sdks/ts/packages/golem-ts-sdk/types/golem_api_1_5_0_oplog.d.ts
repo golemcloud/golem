@@ -1039,9 +1039,46 @@ declare module 'golem:api/oplog@1.5.0' {
     record: OplogPayload;
     summary?: DurableStreamEventSummary;
   };
+  /**
+   * The command of an external tool that a request runs
+   */
+  export type RawExternalToolOperation = {
+    toolName: string;
+    commandPath: string[];
+  };
+  /**
+   * What an accepted request runs. The request entries store it next to the payload, which
+   * does not repeat it.
+   */
+  export type RawInvocationRequestOperation =
+  {
+    tag: 'manual-update'
+    val: ComponentRevision
+  } |
+  {
+    tag: 'agent-initialization'
+  } |
+  {
+    tag: 'agent-method'
+    val: string
+  } |
+  {
+    tag: 'external-tool'
+    val: RawExternalToolOperation
+  } |
+  {
+    tag: 'load-snapshot'
+  } |
+  {
+    tag: 'save-snapshot'
+  } |
+  {
+    tag: 'process-oplog-entries'
+  };
   export type RawAgentInvocationStartedParameters = {
     timestamp: Datetime;
     invocationId: Uuid;
+    operation: RawInvocationRequestOperation;
     payload: OplogPayload;
     traceId: string;
     traceStates: string[];
@@ -1080,6 +1117,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     notBefore?: Datetime;
     invocationId: Uuid;
+    operation: RawInvocationRequestOperation;
     payload: OplogPayload;
     traceId: string;
     traceStates: string[];

@@ -61,8 +61,9 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
     pub(crate) async fn start_pending_invocation(
         self: &std::sync::Arc<Self>,
         idempotency_key: InvocationId,
+        operation: golem_common::model::InvocationRequestOperation,
         payload: golem_common::model::oplog::OplogPayload<
-            golem_common::model::AgentInvocationPayload,
+            golem_common::model::StoredAgentInvocationPayload,
         >,
         context: golem_common::model::invocation_context::InvocationContextStack,
         wallet_pin: golem_common::model::card::InvocationWalletPin,
@@ -85,6 +86,7 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
                         worker
                             .start_pending_invocation_owned(
                                 idempotency_key,
+                                operation,
                                 payload,
                                 context,
                                 wallet_pin,
@@ -99,6 +101,7 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
         }
         self.start_pending_invocation_owned(
             idempotency_key,
+            operation,
             payload,
             context,
             wallet_pin,
@@ -111,8 +114,9 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
     async fn start_pending_invocation_owned(
         &self,
         idempotency_key: InvocationId,
+        operation: golem_common::model::InvocationRequestOperation,
         payload: golem_common::model::oplog::OplogPayload<
-            golem_common::model::AgentInvocationPayload,
+            golem_common::model::StoredAgentInvocationPayload,
         >,
         context: golem_common::model::invocation_context::InvocationContextStack,
         wallet_pin: golem_common::model::card::InvocationWalletPin,
@@ -211,6 +215,7 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
                 .collect();
             let started = self.oplog.agent_invocation_started_entry_from_payload(
                 idempotency_key,
+                operation,
                 payload,
                 context,
                 wallet_pin,
@@ -256,8 +261,10 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
                 .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
             let status = self.get_repaired_status().await?;
             return status
-                .current_invocation_started_at
-                .map(Some)
+                .running
+                .as_ref()
+                .filter(|running| running.key == idempotency_key)
+                .map(|running| Some(running.request.index))
                 .ok_or_else(|| {
                     WorkerExecutorError::runtime(
                         "committed streaming start is absent from agent status",
@@ -268,6 +275,7 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
             .oplog
             .add_agent_invocation_started_from_pending(
                 idempotency_key,
+                operation,
                 payload,
                 context,
                 wallet_pin,

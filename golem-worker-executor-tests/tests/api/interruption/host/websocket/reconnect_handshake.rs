@@ -5,7 +5,7 @@ use test_r::test;
 
 macro_rules! handshake_case {
     ($name:ident, Storage, $path:ident) => {
-        handshake_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $path);
+        handshake_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $path);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $path:ident) => {
         $(#[$attr])*
@@ -39,11 +39,22 @@ handshake_case!(
     Compute,
     Accessor
 );
-handshake_case!(
-    durable_websocket_reconnect_handshake_receive_managed_xfs_storage_quota,
-    Storage,
-    Accessor
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    handshake_case!(
+        durable_websocket_reconnect_handshake_receive_managed_xfs_storage_quota,
+        Storage,
+        Accessor
+    );
+    handshake_case!(
+        durable_websocket_reconnect_handshake_close_managed_xfs_storage_quota,
+        Storage,
+        Direct
+    );
+}
 handshake_case!(
     durable_websocket_reconnect_handshake_close_memory_quota,
     Memory,
@@ -52,11 +63,6 @@ handshake_case!(
 handshake_case!(
     durable_websocket_reconnect_handshake_close_compute_quota_prepaid,
     Compute,
-    Direct
-);
-handshake_case!(
-    durable_websocket_reconnect_handshake_close_managed_xfs_storage_quota,
-    Storage,
     Direct
 );
 

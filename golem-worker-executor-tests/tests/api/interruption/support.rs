@@ -135,7 +135,13 @@ pub(super) fn managed_filesystem_config(
     if !metering.filesystem {
         return Ok(None);
     }
-    #[cfg(target_os = "linux")]
+    platform::managed_filesystem_config()
+}
+
+#[cfg(target_os = "linux")]
+mod platform {
+    pub(super) fn managed_filesystem_config()
+    -> anyhow::Result<Option<golem_worker_executor::services::golem_config::FilesystemStorageMode>>
     {
         use golem_worker_executor::services::golem_config::FilesystemStorageMode;
         let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
@@ -149,8 +155,15 @@ pub(super) fn managed_filesystem_config(
             xfs_quotad_socket: socket.into_boxed_path(),
         }))
     }
-    #[cfg(not(target_os = "linux"))]
-    anyhow::bail!("ManagedXfs storage metering requires Linux")
+}
+
+#[cfg(not(target_os = "linux"))]
+mod platform {
+    pub(super) fn managed_filesystem_config()
+    -> anyhow::Result<Option<golem_worker_executor::services::golem_config::FilesystemStorageMode>>
+    {
+        anyhow::bail!("ManagedXfs storage metering requires Linux")
+    }
 }
 
 fn managed_runtime_path(owned: &OwnedAgentId) -> anyhow::Result<std::path::PathBuf> {
