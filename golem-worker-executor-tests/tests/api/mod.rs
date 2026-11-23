@@ -78,6 +78,8 @@ use std::future::Future;
 use std::io::Write;
 use std::pin::Pin;
 
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -1743,11 +1745,11 @@ impl WorkerProxy for RecordingWorkerProxy {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -5381,7 +5383,12 @@ async fn delete_nonexistent_worker(
     let counter_id = agent_key!("Counter", "delete-nonexistent-1");
     let worker_id = crate::agent::keyed_agent_id(component.environment_id, &counter_id);
 
-    let result = executor.delete_worker(&worker_id).await;
+    let result = executor
+        .delete_worker_with_fingerprint(
+            &worker_id,
+            golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+        )
+        .await;
 
     let err = result.expect_err("Deleting a non-existent worker should fail");
     let err_msg = format!("{err:?}");
@@ -5604,7 +5611,6 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::AgentInvocationPayload;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
     use golem_worker_executor::services::{HasOplog, UsesAllDeps};
@@ -5666,7 +5672,8 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
                 old.add_and_commit_oplog(OplogEntry::pending_agent_invocation(
                     None,
                     golem_common::model::InvocationId(uuid::Uuid::new_v4()),
-                    OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                    Box::new(InvocationRequestOperation::SaveSnapshot),
+                    OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                         caller: callers::anonymous(),
                     })),
                     TraceId::generate(),
@@ -5774,6 +5781,7 @@ async fn concurrent_deletes_share_worker_owned_completion(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
     let owned_agent_id = worker_id.clone();
     let hook = Arc::new(DeletionStageHook::new(
         owned_agent_id.clone(),
@@ -5786,7 +5794,7 @@ async fn concurrent_deletes_share_worker_owned_completion(
     let initiating_worker_id = worker_id.clone();
     let initiator = tokio::spawn(async move {
         initiating_executor
-            .delete_worker(&initiating_worker_id)
+            .delete_worker_with_fingerprint(&initiating_worker_id, fingerprint)
             .await
     });
     hook.wait_until_gated().await;
@@ -5798,11 +5806,18 @@ async fn concurrent_deletes_share_worker_owned_completion(
 
     let first_executor = executor.clone();
     let first_worker_id = worker_id.clone();
-    let first = tokio::spawn(async move { first_executor.delete_worker(&first_worker_id).await });
+    let first = tokio::spawn(async move {
+        first_executor
+            .delete_worker_with_fingerprint(&first_worker_id, fingerprint)
+            .await
+    });
     let second_executor = executor.clone();
     let second_worker_id = worker_id.clone();
-    let second =
-        tokio::spawn(async move { second_executor.delete_worker(&second_worker_id).await });
+    let second = tokio::spawn(async move {
+        second_executor
+            .delete_worker_with_fingerprint(&second_worker_id, fingerprint)
+            .await
+    });
     hook.wait_for_claims(3).await;
     assert_eq!(hook.claims(), (3, 1));
     assert!(!first.is_finished());
@@ -8738,14 +8753,39 @@ async fn cancelling_pending_invocations(
         .ok_or_else(|| anyhow!("expected return value"))?;
 
     // await_promise (fire-and-forget) - worker suspends
+    let ik_await = IdempotencyKey::fresh();
     executor
-        .invoke_agent(
+        .invoke_agent_with_key(
             &component,
             &agent_id,
+            &ik_await,
             "await_promise",
             crate::raw_params(vec![promise_id_value.clone()]),
         )
         .await?;
+    let stored_ik_await = executor
+        .external_invocation_key(&worker_id.agent_id, &ik_await, "await_promise")
+        .await?;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let started = executor
+                .get_oplog(&worker_id, OplogIndex::INITIAL)
+                .await?
+                .into_iter()
+                .any(|entry| {
+                    matches!(&entry.entry,
+                        PublicOplogEntry::AgentInvocationStarted(parameters)
+                            if matches!(&parameters.invocation,
+                                golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(method)
+                                    if method.invocation_id == stored_ik_await))
+                });
+            if started {
+                break anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
 
     // Queue inc_by(6) with ik2 and inc_by(7) with ik3 while suspended
     executor
@@ -8762,8 +8802,45 @@ async fn cancelling_pending_invocations(
     let stored_ik2 = executor
         .external_invocation_key(&worker_id.agent_id, &ik2, "inc_by")
         .await?;
+    // A caller already waiting for ik2 is woken by its cancellation.
+    let waiter = tokio::spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        let ik2 = ik2.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &ik2,
+                    "inc_by",
+                    data_value!(6u64),
+                )
+                .await
+        }
+    });
     let cancel1 = executor.cancel_invocation(&worker_id, &stored_ik1).await;
     let cancel2 = executor.cancel_invocation(&worker_id, &stored_ik2).await;
+    let waited = tokio::time::timeout(Duration::from_secs(60), waiter)
+        .await
+        .map_err(|_| anyhow!("a waiter of a cancelled invocation must be woken"))??;
+    let waited_error = format!(
+        "{:?}",
+        waited.expect_err("a waiter of a cancelled invocation must not get a result")
+    );
+    assert!(
+        waited_error.contains("InvocationCancelled"),
+        "expected a cancelled outcome, got {waited_error}"
+    );
+    let cancel_running = executor
+        .cancel_invocation(&worker_id, &stored_ik_await)
+        .await
+        .expect_err("the running invocation cannot be cancelled yet");
+    assert!(
+        format!("{cancel_running:?}").contains("CannotCancelRunningInvocation"),
+        "{cancel_running:?}"
+    );
     let stored_ik4 = executor
         .external_invocation_key(&worker_id.agent_id, &ik4, "inc_by")
         .await?;
@@ -8791,6 +8868,89 @@ async fn cancelling_pending_invocations(
     assert!(cancel2.is_ok() && cancel2.unwrap());
     assert!(cancel4.is_err()); // cannot cancel a non-existing invocation
     assert_eq!(final_value, 12);
+
+    // Reusing the cancelled key answers `cancelled` and does not run the call.
+    let reused = executor
+        .invoke_and_await_agent_with_key(&component, &agent_id, &ik2, "inc_by", data_value!(6u64))
+        .await;
+    let reused_error = format!(
+        "{:?}",
+        reused.expect_err("a cancelled key must not run again")
+    );
+    assert!(
+        reused_error.contains("InvocationCancelled"),
+        "expected a cancelled outcome, got {reused_error}"
+    );
+    // A second cancel of the same key reports that it is no longer pending.
+    assert!(!executor.cancel_invocation(&worker_id, &stored_ik2).await?);
+
+    let lookup_status = |executor: &TestWorkerExecutor| {
+        let start = golem_api_grpc::proto::golem::worker::InvocationStart {
+            target: Some(crate::agent::id_target(&worker_id)),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
+            idempotency_key: Some(IdempotencyKey::new(stored_ik2.to_string()).into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            caller: Some(callers::anonymous().into()),
+            ..Default::default()
+        };
+        let executor = executor.clone();
+        async move {
+            executor
+                .invoke_agent_session(start)
+                .await
+                .map(|result| result.status)
+        }
+    };
+    assert_eq!(
+        lookup_status(&executor).await?,
+        Some(golem_api_grpc::proto::golem::worker::InvocationStatus::Cancelled as i32)
+    );
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    assert_eq!(
+        lookup_status(&executor).await?,
+        Some(golem_api_grpc::proto::golem::worker::InvocationStatus::Cancelled as i32)
+    );
+
+    let reused = executor
+        .invoke_and_await_agent_with_key(&component, &agent_id, &ik2, "inc_by", data_value!(6u64))
+        .await;
+    let reused_error = format!(
+        "{:?}",
+        reused.expect_err("a cancelled key must stay cancelled after a restart")
+    );
+    assert!(
+        reused_error.contains("InvocationCancelled"),
+        "expected a cancelled outcome after restart, got {reused_error}"
+    );
+    let value_after_restart = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(value_after_restart, 12);
+    let cancelled_starts = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| {
+            matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(parameters)
+                    if matches!(&parameters.invocation,
+                        golem_common::model::oplog::PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.invocation_id == stored_ik2))
+        })
+        .count();
+    assert_eq!(
+        cancelled_starts, 0,
+        "a cancelled invocation must never start"
+    );
     Ok(())
 }
 
@@ -8889,12 +9049,18 @@ async fn scheduled_invocation(
         .start_agent(&component.id, client_agent_id.clone())
         .await?;
 
+    // The account that starts each schedule, and another account that calls the client before the
+    // scheduled call runs.
+    let scheduling_account = callers::account(AccountId::new());
+    let other_account = callers::account(AccountId::new());
+
     // first invocation: schedule increment in the future and poll
     {
         executor
-            .invoke_and_await_agent(
+            .invoke_and_await_agent_as_caller(
                 &component,
                 &client_agent_id,
+                scheduling_account.clone(),
                 "test1",
                 data_value!(server_agent_name.clone()),
             )
@@ -8978,6 +9144,100 @@ async fn scheduled_invocation(
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
+    }
+
+    // fourth invocation: a schedule keeps the caller of the invocation that made it, also when
+    // another caller invokes the scheduling agent before the scheduled call runs
+    {
+        let late_server_name = format!("scheduled-late-server-{}", context.redis_prefix());
+        let late_server_agent_id =
+            agent_key!("ScheduledInvocationServer", late_server_name.clone());
+        let late_server = executor
+            .start_agent(&component.id, late_server_agent_id.clone())
+            .await?;
+        let due = Utc::now() + chrono::Duration::seconds(3);
+        executor
+            .invoke_and_await_agent_as_caller(
+                &component,
+                &client_agent_id,
+                scheduling_account.clone(),
+                "schedule_at",
+                data_value!(
+                    late_server_name,
+                    due.timestamp() as u64,
+                    due.timestamp_subsec_nanos()
+                ),
+            )
+            .await?;
+        executor
+            .invoke_and_await_agent_as_caller(
+                &component,
+                &client_agent_id,
+                other_account,
+                "get_global_value",
+                data_value!(),
+            )
+            .await?;
+        assert!(
+            Utc::now() < due,
+            "the second caller must reach the client before the scheduled call runs"
+        );
+        loop {
+            let value = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &late_server_agent_id,
+                    "get_global_value",
+                    data_value!(),
+                )
+                .await?
+                .into_typed::<u64>()?;
+            if value == 17 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let client = callers::agent_in(
+            client_worker.agent_id,
+            client_agent_id.agent_type.clone(),
+            executor
+                .get_worker_metadata(&client_worker)
+                .await?
+                .fingerprint,
+            component.environment_id,
+        )
+        .immediate;
+        let expected = golem_common::model::caller::Caller {
+            immediate: client,
+            ..scheduling_account.clone()
+        };
+        let recorded = executor
+            .recorded_callers(&late_server.agent_id)
+            .await
+            .into_iter()
+            .filter(|(name, _)| name.ends_with("inc_global_by"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            recorded
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["pending inc_global_by", "inc_global_by"]
+        );
+        for (name, recorded) in recorded {
+            assert_eq!(recorded, expected, "{name}");
+        }
+
+        // The first schedule recorded the same caller.
+        let first = executor
+            .recorded_callers(&server_worker.agent_id)
+            .await
+            .into_iter()
+            .filter(|(name, _)| name == "inc_global_by")
+            .map(|(_, caller)| caller)
+            .collect::<Vec<_>>();
+        assert_eq!(first, [expected]);
     }
 
     executor.check_oplog_is_queryable(&client_worker).await?;
@@ -9500,16 +9760,18 @@ async fn owner_load_restores_lost_invocation_wake(
             id: &ScheduleId,
             owner: uuid::Uuid,
             until: chrono::DateTime<Utc>,
+            now: chrono::DateTime<Utc>,
         ) -> Result<bool, SchedulerStorageError> {
-            self.inner.extend_lease(id, owner, until).await
+            self.inner.extend_lease(id, owner, until, now).await
         }
 
         async fn ack(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
+            now: chrono::DateTime<Utc>,
         ) -> Result<bool, SchedulerStorageError> {
-            self.inner.ack(id, owner).await
+            self.inner.ack(id, owner, now).await
         }
     }
 
@@ -9658,6 +9920,7 @@ async fn local_schedule_rejects_recreated_cached_target(
                 scope_card: None,
             },
             Utc::now() + chrono::Duration::hours(1),
+            &target.agent_id,
             &AuthCtx::System,
         )
         .await;
@@ -9762,7 +10025,16 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
             assert!(
                 tokio::time::timeout(
                     Duration::from_secs(30),
-                    worker.cancel_scheduled_invocation(key, receipt, &owner.agent_id),
+                    worker.cancel_scheduled_invocation(
+                        key,
+                        receipt,
+                        &callers::agent_principal(
+                            owner.agent_id,
+                            golem_common::model::agent::AgentTypeName(
+                                "ScheduledInvocationClient".to_string()
+                            ),
+                        ),
+                    ),
                 )
                 .await
                 .context("cancelling the selected invocation before Started timed out")??
@@ -9788,8 +10060,14 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
                 let worker = worker.clone();
                 let owner = owner.clone();
                 async move {
+                    let canceller = callers::agent_principal(
+                        owner.agent_id,
+                        golem_common::model::agent::AgentTypeName(
+                            "ScheduledInvocationClient".to_string(),
+                        ),
+                    );
                     let mut cancellation =
-                        Box::pin(worker.cancel_scheduled_invocation(key, receipt, &owner.agent_id));
+                        Box::pin(worker.cancel_scheduled_invocation(key, receipt, &canceller));
                     assert!(futures::poll!(&mut cancellation).is_pending());
                     blocked_tx.send(()).unwrap();
                     cancellation.await
@@ -9910,7 +10188,16 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         .await?;
     assert!(
         worker
-            .cancel_scheduled_invocation(key, receipt, &owner.agent_id)
+            .cancel_scheduled_invocation(
+                key,
+                receipt,
+                &callers::agent_principal(
+                    owner.agent_id,
+                    golem_common::model::agent::AgentTypeName(
+                        "ScheduledInvocationClient".to_string()
+                    ),
+                ),
+            )
             .await?
     );
     assert_eq!(
@@ -9941,9 +10228,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
     );
     assert_eq!(
         worker.lookup_invocation_result(&key).await,
-        LookupResult::Complete(Err(WorkerExecutorError::invalid_request(
-            "Invocation was cancelled before execution"
-        )))
+        LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))
     );
     let fresh_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     worker
@@ -9998,6 +10283,96 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         OplogEntry::AgentInvocationStarted { invocation_id, .. } if invocation_id == &fresh_key))
             .count(),
         1
+    );
+    drop(worker);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn scheduled_cancellation_by_another_agent_is_refused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentInvocation;
+    use golem_worker_executor::model::LookupResult;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server = agent_key!("ScheduledInvocationServer", "wrong-canceller");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let owner = executor
+        .start_agent(
+            &component.id,
+            agent_key!("ScheduledInvocationClient", "wrong-canceller-owner"),
+        )
+        .await?;
+    let other = executor
+        .start_agent(
+            &component.id,
+            agent_key!("ScheduledInvocationClient", "wrong-canceller-other"),
+        )
+        .await?;
+    let owned = target.clone();
+    let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
+    let due = Utc::now() + chrono::Duration::seconds(5);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let receipt = worker
+        .schedule_invocation(
+            AgentInvocation::AgentMethod {
+                idempotency_key: key,
+                method_name: "inc_global_by".to_string(),
+                input: data_value!(37u64).into_parts().1,
+                invocation_context: InvocationContextStack::fresh(),
+                caller: callers::agent(
+                    owner.agent_id,
+                    golem_common::model::agent::AgentTypeName(
+                        "ScheduledInvocationClient".to_string(),
+                    ),
+                ),
+                scope_card: None,
+            },
+            due,
+        )
+        .await?;
+
+    // Another agent holds the right receipt, but it is not the recorded immediate caller.
+    assert!(
+        !worker
+            .cancel_scheduled_invocation(
+                key,
+                receipt,
+                &callers::agent_principal(
+                    other.agent_id,
+                    golem_common::model::agent::AgentTypeName(
+                        "ScheduledInvocationClient".to_string()
+                    )
+                ),
+            )
+            .await?
+    );
+
+    // The call completes with a successful result: it was not cancelled.
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if let LookupResult::Complete(result) = worker.lookup_invocation_result(&key).await {
+                break result;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        37
     );
     drop(worker);
     Ok(())
@@ -12550,19 +12925,21 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             id: &ScheduleId,
             owner: uuid::Uuid,
             until: chrono::DateTime<Utc>,
+            now: chrono::DateTime<Utc>,
         ) -> Result<bool, SchedulerStorageError> {
-            self.inner.extend_lease(id, owner, until).await
+            self.inner.extend_lease(id, owner, until, now).await
         }
 
         async fn ack(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
+            now: chrono::DateTime<Utc>,
         ) -> Result<bool, SchedulerStorageError> {
             if self.wakes.lock().unwrap().contains(id) {
                 self.wake_acked.store(true, Ordering::Release);
             }
-            self.inner.ack(id, owner).await
+            self.inner.ack(id, owner, now).await
         }
     }
 
@@ -12794,7 +13171,14 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
     ];
     let failures: Vec<_> = answers
         .iter()
-        .filter(|(_, answer)| !answer.contains("being deleted"))
+        .filter(|(operation, answer)| {
+            let refusal = if *operation == "cancel" {
+                "Cannot cancel invocation on a deleting worker"
+            } else {
+                "being deleted"
+            };
+            !answer.starts_with("Err(") || !answer.contains(refusal)
+        })
         .collect();
     assert!(failures.is_empty(), "{failures:#?}");
 

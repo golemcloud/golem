@@ -1,0 +1,116 @@
+{
+  "tier": "pr",
+  "description": "`file`, `stat`, `which` and `man`: the commands that inspect files and the command set.\n\n`file` is compared with GNU file 5.47 for the cases it describes without a magic database: text\nand its line terminators, scripts, empty files, directories, links, missing files and the MIME\nforms. `man` has no GNU counterpart in the oracle image, so its cases are fixtures.",
+  "cases": [
+    {
+      "name": "inspect: file describes text",
+      "script": "cd /tmp && printf 'x\\n' > t && printf 'hello' > nonl && printf 'a\\r\\nb\\r\\n' > crlf && printf 'a\\r\\nb\\n' > mixed && printf 'h\\303\\251\\n' > utf && : > e && mkdir -p d && ln -sf t link && printf '#!/bin/sh\\necho\\n' > s.sh && printf '#!/usr/bin/env bash\\necho\\n' > b.sh; file t; file nonl; file crlf; file mixed; file utf",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: file describes empty files, directories and links",
+      "script": "cd /tmp && printf 'x\\n' > t && printf 'hello' > nonl && printf 'a\\r\\nb\\r\\n' > crlf && printf 'a\\r\\nb\\n' > mixed && printf 'h\\303\\251\\n' > utf && : > e && mkdir -p d && ln -sf t link && printf '#!/bin/sh\\necho\\n' > s.sh && printf '#!/usr/bin/env bash\\necho\\n' > b.sh; file e; file d; file link",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: file describes scripts",
+      "script": "cd /tmp && printf 'x\\n' > t && printf 'hello' > nonl && printf 'a\\r\\nb\\r\\n' > crlf && printf 'a\\r\\nb\\n' > mixed && printf 'h\\303\\251\\n' > utf && : > e && mkdir -p d && ln -sf t link && printf '#!/bin/sh\\necho\\n' > s.sh && printf '#!/usr/bin/env bash\\necho\\n' > b.sh; file s.sh; file b.sh",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: file aligns several names",
+      "script": "cd /tmp && printf 'x\\n' > t && printf 'hello' > nonl && printf 'a\\r\\nb\\r\\n' > crlf && printf 'a\\r\\nb\\n' > mixed && printf 'h\\303\\251\\n' > utf && : > e && mkdir -p d && ln -sf t link && printf '#!/bin/sh\\necho\\n' > s.sh && printf '#!/usr/bin/env bash\\necho\\n' > b.sh; file t e d link",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: file brief",
+      "script": "cd /tmp && printf 'x\\n' > t && printf 'hello' > nonl && printf 'a\\r\\nb\\r\\n' > crlf && printf 'a\\r\\nb\\n' > mixed && printf 'h\\303\\251\\n' > utf && : > e && mkdir -p d && ln -sf t link && printf '#!/bin/sh\\necho\\n' > s.sh && printf '#!/usr/bin/env bash\\necho\\n' > b.sh; file -b t d",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: file mime type",
+      "script": "cd /tmp && printf 'x\\n' > t && printf 'hello' > nonl && printf 'a\\r\\nb\\r\\n' > crlf && printf 'a\\r\\nb\\n' > mixed && printf 'h\\303\\251\\n' > utf && : > e && mkdir -p d && ln -sf t link && printf '#!/bin/sh\\necho\\n' > s.sh && printf '#!/usr/bin/env bash\\necho\\n' > b.sh; file --mime-type t e d s.sh",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: file mime with charset",
+      "script": "cd /tmp && printf 'x\\n' > t && printf 'hello' > nonl && printf 'a\\r\\nb\\r\\n' > crlf && printf 'a\\r\\nb\\n' > mixed && printf 'h\\303\\251\\n' > utf && : > e && mkdir -p d && ln -sf t link && printf '#!/bin/sh\\necho\\n' > s.sh && printf '#!/usr/bin/env bash\\necho\\n' > b.sh; file -i t utf",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: file describes a missing file and succeeds",
+      "script": "file /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: file recognises gzip data",
+      "script": "printf '\\037\\213\\010\\000\\000\\000\\000\\000' > /tmp/g; file /tmp/g",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: file resolves names against the shell's cwd",
+      "script": "mkdir -p /tmp/w && cd /tmp/w && printf 'x\\n' > here && file here",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: stat format",
+      "script": "printf hello > /tmp/f; mkdir -p /tmp/dd; stat -c '%s %F %n' /tmp/f; stat -c '%F' /tmp/dd",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: stat missing file",
+      "script": "stat /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "inspect: which of a missing command",
+      "script": "which nosuchcmd; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "man: page for a command",
+      "script": "man ls | head -n 1",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "ls(1)\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "the oracle image has no man; these pin this shell's own pages"
+      }
+    },
+    {
+      "name": "man: missing page",
+      "script": "man nosuchpage; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=1\n"
+        },
+        "stderr": {
+          "text": "No manual entry for nosuchpage\n"
+        },
+        "reason": "the oracle image has no man; these pin this shell's own pages"
+      }
+    }
+  ]
+}

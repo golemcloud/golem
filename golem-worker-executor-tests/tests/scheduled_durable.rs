@@ -17,7 +17,7 @@
 //! counts the target's effects to show that the invocation runs exactly once, at its deadline.
 
 use crate::Tracing;
-use crate::scheduled_ephemeral::HoldFirstSchedule;
+use crate::scheduled_ephemeral::{HoldFirstSchedule, PausedScheduler};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::component::ComponentDto;
@@ -113,12 +113,18 @@ impl SchedulerStorage for HoldFirstWake {
         id: &ScheduleId,
         owner: uuid::Uuid,
         until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.extend_lease(id, owner, until).await
+        self.inner.extend_lease(id, owner, until, now).await
     }
 
-    async fn ack(&self, id: &ScheduleId, owner: uuid::Uuid) -> Result<bool, SchedulerStorageError> {
-        self.inner.ack(id, owner).await
+    async fn ack(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.ack(id, owner, now).await
     }
 }
 
@@ -484,7 +490,24 @@ async fn deleted_scheduled_target_is_not_recreated_by_its_wake(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let release = tokio_util::sync::CancellationToken::new();
+    release.cancel();
+    let acknowledged = Arc::new(tokio::sync::Notify::new());
+    let overrides = TestExecutorOverrides {
+        wrap_scheduler_storage: Some(Arc::new({
+            let acknowledged = acknowledged.clone();
+            move |inner| {
+                Arc::new(PausedScheduler {
+                    inner,
+                    release: release.clone(),
+                    invocation_wake: Mutex::new(None),
+                    acknowledged: acknowledged.clone(),
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
@@ -496,8 +519,9 @@ async fn deleted_scheduled_target_is_not_recreated_by_its_wake(
     executor.delete_worker(&target).await?;
     assert!(Utc::now() < due, "the deletion must precede the deadline");
 
-    let wait = (due + chrono::Duration::seconds(5) - Utc::now()).to_std()?;
-    tokio::time::sleep(wait).await;
+    tokio::time::timeout(Duration::from_secs(60), acknowledged.notified())
+        .await
+        .map_err(|_| anyhow::anyhow!("the invocation wake was never acknowledged"))?;
     assert_eq!(executor.get_worker_metadata_opt(&target).await?, None);
     Ok(())
 }

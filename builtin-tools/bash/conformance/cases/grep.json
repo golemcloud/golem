@@ -1,0 +1,402 @@
+{
+  "tier": "pr",
+  "description": "grep conformance: GNU grep 3.12 in the oracle is the reference for status, stdout and stderr.",
+  "cases": [
+    {
+      "name": "grep: basic match",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep ERROR /tmp/app.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: ignore case",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep -i error /tmp/app.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: invert",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep -v INFO /tmp/app.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: count",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep -c INFO /tmp/app.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: line numbers",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep -n 'WARN\\|ERROR' /tmp/app.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: extended alternation",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep -E 'WARN|ERROR' /tmp/app.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: extended groups and counts",
+      "script": "printf 'ab abab ababab\\n' | grep -oE '(ab){2,}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: basic intervals and groups",
+      "script": "printf 'ab abab ababab\\n' | grep -o '\\(ab\\)\\{2\\}'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: basic literal metacharacters",
+      "script": "printf 'a+b\\naab\\na?b\\n(x)\\n' | grep -e 'a+b' -e 'a?b' -e '(x)'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: back references",
+      "script": "printf 'abab\\nabba\\nxyxy\\n' | grep '\\(..\\)\\1' && printf 'abab\\nabba\\n' | grep -E '(.)(.)\\2\\1'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: only matching",
+      "script": "printf 'id=42 id=7\\nnone\\n' | grep -o '[0-9]\\+'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: only matching extended",
+      "script": "printf 'v1.2.3 and v10.0.1\\n' | grep -oE 'v[0-9]+(\\.[0-9]+)*'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: word match",
+      "script": "printf 'foo-bar foobar\\nbarfoo\\nfoo\\n' | grep -w foo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: word match only",
+      "script": "printf 'foo-bar foobar foo\\n' | grep -ow foo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: line match",
+      "script": "printf 'abc\\nabcd\\n' | grep -x abc",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: word boundaries",
+      "script": "printf 'cat catalog concat\\n' | grep -o '\\<cat\\>'; printf 'cat catalog\\n' | grep -o '\\bcat\\b'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: anchors",
+      "script": "printf 'start mid\\nmid start\\nend\\n' | grep -e '^start' -e 'end$'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: character classes",
+      "script": "printf 'a1\\nb22\\n   \\nC\\n' | grep -E '^[[:alpha:]][[:digit:]]{2}$|^[[:space:]]+$|^[[:upper:]]$'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: bracket edge cases",
+      "script": "printf 'a]b\\na-b\\na\\\\b\\n' | grep '[]-]'; printf 'a\\\\b\\n' | grep '[\\\\]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: fixed strings",
+      "script": "printf 'a.b\\nab\\n[x]\\n' | grep -F -e . -e '[x]'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: perl lookaround",
+      "script": "printf 'price: $42 and $7\\n' | grep -oP '(?<=\\$)\\d+'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: perl classes",
+      "script": "printf 'user_1 x\\n2abc\\n' | grep -P '^\\w+\\d\\s'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: multiple patterns",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep -e WARN -e retry /tmp/app.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: newline patterns",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep $'WARN\\nretry' /tmp/app.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: pattern file",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; printf 'WARN\\ndone\\n' > /tmp/p; grep -f /tmp/p /tmp/app.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: empty pattern file",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep -f /dev/null /tmp/app.log; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: empty pattern",
+      "script": "printf 'a\\n\\nb\\n' | grep -c ''",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: blank lines",
+      "script": "printf 'a\\n\\n  \\nb\\n' | grep -cE '^\\s*$'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: after context",
+      "script": "printf 'l1\\nfoo 1\\nl3\\nl4\\nfoo 2\\nl6\\nl7\\nl8\\nfoo 3\\nl10\\n' > /tmp/ctx; grep -A1 -n foo /tmp/ctx",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: before context",
+      "script": "printf 'l1\\nfoo 1\\nl3\\nl4\\nfoo 2\\nl6\\nl7\\nl8\\nfoo 3\\nl10\\n' > /tmp/ctx; grep -B2 'foo 2' /tmp/ctx",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: context",
+      "script": "printf 'l1\\nfoo 1\\nl3\\nl4\\nfoo 2\\nl6\\nl7\\nl8\\nfoo 3\\nl10\\n' > /tmp/ctx; grep -C1 foo /tmp/ctx",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: numeric context",
+      "script": "printf 'l1\\nfoo 1\\nl3\\nl4\\nfoo 2\\nl6\\nl7\\nl8\\nfoo 3\\nl10\\n' > /tmp/ctx; grep -1 'foo 3' /tmp/ctx",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: group separator",
+      "script": "printf 'l1\\nfoo 1\\nl3\\nl4\\nfoo 2\\nl6\\nl7\\nl8\\nfoo 3\\nl10\\n' > /tmp/ctx; grep -A1 --group-separator=== foo /tmp/ctx; grep --no-group-separator -B1 foo /tmp/ctx",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: max count",
+      "script": "printf 'l1\\nfoo 1\\nl3\\nl4\\nfoo 2\\nl6\\nl7\\nl8\\nfoo 3\\nl10\\n' > /tmp/ctx; grep -m2 foo /tmp/ctx; grep -m1 -A2 foo /tmp/ctx",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: max count count",
+      "script": "printf 'l1\\nfoo 1\\nl3\\nl4\\nfoo 2\\nl6\\nl7\\nl8\\nfoo 3\\nl10\\n' > /tmp/ctx; grep -c -m2 foo /tmp/ctx",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: byte offset",
+      "script": "printf 'foo\\nbar foo\\n' | grep -b foo; printf 'foo\\nbar foo\\n' | grep -ob foo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: files with matches",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; printf 'l1\\nfoo 1\\nl3\\nl4\\nfoo 2\\nl6\\nl7\\nl8\\nfoo 3\\nl10\\n' > /tmp/ctx; grep -l INFO /tmp/app.log /tmp/ctx; grep -L INFO /tmp/app.log /tmp/ctx",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: count per file",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; printf 'l1\\nfoo 1\\nl3\\nl4\\nfoo 2\\nl6\\nl7\\nl8\\nfoo 3\\nl10\\n' > /tmp/ctx; grep -c foo /tmp/app.log /tmp/ctx",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: with and without filename",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep -H WARN /tmp/app.log; grep -h WARN /tmp/app.log /tmp/app.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: null after names",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; printf 'l1\\nfoo 1\\nl3\\nl4\\nfoo 2\\nl6\\nl7\\nl8\\nfoo 3\\nl10\\n' > /tmp/ctx; grep -lZ foo /tmp/app.log /tmp/ctx | cat -v; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: label",
+      "script": "echo hello | grep --label=input -H hello",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: quiet status",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep -q ERROR /tmp/app.log; echo found=$?; grep -q NOPE /tmp/app.log; echo missing=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: no match status",
+      "script": "printf 'a\\n' | grep b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: recursive",
+      "script": "mkdir -p /tmp/t/src/sub /tmp/t/node_modules/x && cd /tmp/t && printf 'fn main() {}\\n// TODO: fix\\n' > src/main.rs && printf 'todo later\\nTODO now\\n' > src/sub/notes.md && printf 'TODO vendored\\n' > node_modules/x/index.js && printf 'plain\\n' > README; grep -rn TODO . | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: recursive implicit dot",
+      "script": "mkdir -p /tmp/t/src/sub /tmp/t/node_modules/x && cd /tmp/t && printf 'fn main() {}\\n// TODO: fix\\n' > src/main.rs && printf 'todo later\\nTODO now\\n' > src/sub/notes.md && printf 'TODO vendored\\n' > node_modules/x/index.js && printf 'plain\\n' > README; grep -r TODO | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: recursive files with matches",
+      "script": "mkdir -p /tmp/t/src/sub /tmp/t/node_modules/x && cd /tmp/t && printf 'fn main() {}\\n// TODO: fix\\n' > src/main.rs && printf 'todo later\\nTODO now\\n' > src/sub/notes.md && printf 'TODO vendored\\n' > node_modules/x/index.js && printf 'plain\\n' > README; grep -rli todo src | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: recursive include",
+      "script": "mkdir -p /tmp/t/src/sub /tmp/t/node_modules/x && cd /tmp/t && printf 'fn main() {}\\n// TODO: fix\\n' > src/main.rs && printf 'todo later\\nTODO now\\n' > src/sub/notes.md && printf 'TODO vendored\\n' > node_modules/x/index.js && printf 'plain\\n' > README; grep -r --include='*.rs' TODO . | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: recursive exclude",
+      "script": "mkdir -p /tmp/t/src/sub /tmp/t/node_modules/x && cd /tmp/t && printf 'fn main() {}\\n// TODO: fix\\n' > src/main.rs && printf 'todo later\\nTODO now\\n' > src/sub/notes.md && printf 'TODO vendored\\n' > node_modules/x/index.js && printf 'plain\\n' > README; grep -r --exclude='*.md' --exclude-dir=node_modules TODO . | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: directory without recursion",
+      "script": "mkdir -p /tmp/t/src/sub /tmp/t/node_modules/x && cd /tmp/t && printf 'fn main() {}\\n// TODO: fix\\n' > src/main.rs && printf 'todo later\\nTODO now\\n' > src/sub/notes.md && printf 'TODO vendored\\n' > node_modules/x/index.js && printf 'plain\\n' > README; grep TODO src; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: missing file",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep ERROR /tmp/nope /tmp/app.log; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: missing file quiet",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep -s ERROR /tmp/nope /tmp/app.log; echo status=$?; grep -q ERROR /tmp/nope /tmp/app.log; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: binary file",
+      "script": "printf 'bin\\0hello\\n' > /tmp/b; grep hello /tmp/b; echo status=$?; grep -c hello /tmp/b; grep -a hello /tmp/b | cat -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: binary without match",
+      "script": "printf 'bin\\0hello\\n' > /tmp/b; grep -I hello /tmp/b; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: null data",
+      "script": "printf 'a\\0b1\\0b2\\0' | grep -z b | tr '\\0' '\\n'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: unicode ignore case",
+      "script": "printf 'ÉCOLE école\\n' | grep -io 'école'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: unicode dot",
+      "script": "printf 'héllo\\n' | grep -o 'h.l'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: invalid option",
+      "script": "grep -k x /dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: unrecognized long option",
+      "script": "grep --bogus x /dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: missing pattern",
+      "script": "grep; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: options after operands",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep ERROR /tmp/app.log -n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: double dash",
+      "script": "printf -- '-v\\nx\\n' | grep -- -v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: color never",
+      "script": "printf 'INFO start\\nWARN disk 91%%\\nERROR db timeout\\nINFO retry\\nerror: lowercase\\nINFO done\\n' > /tmp/app.log; grep --color=never WARN /tmp/app.log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: pipeline status",
+      "script": "set -o pipefail; printf 'a\\n' | grep b | cat; echo \"status=$? ${PIPESTATUS[*]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: endless max count",
+      "script": "while :; do echo x; done | grep -m1 x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: endless quiet",
+      "script": "while :; do echo match; done | grep -q match; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "grep: endless count limit",
+      "script": "while :; do echo x; done | grep -c -m3 x",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

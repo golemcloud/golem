@@ -1,0 +1,3408 @@
+{
+  "tier": "sweep",
+  "description": "Edge inputs: the special /dev paths (/dev/null, /dev/stdin, /dev/stdout, /dev/stderr, /dev/fd/N)\nas operands and as redirection targets, in the forms special_paths.py does not already cover:\n/dev/fd/N, stdin that is a file, a here-document or a partly read file, closed descriptors,\nprocess substitution paths, writers, and the test operators.\n\nGenerated from fixed tables with plain loops, so every Python 3 produces the same scripts.",
+  "cases": [
+    {
+      "name": "edge dev: cat fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | cat /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | head -n 1 /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | tail -n 1 /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | wc -l /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | sort /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | uniq -c /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | grep b /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | sed -n 1p /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | cut -c1 /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | nl /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | od -An -c /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | rev /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | tac /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | base64 /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | md5sum /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | jq -R . /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | fold -w 1 /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste fd0 from pipe",
+      "script": "printf 'b\\na\\nb\\n' | paste -s -d , /dev/fd/0; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; cat /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; head -n 1 /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; tail -n 1 /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; wc -l /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; sort /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; uniq -c /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; grep b /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; sed -n 1p /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; cut -c1 /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; nl /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; od -An -c /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; rev /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; tac /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; base64 /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; md5sum /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; jq -R . /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; fold -w 1 /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste stdin from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; paste -s -d , /dev/stdin < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; cat /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; head -n 1 /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; tail -n 1 /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; wc -l /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; sort /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; uniq -c /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; grep b /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; sed -n 1p /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; cut -c1 /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; nl /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; od -An -c /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; rev /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; tac /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; base64 /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; md5sum /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; jq -R . /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; fold -w 1 /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste fd0 from file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; paste -s -d , /dev/fd/0 < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat stdin from heredoc",
+      "script": "cat /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head stdin from heredoc",
+      "script": "head -n 1 /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail stdin from heredoc",
+      "script": "tail -n 1 /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l stdin from heredoc",
+      "script": "wc -l /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort stdin from heredoc",
+      "script": "sort /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c stdin from heredoc",
+      "script": "uniq -c /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep stdin from heredoc",
+      "script": "grep b /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed stdin from heredoc",
+      "script": "sed -n 1p /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut stdin from heredoc",
+      "script": "cut -c1 /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl stdin from heredoc",
+      "script": "nl /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od stdin from heredoc",
+      "script": "od -An -c /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev stdin from heredoc",
+      "script": "rev /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac stdin from heredoc",
+      "script": "tac /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 stdin from heredoc",
+      "script": "base64 /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum stdin from heredoc",
+      "script": "md5sum /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R stdin from heredoc",
+      "script": "jq -R . /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold stdin from heredoc",
+      "script": "fold -w 1 /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste stdin from heredoc",
+      "script": "paste -s -d , /dev/stdin <<'EOF'\nb\na\nb\nEOF; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat stdin from herestring",
+      "script": "cat /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head stdin from herestring",
+      "script": "head -n 1 /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail stdin from herestring",
+      "script": "tail -n 1 /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l stdin from herestring",
+      "script": "wc -l /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort stdin from herestring",
+      "script": "sort /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c stdin from herestring",
+      "script": "uniq -c /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep stdin from herestring",
+      "script": "grep b /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed stdin from herestring",
+      "script": "sed -n 1p /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut stdin from herestring",
+      "script": "cut -c1 /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl stdin from herestring",
+      "script": "nl /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od stdin from herestring",
+      "script": "od -An -c /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev stdin from herestring",
+      "script": "rev /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac stdin from herestring",
+      "script": "tac /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 stdin from herestring",
+      "script": "base64 /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum stdin from herestring",
+      "script": "md5sum /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R stdin from herestring",
+      "script": "jq -R . /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold stdin from herestring",
+      "script": "fold -w 1 /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste stdin from herestring",
+      "script": "paste -s -d , /dev/stdin <<< $'b\\na\\nb'; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; cat /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; head -n 1 /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; tail -n 1 /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; wc -l /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; sort /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; uniq -c /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; grep b /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; sed -n 1p /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; cut -c1 /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; nl /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; od -An -c /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; rev /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; tac /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; base64 /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; md5sum /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; jq -R . /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; fold -w 1 /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste fd3 from exec",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; exec 3< /tmp/in; paste -s -d , /dev/fd/3; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; cat /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; head -n 1 /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; tail -n 1 /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; wc -l /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; sort /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; uniq -c /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; grep b /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; sed -n 1p /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; cut -c1 /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; nl /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; od -An -c /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; rev /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; tac /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; base64 /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; md5sum /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; jq -R . /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; fold -w 1 /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste fd3 on the command",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; paste -s -d , /dev/fd/3 3< /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat fd that is not open",
+      "script": "cat /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head fd that is not open",
+      "script": "head -n 1 /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail fd that is not open",
+      "script": "tail -n 1 /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l fd that is not open",
+      "script": "wc -l /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort fd that is not open",
+      "script": "sort /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c fd that is not open",
+      "script": "uniq -c /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep fd that is not open",
+      "script": "grep b /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed fd that is not open",
+      "script": "sed -n 1p /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut fd that is not open",
+      "script": "cut -c1 /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl fd that is not open",
+      "script": "nl /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od fd that is not open",
+      "script": "od -An -c /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev fd that is not open",
+      "script": "rev /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac fd that is not open",
+      "script": "tac /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 fd that is not open",
+      "script": "base64 /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum fd that is not open",
+      "script": "md5sum /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R fd that is not open",
+      "script": "jq -R . /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold fd that is not open",
+      "script": "fold -w 1 /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste fd that is not open",
+      "script": "paste -s -d , /dev/fd/7; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat stdin closed",
+      "script": "cat /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head stdin closed",
+      "script": "head -n 1 /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail stdin closed",
+      "script": "tail -n 1 /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l stdin closed",
+      "script": "wc -l /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort stdin closed",
+      "script": "sort /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c stdin closed",
+      "script": "uniq -c /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep stdin closed",
+      "script": "grep b /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed stdin closed",
+      "script": "sed -n 1p /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut stdin closed",
+      "script": "cut -c1 /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl stdin closed",
+      "script": "nl /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od stdin closed",
+      "script": "od -An -c /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev stdin closed",
+      "script": "rev /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac stdin closed",
+      "script": "tac /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 stdin closed",
+      "script": "base64 /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum stdin closed",
+      "script": "md5sum /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R stdin closed",
+      "script": "jq -R . /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold stdin closed",
+      "script": "fold -w 1 /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste stdin closed",
+      "script": "paste -s -d , /dev/stdin <&-; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; cat /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; head -n 1 /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; tail -n 1 /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; wc -l /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; sort /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; uniq -c /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; grep b /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; sed -n 1p /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; cut -c1 /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; nl /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; od -An -c /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; rev /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; tac /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; base64 /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; md5sum /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; jq -R . /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; fold -w 1 /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste stdin after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; paste -s -d , /dev/stdin; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; cat -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; head -n 1 -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; tail -n 1 -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; wc -l -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; sort -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; uniq -c -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; grep b -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; sed -n 1p -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; cut -c1 -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; nl -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; od -An -c -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; rev -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; tac -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; base64 -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; md5sum -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; jq -R . -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; fold -w 1 -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste dash after partial read of a file",
+      "script": "printf 'b\\na\\nb\\n' > /tmp/in; { read -r first; paste -s -d , -; } < /tmp/in; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; cat /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; head -n 1 /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; tail -n 1 /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; wc -l /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; sort /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; uniq -c /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; grep b /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; sed -n 1p /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; cut -c1 /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; nl /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; od -An -c /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; rev /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; tac /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; base64 /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; md5sum /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; jq -R . /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; fold -w 1 /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste stdin after partial read of a pipe",
+      "script": "printf 'b\\na\\nb\\n' | { read -r first; paste -s -d , /dev/stdin; }; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | cat /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | head -n 1 /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | tail -n 1 /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | wc -l /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | sort /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | grep b /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | sed -n 1p /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | cut -c1 /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | nl /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | od -An -c /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | rev /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | tac /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | base64 /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | md5sum /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | jq -R . /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | fold -w 1 /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste stdin twice",
+      "script": "printf 'b\\na\\nb\\n' | paste -s -d , /dev/stdin /dev/stdin; echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cat process substitution",
+      "script": "cat <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: head process substitution",
+      "script": "head -n 1 <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tail process substitution",
+      "script": "tail -n 1 <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: wc -l process substitution",
+      "script": "wc -l <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sort process substitution",
+      "script": "sort <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: uniq -c process substitution",
+      "script": "uniq -c <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: grep process substitution",
+      "script": "grep b <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: sed process substitution",
+      "script": "sed -n 1p <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: cut process substitution",
+      "script": "cut -c1 <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: nl process substitution",
+      "script": "nl <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: od process substitution",
+      "script": "od -An -c <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: rev process substitution",
+      "script": "rev <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: tac process substitution",
+      "script": "tac <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: base64 process substitution",
+      "script": "base64 <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: md5sum process substitution",
+      "script": "md5sum <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: jq -R process substitution",
+      "script": "jq -R . <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: fold process substitution",
+      "script": "fold -w 1 <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev: paste process substitution",
+      "script": "paste -s -d , <(printf 'b\\na\\nb\\n'); echo \"status=$?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: echo to stdout",
+      "script": "echo x > /dev/stdout",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: echo to fd1",
+      "script": "echo x > /dev/fd/1",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: echo to stderr",
+      "script": "echo x > /dev/stderr",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: echo to fd2",
+      "script": "echo x > /dev/fd/2",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: append to stdout",
+      "script": "echo x >> /dev/stdout",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: both to null",
+      "script": "echo x &> /dev/null; echo y >& /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: append both to null",
+      "script": "echo x &>> /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: stderr to stdout path",
+      "script": "ls /tmp/nosuch 2> /dev/stdout | sed 's/^/piped: /'",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: stdout to stderr path",
+      "script": "echo moved > /dev/stderr 2> /dev/null; echo after",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: fd3 dup to stdout path",
+      "script": "exec 3> /dev/stdout; echo three >&3; exec 3>&-",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: fd3 via fd path",
+      "script": "echo three > /dev/fd/3 3>&1",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: fd path not open",
+      "script": "echo x > /dev/fd/5; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: bad fd duplicate",
+      "script": "echo x >&5; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: read fd path not open",
+      "script": "cat < /dev/fd/6; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: stdout reopened on a file",
+      "script": "{ echo a; echo b > /dev/stdout; } > /tmp/o; cat /tmp/o",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: stdout appended on a file",
+      "script": "{ echo a; echo b >> /dev/stdout; } > /tmp/o; cat /tmp/o",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: fd1 reopened on a file",
+      "script": "{ echo a; echo b > /dev/fd/1; } > /tmp/o; cat /tmp/o",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: stderr reopened on a file",
+      "script": "{ echo a >&2; echo b > /dev/stderr; } 2> /tmp/o; cat /tmp/o",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: stdout reopened on append file",
+      "script": "echo 0 > /tmp/o; { echo a; echo b > /dev/stdout; } >> /tmp/o; cat /tmp/o",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: exec stdout to null and back",
+      "script": "exec 3>&1 > /dev/null; echo hidden; exec >&3 3>&-; echo shown",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: exec stderr to null",
+      "script": "exec 2> /dev/null; ls /tmp/nosuch; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: exec fd to null then write",
+      "script": "exec 4> /dev/null; echo lost >&4; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: exec fd from null then read",
+      "script": "exec 4< /dev/null; read -r -u 4 x; echo status=$? [$x]",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: exec stdin from null",
+      "script": "exec < /dev/null; read -r x; echo status=$?; cat; echo end",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: exec fd from stdin path",
+      "script": "exec 5< /dev/stdin; read -r -u 5 x; echo \"[$x]\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: tee stdout twice",
+      "script": "echo x | tee /dev/stdout /dev/stdout",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: tee fd2",
+      "script": "echo x | tee /dev/fd/2",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: tee fd3",
+      "script": "echo x | tee /dev/fd/3 3> /tmp/o > /dev/null; cat /tmp/o",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: tee -a stderr",
+      "script": "echo x | tee -a /dev/stderr",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: tee null",
+      "script": "echo x | tee /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: sed w stderr",
+      "script": "echo x | sed 'w /dev/stderr'",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: sed w null",
+      "script": "echo x | sed -n 'w /dev/null'; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: sed r stdin",
+      "script": "echo inserted > /tmp/i; echo x > /tmp/x; sed 'r /dev/stdin' /tmp/x < /tmp/i",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: sed -i null",
+      "script": "sed -i 's/a/b/' /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: sort -o null",
+      "script": "printf 'b\\na\\n' | sort -o /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: sort -o stderr",
+      "script": "printf 'b\\na\\n' | sort -o /dev/stderr",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: cp file to null",
+      "script": "echo x > /tmp/f; cp /tmp/f /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: cp stdin to file",
+      "script": "cp /dev/stdin /tmp/c <<< data; cat /tmp/c",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: cp fd0 to file",
+      "script": "echo piped | cp /dev/fd/0 /tmp/c; cat /tmp/c",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: cp null to file",
+      "script": "cp /dev/null /tmp/c; wc -c < /tmp/c",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: cat file to stderr path",
+      "script": "echo x > /tmp/f; cat /tmp/f > /dev/stderr",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: jq to stderr",
+      "script": "jq -n 1 > /dev/stderr",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: printf to fd path",
+      "script": "printf 'p\\n' > /dev/fd/1",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: split to stdout path",
+      "script": "printf 'a\\nb\\n' | split -l 1 --filter='cat' - /tmp/s; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: diff output to null",
+      "script": "echo a > /tmp/a; echo b > /tmp/b; diff /tmp/a /tmp/b > /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: function output to null",
+      "script": "f() { echo in-f; echo err-f >&2; }; f > /dev/null 2>&1; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: subshell output to stderr path",
+      "script": "( echo sub ) > /dev/stderr",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: command substitution with stdout path",
+      "script": "x=$(echo inner > /dev/stdout); echo \"[$x]\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: command substitution with stderr path",
+      "script": "x=$(echo inner > /dev/stderr); echo \"[$x]\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: pipeline stage to stderr path",
+      "script": "echo a | tee /dev/stderr | tr a b",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: loop output to null",
+      "script": "for i in 1 2; do echo $i; done > /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: heredoc to stdout path",
+      "script": "cat > /dev/stdout <<EOF\nhd\nEOF",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: closed stdout write",
+      "script": "echo x >&-; echo status=$? >&2",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: closed stderr write",
+      "script": "ls /tmp/nosuch 2>&-; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: closed stdout command",
+      "script": "cat /dev/null >&-; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev write: closed stdout printf",
+      "script": "printf 'x\\n' >&-; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: source null",
+      "script": "source /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: source stdin",
+      "script": ". /dev/stdin <<< 'echo sourced'",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: source of /dev/stdin, /dev/stdout or /dev/stderr is unsupported in bash-tool\n"
+        },
+        "reason": "refusal: source reads and checks the whole script before any of it runs, and in a call's single task that read cannot wait for a stream still being written, so sourcing a standard stream is refused (a regular file, a process substitution's /dev/fd/N and /dev/null are sourced)"
+      }
+    },
+    {
+      "name": "edge dev read: source fd3",
+      "script": "source /dev/fd/3 3<<< 'echo three'",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: source process substitution",
+      "script": ". <(echo 'echo ps; x=1'); echo \"x=$x\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: read from null",
+      "script": "read -r x < /dev/null; echo status=$? [$x]",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: read from stdin path",
+      "script": "read -r x < /dev/stdin <<< value; echo \"[$x]\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: read from fd path",
+      "script": "read -r x < /dev/fd/0 <<< value; echo \"[$x]\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: mapfile from null",
+      "script": "mapfile -t a < /dev/null; echo ${#a[@]}",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: while read from stdin path",
+      "script": "while read -r l; do echo \"[$l]\"; done < /dev/stdin <<< $'a\\nb'",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: command substitution from null",
+      "script": "x=$(</dev/null); echo \"[$x] $?\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: command substitution from stdin path",
+      "script": "x=$(</dev/stdin); echo \"[$x]\"",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: eval from stdin",
+      "script": "eval \"$(cat /dev/stdin)\" <<< 'echo evald'",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: xargs -a null",
+      "script": "xargs -a /dev/null echo x; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: xargs -a stdin",
+      "script": "xargs -a /dev/stdin echo <<< 'p q'",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: grep -f null",
+      "script": "echo x | grep -f /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: grep -f stdin",
+      "script": "echo b > /tmp/p; printf 'a\\nb\\n' > /tmp/f; grep -f /dev/stdin /tmp/f < /tmp/p",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: sed -f null",
+      "script": "echo x | sed -f /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: sed -f stdin",
+      "script": "echo x > /tmp/f; sed -f /dev/stdin /tmp/f <<< 's/x/y/'",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: jq -f stdin",
+      "script": "echo '{\"a\":1}' > /tmp/j; jq -f /dev/stdin /tmp/j <<< '.a'",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: jq --slurpfile null",
+      "script": "jq -n --slurpfile v /dev/null '$v'",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: jq --rawfile stdin",
+      "script": "jq -n --rawfile v /dev/stdin '$v' <<< raw",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: diff stdin against file",
+      "script": "echo a > /tmp/f; diff /dev/stdin /tmp/f <<< b; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: diff null against file",
+      "script": "printf 'a\\nb\\n' > /tmp/f; diff /dev/null /tmp/f; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: cmp null against file",
+      "script": "echo a > /tmp/f; cmp /dev/null /tmp/f; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: comm null against file",
+      "script": "printf 'a\\n' > /tmp/f; comm /dev/null /tmp/f",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: join stdin with file",
+      "script": "echo 'k v' > /tmp/f; join /dev/stdin /tmp/f <<< 'k w'",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: paste null and file",
+      "script": "printf 'a\\nb\\n' > /tmp/f; paste /dev/null /tmp/f",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: sort -m null and file",
+      "script": "printf 'a\\nb\\n' > /tmp/f; sort -m /dev/null /tmp/f",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: sort -c null",
+      "script": "sort -c /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: head two nulls",
+      "script": "head /dev/null /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: tail null and file",
+      "script": "echo a > /tmp/f; tail -n 1 /dev/null /tmp/f",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: wc two nulls",
+      "script": "wc /dev/null /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: grep -c null and file",
+      "script": "echo x > /tmp/f; grep -c x /dev/null /tmp/f",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: grep -L null",
+      "script": "grep -L x /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: grep -H stdin path",
+      "script": "grep -H x /dev/stdin <<< x",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: cat -n null and file",
+      "script": "echo a > /tmp/f; cat -n /dev/null /tmp/f /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: sed line count null and file",
+      "script": "echo a > /tmp/f; sed -n '$=' /dev/null /tmp/f",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: md5sum null and stdin",
+      "script": "md5sum /dev/null /dev/stdin <<< x",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: sha256sum -c against stdin",
+      "script": "echo x > /tmp/f; sha256sum /tmp/f > /tmp/s; sha256sum -c /dev/stdin < /tmp/s",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: head -c stdin path",
+      "script": "head -c 2 /dev/stdin <<< abc",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: tail -c stdin path",
+      "script": "tail -c 3 /dev/stdin <<< abc",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: find -exec cat null",
+      "script": "find /tmp -maxdepth 0 -exec cat /dev/null \\; ; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev read: xargs cat null",
+      "script": "echo /dev/null | xargs cat; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -e null",
+      "script": "[ -e /dev/null ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -f null",
+      "script": "[ -f /dev/null ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -d null",
+      "script": "[ -d /dev/null ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -c null",
+      "script": "[ -c /dev/null ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -b null",
+      "script": "[ -b /dev/null ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -s null",
+      "script": "[ -s /dev/null ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -p stdin pipe",
+      "script": "echo x | { [ -p /dev/stdin ]; echo $?; }",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -f stdin file",
+      "script": "echo x > /tmp/f; [ -f /dev/stdin ] < /tmp/f; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -c stdin null",
+      "script": "[ -c /dev/stdin ] < /dev/null; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -e fd0",
+      "script": "[ -e /dev/fd/0 ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -e fd2",
+      "script": "[ -e /dev/fd/2 ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -e fd9",
+      "script": "[ -e /dev/fd/9 ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -e fd9 open",
+      "script": "[ -e /dev/fd/9 ] 9< /dev/null; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -e stderr",
+      "script": "[ -e /dev/stderr ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: cond -e stdout",
+      "script": "[[ -e /dev/stdout ]]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -t",
+      "script": "[ -t 0 ]; echo $?; [ -t 1 ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -ef null",
+      "script": "[ /dev/null -ef /dev/null ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -ef stdin fd0",
+      "script": "[ /dev/stdin -ef /dev/fd/0 ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -ef null file",
+      "script": "echo x > /tmp/f; [ /dev/null -ef /tmp/f ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -nt null",
+      "script": "echo x > /tmp/f; [ /dev/null -nt /dev/null ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: stat -c %F null",
+      "script": "stat -c %F /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: stat -c %s null",
+      "script": "stat -c %s /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: stat -L -c %F stdin pipe",
+      "script": "echo x | stat -L -c %F /dev/stdin",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: stat -L -c %F stdin file",
+      "script": "echo x > /tmp/f; stat -L -c %F /dev/stdin < /tmp/f",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: file null",
+      "script": "file /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: file -L stdin file",
+      "script": "echo text > /tmp/f; file -L /dev/stdin < /tmp/f",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: find -type c null",
+      "script": "find /dev/null -type c",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: find -name null",
+      "script": "find /dev/null -name null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: find stdout",
+      "script": "find /dev/stdout -maxdepth 0; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: realpath null",
+      "script": "realpath /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: readlink -f null",
+      "script": "readlink -f /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: readlink -e fd9",
+      "script": "readlink -e /dev/fd/9; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: ls -d null",
+      "script": "ls -d /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: ls fd9",
+      "script": "ls /dev/fd/9; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: wc -c null",
+      "script": "wc -c /dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: mkdir null",
+      "script": "mkdir /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: mkdir -p null",
+      "script": "mkdir -p /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: mkdir under null",
+      "script": "mkdir /dev/null/d; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: cd null",
+      "script": "cd /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: cd stdin",
+      "script": "cd /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: pushd null",
+      "script": "pushd /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: cat under null",
+      "script": "cat /dev/null/x; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: ls under null",
+      "script": "ls /dev/null/x; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: redirect under null",
+      "script": "echo x > /dev/null/x; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: read under null",
+      "script": "read -r x < /dev/null/x; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: find under null",
+      "script": "find /dev/null/x; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: touch under null",
+      "script": "touch /dev/null/x; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: cp into null dir",
+      "script": "echo x > /tmp/f; cp /tmp/f /dev/null/; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: ls null trailing slash",
+      "script": "ls /dev/null/; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: test -e null trailing slash",
+      "script": "[ -e /dev/null/ ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: source under null",
+      "script": ". /dev/null/x; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: grep -r null",
+      "script": "grep -r x /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution path",
+      "script": "echo <(true) >(true)",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution test -e",
+      "script": "[ -e <(true) ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution test -p",
+      "script": "[ -p <(true) ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution test -f",
+      "script": "[ -f <(true) ]; echo $?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution wc name",
+      "script": "wc -c <(printf abc)",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution head names",
+      "script": "head -n 1 <(seq 3) <(seq 4 6)",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution grep -H",
+      "script": "grep -H x <(echo x)",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution md5sum name",
+      "script": "md5sum <(echo a)",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution cmp",
+      "script": "cmp <(echo a) <(echo b); echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution diff",
+      "script": "diff <(printf 'a\\nb\\n') <(printf 'a\\nc\\n'); echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution comm",
+      "script": "comm <(printf 'a\\nb\\n') <(printf 'b\\nc\\n')",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution join",
+      "script": "join <(printf '1 a\\n') <(printf '1 b\\n')",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution paste",
+      "script": "paste <(seq 2) <(seq 3 4)",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution sort -m",
+      "script": "sort -m <(printf 'a\\nc\\n') <(printf 'b\\nd\\n')",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution exec fd",
+      "script": "exec 3< <(echo from-fd3); cat <&3",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution read fd path",
+      "script": "exec 3< <(echo via-path); cat /dev/fd/3",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution output tee",
+      "script": "echo x | tee >(tr x y) >/dev/null",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution output redirect",
+      "script": "echo x > >(tr x z)",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution twice same",
+      "script": "cat <(echo 1) <(echo 2) <(echo 3)",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: process substitution in array",
+      "script": "a=(<(true) <(true)); echo ${#a[@]}",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: capture-like file name survives /dev/null",
+      "script": "echo keep > /.bash-tool-capture-0; head -c 1 /dev/null; cat /.bash-tool-capture-0; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "edge dev names: capture-like file names survive a utility",
+      "script": "for i in 0 1 2 3 4 5; do echo keep$i > /.bash-tool-capture-$i; done; printf 'x\\n' | od -c > /dev/null; cat /.bash-tool-capture-*; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    }
+  ]
+}

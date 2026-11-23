@@ -253,7 +253,8 @@ async fn audit_1_deployed_records_exact_success_error_stream_and_owner_summaries
     assert_eq!(success_record["occurrenceLabel"], "summary-contract");
     assert_eq!(success_record["toolName"], "streaming");
     assert_eq!(success_record["commandPath"], serde_json::json!(["run"]));
-    assert_eq!(success_record["principal"]["kind"], "anonymous");
+    // The middleware sees the calling agent as the immediate caller.
+    assert_eq!(success_record["principal"]["kind"], "agent");
     assert_eq!(
         success_record["owner"]["agentId"],
         crate::agent::keyed_agent_id(fixture.caller_component.environment_id, &agent_id)
@@ -391,7 +392,7 @@ async fn audit_2_deployed_duplicate_occurrences_use_distinct_keys_and_pass_opaqu
         assert_eq!(record["toolName"], "secret-policy-probe");
         assert_eq!(record["input"]["secretHandles"], 1);
         assert_eq!(record["outcome"]["kind"], "success");
-        assert_eq!(record["principal"]["kind"], "anonymous");
+        assert_eq!(record["principal"]["kind"], "agent");
         assert!(!record.to_string().contains(plaintext));
         assert!(!record.to_string().contains("toolSecret"));
     }

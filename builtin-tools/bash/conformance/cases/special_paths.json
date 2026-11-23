@@ -1,0 +1,938 @@
+{
+  "tier": "pr",
+  "description": "Every file-reading command with /dev/null, /dev/stdin and `-` operands; writers with /dev/stdout.\n\nGenerated: a command added to FILTERS or PAIRS below is checked against all three input forms.",
+  "cases": [
+    {
+      "name": "special paths: b2sum /dev/null",
+      "script": "b2sum /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: b2sum /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | b2sum /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: b2sum dash",
+      "script": "printf 'b\\na\\nb\\n' | b2sum -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: base32 /dev/null",
+      "script": "base32 /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: base32 /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | base32 /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: base32 dash",
+      "script": "printf 'b\\na\\nb\\n' | base32 -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: base64 /dev/null",
+      "script": "base64 /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: base64 /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | base64 /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: base64 dash",
+      "script": "printf 'b\\na\\nb\\n' | base64 -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: basenc /dev/null",
+      "script": "basenc --base64 /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: basenc /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | basenc --base64 /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: basenc dash",
+      "script": "printf 'b\\na\\nb\\n' | basenc --base64 -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: cat /dev/null",
+      "script": "cat /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: cat /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | cat /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: cat dash",
+      "script": "printf 'b\\na\\nb\\n' | cat -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: cksum /dev/null",
+      "script": "cksum /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: cksum /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | cksum /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: cksum dash",
+      "script": "printf 'b\\na\\nb\\n' | cksum -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: cut /dev/null",
+      "script": "cut -c1 /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: cut /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | cut -c1 /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: cut dash",
+      "script": "printf 'b\\na\\nb\\n' | cut -c1 -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: expand /dev/null",
+      "script": "expand /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: expand /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | expand /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: expand dash",
+      "script": "printf 'b\\na\\nb\\n' | expand -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: file /dev/null",
+      "script": "file -b /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: file /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | file -b /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: file dash",
+      "script": "printf 'b\\na\\nb\\n' | file -b -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: fmt /dev/null",
+      "script": "fmt /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: fmt /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | fmt /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: fmt dash",
+      "script": "printf 'b\\na\\nb\\n' | fmt -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: fold /dev/null",
+      "script": "fold -w1 /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: fold /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | fold -w1 /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: fold dash",
+      "script": "printf 'b\\na\\nb\\n' | fold -w1 -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: grep /dev/null",
+      "script": "grep b /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: grep /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | grep b /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: grep dash",
+      "script": "printf 'b\\na\\nb\\n' | grep b -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: head /dev/null",
+      "script": "head -n1 /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: head /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | head -n1 /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: head dash",
+      "script": "printf 'b\\na\\nb\\n' | head -n1 -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: jq /dev/null",
+      "script": "jq -R . /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: jq /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | jq -R . /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: jq dash",
+      "script": "printf 'b\\na\\nb\\n' | jq -R . -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: md5sum /dev/null",
+      "script": "md5sum /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: md5sum /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | md5sum /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: md5sum dash",
+      "script": "printf 'b\\na\\nb\\n' | md5sum -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: nl /dev/null",
+      "script": "nl /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: nl /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | nl /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: nl dash",
+      "script": "printf 'b\\na\\nb\\n' | nl -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: od /dev/null",
+      "script": "od -c /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: od /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | od -c /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: od dash",
+      "script": "printf 'b\\na\\nb\\n' | od -c -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: rev /dev/null",
+      "script": "rev /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: rev /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | rev /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: rev dash",
+      "script": "printf 'b\\na\\nb\\n' | rev -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: sed /dev/null",
+      "script": "sed p /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: sed /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | sed p /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: sed dash",
+      "script": "printf 'b\\na\\nb\\n' | sed p -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: sha1sum /dev/null",
+      "script": "sha1sum /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: sha1sum /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | sha1sum /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: sha1sum dash",
+      "script": "printf 'b\\na\\nb\\n' | sha1sum -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: sha256sum /dev/null",
+      "script": "sha256sum /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: sha256sum /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | sha256sum /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: sha256sum dash",
+      "script": "printf 'b\\na\\nb\\n' | sha256sum -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: sha512sum /dev/null",
+      "script": "sha512sum /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: sha512sum /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | sha512sum /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: sha512sum dash",
+      "script": "printf 'b\\na\\nb\\n' | sha512sum -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: sort /dev/null",
+      "script": "sort /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: sort /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | sort /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: sort dash",
+      "script": "printf 'b\\na\\nb\\n' | sort -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: tac /dev/null",
+      "script": "tac /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: tac /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | tac /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: tac dash",
+      "script": "printf 'b\\na\\nb\\n' | tac -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: tail /dev/null",
+      "script": "tail -n1 /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: tail /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | tail -n1 /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: tail dash",
+      "script": "printf 'b\\na\\nb\\n' | tail -n1 -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: tsort /dev/null",
+      "script": "tsort /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: tsort /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | tsort /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: tsort dash",
+      "script": "printf 'b\\na\\nb\\n' | tsort -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: unexpand /dev/null",
+      "script": "unexpand /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: unexpand /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | unexpand /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: unexpand dash",
+      "script": "printf 'b\\na\\nb\\n' | unexpand -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: uniq /dev/null",
+      "script": "uniq /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: uniq /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | uniq /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: uniq dash",
+      "script": "printf 'b\\na\\nb\\n' | uniq -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: wc /dev/null",
+      "script": "wc /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: wc /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | wc /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: wc dash",
+      "script": "printf 'b\\na\\nb\\n' | wc -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: csplit /dev/null",
+      "script": "csplit -s -f /tmp/cs /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: csplit /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | csplit -s -f /tmp/cs /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: csplit dash",
+      "script": "printf 'b\\na\\nb\\n' | csplit -s -f /tmp/cs -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: split /dev/null",
+      "script": "split -l1 /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: split /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | split -l1 /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: split dash",
+      "script": "printf 'b\\na\\nb\\n' | split -l1 -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: shuf /dev/null",
+      "script": "shuf -n0 /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: shuf /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | shuf -n0 /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: shuf dash",
+      "script": "printf 'b\\na\\nb\\n' | shuf -n0 -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: stat /dev/null",
+      "script": "stat -c %F /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: stat /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | stat -c %F /dev/stdin; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: stat dash",
+      "script": "printf 'b\\na\\nb\\n' | stat -c %F -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: readlink /dev/null",
+      "script": "readlink -f /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: readlink /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | [[ $(readlink -f /dev/stdin) == /proc/*/fd/* ]] && echo match; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=1\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "the oracle resolves /dev/stdin to a real /proc/PID/fd/N pipe path (the case only checks that property now, not the literal path, since the PID changes every run); an agent has no /proc, so it never matches"
+      }
+    },
+    {
+      "name": "special paths: readlink dash",
+      "script": "printf 'b\\na\\nb\\n' | readlink -f -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: realpath /dev/null",
+      "script": "realpath /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: realpath /dev/stdin",
+      "script": "printf 'b\\na\\nb\\n' | [[ $(realpath /dev/stdin) == /proc/*/fd/* ]] && echo match; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=1\n"
+        },
+        "stderr": {
+          "text": "realpath: /dev/stdin: No such file or directory\n"
+        },
+        "reason": "the oracle resolves /dev/stdin to a real /proc/PID/fd/N pipe path (the case only checks that property now, not the literal path, since the PID changes every run); an agent has no /proc, so it never matches"
+      }
+    },
+    {
+      "name": "special paths: realpath dash",
+      "script": "printf 'b\\na\\nb\\n' | realpath -; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: cmp /dev/null twice",
+      "script": "cmp /dev/null /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: cmp stdin and a file",
+      "script": "printf 'a\\n' >/tmp/f; printf 'b\\na\\nb\\n' | cmp - /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: comm /dev/null twice",
+      "script": "comm /dev/null /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: comm stdin and a file",
+      "script": "printf 'a\\n' >/tmp/f; printf 'b\\na\\nb\\n' | comm - /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: diff /dev/null twice",
+      "script": "diff /dev/null /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: diff stdin and a file",
+      "script": "printf 'a\\n' >/tmp/f; printf 'b\\na\\nb\\n' | diff - /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: join /dev/null twice",
+      "script": "join /dev/null /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: join stdin and a file",
+      "script": "printf 'a\\n' >/tmp/f; printf 'b\\na\\nb\\n' | join - /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: paste /dev/null twice",
+      "script": "paste /dev/null /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: paste stdin and a file",
+      "script": "printf 'a\\n' >/tmp/f; printf 'b\\na\\nb\\n' | paste - /tmp/f; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "special paths: sort -o /dev/stdout",
+      "script": "printf 'b\\na\\nb\\n' | sort -o /dev/stdout; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: tee /dev/stderr",
+      "script": "printf 'b\\na\\nb\\n' | tee /dev/stderr >/dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: cp to /dev/stdout",
+      "script": "printf 'x\\n' >/tmp/f; cp /tmp/f /dev/stdout; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: sed w /dev/stdout",
+      "script": "printf 'b\\na\\nb\\n' | sed -n 'w /dev/stdout'; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: cat /dev/fd/0",
+      "script": "printf 'b\\na\\nb\\n' | cat /dev/fd/0; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: redirect into /dev/stdout",
+      "script": "echo out >/dev/stdout; echo err 2>/dev/null >/dev/stderr",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: find /dev/null",
+      "script": "find /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: ls /dev/null",
+      "script": "ls /dev/null; echo status=$?",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    },
+    {
+      "name": "special paths: test on /dev/stdin",
+      "script": "[ -e /dev/stdin ] && echo stdin; [ -e /dev/fd/1 ] && echo fd1; true",
+      "tags": [
+        "redirection.dev-paths"
+      ],
+      "options": {}
+    }
+  ]
+}

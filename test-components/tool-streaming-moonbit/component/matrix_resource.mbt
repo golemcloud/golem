@@ -306,7 +306,8 @@ struct MatrixResourceTyped {}
 
 ///|
 fn matrix_resource_principal(context : @tool.InvocationContext) -> String {
-  context.caller().immediate.to_string()
+  let caller = context.caller()
+  caller.original.to_string() + "|" + caller.immediate.to_string()
 }
 
 ///|
@@ -316,7 +317,7 @@ pub fn MatrixResourceSecret::exchange(
 ) -> SecretExchange {
   {
     provider: "moonbit",
-    principal: matrix_resource_principal(principal),
+    principal: matrix_resource_principal(context),
     ownerAgentId: self_agent_id_text(),
     revealed: secret.reveals_expected(),
     secret,
@@ -330,7 +331,7 @@ pub fn MatrixResourceQuota::exchange(
 ) -> QuotaExchange {
   {
     provider: "moonbit",
-    principal: matrix_resource_principal(principal),
+    principal: matrix_resource_principal(context),
     ownerAgentId: self_agent_id_text(),
     reserved: token.reserve_and_commit_one(),
     token,
@@ -344,7 +345,7 @@ pub fn MatrixResourcePermissions::exchange(
 ) -> PermissionExchange {
   {
     provider: "moonbit",
-    principal: matrix_resource_principal(principal),
+    principal: matrix_resource_principal(context),
     ownerAgentId: self_agent_id_text(),
     card,
   }

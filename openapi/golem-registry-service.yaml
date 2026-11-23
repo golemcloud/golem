@@ -24,6 +24,8 @@ tags:
 - name: EnvironmentToolGrants
 - name: EnvironmentToolMiddlewareGrants
 - name: HealthCheck
+- name: Invocation
+  description: API working on the invocations of agents
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
 - name: McpDeployment

@@ -461,10 +461,10 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
     assert_eq!(
         observed_effects
             .iter()
-            .filter(|path| path.as_str() == "/middleware/artifact-touch/account")
+            .filter(|path| path.as_str() == "/middleware/artifact-touch/agent")
             .count(),
         2,
-        "the authenticated importing identity is visible to middleware before the MCP boundary: {:?}",
+        "the importing agent is the immediate caller that middleware sees before the MCP boundary: {:?}",
         observed_effects
     );
     assert_eq!(
