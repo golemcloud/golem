@@ -2108,6 +2108,21 @@ fn oplog_page_entry_gives_the_claims_of_its_callers_as_an_object() {
         };
         assert_eq!(claims_of_original(read), Some(expected));
     }
+
+    // A number beyond the `f64` range is not a number that the reader can hold. The server
+    // still sends the object, and the read of the page fails with an error.
+    let claims = r#"{"sub":"bob","n":1e400}"#;
+    let AgentOplogEntryContent::Full(entry) = entry_of_a_user_with(Some(claims)).entry else {
+        panic!("the view holds no full entry");
+    };
+    let text = serde_json::to_string(&PublicOplogPageEntry::Included(PublicOplogEntryWithIndex {
+        oplog_index: golem_common::model::oplog::OplogIndex::from_u64(2),
+        attribution: PublicOplogEntryAttribution::agent(),
+        entry,
+    }))
+    .unwrap();
+    assert!(text.contains(&format!(r#""claims":{claims}"#)), "{text}");
+    assert!(serde_json::from_str::<PublicOplogPageEntry>(&text).is_err());
 }
 
 /// Every structured format prints the claims of a caller as an object, for `agent oplog
