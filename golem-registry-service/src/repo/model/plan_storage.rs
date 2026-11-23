@@ -33,6 +33,8 @@ pub enum PlanStorageRepoError {
     AccountNotFound,
     #[error("The owner already has a selectable definition with this name")]
     NameConflict,
+    #[error("A plan definition with this ID exists or existed")]
+    PlanIdExists,
     #[error("Only the account's parent can assign it a plan, from its own definitions")]
     ForeignCatalog,
     #[error("The root account has no plan assignment")]

@@ -80,8 +80,10 @@ pub trait PlanStorageRepo: Send + Sync {
         actor: Uuid,
     ) -> Result<PlanDefinition, PlanStorageRepoError>;
 
-    /// Creates a runtime-managed definition unless one with this ID exists. Returns whether it
-    /// created the definition; an existing definition keeps its later edits.
+    /// Creates a runtime-managed definition unless the owner already has one with this ID.
+    /// Returns whether it created the definition; an existing definition keeps its later edits.
+    /// An ID that belongs to another owner, or to a purged definition, fails with
+    /// [`PlanStorageRepoError::PlanIdExists`].
     async fn seed_definition(
         &self,
         owner_account_id: Uuid,
@@ -100,7 +102,9 @@ pub trait PlanStorageRepo: Send + Sync {
         actor: Uuid,
     ) -> Result<PlanDefinition, PlanStorageRepoError>;
 
-    /// Removes an unassigned definition from selection. It keeps its ID and history.
+    /// Removes an unassigned definition from selection. It keeps its ID and history. A retired
+    /// definition fails with [`PlanStorageRepoError::NotSelectable`] and keeps its retirement
+    /// record.
     async fn retire_definition(
         &self,
         plan_id: Uuid,
@@ -730,8 +734,24 @@ impl DbPlanStorageRepo<PostgresPool> {
                     if reread != ancestry {
                         return Err(AttemptError::Retry);
                     }
-                    if seed && Self::definition_in(tx, plan_id).await?.is_some() {
-                        return Ok(None);
+                    // The exclusive plan guard serializes creations of this ID. A purge keeps
+                    // the revisions, so a purged ID is not reused either.
+                    if let Some(existing) = Self::definition_in(tx, plan_id).await? {
+                        if seed && existing.owner_account_id == owner_account_id {
+                            return Ok(None);
+                        }
+                        return Err(PlanStorageRepoError::PlanIdExists.into());
+                    }
+                    let revision: Option<(i64,)> = tx
+                        .fetch_optional_as(
+                            sqlx::query_as(
+                                "SELECT revision FROM account_plan_revisions WHERE plan_id = $1 LIMIT 1",
+                            )
+                            .bind(plan_id),
+                        )
+                        .await?;
+                    if revision.is_some() {
+                        return Err(PlanStorageRepoError::PlanIdExists.into());
                     }
                     let now = SqlDateTime::now();
                     let record: PlanDefinitionRecord = tx
@@ -882,6 +902,10 @@ impl DbPlanStorageRepo<PostgresPool> {
                         .ok_or(PlanStorageRepoError::PlanNotFound)?;
                     if current.current_revision != expected_revision {
                         return Err(PlanStorageRepoError::ConcurrentModification.into());
+                    }
+                    // Retirement records its actor and time only on the definition row.
+                    if !current.selectable {
+                        return Err(PlanStorageRepoError::NotSelectable.into());
                     }
                     if !Self::members_in(tx, plan_id).await?.is_empty() {
                         return Err(PlanStorageRepoError::Assigned.into());

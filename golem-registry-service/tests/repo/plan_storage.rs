@@ -162,6 +162,12 @@ pub async fn test_plan_definitions_are_versioned_and_owner_scoped(deps: &Deps) {
             )
             .await
     );
+    // An existing ID is refused even with a fresh name.
+    let_assert!(
+        Err(PlanStorageRepoError::PlanIdExists) = repo
+            .create_definition(root.account_id, plan_id, name(), range(None, 5), actor())
+            .await
+    );
     // Names are local to their owner.
     repo.create_definition(
         a.account_id,
@@ -337,7 +343,13 @@ pub async fn test_plan_writes_refuse_impossible_ranges(deps: &Deps) {
             .await
     );
     let narrow_def = repo.get_definition(narrow).await.unwrap().unwrap();
-    repo.retire_definition(narrow, 0, actor()).await.unwrap();
+    let retired_by = actor();
+    repo.retire_definition(narrow, 0, retired_by).await.unwrap();
+    let_assert!(
+        Err(PlanStorageRepoError::NotSelectable) = repo.retire_definition(narrow, 0, actor()).await
+    );
+    let retired = repo.get_definition(narrow).await.unwrap().unwrap().record;
+    assert!(retired.modified_by == retired_by && retired.current_revision == 0);
     let_assert!(
         Err(PlanStorageRepoError::NotSelectable) = repo
             .assign(setup.b.account_id, Some(0), narrow, actor())
@@ -487,6 +499,17 @@ pub async fn test_plan_seed_keeps_later_edits(deps: &Deps) {
     let current = repo.get_definition(plan_id).await.unwrap().unwrap();
     assert!(current.record.current_revision == 1);
     assert!(current.policy == range(None, 99));
+
+    // A seed of an ID that another owner holds is refused and changes nothing.
+    let other = child(deps, root.account_id, &unique_segment(20)).await;
+    let_assert!(
+        Err(PlanStorageRepoError::PlanIdExists) = repo
+            .seed_definition(other.account_id, plan_id, name(), range(None, 10), actor())
+            .await
+    );
+    let current = repo.get_definition(plan_id).await.unwrap().unwrap();
+    assert!(current.record.owner_account_id == root.account_id);
+    assert!(current.record.current_revision == 1);
 }
 
 const RATE: PlanDimension = PlanDimension::OplogWritesPerSecond;
@@ -776,6 +799,13 @@ pub async fn test_tree_purge_releases_plan_records(deps: &Deps) {
             == 1
     );
     assert!(repo.get_definition(owned).await.unwrap().is_none());
+    assert!(repo.get_definition_revision(owned, 0).await.unwrap() == Some(range(None, 5)));
+    // The purged ID keeps its history and is not reused.
+    let_assert!(
+        Err(PlanStorageRepoError::PlanIdExists) = repo
+            .create_definition(setup.a.account_id, owned, name(), range(None, 5), actor())
+            .await
+    );
     assert!(repo.get_definition_revision(owned, 0).await.unwrap() == Some(range(None, 5)));
     assert!(
         repo.list_members(setup.child_plan)
