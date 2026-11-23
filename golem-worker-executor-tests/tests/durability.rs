@@ -2746,6 +2746,206 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_the_older_sn
     Ok(())
 }
 
+/// The period of the periodic snapshots in the save-hook tests.
+const SAVE_HOOK_PERIOD: Duration = Duration::from_millis(200);
+
+/// The indices of the `Snapshot` entries in the oplog of `worker_id`.
+async fn snapshot_indices(
+    executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
+    worker_id: &golem_common::model::OwnedAgentId,
+) -> anyhow::Result<Vec<OplogIndex>> {
+    Ok(executor
+        .get_oplog(worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+        .map(|entry| entry.oplog_index)
+        .collect())
+}
+
+/// Waits until the oplog of `worker_id` holds more than `known` snapshots and no further one comes
+/// for some periods, and gives the number of snapshots.
+async fn settled_snapshot_count(
+    executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
+    worker_id: &golem_common::model::OwnedAgentId,
+    known: usize,
+) -> anyhow::Result<usize> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if snapshot_indices(executor, worker_id).await?.len() > known {
+                break Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("no periodic snapshot after {known} was written"))??;
+    tokio::time::sleep(SAVE_HOOK_PERIOD * 5).await;
+    Ok(snapshot_indices(executor, worker_id).await?.len())
+}
+
+/// Drives a `SnapshotSaveProbe` whose periodic save hook makes one outgoing call to `target`
+/// (`mode` is `rpc` or `http`). Every save reaches the peer once, the saves commit their
+/// snapshots, and a restart from the last snapshot neither replays a save nor calls the peer.
+async fn save_hook_calls_reach_the_peer(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    agent_sdk_rust: &PrecompiledComponent,
+    mode: &str,
+    target: String,
+    peer_count: impl AsyncFn(
+        &golem_worker_executor_test_utils::TestWorkerExecutor,
+        &golem_common::model::component::ComponentDto,
+    ) -> anyhow::Result<u64>,
+) -> anyhow::Result<()> {
+    let policy = SnapshotPolicy::Periodic {
+        period: SAVE_HOOK_PERIOD,
+    };
+    let executor = start_with_snapshot_policy(deps, context, policy.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agent_id = agent_key!("SnapshotSaveProbe", mode, target);
+    let worker_id = executor.keyed_agent_id(component.environment_id, &agent_id)?;
+
+    let mut saves = 0;
+    for expected in 1..=2u64 {
+        let result = executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+        assert_eq!(result.into_typed::<u64>()?, expected);
+        let settled = settled_snapshot_count(&executor, &worker_id, saves).await?;
+        assert!(
+            settled > saves,
+            "{mode}: the save after increment {expected}"
+        );
+        saves = settled;
+        assert_eq!(
+            peer_count(&executor, &component).await?,
+            saves as u64,
+            "{mode}: each committed save called the peer once"
+        );
+    }
+
+    drop(executor);
+    let executor = start_with_snapshot_policy(deps, context, policy).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+    let value = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+    assert_eq!(value, 2, "{mode}: the last snapshot restores the state");
+    tokio::time::sleep(SAVE_HOOK_PERIOD * 5).await;
+    assert_eq!(
+        snapshot_indices(&executor, &worker_id).await?.len(),
+        saves,
+        "{mode}: the recovered agent changed no state, so it saved no snapshot"
+    );
+    assert_eq!(
+        peer_count(&executor, &component).await?,
+        saves as u64,
+        "{mode}: the recovery called the peer no more"
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_periodic_save_hook_makes_an_rpc_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let target = format!("save-hook-rpc-peer-{}", context.redis_prefix());
+    let peer = agent_key!("ReadonlyAgent", target.clone());
+    save_hook_calls_reach_the_peer(
+        deps,
+        &context,
+        agent_sdk_rust,
+        "rpc",
+        target,
+        async |executor, component| {
+            executor
+                .invoke_and_await_agent(component, &peer, "get_count", data_value!())
+                .await?
+                .into_typed::<u64>()
+        },
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_periodic_save_hook_makes_an_http_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::AtomicU64;
+
+    let context = TestContext::new(last_unique_id);
+    let posts = Arc::new(AtomicU64::new(0));
+    let gets = Arc::new(AtomicU64::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let server = tokio::spawn(
+        {
+            let (posts, gets) = (posts.clone(), gets.clone());
+            async move {
+                let route = Router::new()
+                    .route(
+                        "/post",
+                        axum::routing::post(move || async move {
+                            posts.fetch_add(1, Ordering::SeqCst);
+                            "saved"
+                        }),
+                    )
+                    .route(
+                        "/get",
+                        get(move || async move {
+                            gets.fetch_add(1, Ordering::SeqCst);
+                            "saved"
+                        }),
+                    );
+                axum::serve(listener, route).await.unwrap();
+            }
+        }
+        .in_current_span(),
+    );
+    let result = async {
+        save_hook_calls_reach_the_peer(
+            deps,
+            &context,
+            agent_sdk_rust,
+            "http-post",
+            format!("http://localhost:{port}/post"),
+            async |_, _| Ok(posts.load(Ordering::SeqCst)),
+        )
+        .await?;
+        save_hook_calls_reach_the_peer(
+            deps,
+            &context,
+            agent_sdk_rust,
+            "http-get",
+            format!("http://127.0.0.1:{port}/get"),
+            async |_, _| Ok(gets.load(Ordering::SeqCst)),
+        )
+        .await
+    }
+    .await;
+    server.abort();
+    result
+}
+
 #[test]
 #[tracing::instrument]
 async fn snapshot_based_recovery_preserves_state_across_multiple_restarts(
