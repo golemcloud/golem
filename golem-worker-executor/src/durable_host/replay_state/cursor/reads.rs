@@ -1568,8 +1568,7 @@ impl CursorTx<'_> {
         };
         self.st
             .owners
-            .owner(start_index)
-            .and_then(|owner| owner.body)
+            .enclosing_body(start_index)
             .is_some_and(|body| {
                 self.st.body_can_still_consume(
                     &self.cursor.reconstruction_claims,
@@ -1584,22 +1583,14 @@ impl CursorTx<'_> {
     /// closes, or the body a stream observation belongs to.
     fn head_body(&self) -> Option<OplogIndex> {
         let (_, head) = self.st.replay_buffer.front()?;
-        let body_of_start = |start: OplogIndex| {
-            if self.st.owners.is_entity(start) {
-                return Some(start);
-            }
-            self.st.owners.owner(start).and_then(|owner| owner.body)
-        };
         match head {
             OplogEntry::CompletionDelivered { start_index, .. }
-            | OplogEntry::CompletionDiscarded { start_index, .. } => self
-                .st
-                .owners
-                .owner(*start_index)
-                .and_then(|owner| owner.body),
+            | OplogEntry::CompletionDiscarded { start_index, .. } => {
+                self.st.owners.enclosing_body(*start_index)
+            }
             OplogEntry::HostStreamFrame {
                 parent_start_index, ..
-            } => body_of_start(*parent_start_index),
+            } => self.st.body_of(*parent_start_index),
             entry => match head_owner(entry) {
                 HeadOwner::EntityBody(body) => Some(body),
                 HeadOwner::Unattributed | HeadOwner::Agent | HeadOwner::ParentStart(_) => None,

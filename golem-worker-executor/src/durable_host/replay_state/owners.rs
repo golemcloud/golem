@@ -332,6 +332,12 @@ impl OwnerMap {
         self.owners.get(&index).copied()
     }
 
+    /// The nearest entity body that encloses the committed `Start` at `index`, while the map
+    /// holds its owner.
+    pub(super) fn enclosing_body(&self, index: OplogIndex) -> Option<OplogIndex> {
+        self.owner(index).and_then(|owner| owner.body)
+    }
+
     /// The owner of the entity or custom `Start` at `index`.
     pub(super) fn anchor_owner(&self, index: OplogIndex) -> Option<RecordOwner> {
         match self.identity_anchors.get(&index)? {
@@ -515,34 +521,55 @@ impl super::CursorState {
     pub(super) fn body_can_still_consume(
         &self,
         reconstruction_claims: &crate::durable_host::concurrent::ReconstructionClaimState,
-        mut body: OplogIndex,
+        body: OplogIndex,
         exited: Option<OplogIndex>,
     ) -> bool {
-        loop {
+        let mut outermost = body;
+        for body in self.enclosing_bodies(body) {
             if reconstruction_claims.is_body_active(body) || self.starts.is_claimed_ahead(&body) {
                 return true;
             }
             if self.starts.get_retained(&body).is_none() {
                 return false;
             }
-            match self.owners.anchor_owner(body) {
-                Some(RecordOwner {
-                    body: Some(dispatcher),
-                    ..
-                }) if dispatcher < body => body = dispatcher,
-                Some(RecordOwner {
-                    invocation: InvocationOwner::Anchor(invocation),
-                    body: None,
-                }) => {
-                    return self.owners.is_open(invocation) && exited != Some(invocation);
-                }
-                Some(RecordOwner {
-                    invocation: InvocationOwner::AgentLevel,
-                    body: None,
-                }) => return exited.is_none(),
-                _ => return false,
-            }
+            outermost = body;
         }
+        match self.owners.anchor_owner(outermost) {
+            Some(RecordOwner {
+                invocation: InvocationOwner::Anchor(invocation),
+                body: None,
+            }) => self.owners.is_open(invocation) && exited != Some(invocation),
+            Some(RecordOwner {
+                invocation: InvocationOwner::AgentLevel,
+                body: None,
+            }) => exited.is_none(),
+            _ => false,
+        }
+    }
+
+    /// `body` and the entity bodies that enclose its entity `Start`, nearest first. Each body's
+    /// dispatcher is the nearest body enclosing its `Start`; the walk ends at a body whose `Start`
+    /// no earlier body encloses.
+    fn enclosing_bodies(&self, body: OplogIndex) -> impl Iterator<Item = OplogIndex> + '_ {
+        std::iter::successors(Some(body), move |body| {
+            self.owners
+                .anchor_owner(*body)
+                .and_then(|owner| owner.body)
+                .filter(|dispatcher| dispatcher < body)
+        })
+    }
+
+    /// The entity body that a record under `reference` belongs to: `reference` itself when it is
+    /// an entity `Start`, else the nearest body that encloses the committed `Start` at
+    /// `reference`.
+    pub(super) fn body_of(&self, reference: OplogIndex) -> Option<OplogIndex> {
+        if self.owners.is_entity(reference) {
+            return Some(reference);
+        }
+        self.owners
+            .owner(reference)
+            .or_else(|| self.owners.anchor_owner(reference))
+            .and_then(|owner| owner.body)
     }
 
     /// Classifies the retained `Start`s recorded before `end` (all of them without `end`) for the
@@ -613,18 +640,14 @@ impl super::CursorState {
                  invocation started at {closing}"
             )),
             _ => {
-                let mut body = owner.body;
-                while let Some(enclosing) = body {
-                    if self.body_can_still_consume(reconstruction_claims, enclosing, exited) {
-                        return Ok(Class::Wait);
-                    }
-                    body = self
-                        .owners
-                        .anchor_owner(enclosing)
-                        .and_then(|owner| owner.body)
-                        .filter(|dispatcher| *dispatcher < enclosing);
-                }
-                Ok(Class::Own)
+                let waits = owner
+                    .body
+                    .into_iter()
+                    .flat_map(|body| self.enclosing_bodies(body))
+                    .any(|enclosing| {
+                        self.body_can_still_consume(reconstruction_claims, enclosing, exited)
+                    });
+                Ok(if waits { Class::Wait } else { Class::Own })
             }
         }
     }
@@ -638,31 +661,17 @@ impl super::CursorState {
         parent: Option<OplogIndex>,
         invocation_id: Option<golem_common::model::oplog::DurableInvocationId>,
     ) -> Option<OplogIndex> {
-        let body_of = |reference: OplogIndex| {
-            if self.owners.is_entity(reference) {
-                return Some(reference);
-            }
-            self.owners
-                .owner(reference)
-                .map(|owner| owner.body)
-                .unwrap_or_else(|| {
-                    self.owners
-                        .anchor_owner(reference)
-                        .and_then(|owner| owner.body)
-                })
-        };
         match parent {
-            Some(parent) => body_of(parent),
-            None => invocation_id.and_then(|id| body_of(id.anchor)),
+            Some(parent) => self.body_of(parent),
+            None => invocation_id.and_then(|id| self.body_of(id.anchor)),
         }
     }
 
     /// The first retained `Start` whose nearest entity body is `body`.
     pub(super) fn retained_record_of_body(&self, body: OplogIndex) -> Option<OplogIndex> {
-        self.starts.retained_keys().copied().find(|index| {
-            self.owners
-                .owner(*index)
-                .is_some_and(|owner| owner.body == Some(body))
-        })
+        self.starts
+            .retained_keys()
+            .copied()
+            .find(|index| self.owners.enclosing_body(*index) == Some(body))
     }
 }
