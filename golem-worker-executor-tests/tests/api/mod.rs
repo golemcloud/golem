@@ -13085,7 +13085,8 @@ async fn wallet_read_answered_before_a_deletion_gets_the_deletion_refusal(
 // An external-tool lookup that names an incarnation is answered by the existing-only guard for
 // that incarnation: the matching incarnation is looked up, another one is not found, and one whose
 // deletion is running gets the deletion's refusal, for a lookup and for a call, rather than an
-// answer from the deleting generation. A fresh owner cannot be named by a fingerprint.
+// answer from the deleting generation. A virtual receipt can be looked up without a fingerprint,
+// but that lookup never creates an owner. A fresh owner cannot be named by a fingerprint.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -13164,6 +13165,52 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
         unnamed.contains("VALIDATION")
             && unnamed.contains("requires its expected agent fingerprint"),
         "{unnamed}"
+    );
+
+    let virtual_owner = OwnedAgentId::new(
+        context.default_environment_id,
+        &AgentId::external_tool_owner(
+            context.default_environment_id,
+            component.id,
+            &IdempotencyKey::fresh(),
+        ),
+    );
+    assert!(
+        executor
+            .get_worker_metadata_opt(&virtual_owner)
+            .await?
+            .is_none()
+    );
+    let mut virtual_lookup = lookup(fingerprint);
+    virtual_lookup.target = Some(crate::agent::id_target(&virtual_owner));
+    virtual_lookup.expected_callee_fingerprint = None;
+    for _ in 0..2 {
+        let result = executor
+            .invoke_agent_session(virtual_lookup.clone())
+            .await?;
+        assert_eq!(
+            result.status,
+            Some(golem_api_grpc::proto::golem::worker::InvocationStatus::Unknown as i32)
+        );
+        assert!(
+            executor
+                .get_worker_metadata_opt(&virtual_owner)
+                .await?
+                .is_none()
+        );
+    }
+    virtual_lookup.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32;
+    let virtual_call = answer(executor.invoke_agent_session(virtual_lookup).await);
+    assert!(
+        virtual_call.contains("VALIDATION")
+            && virtual_call.contains("existing tool target must be a real agent"),
+        "{virtual_call}"
+    );
+    assert!(
+        executor
+            .get_worker_metadata_opt(&virtual_owner)
+            .await?
+            .is_none()
     );
 
     let owned = worker_id.clone();
