@@ -699,7 +699,7 @@ mod tests {
 
         #[arg(config = "option", repeatable = "repeated")]
         #[arg(maybe = "positional", max_length = 3)]
-        #[arg(label = "option", optional_scalar, max_length = 5)]
+        #[arg(label = "option", aliases = ["tag"], optional_scalar, max_length = 5)]
         #[arg(verbose = "flag", kind = "count-flag", max = 3)]
         #[arg(color = "flag", negatable = true, default = true)]
         #[arg(value = "option", required = true)]
@@ -728,15 +728,21 @@ mod tests {
         );
     }
 
-    fn published_input_schema(
+    fn published_tool(
         descriptor: golem_rust::agentic::WireToolDescriptorFn,
-        command_path: &[String],
-    ) -> golem_rust::schema::graph::SchemaGraph {
+    ) -> golem_rust::schema::tool::Tool {
         let schema = golem_rust::agentic::WireToolSchema::default();
         let tool = descriptor(&schema)
             .and_then(|tool| tool.into_wire(schema))
             .expect("wire descriptor builds");
-        let tool = golem_rust::schema::tool::wit::decode_tool(tool).expect("wire tool decodes");
+        golem_rust::schema::tool::wit::decode_tool(tool).expect("wire tool decodes")
+    }
+
+    fn published_input_schema(
+        descriptor: golem_rust::agentic::WireToolDescriptorFn,
+        command_path: &[String],
+    ) -> golem_rust::schema::graph::SchemaGraph {
+        let tool = published_tool(descriptor);
         let index = tool
             .command_index_by_path(command_path)
             .expect("command path resolves");
@@ -747,8 +753,24 @@ mod tests {
     #[test]
     async fn wire_client_projection_matches_native_command_inputs() {
         use golem_rust::agentic::DirectInputValue;
+        use golem_rust::schema::graph::SchemaGraph;
         use golem_rust::schema::tool::Tool;
         use golem_rust::schema::validation::subtyping::is_equivalent_cross_graph;
+
+        fn assert_schema_matches(actual: &SchemaGraph, expected: &SchemaGraph, command: &str) {
+            assert!(
+                is_equivalent_cross_graph(actual, &actual.root, expected, &expected.root),
+                "input schema differs at {command}"
+            );
+            let mut actual_defs = actual.defs.iter().map(|def| &def.id).collect::<Vec<_>>();
+            let mut expected_defs = expected.defs.iter().map(|def| &def.id).collect::<Vec<_>>();
+            actual_defs.sort();
+            expected_defs.sort();
+            assert_eq!(
+                actual_defs, expected_defs,
+                "only input-reachable definitions at {command}"
+            );
+        }
 
         fn paths(tool: &Tool, node: usize, path: Vec<String>) -> Vec<(usize, Vec<String>)> {
             let mut result = vec![(node, path.clone())];
@@ -782,12 +804,7 @@ mod tests {
         for descriptor in descriptors {
             let schema = golem_rust::agentic::WireToolSchema::default();
             let wire = descriptor(&schema).unwrap();
-            let native_schema = golem_rust::agentic::WireToolSchema::default();
-            let native = descriptor(&native_schema)
-                .unwrap()
-                .into_wire(native_schema)
-                .unwrap();
-            let native = golem_rust::schema::tool::wit::decode_tool(native).unwrap();
+            let native = published_tool(*descriptor);
             for (index, path) in paths(&native, 0, Vec::new()) {
                 let actual = wire.canonical_wire_input_model(&schema, &path);
                 if native.commands.nodes[index].body.is_none() {
@@ -799,18 +816,7 @@ mod tests {
                 let expected = native
                     .canonical_input_record_schema_unvalidated(index)
                     .unwrap();
-                assert!(
-                    is_equivalent_cross_graph(&graph, &graph.root, &expected, &expected.root),
-                    "{path:?}"
-                );
-                let mut actual_defs = graph.defs.iter().map(|def| &def.id).collect::<Vec<_>>();
-                let mut expected_defs = expected.defs.iter().map(|def| &def.id).collect::<Vec<_>>();
-                actual_defs.sort();
-                expected_defs.sort();
-                assert_eq!(
-                    actual_defs, expected_defs,
-                    "only input-reachable definitions at {path:?}"
-                );
+                assert_schema_matches(&graph, &expected, &format!("{path:?}"));
                 assert_eq!(
                     actual.aliases,
                     native
@@ -833,18 +839,23 @@ mod tests {
         macro_rules! check_builder {
             ($descriptor:ident, $builder:ident, [$($path:expr),*], $($name:literal => $value:expr),* $(,)?) => {{
                 let path = [$($path.to_string()),*];
-                let expected = published_input_schema($descriptor, &path);
+                let command = format!("{} at {path:?}", stringify!($builder));
+                let tool = published_tool($descriptor);
+                let index = tool.command_index_by_path(&path).expect("command path resolves");
+                let expected = tool.canonical_input_record_schema_unvalidated(index).unwrap();
                 let input = encode_with_schema(
                     &[$(DirectInputValue::new($name, vec![], None, $value)),*],
                     $builder,
                 )
                 .await
-                .unwrap_or_else(|error| panic!("{}: {error}", stringify!($builder)));
-                assert!(
-                    is_equivalent_cross_graph(input.graph(), &input.graph().root, &expected, &expected.root),
-                    "{} at {path:?}", stringify!($builder),
+                .unwrap_or_else(|error| panic!("{command}: {error}"));
+                assert_schema_matches(input.graph(), &expected, &command);
+                assert_eq!(
+                    $builder().unwrap().field_aliases().collect::<Vec<_>>(),
+                    tool.canonical_input_fields(index).into_iter().map(|field| field.aliases).collect::<Vec<_>>(),
+                    "field aliases at {command}",
                 );
-                assert!(input_is_valid(&input), "{} at {path:?}", stringify!($builder));
+                assert!(input_is_valid(&input), "{command}");
             }};
         }
 
@@ -933,7 +944,7 @@ mod tests {
             "area" => "europe".to_string(),
             "config" => BTreeMap::from([("key".to_string(), "value".to_string())]),
             "maybe" => Some("abc".to_string()),
-            "label" => None::<String>,
+            "tag" => Some("tiny".to_string()),
             "verbose" => 2u32,
             "color" => false,
             "value" => Some("value".to_string()),
@@ -953,6 +964,18 @@ mod tests {
             "node" => RecursiveNode { next: Some(Box::new(RecursiveNode { next: None })) },
             "other" => None::<RecursiveNode>,
             "count" => 7u32,
+        );
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_TailNumericUnit,
+            __golem_wire_input_schema_for_TailNumericUnit_run,
+            ["run"],
+            "values" => vec![1u32],
+        );
+        check_builder!(
+            __golem_standalone_wire_tool_descriptor_for_TailItemBoundsWithOccurrenceMax,
+            __golem_wire_input_schema_for_TailItemBoundsWithOccurrenceMax_run,
+            ["run"],
+            "values" => vec![2u32],
         );
     }
 
