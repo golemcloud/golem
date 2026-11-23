@@ -296,7 +296,8 @@ An `AgentId` is an RFC 9562 UUIDv8 (`golem-common/src/base_model/agent_id.rs`): 
 bits are the type tag, the per-environment type ID of the agent type (tag 0 is reserved), and the
 other 90 bits are H. Every ID comes from one derivation in
 `golem-common/src/model/agent/agent_uuid.rs`; a derived H is a SHA-256 prefix over the
-derivation's domain tag and length-prefixed inputs, and golden tests pin each one.
+derivation's domain tag and its inputs, each variable-length input with a length prefix, and
+golden tests pin each one.
 
 | Derivation | H from | Used for |
 |---|---|---|
@@ -305,15 +306,18 @@ derivation's domain tag and length-prefixed inputs, and golden tests pin each on
 | `AgentId::random` | random | other external creates without a key; forks through the worker service |
 | `AgentId::allocated` | environment, type tag, caller ID and fingerprint, call key | create without a key or fork inside an agent; replay allocates the same ID |
 | `AgentId::durable_stream_fork` | environment, root ID, route scope, fork name (root's tag) | Durable Streams forks |
-| `AgentId::imported_phantom` | environment, type ID, stored 1.6 name | agents imported from 1.6 without a key |
+| `AgentId::imported_phantom` | environment, type ID, stored 1.6 name | reserved for the 1.6 import of agents without a key; no caller yet |
 | `AgentId::ephemeral_invocation` / `ephemeral_proxy` / `durable_stream_session` | owner key, constructor, route session | ephemeral instances and `phantomAgent` route sessions only |
 | `AgentId::external_tool_owner` / `random_reserved` | reserved tag | native tool owners on a component; oplog processors |
 
 Rules that follow from it:
 
-- **The ID is the address.** Every storage layer keys the agent as `OwnedAgentId::storage_key`,
-  `{environment}/{agent}`, and the shard comes from `AgentId::routing_hash` (top 63 bits of H,
-  never the tag). No key → ID table and no per-agent record outside the oplog exist; do not add one.
+- **The ID is the address.** Every storage layer addresses the agent by its environment and agent
+  ID (the indexed oplog by `OwnedAgentId::storage_key`, `{environment}/{agent}`; the blob archive
+  by a namespace with the environment and type tag, and a directory per agent ID). The shard comes
+  from `AgentId::routing_hash` (top 63 bits of H, never the tag). No key → ID table exists, and
+  resolving an agent needs no record outside the oplog: the agent-mode hint only picks which mode's
+  oplog to read first. Do not add a record that resolution needs.
 - **Resolution** (`worker/target.rs::resolve_target`). A key target canonicalizes the key against
   the implementing component's constructor schema and derives the keyed ID; upsert records
   `CreateRequestKind::GetOrCreate`, keyed create `Exclusive`. An ID target with a constructor
@@ -326,10 +330,11 @@ Rules that follow from it:
   reach the successor carries the fingerprint: expected callee fingerprints, `PromiseId` and
   webhook IDs, pinned RPC, scheduled actions, stream sessions, export forks, ETags and session
   tokens.
-- **Derived caches are disposable.** The cached status, its checkpoint, the invocation-result index
-  and the agent-mode hint are scoped by fingerprint; archiving removes them once the whole oplog is
-  in the last layer (`worker/persistence.rs` → `WorkerService::remove_cached_status`), and the next
-  load folds them from the oplog. Test:
+- **Derived caches are disposable.** The cached status, its checkpoint and the invocation-result
+  index are scoped by fingerprint; the agent-mode hint has one key per agent and carries the
+  fingerprint in its value. Archiving removes all four once the whole oplog is in the last layer
+  (`worker/persistence.rs` → `WorkerService::remove_cached_status`). The next load folds the status
+  caches from the oplog, and the next resolution writes the hint again. Test:
   `oplog_unreadable.rs::archived_keyed_agents_resolve_by_key_and_by_id_from_their_oplog`.
 
 ## Component map
@@ -1481,9 +1486,8 @@ and `AgentMetadata.create_request` carries it after every load. `CreateRequest` 
 (`GetOrCreate`, `Exclusive`, `Unkeyed` or `Fork`), the creating request's idempotency key, its
 caller and its invocation context. Callers pass a `CreateIntent`. An explicit create
 (`CreateIntent::Create`) records its key. An invocation that creates its target
-(`CreateIntent::Invocation`) records its key only when the key identifies the agent, that is, when
-the target ID is `AgentId::ephemeral_invocation` of the key; a durable target created this way
-records no key. An invocation session passes the owner key of its `request_key`, from which clients
+(`CreateIntent::Invocation`) records its idempotency key only when its owner has no key
+(`Unkeyed`); a keyed target created this way records `GetOrCreate` and no idempotency key. An invocation session passes the owner key of its `request_key`, from which clients
 derive an ephemeral target's ID. The recorded `wasm-rpc` activation call sends the key derived
 from its own `Start`, so a repaired activation sends the same key. A re-activation of a recorded
 target sends no create request: it builds a `ReplayedDemand` with the recorded fingerprint. A fork
