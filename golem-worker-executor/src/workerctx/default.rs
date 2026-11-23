@@ -566,7 +566,6 @@ impl wasmtime_wasi_http::WasiHttpView for Context {
     }
 }
 
-#[async_trait]
 impl FuelManagement for Context {
     fn fuel_metering_enabled(&self) -> bool {
         self.fuel_tracker.is_some()
@@ -647,7 +646,6 @@ impl CallCountManagement for Context {
     }
 }
 
-#[async_trait]
 impl InvocationManagement for Context {
     async fn set_current_idempotency_key(&mut self, key: InvocationId) {
         self.durable_ctx.set_current_idempotency_key(key).await
@@ -677,7 +675,6 @@ impl InvocationManagement for Context {
     }
 }
 
-#[async_trait]
 impl StatusManagement for Context {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         self.durable_ctx.check_interrupt()
@@ -692,7 +689,6 @@ impl StatusManagement for Context {
     }
 }
 
-#[async_trait]
 impl InvocationHooks for Context {
     async fn on_agent_invocation_started(
         &mut self,
@@ -758,6 +754,7 @@ impl DurableResourceLimiter<Context> for Context {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ResourceLimiterAsync for Context {
     async fn memory_growing(
         &mut self,
@@ -811,7 +808,6 @@ impl ResourceLimiterAsync for Context {
     }
 }
 
-#[async_trait]
 impl ExternalOperations<Context> for Context {
     type ExtraDeps = NoAdditionalDeps;
 
@@ -846,6 +842,7 @@ impl ExternalOperations<Context> for Context {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ResourceStore for Context {
     fn self_uri(&self) -> Uri {
         self.durable_ctx.self_uri()
@@ -864,7 +861,6 @@ impl ResourceStore for Context {
     }
 }
 
-#[async_trait]
 impl UpdateManagement for Context {
     fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
         self.durable_ctx.snapshot_boundary_blocker()
@@ -907,7 +903,6 @@ impl UpdateManagement for Context {
     }
 }
 
-#[async_trait]
 impl FileSystemReading for Context {
     async fn get_file_system_node(
         &self,
@@ -1097,7 +1092,6 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for Context {
     }
 }
 
-#[async_trait]
 impl InvocationContextManagement for Context {
     fn remove_span(
         &mut self,
@@ -1111,7 +1105,6 @@ impl InvocationContextManagement for Context {
     }
 }
 
-#[async_trait]
 impl WorkerCtx for Context {
     type PublicState = PublicDurableWorkerState<Context>;
 

@@ -753,6 +753,7 @@ impl<DBP: Pool> DbRegistryChangeRepo<DBP> {
 
 // Postgres implementation.
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
     async fn get_events_since(
         &self,
@@ -851,6 +852,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
 
 // SQLite implementation.
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
     async fn get_events_since(
         &self,

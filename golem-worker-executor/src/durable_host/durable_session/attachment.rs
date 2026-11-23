@@ -610,6 +610,7 @@ impl StreamSession {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl StreamAttachmentConsumerProbe for StreamSession {
     async fn status(
         &self,

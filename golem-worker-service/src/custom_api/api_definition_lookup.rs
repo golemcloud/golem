@@ -57,6 +57,7 @@ impl RegistryServiceApiDefinitionsLookup {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl HttpApiDefinitionsLookup for RegistryServiceApiDefinitionsLookup {
     async fn get(&self, domain: &Domain) -> Result<CompiledRoutes, ApiDefinitionLookupError> {
         self.registry_service_client
