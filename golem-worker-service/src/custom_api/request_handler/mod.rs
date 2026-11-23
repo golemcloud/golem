@@ -620,6 +620,7 @@ mod mounted_tests {
     struct UnknownSiteLookup;
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl crate::custom_api::api_definition_lookup::HttpApiDefinitionsLookup for UnknownSiteLookup {
         async fn get(
             &self,

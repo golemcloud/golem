@@ -932,6 +932,7 @@ async fn agent_selector_runs_after_auth_and_before_etag_revalidation() {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl HttpApiDefinitionsLookup for StaticApiDefinitionsLookup {
     async fn get(
         &self,

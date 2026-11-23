@@ -4877,6 +4877,7 @@ mod tests {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ComponentService for StaticComponentService {
         async fn invalidate_current(&self) {}
 

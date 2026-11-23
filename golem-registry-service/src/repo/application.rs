@@ -94,6 +94,7 @@ impl<Repo: ApplicationRepo> LoggedApplicationRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     async fn get_by_name(
         &self,
@@ -194,6 +195,7 @@ impl<DBP: Pool> DbApplicationRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn get_by_name(
         &self,
@@ -445,6 +447,7 @@ trait ApplicationRepoInternal: ApplicationRepo {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ApplicationRepoInternal for DbApplicationRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;

@@ -745,6 +745,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
+    #[golem_async_trait::region_simple]
     impl RegistryChangeRepo for MockRegistryChangeRepo {
         async fn get_events_since(
             &self,
