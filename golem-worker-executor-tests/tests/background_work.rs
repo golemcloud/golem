@@ -1926,3 +1926,234 @@ async fn a_call_dropped_before_the_return_replays_while_background_work_waits(
     )
     .await
 }
+
+/// Invocations queued behind each other store the `AgentInvocationSettled` of each one in the
+/// commit that stores the `AgentInvocationStarted` of the next one, and the agent that becomes
+/// idle stores its last `AgentInvocationSettled` on its own. The first invocation waits for a
+/// promise until the others are queued, without suspending: a resumed first invocation would
+/// settle at the replay tail, which commits its `AgentInvocationSettled` on its own.
+#[test]
+#[timeout("180s")]
+#[tracing::instrument]
+async fn queued_invocations_store_each_settlement_with_the_next_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const QUEUED: usize = 8;
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, never_suspending()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agents = Agents::new(&executor, component, &context, "queued-settlement").await?;
+    let release = agents.create_release(&executor, &agents.tally).await?;
+    executor
+        .invoke_agent(
+            &agents.component,
+            &agents.tally,
+            "add_when_released",
+            data_value!(Some(release.clone()), 1u64),
+        )
+        .await?;
+    for _ in 0..QUEUED {
+        executor
+            .invoke_agent(
+                &agents.component,
+                &agents.tally,
+                "add_when_released",
+                data_value!(None::<PromiseId>, 1u64),
+            )
+            .await?;
+    }
+    let deadline = tokio::time::Instant::now() + RESULT_WAIT;
+    while executor
+        .get_worker_metadata(&agents.tally_id)
+        .await?
+        .pending_invocation_count
+        < QUEUED as u64
+    {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "the invocations were not queued"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let writes_before = executor
+        .oplog_commit_writes(&agents.tally_id.agent_id)
+        .len();
+    agents.complete(&executor, &release).await?;
+    loop {
+        let metadata = executor.get_worker_metadata(&agents.tally_id).await?;
+        if metadata.status == AgentStatus::Idle && metadata.pending_invocation_count == 0 {
+            break;
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "the queued invocations did not finish"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let writes = executor.oplog_commit_writes(&agents.tally_id.agent_id)[writes_before..].to_vec();
+    let oplog = executor
+        .get_oplog(&agents.tally_id, OplogIndex::INITIAL)
+        .await?;
+    let invocations = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(call)
+                    if call.method_name == "add_when_released" =>
+                {
+                    Some((call.invocation_id, entry.oplog_index))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(invocations.len(), QUEUED + 1);
+    let settled = invocations
+        .iter()
+        .map(|(invocation, _)| {
+            let settled = settled_of(&oplog, invocation);
+            assert_eq!(settled.len(), 1, "every invocation settles once");
+            settled[0]
+        })
+        .collect::<Vec<_>>();
+    let write_of = |index: OplogIndex| writes.iter().position(|write| write.contains(&index));
+    tracing::info!(
+        writes = writes.len(),
+        invocations = QUEUED + 1,
+        ?writes,
+        ?invocations,
+        ?settled,
+        "commits that stored entries while the queued invocations ran"
+    );
+    for (previous, (_, started)) in settled.iter().zip(invocations.iter().skip(1)) {
+        assert_eq!(
+            write_of(*started),
+            write_of(*previous),
+            "the Started at {started} is stored with the Settled at {previous}"
+        );
+        assert!(
+            write_of(*started).is_some(),
+            "the Started at {started} is stored"
+        );
+    }
+    assert!(
+        write_of(*settled.last().unwrap()).is_some(),
+        "the last Settled is stored when the agent becomes idle"
+    );
+    Ok(())
+}
+
+/// The executor is lost after an invocation's drain appended its `AgentInvocationSettled`, which
+/// waits for the commit of the next queued invocation's `AgentInvocationStarted`, and before that
+/// start is stored. No commit before the restart stored that `AgentInvocationSettled`. After the
+/// restart each invocation runs once and settles once, and the queued invocation runs after the
+/// first. The agent does not suspend while the first invocation waits, so its settlement is the
+/// live one that waits for the next start.
+#[test]
+#[timeout("240s")]
+#[tracing::instrument]
+async fn a_restart_before_the_next_start_settles_each_invocation_once(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = never_suspending();
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agents = Agents::new(&executor, component, &context, "restart-before-start").await?;
+    let release = agents.create_release(&executor, &agents.tally).await?;
+    executor
+        .invoke_agent(
+            &agents.component,
+            &agents.tally,
+            "add_when_released",
+            data_value!(Some(release.clone()), 1u64),
+        )
+        .await?;
+    executor
+        .invoke_agent(
+            &agents.component,
+            &agents.tally,
+            "add_when_released",
+            data_value!(None::<PromiseId>, 2u64),
+        )
+        .await?;
+    let deadline = tokio::time::Instant::now() + RESULT_WAIT;
+    loop {
+        let metadata = executor.get_worker_metadata(&agents.tally_id).await?;
+        if metadata.status == AgentStatus::Running && metadata.pending_invocation_count == 1 {
+            break;
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "the first invocation did not start with the second queued"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let mut started = executor
+        .gate_next_invocation_started_append(&agents.tally_id.agent_id)
+        .await;
+    agents.complete(&executor, &release).await?;
+    tokio::time::timeout(RESULT_WAIT, started.entered()).await?;
+    let writes_before_restart = executor.oplog_commit_writes(&agents.tally_id.agent_id);
+    started.abort();
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    assert_eq!(agents.total(&executor).await?, 3);
+    let oplog = executor
+        .get_oplog(&agents.tally_id, OplogIndex::INITIAL)
+        .await?;
+    let started = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(call)
+                    if call.method_name == "add_when_released" =>
+                {
+                    Some((call.invocation_id, entry.oplog_index))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(started.len(), 2, "each invocation starts once");
+    for (invocation, _) in &started {
+        assert!(
+            finished_of(&oplog, invocation).is_some(),
+            "the result of {invocation} is recorded"
+        );
+        assert_eq!(
+            settled_of(&oplog, invocation).len(),
+            1,
+            "{invocation} settles once"
+        );
+    }
+    let first_settled = settled_of(&oplog, &started[0].0)[0];
+    assert!(
+        writes_before_restart
+            .iter()
+            .all(|write| !write.contains(&first_settled)),
+        "the Settled at {first_settled} waited for the next start: {writes_before_restart:?}"
+    );
+    assert!(
+        started[0].1 < first_settled && first_settled < started[1].1,
+        "the first invocation starts at {}, settles at {first_settled}, and the second starts at {}",
+        started[0].1,
+        started[1].1
+    );
+    Ok(())
+}

@@ -652,6 +652,9 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     #[allow(dead_code)]
     metrics_status: Arc<WorkerStatusMetric>,
     last_known_status_detached: Arc<AtomicBool>,
+    /// Set while an `AgentInvocationSettled` that the invocation loop appended waits for the
+    /// commit of the next `AgentInvocationStarted` (see [`Worker::defer_settlement_commit`]).
+    settlement_commit_deferred: AtomicBool,
     status_flusher: Arc<status_flusher::AgentStatusFlusher>,
     status_checkpointer: status_checkpointer::StatusCheckpointer,
     // Note: std lock for wasmtime reasons

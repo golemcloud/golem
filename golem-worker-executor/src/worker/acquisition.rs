@@ -1217,6 +1217,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owner_execution,
             owner_runtime_resources,
             last_known_status_detached,
+            settlement_commit_deferred: AtomicBool::new(false),
             status_flusher,
             status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),

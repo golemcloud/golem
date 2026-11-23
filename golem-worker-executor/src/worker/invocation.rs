@@ -104,8 +104,11 @@ impl<Ctx: WorkerCtx> super::Worker<Ctx> {
                     self.agent_id()
                 ),
             })?;
+        // The commit also stores a deferred `AgentInvocationSettled` of the previous invocation,
+        // and its fold covers both entries in order.
         self.commit_oplog_and_update_state(CommitLevel::Always)
             .await?;
+        self.settlement_committed();
         Ok(Some(index))
     }
 }

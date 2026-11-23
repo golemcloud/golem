@@ -2782,8 +2782,23 @@ fails the invocation; capable children staged until their parent ends are admitt
 the drain (`end_tool_parent`) and settle before `AgentInvocationSettled`. Neither
 `max_invocation_duration` nor `tail_work_settle_timeout` bounds the drain. Its end appends the hint
 `AgentInvocationSettled { invocation_id, consumed_fuel }` (`on_agent_invocation_settled`), and
-only then does the loop start the next invocation. Only the constructor and agent methods that
-use no streams can record at the return (`records_result_at_return`): methods that use streams
+only then does the loop start the next invocation. When a live invocation of a durable agent
+ends its drain and the loop's next work is a due queued invocation, the hint stays in the oplog
+buffer and the `AgentInvocationStarted` commit of that invocation stores both, with one status
+fold that covers both in order (`Worker::defer_settlement_commit`). Until then the status shows
+the invocation settling, as during any `Settled` commit. The loop commits a deferred `Settled`
+on its own before other work (a resident invocation, an idle turn, a pending update, or a
+pending invocation that writes no `AgentInvocationStarted`), before it waits for a command or
+for a concurrent-agent permit that is not free at once, and when it exits
+(`commit_deferred_settlement`); a failure of the next invocation before its start commits it in
+`on_invocation_failure` before it reads the retry state. The start of the next invocation
+(payload hydration, scope card, card-event boundary, instance lock) runs with `Settled` buffered
+and the status `Running`, so an interrupt or resume decision made in that step sees a running
+agent. `Settled` is committed on its own when nothing is queued, for ephemeral agents (at
+`Deferred`), and at the replay tail. A crash before the next start loses at most the buffered
+`Settled`: replay reaches the replay tail with the anchor open and settles it live. Only the
+constructor and agent methods that use no streams can record at the return
+(`records_result_at_return`): methods that use streams
 (stream inputs or a stream result, which open a streaming session), snapshot save and load
 (including a manual update's), oplog-processor batches and external-tool invocations keep the
 settled path: their work settles before their terminal, and they write no

@@ -1061,6 +1061,16 @@ impl TestWorkerExecutor {
             ))
     }
 
+    /// The entries of each commit of the agent's opened oplog that stored entries, in commit
+    /// order: one list of indices per commit made at a level other than `ReportOnly`.
+    pub fn oplog_commit_writes(&self, agent_id: &AgentId) -> Vec<Vec<OplogIndex>> {
+        self.additional_test_deps
+            .oplog_commit_writes(&OwnedAgentId::new(
+                self.context.default_environment_id,
+                agent_id,
+            ))
+    }
+
     pub fn oplog_service_call_count(&self, agent_id: &AgentId, api: &'static str) -> usize {
         self.additional_test_deps.oplog_call_count(
             &OwnedAgentId::new(self.context.default_environment_id, agent_id),
@@ -6719,6 +6729,13 @@ impl Oplog for TestOplog {
             }
         }
         let committed = self.oplog.commit(level).await;
+        if level != CommitLevel::ReportOnly
+            && let Ok(entries) = &committed
+            && !entries.is_empty()
+        {
+            self.additional_test_deps
+                .record_oplog_commit_write(&self.owned_agent_id, entries.keys().copied().collect());
+        }
         if committed.as_ref().is_ok_and(|entries| {
             entries
                 .values()
@@ -7430,6 +7447,7 @@ pub struct AdditionalTestDeps {
     oplog_end_gates: Arc<std::sync::Mutex<OplogEndGates>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_entries_read: Arc<std::sync::Mutex<HashMap<OwnedAgentId, u64>>>,
+    oplog_commit_writes: Arc<std::sync::Mutex<HashMap<OwnedAgentId, Vec<Vec<OplogIndex>>>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outages: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outage_targets: Arc<std::sync::Mutex<HashMap<AgentId, PayloadId>>>,
@@ -7522,6 +7540,7 @@ impl AdditionalTestDeps {
             rpc_memory_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_entries_read: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_commit_writes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outages: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outage_targets: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -8052,6 +8071,24 @@ impl AdditionalTestDeps {
             .unwrap()
             .entry(owned_agent_id.clone())
             .or_default() += entries;
+    }
+
+    fn record_oplog_commit_write(&self, owned_agent_id: &OwnedAgentId, indices: Vec<OplogIndex>) {
+        self.oplog_commit_writes
+            .lock()
+            .unwrap()
+            .entry(owned_agent_id.clone())
+            .or_default()
+            .push(indices);
+    }
+
+    fn oplog_commit_writes(&self, owned_agent_id: &OwnedAgentId) -> Vec<Vec<OplogIndex>> {
+        self.oplog_commit_writes
+            .lock()
+            .unwrap()
+            .get(owned_agent_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn oplog_entries_read(&self, owned_agent_id: &OwnedAgentId) -> u64 {

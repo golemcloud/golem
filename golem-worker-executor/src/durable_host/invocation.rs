@@ -156,7 +156,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// ends it. At the replay tail the Store switches to live and ends it as a live invocation
     /// does: the producers are disposed, the open custom durable scopes are checked, the
     /// retained `Start`s are released, and `AgentInvocationSettled` is appended and committed at
-    /// the level of `AgentInvocationFinished`.
+    /// the level of `AgentInvocationFinished`. A live invocation of a durable agent whose next
+    /// work is a due queued invocation leaves the commit to the `AgentInvocationStarted` of that
+    /// invocation ([`crate::worker::Worker::defer_settlement_commit`]).
     pub(crate) async fn on_agent_invocation_settled(
         &mut self,
         consumed_fuel: u64,
@@ -166,7 +168,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             WorkerExecutorError::runtime("agent invocation settled without a current invocation")
         })?;
         let invocation = self.invocation_key();
+        let mut live_from_start = true;
         if let Some(anchor) = self.state.open_invocation_anchor.take() {
+            live_from_start = false;
             match self
                 .state
                 .replay_state
@@ -211,6 +215,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentMode::Durable => CommitLevel::Always,
             AgentMode::Ephemeral => CommitLevel::Deferred,
         };
+        if commit_level == CommitLevel::Always
+            && live_from_start
+            && matches!(self.state.store_replay_state, StoreReplayState::Primary)
+            && worker.next_work_is_a_due_invocation()
+        {
+            worker.defer_settlement_commit();
+            return Ok(());
+        }
         worker
             .commit_oplog_before_status_update(commit_level)
             .await?;
@@ -1061,6 +1073,19 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             }
         }
 
+        // A failure of the next invocation before its start (admission, lowering, scope card)
+        // decides with the retry state that the previous invocation's deferred
+        // `AgentInvocationSettled` clears, so that entry is committed and folded first.
+        if let Err(error) = self
+            .public_state
+            .worker()
+            .commit_deferred_settlement()
+            .await
+        {
+            return self
+                .refused_terminal_entry(&error, trap_type, full_function_name)
+                .await;
+        }
         let latest_status_before = self.public_state.worker().get_last_known_status().await;
         let (decision, retry_policy_state) = self
             .get_recovery_decision_on_trap_with_semantic(

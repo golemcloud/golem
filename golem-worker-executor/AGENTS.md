@@ -97,6 +97,15 @@ oplog-processor batches and external-tool invocations keep the settled path: the
 - **Status** stays `Running` from a terminal with `awaits_settlement` until its
   `AgentInvocationSettled` (`AgentStatusRecord::settling_invocation`), so interrupts, crash
   recovery and shard assignment treat a draining agent as running.
+- **The `Settled` commit** of a live durable invocation whose next work is a due queued
+  invocation is left to the `AgentInvocationStarted` commit of that invocation, which stores both
+  entries with one status fold (`Worker::defer_settlement_commit`). The invocation loop commits a
+  deferred `Settled` on its own before other work, before it waits for a command or a permit, and
+  when it exits; a failure of the next invocation before its start commits it before it reads the
+  retry state. The start of the next invocation (payload hydration, scope card, instance lock)
+  runs with `Settled` buffered and the status `Running`. `Settled` is committed on its own when
+  nothing is queued, for ephemeral agents, at the replay tail, and before resident work, an idle
+  turn or a pending update.
 
 ## External effects
 

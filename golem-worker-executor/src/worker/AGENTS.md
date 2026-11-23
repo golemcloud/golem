@@ -36,9 +36,14 @@ rewinding a cursor.
   their parent ends are admitted at the end of the drain (`end_tool_parent`) and settle before
   `AgentInvocationSettled`, the hint the end of the drain appends
   (`invocation.rs::record_at_return_and_drain`). The next invocation starts only after
-  `Settled`. Methods that use streams (stream inputs or a stream result), snapshot save and load
-  (including a manual update's), oplog-processor batches and external-tool invocations keep the
-  settled path: they settle their
+  `Settled`. When a due queued invocation is the loop's next work, `Settled` is not committed on
+  its own: the next `AgentInvocationStarted` commit stores both (`defer_settlement_commit`), and
+  the loop commits a deferred `Settled` itself before other work, before it waits for a command
+  or a permit, and when it exits (`commit_deferred_settlement`). The start of the next
+  invocation (payload hydration, scope card, instance lock) runs with `Settled` buffered and the
+  status `Running`. Methods that use streams (stream
+  inputs or a stream result), snapshot save and load (including a manual update's),
+  oplog-processor batches and external-tool invocations keep the settled path: they settle their
   active durable-call work before their terminal (`tail_work.rs`) and write no `Settled`. A
   failure during the drain never replaces the recorded result: a trap reconstructs under the retry
   policy, and an interrupt or suspension stops the agent until it resumes and reconstructs; giving
