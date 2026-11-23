@@ -1,184 +1,81 @@
 # Bash tool conformance matrix
 
-The matrix runs each case in the bash tool's shell and compares the exact exit status, stdout and
-stderr with Bash 5 and the GNU tools. The shell side is the standalone `cooperative` example: the
-same shell crate, with deterministic tool probes, under Wasmtime. It does not call a Golem server.
-It runs as a WASI 0.3 command (`wasi:cli/run@0.3.0`, which `wasmtime run -Sp3` calls) on the
-component's own task runtime, so `curl` and `wget` reach the network as the tool's do; their cases
-use a port that refuses and a name under `.invalid`, which fail the same way on both sides.
-WASI's exit interface reduces every nonzero code to failure, so the example writes its real exit
-code to a separate report that the harness reads.
+The matrix compares the tool's shell with recorded Bash 5 and GNU tool answers. It checks the exact shell exit status, stdout and stderr, including invalid UTF-8. It runs the standalone `cooperative` example under Wasmtime, not a Golem server. That example uses the same shell crate and deterministic sibling-tool probes. It runs as a WASI 0.3 command on the component's own task runtime.
 
-Both sides run in the environment an agent has: no HOME, a uid with no passwd entry, cwd `/`,
-Golem's `GOLEM_*` variables, and a fresh `/tmp`. Bash's answers are recorded once into `goldens/`,
-so checking needs no Docker; the goldens carry a fingerprint of the oracle image and environment,
-and `check` refuses stale ones.
+## Provenance and harness choice
+
+Golem added this harness and its corpora in [PR #3929](https://github.com/golemcloud/golem/pull/3929), rather than vendoring a third-party Python suite. Some real-world cases adapt public examples and command shapes; [cases/NOTICE](cases/NOTICE) records their sources, revisions, licenses and modifications. The separate Brush compatibility suite is upstream Rust/YAML, fetched at the Brush revision pinned in `../Cargo.toml`.
+
+The harness is a typechecked Effect TypeScript CLI because its work is external-process orchestration: running Wasmtime and Docker, recording oracle answers, checking drift, reporting failures and maintaining baselines. These are developer commands, not Rust unit tests. The process-free harness tests use Bun. Brush keeps its own Rust test harness; it is not converted to test-r.
+
+`cases/*.json` is the editable source of truth. The former Python modules' finite, deterministic generators have been expanded into explicit cases. All 18,009 scripts, names, tags, options, tiers, fixture bytes and reasons were preserved. No oracle answers were regenerated for this conversion. The corpus descriptions and third-party notice remain with the data. New cases do not require a generator or Python.
+
+## Run the matrix
+
+Install Bun, Wasmtime with WASI 0.3/component-model async support (CI uses 50.0.1), and the Rust `wasm32-wasip2` target. From the repository root:
 
 ```sh
-cargo build --manifest-path builtin-tools/bash/Cargo.toml \
+bun install --cwd builtin-tools/bash/conformance --frozen-lockfile
+bun run --cwd builtin-tools/bash/conformance check
+bun run --cwd builtin-tools/bash/conformance test
+cargo build --manifest-path builtin-tools/bash/Cargo.toml --locked \
   -p bash-shell --example cooperative --features test-support --release --target wasm32-wasip2
 W=builtin-tools/bash/target/wasm32-wasip2/release/examples/cooperative.wasm
-python3 builtin-tools/bash/conformance/conformance.py check --wasm $W     # against goldens
-python3 builtin-tools/bash/conformance/conformance.py coverage --wasm $W  # checklist gate
-python3 builtin-tools/bash/conformance/test_conformance.py              # harness tests
-# After adding or changing cases (needs Docker; builds oracle.Dockerfile):
-python3 builtin-tools/bash/conformance/conformance.py record --prefix '<text>'
+bun builtin-tools/bash/conformance/conformance.ts check --wasm "$W"
+bun builtin-tools/bash/conformance/conformance.ts coverage --wasm "$W"
+# After adding or changing cases (needs Docker):
+bun builtin-tools/bash/conformance/conformance.ts record --prefix '<text>'
 ```
 
-`live` compares with the oracle directly and `stale` re-runs it to find goldens that no longer
-match. The harness compiles the shell once with Wasmtime before it runs any cases, with a separate
-120-second compilation timeout. Each case gets a fresh filesystem and a 15-second execution
-timeout; cases run in parallel, one per CPU by default (`--jobs N`). `--case '<name>'` selects one
-case and `--prefix '<text>'` every case whose name starts with it; repeat either to select more.
-`--report FILE` writes the failures as JSON. The matrix needs Wasmtime with WASI
-0.3/component-model async support.
+The package's `check` script runs strict TypeScript checks, oxlint and dprint. The cargo-make preparation task runs the same checks. `bun run --cwd builtin-tools/bash/conformance format` formats the TypeScript and package configuration, not the corpora or goldens. The pinned native oxlint rules follow Effect's conventions and reject explicit `any`; they do not require the unpublished `@effect/oxc` plugin. Formatting uses two spaces, double quotes, no semicolons or trailing commas, and a 120-column target.
 
-`record` runs the oracle **twice** per case by default, each run in its own fresh container, and
-refuses to write a golden the two runs disagree on -- printing which case and which field (status,
-stdout or stderr) differed. A case whose answer depends on this run's own randomness (a PID,
-`$RANDOM`, an untrimmed wall-clock time) would otherwise poison the golden with a snapshot that
-stops matching the very next time the oracle happens to run it, which is exactly the kind of thing
-`stale` exists to catch later -- catching it at record time instead means a case has to be made
-deterministic (or given a fixture) before it is ever recorded, and `stale` only ever has to explain
-a real change in the oracle. `--runs 1` records with a single pass, for quick local iteration when
-you are not yet ready to commit a golden (it skips the determinism check entirely, so a case
-recorded this way is not proven deterministic).
+The CLI supports `check` (the default), `coverage`, `record`, `live` and `stale`. `live` compares with the oracle directly, without reading goldens or a recorded fingerprint. `stale` re-runs it to find answers that no longer match the goldens. Only `record` writes goldens. `check` and `coverage` need no Docker.
 
-The oracle image pins its base by digest: Bash 5 on Alpine with the GNU tools installed over
-BusyBox (currently coreutils 9.11, grep 3.12, sed 4.9, jq 1.8.2, diffutils 3.12, patch 2.8,
-findutils 4.10.0, file 5.47, curl 8.22.0 and wget 1.25.0), run with `LC_ALL=C.UTF-8`. The packages
-come from Alpine's index when the image is built, so a rebuild can pick up newer versions; the
-drift workflow below is what catches that. `oracle_fingerprint()` hashes the whole Dockerfile, so
-changing it (for instance to pin those package versions too) invalidates every recorded golden and
-forces a re-record.
+The harness compiles the shell once before parallel execution, outside the per-case timeout, with a 120-second compilation timeout. Each case has a fresh filesystem and a 15-second execution timeout unless its `options.timeout` overrides it. Both output streams drain concurrently. Effect scopes release temporary directories and subprocesses, including on timeout or interruption. Oracle containers are scoped to workers and reset before each case.
 
-The base digest names a multi-architecture index, so the oracle runs on the host's architecture.
-The goldens were recorded on arm64; CI's drift job runs on x86-64. Bash and the GNU tools answer
-a few inputs differently on the two, through C's `char` signedness and bash's `long double`: a
-multibyte IFS delimiter that follows whitespace, `printf` of a value exactly at a rounding tie
-(`%.2f` of 0.005), `xargs -d` with byte 0xff, and `wc --debug`'s hardware line. bash-tool gives
-arm64's answer. The per-PR cases that reach these carry a fixture saying so, and the sweep leaves
-them out.
+`--jobs N` bounds concurrency. Its default is `BASH_CONFORMANCE_JOBS`, or the available CPU count. `--case '<name>'` selects an exact name; `--prefix '<text>'` selects a prefix. Repeat either to select more. A selection that matches no cases fails. `--report FILE` writes JSON failure records with scripts, tags, expected and actual byte streams, and execution errors. `--wasmtime PATH` and `--oracle-image IMAGE` override the executables/image used for local checks.
 
-Each corpus is a module in `cases/` that defines `CASES` as `(name, script)` or
-`(name, script, tags)`. Where the tool deliberately differs from bash, a corpus adds a fixture
-with its reason: `EXPECTED` (status, stdout, stderr, reason) or `EXPECTED_STDERR` (stderr only);
-`check` flags a fixture that has come to match bash, so fixtures cannot outlive their reason. Where
-bash's own answer varies with timing and the tool gives the usual one, a corpus names the case in
-`ORACLE_RACES` with the reason: `check` still compares it with its golden, and `stale` leaves it
-out. A
-script with `#--call--` lines runs as separate calls, each a fresh shell as each `run` of the tool
-is: our side starts every call in the directory the previous one ended in, as a caller passing back
-the returned `cwd` does, and the oracle runs each call as its own `bash -c` in the directory the
-marker names (`#--call-- /tmp/w`; `/` when it names none). `features.py` lists the features of the bash manual and every registered command;
-`coverage` fails when one has no case, or no `n/a` reason.
+## Corpus contract
 
-## Brush's compatibility suite
+Each corpus has a `description`, `tier` (`pr` or `sweep`) and `cases` array. Each case has a unique `name`, a `script`, `tags` and `options`. `options.no_tmp` leaves `/tmp` absent. A full deliberate fixture is `expected: {status, stdout, stderr, reason}`. A stderr-only fixture is `expectedStderr: {value, reason}`. Byte streams use either `{"text": "..."}` or `{"base64": "..."}`. Reasons must be nonempty. Full fixtures replace all three outcome fields; stderr-only fixtures preserve the oracle status and stdout. `check` rejects a fixture that now matches the oracle.
 
-`compat/` runs Brush's own suite (about 2,500 YAML cases, each compared with a real bash) against
-the tool's shell, as the `compat` example (a bash-like command line over the same shell) under
-Wasmtime, inside a Linux image with bash 5 and GNU tools:
+`oracleRace` holds the reason an oracle answer depends on timing. `check` still compares that case with its recorded golden; `stale` skips it. `stale` also skips full deliberate fixtures, whose live oracle answer is not the tool's contract. It does not skip stderr-only fixtures.
+
+A line `#--call-- /some/directory` splits a script into separate calls. Each call starts a fresh shell. Our example carries the previous call's final cwd, as a caller passing back the tool's returned cwd does. The oracle starts the next call in the directory named by the marker (`/` if omitted). Outputs concatenate and the last call supplies the status. State other than cwd does not carry between shells.
+
+`features.json` lists language features, builtins, commands, explicit not-applicable reasons, qualifier tags and Unicode-aware ECMAScript syntax detectors. A case earns credit from its tags, syntax and command positions, and its command-prefixed name. `coverage` rejects unknown tags, uncovered applicable features, and differences between the checklist and the shell's actual `compgen` builtin/command registration. `printf` is a command that replaces a Bash builtin; `probe-tool` and `legacy-stdin` are example-only fixtures.
+
+Detectors are coverage heuristics, not a shell parser. They use native ECMAScript `\s` for whitespace and `[\p{L}\p{N}_]` for Unicode names and keyword boundaries. Keep those boundaries Unicode-aware: `café()` is a function, but `whileé` is not the `while` keyword. These expressions do not emulate Python's regular-expression semantics.
+
+## Oracle and goldens
+
+Both sides see no HOME, no passwd entry for their uid, cwd `/`, Golem's fixed `GOLEM_*` variables, and a fresh writable filesystem. The oracle also has a tool PATH and `LC_ALL=C.UTF-8`. Network error cases use a refused port and a `.invalid` name.
+
+`oracle.Dockerfile` pins its Alpine base by multi-architecture digest and installs Bash 5 and GNU tools. Packages come from Alpine's index, so rebuilding can pick up new versions. Goldens include fingerprints of the full Dockerfile and environment profile, plus each script's hash. `check` refuses a changed oracle profile, missing golden or edited script. The status report must contain a u8 and equal the WASI process exit status; a runtime failure after the report is not accepted as a shell result.
+
+`record` runs each selected case twice by default, in fresh worker containers on each pass, and refuses to record an answer whose status, stdout or stderr differs. It reports the differing field. `--runs 1` skips that determinism check for local iteration; it does not establish a deterministic answer. Recording a subset preserves other current goldens and removes cases that no longer exist.
+
+Goldens were recorded on arm64. Bash/GNU answers can differ on x86-64 because of C `char` signedness and Bash `long double`: multibyte IFS after whitespace, rounding ties in `printf`, `xargs -d` with byte 0xff, and `wc --debug` hardware output. The affected PR cases retain their explained fixtures; the sweep omits these inputs.
+
+## Tiers and CI
+
+There are 2,254 `pr` cases and 15,755 additional `sweep` cases. `check` defaults to `pr`; `--tier all` checks both. Other commands select from both tiers. The sweep has no deliberate fixtures. `sweep-known-failures.json` lists its existing differences. `--known-failures FILE` rejects both new failures and selected listed cases that now pass. `--update-known-failures` rewrites that file from the selected run; use a full run to replace the full baseline.
+
+- `cargo make test-builtin-bash-pipelines` builds the example, checks types, lint and formatting, tests the harness, checks PR cases, and runs coverage.
+- `cargo make test-builtin-bash-sweep` runs Brush compatibility against its baseline and the full matrix against its known failures.
+- `cargo make test-builtin-bash-oracle-drift` runs `stale` against the live oracle. It needs Docker, not a built Wasm shell.
+
+The separate `.github/workflows/builtin-bash-oracle-drift.yaml` workflow runs on oracle/corpus/harness input changes, weekly, or manual dispatch. It is not part of every push's matrix check: an upstream oracle change should not fail unrelated work. No command here dispatches a workflow.
+
+## Brush compatibility
+
+`compat/` runs the pinned Brush checkout's roughly 2,500 YAML cases against the tool's `compat` example and real Bash, inside Linux with GNU tools:
 
 ```sh
 cargo build --manifest-path builtin-tools/bash/Cargo.toml \
   -p bash-shell --example compat --release --target wasm32-wasip2
-builtin-tools/bash/conformance/compat/run-in-docker.sh <brush checkout> <compat.wasm> > out.txt
-python3 builtin-tools/bash/conformance/compat/baseline.py check out.txt
+builtin-tools/bash/conformance/compat/run-in-docker.sh <brush-checkout> <compat.wasm> > out.txt
+bun builtin-tools/bash/conformance/compat/baseline.ts check out.txt
 ```
 
-`compat/baseline.txt` lists the cases that fail today; `baseline.py check` fails on a new failure
-and on a listed case that now passes, and `baseline.py update` rewrites the list. Many listed
-cases run a script from standard input or a file, or interactively, where bash behaves as it does
-not under `-c`; the tool always runs a script as `bash -c` would.
-
-| Corpus | Cases |
-|---|---|
-| `cases/agent_idioms.py` (commands agents write) | 119 |
-| `cases/builtins.py` (each Bash builtin) | 87 |
-| `cases/command_errors.py` (utility and HTTP usage errors) | 16 |
-| `cases/compound.py` (compound commands, `select`, `for ((;;))`) | 31 |
-| `cases/core.py` (pipes, SIGPIPE, traps, jobs, tool probes) | 118 |
-| `cases/coreutils_errors.py` | 47 |
-| `cases/coreutils_extra.py` | 71 |
-| `cases/coreutils_edge.py` (arithmetic, format directives, locale, huge widths, non-regular inputs) | 93 |
-| `cases/deep_directory_walks.py` (`grep -r` and `diff -r` over deep trees) | 3 |
-| `cases/deep_trees.py` (`du` and `rm -r` over deep trees) | 4 |
-| `cases/diagnostics.py` | 19 |
-| `cases/diff.py` (diff, cmp, patch) | 76 |
-| `cases/env_facts.py` (what an agent's environment looks like) | 30 |
-| `cases/expansions.py` (expansions, globbing, process substitution) | 70 |
-| `cases/find.py` | 67 |
-| `cases/find_expression_limits.py` (long `find` expressions and nested parentheses) | 3 |
-| `cases/grep.py` | 66 |
-| `cases/growing_file_reads.py` (commands reading a file they are writing) | 4 |
-| `cases/inspect.py` (`file`, `stat`, `which`, `man`) | 15 |
-| `cases/job_listings.py` (`jobs` in substitutions and pipeline stages) | 5 |
-| `cases/jobs.py` (jobs, traps and signals in the process model) | 143 |
-| `cases/jq.py` | 95 |
-| `cases/memory.py` (the shell's memory budget) | 8 |
-| `cases/options.py` (`set` and `shopt` options) | 18 |
-| `cases/params.py` (parameters and arrays) | 33 |
-| `cases/parsing.py` (parser, tokenizer, expansion syntax; jq's parsing) | 231 |
-| `cases/pattern_depth.py` (deeply nested extended globs, `globstar` over a deep tree) | 4 |
-| `cases/pipe_readers.py` (pipelines whose reader exits early) | 4 |
-| `cases/redirect.py` (redirections, `{var}>`, descriptor moves) | 26 |
-| `cases/redirections.py` (`exec`) | 7 |
-| `cases/refusals.py` (refusals and the builtins at their edge) | 45 |
-| `cases/runtime.py` (shell runtime semantics) | 148 |
-| `cases/sed.py` | 74 |
-| `cases/sh.py` (`sh -c`, `bash -c`) | 13 |
-| `cases/siblings.py` (concurrent sibling calls) | 3 |
-| `cases/special_paths.py` (`/dev/null`, `/dev/stdin`, `-` and `/dev/stdout` as operands (generated)) | 124 |
-| `cases/state.py` (separate calls: only the working directory carries (`#--call--`)) | 15 |
-| `cases/symlink_escapes.py` (links whose target climbs above `/`) | 7 |
-| `cases/syntax.py` (syntax and syntax errors) | 20 |
-| `cases/test_operands.py` (`test` and `[` over long operand lists and nested parentheses) | 9 |
-| `cases/text_tools.py` (grep, diff, sed, jq, patch, cmp) | 69 |
-| `cases/tilde.py` (`~` with and without a home directory, in assignment-like words) | 12 |
-| `cases/tool_layer.py` (resource bounds, `/dev`, the utilities' streams and environment) | 152 |
-| `cases/traps.py` (EXIT, ERR, DEBUG, RETURN) | 18 |
-| `cases/xargs.py` | 32 |
-| **Total, per PR** | **2254** |
-| `cases/sweep_options_*.py` (sweep tier: every option of every registered command; 7 modules) | 4103 |
-| `cases/sweep_grammar_*.py` (sweep tier: Bash grammar, generated from fixed seeds; 10 modules) | 4224 |
-| `cases/sweep_realworld_*.py` (sweep tier: tldr-pages examples and coding-agent command shapes, see `cases/NOTICE`; 5 modules) | 3488 |
-| `cases/sweep_edge_*.py` (sweep tier: Unicode, invalid UTF-8, binary, empty and large input, `/dev` paths, separate calls, error paths; 7 modules) | 3940 |
-| **Total, sweep job** | **18009** |
-
-## Two tiers
-
-A corpus that sets `TIER = "sweep"` is checked only with `--tier all`; `check`'s default (`--tier
-pr`) skips it. The sweep-tier corpora carry no fixtures. The sweep cases where the tool still
-differs from Bash are listed in `sweep-known-failures.json`; the slow job passes
-`--known-failures` with it, so it fails on a case that fails but is not listed, and on a listed
-case that now passes (remove it from the list, or rewrite the list from a full run with
-`--update-known-failures`). A per-PR case never goes in that list.
-
-| Tier | Runs against goldens in | Job |
-|---|---|---|
-| `pr` (default) | every PR and push (`cooperative-pipelines`) | `test-builtin-bash-pipelines` |
-| `all` (`pr` + `sweep`) | every PR and push, alongside Brush's compat suite (`conformance-sweep`) | `test-builtin-bash-sweep` |
-
-Neither job re-runs the oracle: both compare the shell's own output with what is already recorded
-in `goldens/`, so a PR needs no Docker to pass. Checking against a *live* oracle (`stale`) is a
-third, separate concern below.
-
-## Oracle drift
-
-`stale` re-runs the live oracle for every case (both tiers) and reports one whose answer no longer
-matches its recorded golden -- catching either a genuine oracle change (the Dockerfile was edited
-on purpose) or a case that slipped past `record`'s determinism check some other way (recorded with
-`--runs 1`, say, or before that check existed). It is deliberately **not** run on every push: it
-is the slowest thing in this directory (re-running ~17,000 cases against Docker containers, not
-just comparing already-recorded JSON), and its failures are about the oracle's own answer, not
-about anything a given PR touched, so running it per-push would fail unrelated PRs whenever the
-oracle happens to drift.
-
-It runs instead in its own workflow, `.github/workflows/builtin-bash-oracle-drift.yaml` (job
-"Oracle drift (stale goldens)", `cargo make test-builtin-bash-oracle-drift`), triggered only by:
-- a push or PR touching `oracle.Dockerfile`, `goldens/**` or `conformance.py` itself (a `paths:`
-  filter on that workflow's own `on:`, not a job-level condition inside the shared
-  `builtin-bash.yaml` -- the other jobs there keep running on every bash change regardless);
-- a weekly `schedule:`, for the oracle drifting on its own with nothing in this repo changing
-  (Alpine's index publishing a newer package, say);
-- `workflow_dispatch:`, to run it by hand.
+`baseline.ts check` requires a completed summary and fails on new failures or listed cases that now pass. `update` rewrites `compat/baseline.txt`. The named upstream SIGPIPE race is excluded. Brush's own YAML `known_failure` handling stays in its harness. Many baseline cases use standard input, a script file or interactive mode, whereas the tool always runs scripts with `bash -c` semantics.

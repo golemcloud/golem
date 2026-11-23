@@ -4109,10 +4109,13 @@ async fn streaming_output_resume_restores_exact_cursors(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.invocation_results.recent_capacity = 0;
-            config.invocation_results.bloom_bits = 1;
-            config.invocation_results.bloom_hashes = 1;
+        configure: Some(Arc::new(move |config| {
+            // Ephemeral results have no catch-up index; evict history only for durable recovery.
+            if restart_executor {
+                config.invocation_results.recent_capacity = 0;
+                config.invocation_results.bloom_bits = 1;
+                config.invocation_results.bloom_hashes = 1;
+            }
             // Keep the promise gate valid beyond this test's two-minute deadline.
             config.suspend.ephemeral_max_sleep = Duration::from_secs(180);
         })),
@@ -4363,6 +4366,50 @@ async fn streaming_output_resume_restores_exact_cursors(
             caller: start.caller.clone(),
         })),
     };
+
+    // A resume whose caller differs from the pinned one, here only in its original caller, is
+    // refused: no resume replaces the recorded caller.
+    let mut changed_caller = golem_common::model::caller::Caller::try_from(
+        start
+            .caller
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("the start names its caller"))?,
+    )
+    .map_err(anyhow::Error::msg)?;
+    changed_caller.original = callers::account_principal(AccountId::new());
+    let mut changed_request = resume_request.clone();
+    if let Some(invocation_request::Request::ResumeAttach(resume)) =
+        changed_request.request.as_mut()
+    {
+        resume.caller = Some(changed_caller.into());
+        resume.attempt_id = Some(uuid::Uuid::new_v4().into());
+    }
+    let (changed_requests, changed_receiver) = mpsc::channel(1);
+    changed_requests.send(changed_request).await?;
+    let refusal = match executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(changed_receiver))
+        .await
+    {
+        Err(status) => status.message().to_string(),
+        Ok(responses) => {
+            let mut responses = responses.into_inner();
+            match responses.message().await {
+                Err(status) => status.message().to_string(),
+                Ok(Some(InvocationResponse {
+                    response: Some(invocation_response::Response::Rejected(rejected)),
+                })) => rejected.error,
+                other => anyhow::bail!("a resume with another caller was not refused: {other:?}"),
+            }
+        }
+    };
+    assert!(
+        refusal.contains("resume identity differs from the pinned caller"),
+        "{refusal}"
+    );
+    drop(changed_requests);
+
     let mut recovered_state = InvocationSessionState::default();
     recovered_state
         .validate_trusted_request(&resume_request)
@@ -11704,6 +11751,123 @@ async fn rpc_handle_does_not_recreate_a_deleted_child_through_a_streaming_call(
         );
     }
 
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn rpc_handle_does_not_reach_a_recreated_child_through_a_streaming_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const STREAMING_CALL: &str = "kept_agent_rpc_invoke_and_await_u64_stream_result";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let target_component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let caller = agent_key!("GolemHostApi", "kept-stream-recreated-caller");
+    let target = agent_key!("StreamingRpcTarget", "kept-stream-recreated-child");
+    executor
+        .start_agent(&caller_component.id, caller.clone())
+        .await?;
+    let kept = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            "keep_agent_rpc",
+            data_value!("StreamingRpcTarget", "kept-stream-recreated-child", "ping"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(kept, Ok(()));
+    let streamed = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            STREAMING_CALL,
+            data_value!("increment_stream"),
+        )
+        .await?
+        .into_typed::<Result<Vec<u64>, String>>()?;
+    assert_eq!(streamed, Ok(vec![1]));
+
+    let target_worker = crate::agent::keyed_agent_id(target_component.environment_id, &target);
+    let original = executor
+        .get_worker_metadata(&target_worker)
+        .await?
+        .fingerprint;
+    executor.delete_worker(&target_worker).await?;
+    let replacement = executor
+        .start_agent(&target_component.id, target.clone())
+        .await?;
+    assert_eq!(replacement, target_worker);
+    assert_ne!(
+        executor
+            .get_worker_metadata(&replacement)
+            .await?
+            .fingerprint,
+        original
+    );
+    let fresh = executor
+        .invoke_and_await_agent(
+            &target_component,
+            &target,
+            "increment_scalar",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(fresh, 1);
+
+    let mut executor = executor;
+    for restarted in [false, true] {
+        if restarted {
+            drop(executor);
+            executor = start(deps, &context).await?;
+        }
+        let result = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &caller,
+                STREAMING_CALL,
+                data_value!("increment_stream"),
+            )
+            .await?
+            .into_typed::<Result<Vec<u64>, String>>()?;
+        assert!(
+            matches!(&result, Err(error) if error.starts_with("RpcError::NotFound(")),
+            "a stream through the old handle must fail as not found (restarted: {restarted}): {result:?}"
+        );
+        let value = executor
+            .invoke_and_await_agent(&target_component, &target, "scalar_value", data_value!())
+            .await?
+            .into_typed::<u64>()?;
+        assert_eq!(
+            value, 1,
+            "the stream must not reach the replacement (restarted: {restarted})"
+        );
+    }
+    let fresh = executor
+        .invoke_and_await_agent(
+            &target_component,
+            &target,
+            "increment_scalar",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(fresh, 2);
     Ok(())
 }
 

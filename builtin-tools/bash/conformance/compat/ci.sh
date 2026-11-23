@@ -2,7 +2,7 @@
 # The slow conformance job: Brush's compatibility suite against the tool's shell, compared with the
 # recorded baseline, and every matrix case, sweep tier included, checked against its golden.
 # Re-checking the goldens against a live oracle (`stale`) is a SEPARATE job on its own schedule,
-# not run here: it only needs to run when the oracle Dockerfile, the goldens or conformance.py
+# not run here: it only needs to run when the oracle Dockerfile, the goldens or the harness
 # change, or on a fixed schedule, not on every push -- see "Oracle drift" in the workflow.
 #
 #   ci.sh TARGET_DIR
@@ -37,11 +37,11 @@ if [ "$status" -eq 124 ]; then
   echo "ci.sh: Brush's compat suite did not finish in 20 minutes: one of its cases hangs the shell" >&2
   exit 1
 fi
-python3 "$here/baseline.py" check "$out"
+bun "$here/baseline.ts" check "$out"
 
 # Every case against its golden, including the sweep-tier corpora the per-PR job skips. The cases
 # still known to differ are listed in sweep-known-failures.json: the job fails on a new failure,
 # and on a listed case that now passes, so the list only shrinks.
-python3 "$bash_dir/conformance/conformance.py" check --tier all \
+bun "$bash_dir/conformance/conformance.ts" check --tier all \
   --wasm "$target/wasm32-wasip2/release/examples/cooperative.wasm" \
   --known-failures "$bash_dir/conformance/sweep-known-failures.json"

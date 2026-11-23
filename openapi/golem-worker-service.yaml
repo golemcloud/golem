@@ -24,6 +24,8 @@ tags:
 - name: EnvironmentToolGrants
 - name: EnvironmentToolMiddlewareGrants
 - name: HealthCheck
+- name: Invocation
+  description: API working on the invocations of agents
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
 - name: McpDeployment
@@ -1661,111 +1663,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: fork_worker
-  /v1/runtime/envs/{environment_id}/agents/{agent_id}/invocations/{idempotency_key}:
-    delete:
-      tags:
-      - Worker
-      summary: Cancels a pending invocation if it has not started yet
-      description: |-
-        The invocation to be cancelled is identified by the idempotency key returned when the
-        invoke API accepted it.
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: agent_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: idempotency_key
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: expectedFingerprint
-        schema:
-          type: string
-          format: uuid
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/CancelInvocationResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '413':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '415':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: A limit was exceeded, or the idempotency key was already used for a different request.
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: cancel_invocation
   /v1/runtime/envs/{environment_id}/agents/{agent_id}/connect:
     get:
       tags:
@@ -2451,11 +2348,26 @@ paths:
         required: true
       responses:
         '200':
-          description: ''
+          description: |-
+            The invocation was accepted. `Golem-Invocation-Id` is its invocation ID, as in the REST
+            paths of invocations, and `Golem-Environment-Id` the environment in which the ID
+            resolves. An awaited invocation that is accepted and then fails answers an error, which
+            carries neither header.
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/AgentInvocationResult'
+          headers:
+            GOLEM-INVOCATION-ID:
+              required: true
+              deprecated: false
+              schema:
+                type: string
+            GOLEM-ENVIRONMENT-ID:
+              required: true
+              deprecated: false
+              schema:
+                type: string
         '400':
           description: ''
           content:
@@ -2546,11 +2458,24 @@ paths:
         required: true
       responses:
         '200':
-          description: ''
+          description: |-
+            An accepted invocation carries `Golem-Invocation-Id`, its invocation ID as in the REST
+            paths of invocations, and `Golem-Environment-Id`, the environment in which the ID
+            resolves. A lookup carries neither. The ID of a standalone tool invocation, which runs on
+            a fresh owner, cannot be read through the invocation endpoints.
           content:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/NativeToolInvocationResponse'
+          headers:
+            GOLEM-INVOCATION-ID:
+              deprecated: false
+              schema:
+                type: string
+            GOLEM-ENVIRONMENT-ID:
+              deprecated: false
+              schema:
+                type: string
         '400':
           description: ''
           content:
@@ -2781,6 +2706,442 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_agent_session
+  /v1/runtime/envs/{environment_id}/invocations:
+    get:
+      tags:
+      - Invocation
+      summary: List the invocations of one agent
+      description: |-
+        Newest change first, with the invocation ID as tie-breaker. Pass `nextCursor` of a page as
+        `cursor` to get the next one; an invocation that changes while paging appears at most once.
+        `since` and `until` are inclusive bounds on the last change.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent
+        schema:
+          type: string
+          format: uuid
+        in: query
+        description: The agent ID
+        required: true
+        deprecated: false
+        explode: true
+      - name: operation
+        schema:
+          type: string
+        in: query
+        description: Only invocations of this method name or `tool:<tool>/<command path>`
+        required: false
+        deprecated: false
+        explode: true
+      - name: state
+        schema:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/InvocationState'
+        in: query
+        description: Only invocations in one of these states
+        required: false
+        deprecated: false
+        explode: true
+      - name: kind
+        schema:
+          $ref: '#/components/schemas/InvocationKind'
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: since
+        schema:
+          type: string
+          format: date-time
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: until
+        schema:
+          type: string
+          format: date-time
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: pageSize
+        schema:
+          type: integer
+          format: uint32
+        in: query
+        description: At most 1000; the default is 100
+        required: false
+        deprecated: false
+        explode: true
+      - name: cursor
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvocationPage'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_invocations
+  /v1/runtime/envs/{environment_id}/invocations/lookup:
+    get:
+      tags:
+      - Invocation
+      summary: Find the invocations that the caller started on an agent with an idempotency key
+      description: |-
+        The key is matched in the caller's own idempotency scope, against every method and tool
+        command the agent ran, including those a later revision removed. A removed method is
+        found only while one of its invocations has the method name outside an external payload;
+        otherwise pass `operation`. A caller without a scope, and a key used through an HTTP
+        route, find nothing. No match is `404`.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent
+        schema:
+          type: string
+          format: uuid
+        in: query
+        description: The agent ID
+        required: true
+        deprecated: false
+        explode: true
+      - name: operation
+        schema:
+          type: string
+        in: query
+        description: Only the invocation of this method name or `tool:<tool>/<command path>`
+        required: false
+        deprecated: false
+        explode: true
+      - name: Idempotency-Key
+        schema:
+          type: string
+        in: header
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvocationLookupResult'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: lookup_invocations
+  /v1/runtime/envs/{environment_id}/invocations/{invocation_id}:
+    get:
+      tags:
+      - Invocation
+      summary: Get an invocation, with its result once it is terminal
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: invocation_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Invocation'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_invocation
+  /v1/runtime/envs/{environment_id}/invocations/{invocation_id}/cancel:
+    post:
+      tags:
+      - Invocation
+      summary: Cancel an invocation
+      description: |-
+        A `pending` or `scheduled` invocation becomes `cancelled` at once and never runs. A
+        terminal invocation keeps its state. Both answer `200` with the invocation's state.
+        Cancelling an invocation that already started is not supported yet and answers `409`
+        with the code `CANNOT_CANCEL_RUNNING_INVOCATION`.
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: invocation_id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvocationSummary'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: A limit was exceeded, or the idempotency key was already used for a different request.
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: cancel_invocation
 components:
   schemas:
     AccountCardHolder:
@@ -4113,14 +4474,6 @@ components:
         default:
           type: boolean
         negatable:
-          type: boolean
-    CancelInvocationResponse:
-      type: object
-      title: CancelInvocationResponse
-      required:
-      - canceled
-      properties:
-        canceled:
           type: boolean
     Card:
       type: object
@@ -5970,6 +6323,125 @@ components:
     InterruptResponse:
       type: object
       title: InterruptResponse
+    Invocation:
+      type: object
+      title: Invocation
+      description: |-
+        An invocation with its result. `result` is present once the invocation is `completed` or
+        `failed`; a completed constructor run has no result.
+      required:
+      - summary
+      properties:
+        summary:
+          $ref: '#/components/schemas/InvocationSummary'
+        result:
+          $ref: '#/components/schemas/InvocationOutcome'
+    InvocationFailure:
+      type: object
+      title: InvocationFailure
+      required:
+      - error
+      properties:
+        error:
+          type: string
+    InvocationKind:
+      type: string
+      enum:
+      - method
+      - constructor
+      - tool
+    InvocationLookupResult:
+      type: object
+      title: InvocationLookupResult
+      required:
+      - invocations
+      properties:
+        invocations:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvocationSummary'
+    InvocationMethodResult:
+      type: object
+      title: InvocationMethodResult
+      required:
+      - value
+      properties:
+        value:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
+    InvocationOutcome:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationToolResult'
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationFailure'
+      discriminator:
+        propertyName: type
+        mapping:
+          Method: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
+          Tool: '#/components/schemas/InvocationOutcome_InvocationToolResult'
+          Failure: '#/components/schemas/InvocationOutcome_InvocationFailure'
+    InvocationOutcome_InvocationFailure:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Failure
+            example: Failure
+      - $ref: '#/components/schemas/InvocationFailure'
+    InvocationOutcome_InvocationMethodResult:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Method
+            example: Method
+      - $ref: '#/components/schemas/InvocationMethodResult'
+    InvocationOutcome_InvocationToolResult:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Tool
+            example: Tool
+      - $ref: '#/components/schemas/InvocationToolResult'
+    InvocationPage:
+      type: object
+      title: InvocationPage
+      required:
+      - invocations
+      properties:
+        invocations:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvocationSummary'
+        nextCursor:
+          type: string
+          description: Present when more invocations may follow
+    InvocationState:
+      type: string
+      description: The lifecycle state of an invocation.
+      enum:
+      - scheduled
+      - pending
+      - running
+      - waiting
+      - retrying
+      - interrupted
+      - completed
+      - failed
+      - cancelled
     InvocationStatus:
       type: string
       description: Status of an idempotency key lookup on a worker.
@@ -5977,6 +6449,50 @@ components:
       - unknown
       - pending
       - complete
+      - cancelled
+    InvocationSummary:
+      type: object
+      title: InvocationSummary
+      description: |-
+        One invocation of an agent. `kind` and `operation` are absent when the invocation's request
+        is not known.
+      required:
+      - invocationId
+      - agentId
+      - environmentId
+      - state
+      - changedAt
+      properties:
+        invocationId:
+          type: string
+          description: '`<agent ID>.<UUID>`'
+        agentId:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        state:
+          $ref: '#/components/schemas/InvocationState'
+        kind:
+          $ref: '#/components/schemas/InvocationKind'
+        operation:
+          type: string
+          description: The method name, or `tool:<tool>/<command path>`. Absent for the constructor run.
+        acceptedAt:
+          type: string
+          format: date-time
+        changedAt:
+          type: string
+          format: date-time
+    InvocationToolResult:
+      type: object
+      title: InvocationToolResult
+      required:
+      - result
+      properties:
+        result:
+          $ref: '#/components/schemas/NativeToolResult'
     JsonSnapshotData:
       type: object
       title: JsonSnapshotData

@@ -819,7 +819,34 @@ fn result_at(terminal: u64) -> InvocationResultPosition {
     InvocationResultPosition {
         terminal: OplogIndex::from_u64(terminal),
         request: Some(OplogIndex::from_u64(terminal - 1)),
+        end: golem_common::model::InvocationEnd::Completed,
+        operation: None,
+        accepted_at: None,
+        changed_at: golem_common::model::Timestamp::from(0),
     }
+}
+
+#[test]
+fn long_operations_switch_the_membership_to_its_bounded_form_sooner() {
+    let fill = |operation: &str| {
+        let mut membership = InvocationResultMembership::new(1, 8 * 1024, 3);
+        for terminal in 1..=5 {
+            membership.insert(
+                InvocationId::new(),
+                InvocationResultPosition {
+                    operation: Some(crate::model::InvocationOperation::Method(
+                        operation.to_string(),
+                    )),
+                    ..result_at(terminal + 1)
+                },
+            );
+        }
+        membership
+    };
+
+    // With a 1 KiB Bloom filter, five entries stay exact only while their operations are small.
+    assert!(fill("m").is_exact_complete());
+    assert!(!fill(&"m".repeat(400)).is_exact_complete());
 }
 
 #[test]
@@ -1853,6 +1880,7 @@ fn agent_status_record_has_pending_work_for_pending_invocations() {
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(ComponentRevision::INITIAL),
+        operation: None,
     });
 
     assert!(status.has_pending_work(Timestamp::now_utc()));
@@ -1868,6 +1896,7 @@ fn scheduled_invocations_become_pending_work_only_when_due() {
             oplog_index: OplogIndex::INITIAL,
             idempotency_key: Some(InvocationId::new()),
             manual_update_target_revision: None,
+            operation: None,
         }],
         ..Default::default()
     };

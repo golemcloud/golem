@@ -654,6 +654,7 @@ fn tool_deployment_state_proto_rejects_revealable_secrets_outside_readable_scope
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: crate::model::tool::ToolFilesystemAccess::Unset,
         source,
+        shell: false,
     };
     let component_id = ComponentId::new();
     let mut component_binding = binding.clone();
@@ -734,6 +735,7 @@ fn tool_deployment_state_proto_roundtrip_preserves_coherent_snapshot() {
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: crate::model::tool::ToolFilesystemAccess::Allowed,
         source,
+        shell: false,
     };
     let component_id = ComponentId::new();
     let mut component_binding = binding.clone();

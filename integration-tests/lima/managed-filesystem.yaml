@@ -18,7 +18,8 @@ provision:
       set -eux -o pipefail
       export DEBIAN_FRONTEND=noninteractive
       apt-get update
-      apt-get install -y build-essential clang cmake curl git libssl-dev pkg-config python3 redis-server util-linux xfsprogs
+      apt-get install -y build-essential clang cmake curl git libssl-dev pkg-config python3 redis-server unzip util-linux xfsprogs
+      curl --proto '=https' --tlsv1.2 -fsSL https://bun.com/install | BUN_INSTALL=/usr/local bash -s -- bun-v1.4.4
   - mode: user
     script: |
       #!/bin/bash
@@ -28,6 +29,7 @@ provision:
       fi
       . "${HOME}/.cargo/env"
       rustup target add wasm32-wasip1 wasm32-wasip2
+      cargo install --locked cargo-test-r --version 2.2.14
 
 probes:
   - mode: readiness
@@ -36,3 +38,5 @@ probes:
       #!/bin/bash
       test -x /usr/sbin/mkfs.xfs
       test -x "${HOME}/.cargo/bin/cargo"
+      test -x "${HOME}/.cargo/bin/cargo-test-r"
+      test -x /usr/local/bin/bun

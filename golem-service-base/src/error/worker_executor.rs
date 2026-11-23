@@ -180,6 +180,12 @@ pub enum WorkerExecutorError {
         next_oplog_index: OplogIndex,
         reason: StaleCursorReason,
     },
+    /// The invocation was cancelled before it started (pending or scheduled). Its outcome is
+    /// `cancelled`; reusing its key returns this again and never runs it.
+    InvocationCancelled,
+    /// A cancel request for an invocation that is running. Cancelling a running invocation is
+    /// not supported yet; until it is, this typed answer replaces the spec's `202`.
+    CannotCancelRunningInvocation,
 }
 
 /// Why an oplog read refuses a cursor.
@@ -568,6 +574,10 @@ impl Display for WorkerExecutorError {
                 "Stale oplog cursor: the cursor to index {next_oplog_index} of the oplog of \
                  {agent_id} comes from the pages of another query"
             ),
+            Self::InvocationCancelled => write!(f, "Invocation was cancelled before execution"),
+            Self::CannotCancelRunningInvocation => {
+                write!(f, "The invocation is running and cannot be cancelled yet")
+            }
         }
     }
 }
@@ -619,6 +629,8 @@ impl Error for WorkerExecutorError {
             Self::ComponentServiceRefused { .. } => "Component service refused the request",
             Self::OplogFailed { .. } => "Oplog failed",
             Self::StaleCursor { .. } => "Stale oplog cursor",
+            Self::InvocationCancelled => "Invocation cancelled",
+            Self::CannotCancelRunningInvocation => "Cannot cancel a running invocation yet",
         }
     }
 }
@@ -662,6 +674,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::ComponentServiceRefused { .. } => "ComponentServiceRefused",
             Self::OplogFailed { .. } => "OplogFailed",
             Self::StaleCursor { .. } => "StaleCursor",
+            Self::InvocationCancelled => "InvocationCancelled",
+            Self::CannotCancelRunningInvocation => "CannotCancelRunningInvocation",
         }
     }
 
@@ -678,6 +692,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::InvalidShardId { .. }
             | Self::OplogFenced { .. }
             | Self::StaleCursor { .. }
+            | Self::InvocationCancelled
+            | Self::CannotCancelRunningInvocation
             | Self::ComponentNotFound { .. } => true,
             Self::InvalidRequest { .. }
             | Self::AgentCreationFailed { .. }
@@ -762,6 +778,8 @@ impl From<WorkerExecutorError> for Status {
         match value {
             error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
             | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
+            | WorkerExecutorError::InvocationCancelled
+            | WorkerExecutorError::CannotCancelRunningInvocation
             | WorkerExecutorError::AgentKeyCollision { .. }
             | WorkerExecutorError::AgentAlreadyExists { .. }) => {
                 let code = if matches!(error, WorkerExecutorError::AgentAlreadyExists { .. }) {
@@ -1105,6 +1123,20 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
+            WorkerExecutorError::InvocationCancelled => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::InvocationCancelled(
+                        golem::worker::v1::InvocationCancelled {},
+                    ),
+                ),
+            },
+            WorkerExecutorError::CannotCancelRunningInvocation => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::CannotCancelRunningInvocation(
+                        golem::worker::v1::CannotCancelRunningInvocation {},
+                    ),
+                ),
+            },
             // The client cannot act on the epochs; what it can do is what it does for a lapsed
             // lease - refresh its routing table and retry on the owner. A fence can land in the
             // middle of an invocation, and the retry is still one invocation, not a second: the
@@ -1429,6 +1461,12 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     },
                 })
             }
+            Some(golem::worker::v1::worker_execution_error::Error::InvocationCancelled(_)) => {
+                Ok(Self::InvocationCancelled)
+            }
+            Some(
+                golem::worker::v1::worker_execution_error::Error::CannotCancelRunningInvocation(_),
+            ) => Ok(Self::CannotCancelRunningInvocation),
         }
     }
 }
@@ -1589,6 +1627,8 @@ mod read_only_violation_trap_tests {
                 agent_id: golem_common::model::AgentId::from_parts(7, 3),
                 requested_key: "Cart(\"a\")".to_string(),
             },
+            WorkerExecutorError::InvocationCancelled,
+            WorkerExecutorError::CannotCancelRunningInvocation,
         ] {
             let status: Status = expected.clone().into();
             assert_eq!(status.code(), tonic::Code::FailedPrecondition);

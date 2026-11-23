@@ -726,29 +726,6 @@ expectedFingerprint|string|No|-
 }
 ```
 
-## Cancels a pending invocation if it has not started yet
-
-Path|Method|Protected
----|---|---
-`/v1/runtime/envs/{environment_id}/agents/{agent_id}/invocations/{idempotency_key}`|DELETE|Yes
-
-The invocation to be cancelled is identified by the idempotency key returned when the
-invoke API accepted it.
-
-**Query Parameters**
-
-Name|Type|Required|Description
----|---|---|---
-expectedFingerprint|string|No|-
-
-**Example Response JSON**
-
-```json copy
-{
-  "canceled": true
-}
-```
-
 ## Connect to an agent using a websocket and stream events
 
 Path|Method|Protected

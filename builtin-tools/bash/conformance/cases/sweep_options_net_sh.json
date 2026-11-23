@@ -1,0 +1,1714 @@
+{
+  "tier": "sweep",
+  "description": "Option sweep, part F: curl and wget (no network on either side: usage and error paths only),\nand the `sh` / `bash` commands' own options.\n\nTransfers go to 127.0.0.1 port 1, which refuses on both sides, or to a name under `.invalid`,\nwhich never resolves; their diagnostics carry timings, so those cases compare the status and\nanything written to stdout or files. Error paths fold GNU's curly quotes into ASCII ones.",
+  "cases": [
+    {
+      "name": "opt curl: no url",
+      "script": "{ curl; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: no url with options",
+      "script": "{ curl -s -o /tmp/x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: unknown option",
+      "script": "{ curl --bogus http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: unknown short option",
+      "script": "{ curl -Q http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: missing argument short",
+      "script": "{ curl -H; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: missing argument long",
+      "script": "{ curl --max-time; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: missing argument output",
+      "script": "{ curl -o; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: unsupported protocol",
+      "script": "{ curl -sS gopher2://x/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: unsupported protocol silent",
+      "script": "{ curl -s foo://x/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: malformed port",
+      "script": "{ curl -sS http://127.0.0.1:99999/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: empty url",
+      "script": "{ curl -sS ''; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: connection refused status",
+      "script": "{ curl -s http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: connection refused fail",
+      "script": "{ curl -sf http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: resolve failure status",
+      "script": "{ curl -s http://host.invalid/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: output file not created on failure",
+      "script": "curl -s -o /tmp/o http://127.0.0.1:1/; echo \"status=$?\"; ls /tmp",
+      "tags": [
+        "cmd.curl"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: remote name no path",
+      "script": "cd /tmp; curl -s -O http://127.0.0.1:1; echo \"status=$?\"",
+      "tags": [
+        "cmd.curl"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: remote name refused",
+      "script": "cd /tmp; curl -s -O http://127.0.0.1:1/f.txt; echo \"status=$?\"; ls /tmp",
+      "tags": [
+        "cmd.curl"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: create dirs refused",
+      "script": "curl -s --create-dirs -o /tmp/a/b/c http://127.0.0.1:1/; echo \"status=$?\"; ls /tmp",
+      "tags": [
+        "cmd.curl"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: invalid max time",
+      "script": "{ curl -m abc http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: negative max time",
+      "script": "{ curl -m -1 http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: invalid connect timeout",
+      "script": "{ curl --connect-timeout x http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: invalid retry",
+      "script": "{ curl --retry x http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: invalid retry delay",
+      "script": "{ curl --retry-delay x http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: retry refused",
+      "script": "{ curl -s --retry 1 --retry-delay 0 http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: data file missing",
+      "script": "{ curl -s -d @/tmp/nosuch http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: upload file missing",
+      "script": "{ curl -s -T /tmp/nosuch http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: form file missing",
+      "script": "{ curl -s -F 'f=@/tmp/nosuch' http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: form bad syntax",
+      "script": "{ curl -s -F novalue http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: json refused",
+      "script": "{ curl -s --json '{}' http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: method refused",
+      "script": "{ curl -s -X DELETE http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: head refused",
+      "script": "{ curl -s -I http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: include refused",
+      "script": "{ curl -s -i http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: location refused",
+      "script": "{ curl -sL http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: header refused",
+      "script": "{ curl -s -H 'X-A: b' http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: user agent refused",
+      "script": "{ curl -s -A agent http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: user refused",
+      "script": "{ curl -s -u a:b http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: referer refused",
+      "script": "{ curl -s -e http://x/ http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: cookie refused",
+      "script": "{ curl -s -b 'a=b' http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: cookie jar refused",
+      "script": "curl -s -c /tmp/jar http://127.0.0.1:1/; echo \"status=$?\"; ls /tmp",
+      "tags": [
+        "cmd.curl"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: compressed refused",
+      "script": "{ curl -s --compressed http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: get with data refused",
+      "script": "{ curl -s -G -d a=b http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: write out on failure",
+      "script": "curl -s -w '[%{http_code}]' http://127.0.0.1:1/; echo \" status=$?\"",
+      "tags": [
+        "cmd.curl"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: write out exitcode",
+      "script": "curl -s -w '%{exitcode}' http://127.0.0.1:1/; echo \" status=$?\"",
+      "tags": [
+        "cmd.curl"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: write out unknown variable",
+      "script": "{ curl -s -w '%{bogus}' http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: verbose refused",
+      "script": "curl -sv http://127.0.0.1:1/ 2>/dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.curl"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: help",
+      "script": "curl --help >/dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.curl"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: version",
+      "script": "curl --version >/dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.curl"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: silent show error",
+      "script": "{ curl -sS http://host.invalid/ 2>&1 >/dev/null | sed 's/ ([^()]*)$//' >&2; (exit ${PIPESTATUS[0]}); } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: fail with body refused",
+      "script": "{ curl -s --fail-with-body http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: several urls refused",
+      "script": "{ curl -s http://127.0.0.1:1/ http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: url option",
+      "script": "{ curl -s --url http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: output dir missing",
+      "script": "{ curl -s -o /tmp/nosuch/x http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: insecure refused",
+      "script": "{ curl -sk https://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: range refused",
+      "script": "{ curl -s -r 0-1 http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: data urlencode refused",
+      "script": "{ curl -s --data-urlencode 'a=b c' http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt curl: config file missing",
+      "script": "{ curl -s -K /tmp/nosuch http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.curl",
+        "cmd.curl.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: no url",
+      "script": "{ wget; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: unknown option",
+      "script": "{ wget --bogus http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: unknown short option",
+      "script": "{ wget -Z http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: missing argument",
+      "script": "{ wget -O; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: connection refused quiet",
+      "script": "{ wget -q http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: resolve failure quiet",
+      "script": "{ wget -q http://host.invalid/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: output document not left",
+      "script": "cd /tmp; wget -q -O out http://127.0.0.1:1/; echo \"status=$?\"; ls",
+      "tags": [
+        "cmd.wget"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: output stdout refused",
+      "script": "{ wget -q -O - http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: prefix refused",
+      "script": "wget -q -P /tmp/dl http://127.0.0.1:1/; echo \"status=$?\"; ls /tmp",
+      "tags": [
+        "cmd.wget"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: continue refused",
+      "script": "{ wget -q -c http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: timestamping refused",
+      "script": "{ wget -q -N http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: timeout refused",
+      "script": "{ wget -q -T 1 http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: tries refused",
+      "script": "{ wget -q -t 1 http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: invalid timeout",
+      "script": "{ wget -T x http://127.0.0.1:1/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: invalid tries",
+      "script": "{ wget -t x http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: max redirect refused",
+      "script": "{ wget -q --max-redirect 0 http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: invalid max redirect",
+      "script": "{ wget --max-redirect=x http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: post data refused",
+      "script": "{ wget -q --post-data a=b http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: post file missing",
+      "script": "{ wget -q --post-file /tmp/nosuch http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: post data and file",
+      "script": "{ echo x >/tmp/f; wget -q --post-data a --post-file /tmp/f http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: header refused",
+      "script": "{ wget -q --header 'X-A: b' http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: user agent refused",
+      "script": "{ wget -q -U agent http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: server response refused",
+      "script": "{ wget -q -S http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: content disposition refused",
+      "script": "{ wget -q --content-disposition http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: unsupported scheme",
+      "script": "{ wget -q ftpx://x/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: unsupported scheme message",
+      "script": "{ wget ftpx://x/; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: help",
+      "script": "wget --help >/dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.wget"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: version",
+      "script": "wget --version >/dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.wget"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: output directory missing",
+      "script": "{ wget -q -O /tmp/nosuch/x http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: several urls",
+      "script": "{ wget -q http://127.0.0.1:1/ http://host.invalid/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: no clobber refused",
+      "script": "{ wget -q -nc http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: spider refused",
+      "script": "{ wget -q --spider http://127.0.0.1:1/; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: input file missing",
+      "script": "{ wget -q -i /tmp/nosuch; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wget: empty url",
+      "script": "{ wget -q ''; } >/tmp/out 2>/tmp/err; echo \"status=$?\"; wc -c </tmp/out",
+      "tags": [
+        "cmd.wget",
+        "cmd.wget.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: c with name and args",
+      "script": "sh -c 'echo \"$0|$1|$#\"' name a b",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: c default name",
+      "script": "sh -c 'echo \"$0\"'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: c exit status",
+      "script": "sh -c 'exit 7'; echo \"status=$?\"",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: c missing argument",
+      "script": "{ sh -c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: errexit",
+      "script": "sh -e -c 'false; echo no'; echo \"status=$?\"",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: nounset",
+      "script": "{ sh -u -c 'echo $nope'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: xtrace",
+      "script": "{ sh -x -c 'echo hi'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: verbose",
+      "script": "{ sh -v -c 'echo hi'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: noglob",
+      "script": "cd /tmp; touch a1; sh -f -c 'echo a*'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: noexec",
+      "script": "sh -n -c 'echo hi'; echo \"status=$?\"",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: noexec syntax error",
+      "script": "{ sh -n -c 'if'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: allexport",
+      "script": "sh -a -c 'X=1; sh -c \"echo \\$X\"'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: pipefail option",
+      "script": "sh -o pipefail -c 'false | true'; echo \"status=$?\"",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: plus o option",
+      "script": "sh +o errexit -c 'false; echo went on'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: shopt option",
+      "script": "sh -O extglob -c 'shopt -q extglob && echo on'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: plus O option",
+      "script": "sh +O extglob -c 'shopt -q extglob || echo off'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: invalid option name",
+      "script": "{ sh -o bogus -c true; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: invalid shopt name",
+      "script": "{ sh -O bogus -c 'echo ran'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: invalid short option",
+      "script": "{ sh -Q -c true; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: invalid long option",
+      "script": "{ sh --bogus -c true; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: combined flags",
+      "script": "sh -ec 'false; echo no'; echo \"status=$?\"",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: double dash",
+      "script": "{ sh -c -- 'echo ok'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: stdin script",
+      "script": "echo 'echo from stdin; echo $#' | sh -s a b",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: stdin script default",
+      "script": "echo 'echo piped' | sh",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: norc",
+      "script": "sh --norc -c 'echo ok'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: noprofile",
+      "script": "sh --noprofile -c 'echo ok'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: noediting",
+      "script": "sh --noediting -c 'echo ok'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: posix mode",
+      "script": "sh --posix -c 'shopt -qo posix && echo posix || echo not'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: posix o",
+      "script": "sh -o posix -c 'shopt -qo posix && echo posix'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: login shell",
+      "script": "sh -l -c 'shopt -q login_shell && echo login || echo not'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: rcfile refused",
+      "script": "{ sh --rcfile /tmp/rc -c 'echo ok'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: restricted",
+      "script": "{ sh -r -c 'cd /tmp'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\nsh: a restricted shell (-r) is unsupported in bash-tool\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "fixture: bash-tool does not implement restricted shells (rbash); a bash or sh child given -r or --restricted is refused with bash-tool's canonical refusal (README, Commands), not run unrestricted"
+      }
+    },
+    {
+      "name": "opt sh: restricted long",
+      "script": "{ sh --restricted -c 'echo ok'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\nsh: a restricted shell (--restricted) is unsupported in bash-tool\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "fixture: bash-tool does not implement restricted shells (rbash); a bash or sh child given -r or --restricted is refused with bash-tool's canonical refusal (README, Commands), not run unrestricted"
+      }
+    },
+    {
+      "name": "opt sh: help status",
+      "script": "sh --help >/dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: version first line",
+      "script": "sh --version | head -n 1 | cut -c1-9",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: isolated cd",
+      "script": "cd /tmp; sh -c 'cd /'; pwd",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: isolated variables",
+      "script": "X=1; sh -c 'X=2'; echo $X",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: no function inheritance",
+      "script": "{ f() { echo f; }; sh -c 'f'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: exported function",
+      "script": "f() { echo f; }; export -f f; sh -c 'f'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: stdin inherited",
+      "script": "echo data | sh -c 'cat'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: exit code over 255",
+      "script": "sh -c 'exit 300'; echo \"status=$?\"",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: syntax error in c",
+      "script": "{ sh -c 'if then'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sh",
+        "cmd.sh.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: dollar dash",
+      "script": "sh -e -c 'echo $-' | tr -d 'hBc'",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: positional count",
+      "script": "sh -c 'echo $#; shift; echo $1' n a b c",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: set options after c",
+      "script": "sh -c 'echo $1' -x arg; echo \"status=$?\"",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sh: nested",
+      "script": "sh -c \"sh -c 'echo \\$0' inner\"",
+      "tags": [
+        "cmd.sh"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: c with name and args",
+      "script": "bash -c 'echo \"$0|$1|$#\"' name a b",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: c default name",
+      "script": "bash -c 'echo \"$0\"'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: c exit status",
+      "script": "bash -c 'exit 7'; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: c missing argument",
+      "script": "{ bash -c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: errexit",
+      "script": "bash -e -c 'false; echo no'; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: nounset",
+      "script": "{ bash -u -c 'echo $nope'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: xtrace",
+      "script": "{ bash -x -c 'echo hi'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: verbose",
+      "script": "{ bash -v -c 'echo hi'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: noglob",
+      "script": "cd /tmp; touch a1; bash -f -c 'echo a*'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: noexec",
+      "script": "bash -n -c 'echo hi'; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: noexec syntax error",
+      "script": "{ bash -n -c 'if'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: allexport",
+      "script": "bash -a -c 'X=1; sh -c \"echo \\$X\"'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: pipefail option",
+      "script": "bash -o pipefail -c 'false | true'; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: plus o option",
+      "script": "bash +o errexit -c 'false; echo went on'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: shopt option",
+      "script": "bash -O extglob -c 'shopt -q extglob && echo on'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: plus O option",
+      "script": "bash +O extglob -c 'shopt -q extglob || echo off'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: invalid option name",
+      "script": "{ bash -o bogus -c true; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: invalid shopt name",
+      "script": "{ bash -O bogus -c 'echo ran'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: invalid short option",
+      "script": "{ bash -Q -c true; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: invalid long option",
+      "script": "{ bash --bogus -c true; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: combined flags",
+      "script": "bash -ec 'false; echo no'; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: double dash",
+      "script": "{ bash -c -- 'echo ok'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: stdin script",
+      "script": "echo 'echo from stdin; echo $#' | bash -s a b",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: stdin script default",
+      "script": "echo 'echo piped' | bash",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: norc",
+      "script": "bash --norc -c 'echo ok'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: noprofile",
+      "script": "bash --noprofile -c 'echo ok'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: noediting",
+      "script": "bash --noediting -c 'echo ok'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: posix mode",
+      "script": "bash --posix -c 'shopt -qo posix && echo posix || echo not'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: posix o",
+      "script": "bash -o posix -c 'shopt -qo posix && echo posix'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: login shell",
+      "script": "bash -l -c 'shopt -q login_shell && echo login || echo not'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: rcfile refused",
+      "script": "{ bash --rcfile /tmp/rc -c 'echo ok'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: restricted",
+      "script": "{ bash -r -c 'cd /tmp'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\nbash: a restricted shell (-r) is unsupported in bash-tool\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "fixture: bash-tool does not implement restricted shells (rbash); a bash or sh child given -r or --restricted is refused with bash-tool's canonical refusal (README, Commands), not run unrestricted"
+      }
+    },
+    {
+      "name": "opt bash: restricted long",
+      "script": "{ bash --restricted -c 'echo ok'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\nbash: a restricted shell (--restricted) is unsupported in bash-tool\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "fixture: bash-tool does not implement restricted shells (rbash); a bash or sh child given -r or --restricted is refused with bash-tool's canonical refusal (README, Commands), not run unrestricted"
+      }
+    },
+    {
+      "name": "opt bash: help status",
+      "script": "bash --help >/dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: version first line",
+      "script": "bash --version | head -n 1 | cut -c1-9",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: isolated cd",
+      "script": "cd /tmp; bash -c 'cd /'; pwd",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: isolated variables",
+      "script": "X=1; bash -c 'X=2'; echo $X",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: no function inheritance",
+      "script": "{ f() { echo f; }; bash -c 'f'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: exported function",
+      "script": "f() { echo f; }; export -f f; bash -c 'f'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: stdin inherited",
+      "script": "echo data | bash -c 'cat'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: exit code over 255",
+      "script": "bash -c 'exit 300'; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: syntax error in c",
+      "script": "{ bash -c 'if then'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.bash",
+        "cmd.bash.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: dollar dash",
+      "script": "bash -e -c 'echo $-' | tr -d 'hBc'",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: positional count",
+      "script": "bash -c 'echo $#; shift; echo $1' n a b c",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: set options after c",
+      "script": "bash -c 'echo $1' -x arg; echo \"status=$?\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt bash: nested",
+      "script": "bash -c \"bash -c 'echo \\$0' inner\"",
+      "tags": [
+        "cmd.bash"
+      ],
+      "options": {}
+    }
+  ]
+}
