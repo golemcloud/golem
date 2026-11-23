@@ -1059,6 +1059,7 @@ fn package_manifest(
     Ok(app_raw::ApplicationWithSource {
         source,
         application: serde_json::from_str(&declarations)?,
+        is_development_package: false,
     })
 }
 
@@ -1283,6 +1284,7 @@ fn development_manifests(
                 }
                 manifests.push(app_raw::ApplicationWithSource {
                     source,
+                    is_development_package: true,
                     application: app_raw::Application {
                         component_templates: raw.component_templates,
                         components: raw.components,

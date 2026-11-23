@@ -174,6 +174,87 @@ async fn development_package_build_reads_its_current_component_without_a_lock() 
     .await;
 }
 
+#[test]
+#[timeout("120s")]
+async fn development_package_build_uses_its_rust_workspace_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let consumer = dir.path().join("consumer");
+    let producer = dir.path().join("producer");
+    let guest = producer.join("guest");
+    // This fixture needs the Rust template, not the guest SDK implementation.
+    let sdk = dir.path().join("sdk");
+    fs::create_dir_all(sdk.join("src")).unwrap();
+    fs::write(
+        sdk.join("Cargo.toml"),
+        "[package]\nname = 'golem-rust'\nversion = '0.0.0'\nedition = '2021'\n",
+    )
+    .unwrap();
+    fs::write(sdk.join("src/lib.rs"), "").unwrap();
+    fs::create_dir(&consumer).unwrap();
+    fs::create_dir_all(guest.join("src")).unwrap();
+    fs::write(consumer.join("Cargo.toml"), "[workspace]\nresolver = '2'\n").unwrap();
+    fs::write(
+        producer.join("Cargo.toml"),
+        "[workspace]\nresolver = '2'\nmembers = ['guest']\n",
+    )
+    .unwrap();
+    let guest_manifest = "[package]\nname = 'editable_guest'\nversion = '0.1.0'\nedition = '2021'\n[lib]\ncrate-type = ['cdylib']\n[dependencies]\ngolem-rust = { path = '../../sdk' }\n";
+    fs::write(guest.join("Cargo.toml"), guest_manifest).unwrap();
+    for workspace in [&consumer, &producer] {
+        fs::create_dir(workspace.join(".cargo")).unwrap();
+        fs::write(
+            workspace.join(".cargo/config.toml"),
+            "[build]\ntarget-dir = 'target'\n",
+        )
+        .unwrap();
+    }
+    let version = versions::sdk::MANIFEST;
+    fs::write(
+        consumer.join("golem.yaml"),
+        format!("manifestVersion: {version}\napp: consumer\nenvironments:\n  local: {{server: local}}\npackages:\n  editable: {{path: ../producer}}\n"),
+    ).unwrap();
+    fs::write(
+        producer.join("golem.yaml"),
+        format!("manifestVersion: {version}\napp: producer\npackage: {{name: editable, version: 1.0.0}}\ncomponents:\n  editable:guest:\n    dir: guest\n    templates: rust\n"),
+    ).unwrap();
+    let wasm = producer.join("target/wasm32-wasip2/debug/editable_guest.wasm");
+    let mut previous = Vec::new();
+    for value in [17, 42] {
+        fs::write(
+            guest.join("src/lib.rs"),
+            format!("#[no_mangle]\npub extern \"C\" fn version() -> u32 {{ {value} }}\n"),
+        )
+        .unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+            .kill_on_drop(true)
+            .current_dir(&consumer)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("CARGO_BUILD_TARGET_DIR")
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("GOLEM_RUST_PATH", &sdk)
+            .arg("--config-dir")
+            .arg(consumer.join("isolated-config"))
+            .arg("build")
+            .arg("--yes")
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let bytes = fs::read(&wasm).unwrap();
+        assert_ne!(bytes, previous);
+        previous = bytes;
+        assert_eq!(
+            fs::read_to_string(guest.join("Cargo.toml")).unwrap(),
+            guest_manifest
+        );
+    }
+}
+
 // Assemble a package without a publisher-side build, which cannot extract these components.
 fn write_install_fixture(path: &Path, name: &str, wasm: Vec<u8>) -> String {
     use sha2::{Digest, Sha256};

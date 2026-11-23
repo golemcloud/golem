@@ -858,6 +858,7 @@ pub struct Application {
     app_root_dir_str: String,
     golem_temp_dir_str: String,
     cargo_workspace_mode: bool,
+    development_sources: BTreeSet<PathBuf>,
 
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
@@ -956,12 +957,12 @@ impl Application {
     /// Returns the cargo manifest directory used to resolve the `cargoTarget` template
     /// variable for a component located at `component_dir`.
     ///
-    /// In a cargo workspace the target directory is shared at the application root; otherwise
-    /// it is resolved relative to the component directory. The directory is only used to query
+    /// For the consuming app's workspace, resolve from its root. For a development package,
+    /// resolve from the component directory, where its Cargo build runs. The directory is only used to query
     /// cargo (see [`resolve_cargo_target_dir`]) lazily, when a template actually references
     /// `cargoTarget`.
-    fn cargo_manifest_dir_for(&self, component_dir: &str) -> String {
-        if self.cargo_workspace_mode {
+    fn cargo_manifest_dir_for(&self, source: &Path, component_dir: &str) -> String {
+        if self.cargo_workspace_mode && !self.development_sources.contains(source) {
             self.app_root_dir_str.clone()
         } else {
             component_dir.to_string()
@@ -1462,7 +1463,9 @@ impl Application {
                     .map(|s| s.to_string()),
                 fs::path_to_str(component.component_dir())
                     .ok()
-                    .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
+                    .map(|component_dir| {
+                        self.cargo_manifest_dir_for(component.source(), component_dir)
+                    }),
             );
 
             let template_names = agent.templates.clone().into_vec();
@@ -1684,7 +1687,9 @@ impl Application {
                             .map(str::to_string),
                         fs::path_to_str(component.component_dir())
                             .ok()
-                            .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
+                            .map(|component_dir| {
+                                self.cargo_manifest_dir_for(component.source(), component_dir)
+                            }),
                     ),
                 )
             }
@@ -4586,6 +4591,7 @@ mod app_builder {
         app_root_dir_str: String,
         golem_temp_dir_str: String,
         cargo_workspace_mode: bool,
+        development_sources: BTreeSet<PathBuf>,
 
         // For app build
         include: Vec<String>,
@@ -4700,6 +4706,7 @@ mod app_builder {
                 app_root_dir_str: builder.app_root_dir_str,
                 golem_temp_dir_str: builder.golem_temp_dir_str,
                 cargo_workspace_mode: builder.cargo_workspace_mode,
+                development_sources: builder.development_sources,
                 environments,
                 environment_sources: builder.environment_sources,
                 component_preset_selector: component_presets,
@@ -4857,6 +4864,9 @@ mod app_builder {
                 |validation| {
                     let app_source_dir = fs::parent_or_err(&app.source).expect("Failed to get parent");
                     self.all_sources.insert(app.source.clone());
+                    if app.is_development_package {
+                        self.development_sources.insert(app.source.clone());
+                    }
 
                     for environment_name in app.application.environments.keys() {
                         if let Ok(environment_name) = environment_name.parse::<EnvironmentName>() {
@@ -5952,11 +5962,13 @@ mod app_builder {
                 Some(self.app_root_dir_str.clone()),
                 Some(self.golem_temp_dir_str.clone()),
                 Some(component_dir_str.clone()),
-                Some(if self.cargo_workspace_mode {
-                    self.app_root_dir_str.clone()
-                } else {
-                    component_dir_str.clone()
-                }),
+                Some(
+                    if self.cargo_workspace_mode && !self.development_sources.contains(&source) {
+                        self.app_root_dir_str.clone()
+                    } else {
+                        component_dir_str.clone()
+                    },
+                ),
             );
 
             match self.component_layer_store.value(
