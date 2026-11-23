@@ -250,6 +250,7 @@ impl RemoteComponentService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for RemoteComponentService {
     async fn invalidate_current(&self) {
         // Pending lookups may not yet identify their environment. Generation keys

@@ -314,6 +314,7 @@ pub trait OplogOps: Oplog {
             function_name,
             invocation_id,
             observational_owner: None,
+            driver: None,
             request: Some(request_payload),
             durable_function_type: function_type,
             span_started: None,
@@ -423,6 +424,7 @@ pub trait OplogOps: Oplog {
         method_name: Option<String>,
         consumed_fuel: u64,
         component_revision: ComponentRevision,
+        awaits_settlement: bool,
     ) -> Result<OplogIndex, OplogError> {
         let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
             i64::MAX
@@ -438,8 +440,27 @@ pub trait OplogOps: Oplog {
             method_name,
             consumed_fuel,
             component_revision,
+            awaits_settlement,
         };
         self.add(entry).await
+    }
+
+    async fn add_agent_invocation_settled(
+        &self,
+        invocation_id: golem_common::model::InvocationId,
+        consumed_fuel: u64,
+    ) -> Result<OplogIndex, OplogError> {
+        let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
+            i64::MAX
+        } else {
+            consumed_fuel as i64
+        };
+
+        self.add(OplogEntry::agent_invocation_settled(
+            invocation_id,
+            consumed_fuel,
+        ))
+        .await
     }
 
     async fn create_snapshot_based_update_description(

@@ -479,6 +479,7 @@ impl TestFilesystemSnapshotStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
     async fn save(
         &self,

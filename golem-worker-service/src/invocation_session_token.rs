@@ -85,7 +85,7 @@ pub struct SessionTokenPayload {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionAgentIdentity {
     pub component_id: Uuid,
-    pub component_revision: u64,
+    pub component_revision: Option<u64>,
     pub agent_id: AgentId,
     pub target: SessionInvocationTarget,
 }
@@ -108,7 +108,13 @@ pub fn encode_session_agent_identity(
     let mut bytes = Vec::new();
     bytes.push(3);
     bytes.extend_from_slice(identity.component_id.as_bytes());
-    bytes.extend_from_slice(&identity.component_revision.to_be_bytes());
+    bytes.push(u8::from(identity.component_revision.is_some()));
+    bytes.extend_from_slice(
+        &identity
+            .component_revision
+            .unwrap_or_default()
+            .to_be_bytes(),
+    );
     bytes.extend_from_slice(identity.agent_id.0.as_bytes());
     match &identity.target {
         SessionInvocationTarget::Method { agent_type, method } => {
@@ -153,17 +159,22 @@ pub fn decode_session_agent_identity(
     let bytes = URL_SAFE_NO_PAD
         .decode(encoded)
         .map_err(|_| token_invalid("invalid session agent identity"))?;
-    if bytes.len() < 42 || bytes[0] != 3 {
+    if bytes.len() < 43 || bytes[0] != 3 {
         return Err(token_invalid("invalid session agent identity"));
     }
     let component_id = Uuid::from_slice(&bytes[1..17])
         .map_err(|_| token_invalid("invalid session agent identity"))?;
-    let component_revision = u64::from_be_bytes(bytes[17..25].try_into().unwrap());
+    let revision = u64::from_be_bytes(bytes[18..26].try_into().unwrap());
+    let component_revision = match bytes[17] {
+        0 if revision == 0 => None,
+        1 => Some(revision),
+        _ => return Err(token_invalid("invalid session execution revision")),
+    };
     let agent_id = AgentId(
-        Uuid::from_slice(&bytes[25..41])
+        Uuid::from_slice(&bytes[26..42])
             .map_err(|_| token_invalid("invalid session agent identity"))?,
     );
-    let mut offset = 41;
+    let mut offset = 42;
     let kind = *bytes
         .get(offset)
         .ok_or_else(|| token_invalid("invalid session agent identity"))?;
@@ -956,7 +967,7 @@ mod tests {
     fn native_session_identity_round_trips_without_method_identity() {
         let identity = SessionAgentIdentity {
             component_id: Uuid::new_v4(),
-            component_revision: 17,
+            component_revision: Some(17),
             agent_id: AgentId::from_parts(0, 7),
             target: SessionInvocationTarget::ExternalTool {
                 tool_name: "files".to_string(),

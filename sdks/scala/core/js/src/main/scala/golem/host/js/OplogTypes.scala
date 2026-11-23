@@ -98,6 +98,7 @@ sealed trait JsStartParameters extends js.Object {
   def functionName: String                            = js.native
   def invocationId: js.UndefOr[JsDurableInvocationId] = js.native
   def observationalOwner: js.UndefOr[js.BigInt]       = js.native
+  def driver: js.UndefOr[js.BigInt]                   = js.native
   def request: js.UndefOr[JsTypedSchemaValue]         = js.native
   def durableFunctionType: JsWrappedFunctionType      = js.native
   def spanStarted: js.UndefOr[JsSpanStarted]          = js.native
@@ -258,6 +259,65 @@ sealed trait JsEndRemoteWriteParameters extends js.Object {
   def beginIndex: js.BigInt = js.native
 }
 
+// --- PublicCaller ---
+
+@js.native
+sealed trait JsPublicPrincipalRef extends js.Object {
+  def issuer: String  = js.native
+  def subject: String = js.native
+}
+
+@js.native
+sealed trait JsPublicUserPrincipal extends js.Object {
+  def pair: JsPublicPrincipalRef  = js.native
+  def authenticatedAt: JsDatetime = js.native
+}
+
+@js.native
+sealed trait JsPublicAccountPrincipal extends js.Object {
+  def pair: JsPublicPrincipalRef = js.native
+  def accountId: JsAccountId     = js.native
+  def authentication: String     = js.native
+}
+
+@js.native
+sealed trait JsPublicAgentPrincipal extends js.Object {
+  def pair: JsPublicPrincipalRef     = js.native
+  def agentId: JsAgentId             = js.native
+  def agentType: String              = js.native
+  def environmentId: JsEnvironmentId = js.native
+}
+
+@js.native
+sealed trait JsPublicToolPrincipal extends js.Object {
+  def pair: JsPublicPrincipalRef     = js.native
+  def environmentId: JsEnvironmentId = js.native
+  def toolName: String               = js.native
+}
+
+@js.native
+sealed trait JsPublicPrincipal extends js.Object {
+  def tag: String = js.native
+}
+
+@js.native
+sealed trait JsPublicPrincipalWithValue extends JsPublicPrincipal {
+  @JSName("val") def value: js.Any = js.native
+}
+
+@js.native
+sealed trait JsPublicTokenProvenance extends js.Object {
+  def id: JsUuid                              = js.native
+  def maker: js.UndefOr[JsPublicPrincipalRef] = js.native
+}
+
+@js.native
+sealed trait JsPublicCaller extends js.Object {
+  def original: JsPublicPrincipal               = js.native
+  def immediate: JsPublicPrincipal              = js.native
+  def tokens: js.Array[JsPublicTokenProvenance] = js.native
+}
+
 // --- AgentInitializationParameters ---
 
 @js.native
@@ -267,6 +327,7 @@ sealed trait JsAgentInitializationParameters extends js.Object {
   def traceId: String                                   = js.native
   def traceStates: js.Array[String]                     = js.native
   def invocationContext: js.Array[js.Array[JsSpanData]] = js.native
+  def caller: JsPublicCaller                            = js.native
 }
 
 // --- AgentMethodInvocationParameters ---
@@ -279,6 +340,7 @@ sealed trait JsAgentMethodInvocationParameters extends js.Object {
   def traceId: String                                   = js.native
   def traceStates: js.Array[String]                     = js.native
   def invocationContext: js.Array[js.Array[JsSpanData]] = js.native
+  def caller: JsPublicCaller                            = js.native
 }
 
 @js.native
@@ -289,20 +351,30 @@ sealed trait JsExternalToolInvocationParameters extends js.Object {
   def traceId: String                                   = js.native
   def traceStates: js.Array[String]                     = js.native
   def invocationContext: js.Array[js.Array[JsSpanData]] = js.native
+  def caller: JsPublicCaller                            = js.native
+}
+
+// --- SaveSnapshotParameters ---
+
+@js.native
+sealed trait JsSaveSnapshotParameters extends js.Object {
+  def caller: JsPublicCaller = js.native
 }
 
 // --- LoadSnapshotParameters ---
 
 @js.native
 sealed trait JsLoadSnapshotParameters extends js.Object {
-  def snapshot: JsSnapshot = js.native
+  def snapshot: JsSnapshot   = js.native
+  def caller: JsPublicCaller = js.native
 }
 
 // --- ProcessOplogEntriesParameters ---
 
 @js.native
 sealed trait JsProcessOplogEntriesParameters extends js.Object {
-  def invocationId: JsUuid = js.native
+  def invocationId: JsUuid   = js.native
+  def caller: JsPublicCaller = js.native
 }
 
 // --- ManualUpdateParameters ---
@@ -310,6 +382,7 @@ sealed trait JsProcessOplogEntriesParameters extends js.Object {
 @js.native
 sealed trait JsManualUpdateParameters extends js.Object {
   def targetRevision: js.BigInt = js.native
+  def requester: JsPublicCaller = js.native
 }
 
 // --- AgentInvocation  –  tagged union ---
@@ -331,8 +404,8 @@ object JsAgentInvocation {
   def agentMethodInvocation(params: JsAgentMethodInvocationParameters): JsAgentInvocation =
     JsShape.tagged[JsAgentInvocation]("agent-method-invocation", params)
 
-  def saveSnapshot: JsAgentInvocation =
-    JsShape.tagOnly[JsAgentInvocation]("save-snapshot")
+  def saveSnapshot(params: JsSaveSnapshotParameters): JsAgentInvocation =
+    JsShape.tagged[JsAgentInvocation]("save-snapshot", params)
 
   def loadSnapshot(params: JsLoadSnapshotParameters): JsAgentInvocation =
     JsShape.tagged[JsAgentInvocation]("load-snapshot", params)
@@ -422,6 +495,13 @@ sealed trait JsAgentInvocationFailedParameters extends js.Object {
   def startIndex: js.BigInt = js.native
 }
 
+@js.native
+sealed trait JsAgentInvocationSettledParameters extends js.Object {
+  def timestamp: JsDatetime   = js.native
+  def invocationId: JsUuid    = js.native
+  def consumedFuel: js.BigInt = js.native
+}
+
 // --- PendingAgentInvocationParameters ---
 
 @js.native
@@ -477,6 +557,7 @@ sealed trait JsPendingUpdateParameters extends js.Object {
   def timestamp: JsDatetime            = js.native
   def targetRevision: js.BigInt        = js.native
   def description: JsUpdateDescription = js.native
+  def requester: JsPublicCaller        = js.native
 }
 
 // --- SuccessfulUpdateParameters ---

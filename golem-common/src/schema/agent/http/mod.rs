@@ -14,7 +14,7 @@
 
 use super::{AgentMethodSchema, AgentTypeKind, AgentTypeSchema, FieldSource};
 use crate::base_model::agent::{
-    AgentMode, HttpMethod, HttpMountDetails, PathSegment, PhantomIdBinding, Snapshotting,
+    AgentIdBinding, AgentMode, HttpMethod, HttpMountDetails, PathSegment, Snapshotting,
 };
 use crate::schema::validation::is_equivalent_cross_graph;
 use crate::schema::{SchemaGraph, SchemaType};
@@ -43,7 +43,7 @@ pub enum HttpAgentValidationError {
     HandlerEndpointPolicy(String),
     HandlerSchema(String),
     UnboundConstructor(String),
-    InvalidPhantomBinding(String),
+    InvalidIdBinding(String),
 }
 
 impl Display for HttpAgentValidationError {
@@ -101,7 +101,7 @@ impl Display for HttpAgentValidationError {
                 f,
                 "HTTP filesystem owner constructor parameter or path capture '{name}' is invalid or unbound"
             ),
-            InvalidPhantomBinding(error) => write!(f, "invalid HTTP phantom ID binding: {error}"),
+            InvalidIdBinding(error) => write!(f, "invalid HTTP agent ID binding: {error}"),
         }
     }
 }
@@ -155,7 +155,7 @@ pub(super) fn validate(agent: &AgentTypeSchema) -> Result<(), HttpAgentValidatio
             .map_err(HttpAgentValidationError::InvalidFileMapping)?;
         FileMapping::validate_list(&mount.filesystem_bindings)
             .map_err(HttpAgentValidationError::InvalidFileMapping)?;
-        validate_phantom_binding(agent, mount)?;
+        validate_id_binding(agent, mount)?;
         validate_file_response_headers(
             &mount.file_response_headers,
             !mount.static_bindings.is_empty() || !mount.filesystem_bindings.is_empty(),
@@ -190,30 +190,44 @@ pub(super) fn validate(agent: &AgentTypeSchema) -> Result<(), HttpAgentValidatio
     }
 }
 
-fn validate_phantom_binding(
+fn validate_id_binding(
     agent: &AgentTypeSchema,
     mount: &HttpMountDetails,
 ) -> Result<(), HttpAgentValidationError> {
-    let Some(binding) = &mount.phantom_id_binding else {
+    let invalid = |message: &str| HttpAgentValidationError::InvalidIdBinding(message.into());
+    let Some(binding) = &mount.agent_id_binding else {
+        if mount.create_route.is_some() {
+            return Err(invalid("create routes require an ID binding"));
+        }
         return Ok(());
     };
-    let invalid = |message: &str| HttpAgentValidationError::InvalidPhantomBinding(message.into());
     if agent.mode != AgentMode::Durable || agent.kind != AgentTypeKind::Regular {
         return Err(invalid("selectors require a durable regular agent"));
     }
-    if !mount.filesystem_bindings.is_empty() {
+    if mount.phantom_agent {
+        return Err(invalid("ID binding cannot be combined with phantomAgent"));
+    }
+    if mount.create_route.as_ref().is_some_and(|path| {
+        path.iter().any(|segment| match segment {
+            PathSegment::SystemVariable(_) => false,
+            PathSegment::Segment(schema_http::PathSegment::Literal(literal)) => {
+                !valid_decoded_segment(&literal.value)
+            }
+            _ => true,
+        })
+    }) {
         return Err(invalid(
-            "selectors cannot be combined with filesystem bindings",
+            "create paths must contain only literal or system segments",
         ));
     }
     let details = match binding {
-        PhantomIdBinding::Path(details) | PhantomIdBinding::Query(details) => details,
+        AgentIdBinding::Path(details) | AgentIdBinding::Query(details) => details,
     };
     if details.name.is_empty() {
         return Err(invalid("selector name cannot be empty"));
     }
     match binding {
-        PhantomIdBinding::Path(details) => {
+        AgentIdBinding::Path(details) => {
             let captures: Vec<_> = mount
                 .path_prefix
                 .iter()
@@ -236,12 +250,6 @@ fn validate_phantom_binding(
                     "path selector must name exactly one ordinary mount capture",
                 ));
             }
-            let constructor_capture = agent
-                .constructor
-                .input_schema
-                .fields()
-                .iter()
-                .any(|field| field.name == details.name);
             let method_capture = agent.methods.iter().any(|method| {
                 method.http_endpoint.iter().any(|endpoint| {
                     endpoint.path_suffix.iter().any(|segment| match segment {
@@ -253,19 +261,33 @@ fn validate_phantom_binding(
                     })
                 })
             });
-            if constructor_capture || method_capture {
+            if method_capture {
                 return Err(invalid(
                     "path selector cannot also bind an application argument",
                 ));
             }
         }
-        PhantomIdBinding::Query(details) => {
+        AgentIdBinding::Query(details) => {
             if agent.methods.iter().any(|method| {
                 method.http_endpoint.iter().any(|endpoint| {
                     endpoint
                         .query_vars
                         .iter()
                         .any(|variable| variable.query_param_name == details.name)
+                        || (matches!(endpoint.http_method, HttpMethod::Method(
+                            schema_http::HttpMethod::Get(_)
+                            | schema_http::HttpMethod::Head(_)
+                            | schema_http::HttpMethod::Delete(_)
+                        )) && method.input_schema.fields().iter().any(|field| {
+                            field.source == FieldSource::UserSupplied
+                                && field.name == details.name
+                                && !matches!(agent.schema.resolve_ref(&field.schema), Ok(SchemaType::Stream { .. }))
+                                && !endpoint.query_vars.iter().any(|binding| binding.variable_name == field.name)
+                                && !endpoint.header_vars.iter().any(|binding| binding.variable_name == field.name)
+                                && !endpoint.path_suffix.iter().any(|segment| matches!(segment,
+                                    PathSegment::Segment(schema_http::PathSegment::PathVariable(variable)
+                                        | schema_http::PathSegment::RemainingPathVariable(variable)) if variable.variable_name == field.name))
+                        }))
                 })
             }) {
                 return Err(invalid(
@@ -273,6 +295,15 @@ fn validate_phantom_binding(
                 ));
             }
         }
+    }
+    if mount.path_prefix.iter().any(|segment| match segment {
+        PathSegment::Segment(schema_http::PathSegment::PathVariable(variable)) => {
+            !matches!(binding, AgentIdBinding::Path(details) if details.name == variable.variable_name)
+        }
+        PathSegment::Segment(schema_http::PathSegment::RemainingPathVariable(_)) => true,
+        _ => false,
+    }) {
+        return Err(invalid("ID mounts cannot bind constructor parameters"));
     }
     Ok(())
 }
@@ -409,6 +440,9 @@ fn validate_filesystem_owner(
 ) -> Result<(), HttpAgentValidationError> {
     if agent.mode != AgentMode::Durable || mount.phantom_agent {
         return Err(HttpAgentValidationError::FilesystemOwner);
+    }
+    if mount.agent_id_binding.is_some() {
+        return Ok(());
     }
     let mut captures = HashSet::new();
     for segment in &mount.path_prefix {

@@ -18,6 +18,8 @@ message CompiledMcpToolExport {
   repeated string command_path = 6;
   golem.tool.Tool definition = 7;
   golem.schema.SchemaGraph input_schema = 8;
+  string mcp_root_name = 9;
+  repeated string mcp_command_path = 10;
 }
 
 message CompiledMcp {

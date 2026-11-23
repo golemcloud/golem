@@ -117,9 +117,17 @@ extern "wasm" fn load32(ptr : Int32) -> Int32 =
   #|(func (param i32) (result i32) local.get 0 i32.load)
 
 ///|
-#owned(value)
-extern "wasm" fn string_ptr(value : String) -> Int32 =
-  #|(func (param i32) (result i32) local.get 0)
+fn string_ptr(value : String) -> Int32 {
+  let ptr = @gen.mbt_ffi_cabi_realloc(0, 0, 2, value.length() * 2)
+  for i in 0..<value.length() {
+    store16(ptr + i * 2, value[i].to_int())
+  }
+  ptr
+}
+
+///|
+extern "wasm" fn store16(ptr : Int32, value : Int32) =
+  #|(func (param i32 i32) local.get 0 local.get 1 i32.store16)
 
 ///|
 fn free(ptr : Int32) -> Unit {

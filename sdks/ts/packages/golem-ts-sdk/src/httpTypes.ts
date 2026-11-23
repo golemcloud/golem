@@ -366,6 +366,9 @@ export type BindableKeys<C> = {
  * path missing var '…'"` requirement that no real spec value can satisfy, so the
  * `defineAgent` assignment fails with a clear message.
  *
+ * ID-bound mounts carry `V = string`: their constructor fields do not come
+ * from the URL. The mount factory checks their captures separately.
+ *
  * Mirrors (defence-in-depth) the runtime "every mount var is an id field" loop
  * in `runtime.ts`.
  */

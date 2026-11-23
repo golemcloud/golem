@@ -39,6 +39,7 @@ impl RedisMcpSessionStore {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl McpSessionStore for RedisMcpSessionStore {
     async fn create(
         &self,

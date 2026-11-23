@@ -28,7 +28,7 @@ It must be a dedicated, narrowly scoped GitHub token with contents write access 
 interactive run can instead use the orb's existing GitHub credential.
 
 Regression warnings require `SLACK_BENCHMARK_WEBHOOK_URL` as an Amp project secret. Use a Slack
-incoming webhook restricted to `#golem-dev-internal`, and never store the URL in the repository.
+incoming webhook restricted to `#golem-dev-ci`, and never store the URL in the repository.
 
 The Amp schedule is intentionally only a trigger. Its durable prompt is:
 
@@ -54,7 +54,7 @@ path. Distinguish direct evidence from inference, consider whether infrastructur
 a benchmark definition change better explains the result, and avoid naming a commit solely because
 it falls in the commit range. Do not send the same run timestamp twice from this scheduled thread.
 
-Send warnings to `#golem-dev-internal` through `SLACK_BENCHMARK_WEBHOOK_URL`. Include the affected
+Send warnings to `#golem-dev-ci` through `SLACK_BENCHMARK_WEBHOOK_URL`. Include the affected
 benchmarks and percentage changes, links to the previous and latest Golem commits, the suspected
 cause and confidence, and a link to <https://golemcloud.github.io/benchmark-results/>. Never print
 or otherwise expose the webhook URL. If no commit is a credible cause, say that explicitly rather

@@ -223,3 +223,260 @@ async fn test_header_oidc_principal_with_overrides(
 
     Ok(())
 }
+
+/// The callers of the `authedPrincipal` starts in an oplog.
+fn authed_principal_callers(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+) -> Vec<golem_common::model::caller::PublicCaller> {
+    use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
+    use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
+    oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+                invocation: PublicAgentInvocation::AgentMethodInvocation(params),
+                ..
+            }) if params.method_name == "authedPrincipal" => Some(params.caller.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Shares a permission of the owner of `agent` with `target`.
+async fn share_with(
+    agent: &HttpTestContext,
+    target: &golem_test_framework::config::dsl_impl::TestUserContext<EnvBasedTestDependencies>,
+    name: &str,
+    permission: String,
+) -> anyhow::Result<()> {
+    use golem_client::api::RegistryServiceClient;
+    use golem_common::model::permission_share::{
+        PermissionShareCreation, PermissionShareData, PermissionShareName,
+    };
+    use golem_test_framework::config::TestDependencies;
+    let client = agent
+        .user
+        .deps
+        .registry_service()
+        .client(&agent.user.token)
+        .await;
+    client
+        .create_permission_share(
+            &agent.user.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: target.account_email.clone(),
+                name: PermissionShareName(name.to_string()),
+                data: PermissionShareData {
+                    lower_positive: vec![permission],
+                    lower_negative: Vec::new(),
+                    upper_positive: Vec::new(),
+                    upper_negative: Vec::new(),
+                },
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    use golem_client::api::{AgentClient, WorkerClient, WorkerError};
+    use golem_common::model::caller::{Pair, PublicPrincipal};
+    use golem_common::model::oplog::{OplogInclude, OplogIndex};
+    use golem_test_framework::config::TestDependencies;
+    use golem_test_framework::dsl::TestDsl;
+
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/principal-agent/test-agent/authed-principal")?,
+        )
+        .header(
+            "x-golem-test-session",
+            "{ \"subject\": \"bob\", \"email\": \"bob@golem.cloud\"}",
+        )
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    // The agent that the route created, found by its key.
+    let key = golem_common::agent_key!("PrincipalAgent", "test-agent");
+    let reference = agent
+        .user
+        .deps
+        .worker_service()
+        .agent_http_client(&agent.user.token)
+        .await
+        .lookup_agent(
+            &agent.env_id.0,
+            "PrincipalAgent",
+            &golem_client::model::AgentKeyRequest {
+                parameters: golem_common::schema::ExternalSchemaValue::try_from(
+                    key.parameters.value().clone(),
+                )
+                .map_err(anyhow::Error::msg)?,
+            },
+        )
+        .await?;
+    let agent_id = golem_common::model::OwnedAgentId::new(
+        agent.env_id,
+        &golem_common::model::AgentId(reference.agent_id),
+    );
+    let bob = Pair::new("http://test-idp.com", "bob");
+
+    // The owner reads the oplog: bob in both roles, without claims.
+    let callers =
+        authed_principal_callers(&agent.user.get_oplog(&agent_id, OplogIndex::INITIAL).await?);
+    assert!(!callers.is_empty());
+    for caller in &callers {
+        assert!(matches!(&caller.original, PublicPrincipal::User(user) if user.pair == bob));
+        assert_eq!(caller.immediate, caller.original);
+        assert!(caller.original.claims().is_none(), "{caller:?}");
+    }
+
+    // The owner asks for the claims: both roles show them.
+    let callers = authed_principal_callers(
+        &agent
+            .user
+            .get_oplog_with_claims(&agent_id, OplogIndex::INITIAL)
+            .await?,
+    );
+    assert!(!callers.is_empty());
+    for caller in &callers {
+        for role in [&caller.original, &caller.immediate] {
+            assert_eq!(
+                role.claims().unwrap().to_value().unwrap()["sub"],
+                "bob",
+                "{caller:?}"
+            );
+        }
+    }
+
+    // Another value of `include` is refused.
+    let deps = &agent.user.deps;
+    let owner_client = deps
+        .worker_service()
+        .worker_http_client(&agent.user.token)
+        .await;
+    let mut url = owner_client.context.base_url.clone();
+    url.path_segments_mut().unwrap().extend([
+        "v1",
+        "runtime",
+        "envs",
+        &agent.env_id.0.to_string(),
+        "agents",
+        &agent_id.agent_id.to_string(),
+        "oplog",
+    ]);
+    url.query_pairs_mut()
+        .append_pair("count", "10")
+        .append_pair("include", "other");
+    let response = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(agent.user.token.secret())
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    // An account that may see the application but not the oplog gets no claims.
+    let viewer = deps.user().await?;
+    share_with(
+        agent,
+        &viewer,
+        "app-view",
+        format!(
+            "application({}/{}) @ {} : view :",
+            agent.user.account_email.as_str(),
+            agent.application_name,
+            viewer.account_email.as_str()
+        ),
+    )
+    .await?;
+    let viewer_client = deps
+        .worker_service()
+        .worker_http_client(&viewer.token)
+        .await;
+    let result = viewer_client
+        .get_oplog(
+            &agent.env_id.0,
+            &agent_id.agent_id.0,
+            Some(1),
+            100,
+            None,
+            None,
+            Some(&OplogInclude::Claims),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(golem_client::Error::Item(WorkerError::Error403(_)))
+        ),
+        "{result:?}"
+    );
+
+    // An account with the oplog read permission gets the claims.
+    let reader = deps.user().await?;
+    share_with(
+        agent,
+        &reader,
+        "oplog-read",
+        format!(
+            "oplog({}/{}/{}/{}/{}) @ {} : read : *",
+            agent.user.account_email.as_str(),
+            agent.application_name,
+            agent.environment_name,
+            "golem-it:agent-sdk-ts",
+            agent_id.agent_id,
+            reader.account_email.as_str()
+        ),
+    )
+    .await?;
+    let reader_client = deps
+        .worker_service()
+        .worker_http_client(&reader.token)
+        .await;
+    let page = reader_client
+        .get_oplog(
+            &agent.env_id.0,
+            &agent_id.agent_id.0,
+            Some(1),
+            100,
+            None,
+            None,
+            Some(&OplogInclude::Claims),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
+    let entries = page
+        .entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            golem_common::model::oplog::PublicOplogPageEntry::Included(entry) => Some(entry),
+            golem_common::model::oplog::PublicOplogPageEntry::Omitted(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let callers = authed_principal_callers(&entries);
+    assert!(!callers.is_empty());
+    for caller in &callers {
+        assert_eq!(
+            caller.original.claims().unwrap().to_value().unwrap()["sub"],
+            "bob",
+            "{caller:?}"
+        );
+    }
+
+    Ok(())
+}

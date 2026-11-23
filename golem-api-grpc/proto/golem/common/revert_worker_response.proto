@@ -19,5 +19,4 @@ message RevertLastInvocations {
 
 message ResolvedRevert {
   uint64 last_oplog_index = 1;
-  uint64 observed_oplog_index = 2;
 }

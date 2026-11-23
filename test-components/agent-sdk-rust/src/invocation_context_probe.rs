@@ -99,6 +99,17 @@ pub trait InvocationContextProbe {
     /// text is `<kind> <pair text>` or `anonymous`.
     fn caller_summary(&self, ctx: InvocationContext) -> String;
 
+    /// A new promise, for `caller_around_promise`.
+    fn create_promise(&self) -> golem_rust::PromiseId;
+
+    /// The caller of this call before it waits for `promise` and after the promise completes,
+    /// each in the form of `caller_summary`.
+    async fn caller_around_promise(
+        &self,
+        promise: golem_rust::PromiseId,
+        ctx: InvocationContext,
+    ) -> Vec<String>;
+
     /// Records the digest of the original caller's claims text: its hex blake3 and its length
     /// in bytes, as `<hex>:<length>`. Returns the recorded entry.
     fn record_caller_claims_digest(&mut self, ctx: InvocationContext) -> String;
@@ -165,6 +176,20 @@ impl InvocationContextProbe for InvocationContextProbeImpl {
 
     fn caller_summary(&self, ctx: InvocationContext) -> String {
         caller_text(ctx.caller())
+    }
+
+    fn create_promise(&self) -> golem_rust::PromiseId {
+        golem_rust::create_promise()
+    }
+
+    async fn caller_around_promise(
+        &self,
+        promise: golem_rust::PromiseId,
+        ctx: InvocationContext,
+    ) -> Vec<String> {
+        let before = caller_text(ctx.caller());
+        golem_rust::await_promise(&promise).await;
+        vec![before, caller_text(ctx.caller())]
     }
 
     fn record_caller_claims_digest(&mut self, ctx: InvocationContext) -> String {

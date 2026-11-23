@@ -153,6 +153,20 @@
           "200": {
             "description": "Existing invocation",
             "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Location": {
                 "description": "Created session URL",
                 "schema": {
@@ -164,6 +178,20 @@
           "201": {
             "description": "Session created",
             "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Location": {
                 "description": "Created session URL",
                 "schema": {
@@ -173,19 +201,100 @@
             }
           },
           "400": {
-            "description": "Invalid arguments"
+            "description": "Invalid arguments",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Session or slot not found"
+            "description": "Session or slot not found",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
-            "description": "Invocation arguments conflict"
+            "description": "Invocation arguments conflict",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "description": "Executor unavailable",
             "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Retry-After": {
                 "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
                 "schema": {
                   "type": "string"
                 }
@@ -1340,25 +1449,138 @@
         ],
         "responses": {
           "200": {
-            "description": "Existing invocation"
+            "description": "Existing invocation",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "201": {
-            "description": "Session created"
+            "description": "Session created",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
-            "description": "Invalid arguments"
+            "description": "Invalid arguments",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Session or slot not found"
+            "description": "Session or slot not found",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
-            "description": "Invocation arguments conflict"
+            "description": "Invocation arguments conflict",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "description": "Executor unavailable",
             "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Retry-After": {
                 "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
                 "schema": {
                   "type": "string"
                 }
@@ -1863,6 +2085,20 @@
                   "type": "string"
                 }
               },
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Stream-Cancelled": {
                 "description": "Cancellation terminal",
                 "schema": {
@@ -1921,6 +2157,20 @@
                   "type": "string"
                 }
               },
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Stream-Cancelled": {
                 "description": "Cancellation terminal",
                 "schema": {
@@ -1965,19 +2215,100 @@
             }
           },
           "400": {
-            "description": "Body must be empty; optional Content-Type must match the slot. Lazy creation requires all method arguments in the URL"
+            "description": "Body must be empty; optional Content-Type must match the slot. Lazy creation requires all method arguments in the URL",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Session or slot not found"
+            "description": "Session or slot not found",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "409": {
-            "description": "Content type mismatch or tombstoned slot"
+            "description": "Content type mismatch or tombstoned slot",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "description": "Executor unavailable",
             "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Retry-After": {
                 "description": "Retry delay in seconds",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request or invocation failure",
+            "headers": {
+              "Golem-Environment-Id": {
+                "description": "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+                "required": false,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Golem-Invocation-Id": {
+                "description": "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+                "required": false,
                 "schema": {
                   "type": "string"
                 }

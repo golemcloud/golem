@@ -636,6 +636,7 @@ impl wasmtime_wasi::p2::InputStream for AgentFileInputStream {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::p2::Pollable for AgentFileInputStream {
     async fn ready(&mut self) {
         if !self.buffered.is_empty() || self.eof || self.error.is_some() {
@@ -769,6 +770,7 @@ impl wasmtime_wasi::p2::OutputStream for AgentFileOutputStream {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::p2::Pollable for AgentFileOutputStream {
     async fn ready(&mut self) {
         let AgentFileOutputState::Waiting(operation) = &mut self.state else {

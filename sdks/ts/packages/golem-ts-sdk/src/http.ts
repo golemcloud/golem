@@ -112,28 +112,17 @@ export const agentVersion = (): PathSegment => ({ tag: 'system-variable', val: '
 /** A path: either a `{var}`-template string or an array of segment builders. */
 export type PathInput = string | readonly PathSegment[];
 
-/** Explicit phantom UUID selection. Omission of an optional selector selects the original. */
-export type PhantomIdSpec<N extends string = string> =
-  | { readonly source: 'path'; readonly name: N; readonly optional: boolean }
-  | { readonly source: 'query'; readonly name: N; readonly optional: boolean };
+/** Select an existing agent by its required ID, independently of its constructor. */
+export type AgentIdSpec<N extends string = string> =
+  | { readonly source: 'path'; readonly name: N }
+  | { readonly source: 'query'; readonly name: N };
 
-/** Select an exact phantom UUID scoped to this agent's constructor. */
-export const phantomId = {
-  path: <const N extends string>(name: N, options?: { readonly optional?: boolean }) =>
-    ({
-      source: 'path',
-      name,
-      optional: options?.optional === undefined ? false : options.optional,
-    }) as const,
-  query: <const N extends string>(name: N, options?: { readonly optional?: boolean }) =>
-    ({
-      source: 'query',
-      name,
-      optional: options?.optional === undefined ? false : options.optional,
-    }) as const,
+export const agentId = {
+  path: <const N extends string>(name: N) => ({ source: 'path', name }) as const,
+  query: <const N extends string>(name: N) => ({ source: 'query', name }) as const,
 };
 
-type PhantomPathName<S> = S extends { readonly source: 'path'; readonly name: infer N } ? N : never;
+type AgentPathName<S> = S extends { readonly source: 'path'; readonly name: infer N } ? N : never;
 
 /** A method input or output value exposed as a named durable stream. */
 export interface DurableStreamSlotOptions {
@@ -240,7 +229,9 @@ export interface HttpMountSpec<
   readonly cors?: readonly string[];
   /** Mark this agent as a phantom agent (fresh instance per request). */
   readonly phantomAgent?: boolean;
-  readonly phantomId?: PhantomIdSpec;
+  readonly agentId?: AgentIdSpec;
+  /** Full exact POST path for creating an unkeyed agent. Only valid with agentId. */
+  readonly create?: PathInput;
   /** Ordered live file mappings, only for durable non-phantom agents. */
   readonly exposeFiles?: readonly FileExposure[];
   /** Response headers applied by the host when serving exposed files. */
@@ -438,7 +429,8 @@ export const custom = ((
 /** Options accepted by {@link mount}. */
 export interface MountOptionsFor<
   W extends string = string,
-  S extends PhantomIdSpec = PhantomIdSpec,
+  S extends AgentIdSpec = AgentIdSpec,
+  C extends string = string,
 > {
   /** When `true`, the host treats every endpoint as authentication-required. */
   readonly auth?: boolean;
@@ -446,7 +438,8 @@ export interface MountOptionsFor<
   readonly cors?: readonly string[];
   /** Mark this agent as a phantom agent (one fresh instance per HTTP request). */
   readonly phantomAgent?: boolean;
-  readonly phantomId?: S;
+  readonly agentId?: S;
+  readonly create?: ValidMountPath<C>;
   /** Ordered live file mappings, only for durable non-phantom agents. */
   readonly exposeFiles?: readonly FileExposure[];
   /** Response headers applied by the host when serving exposed files. */
@@ -461,22 +454,44 @@ export interface MountOptionsFor<
 }
 
 /** Escape-hatch (segment-array) form options for {@link mount}. */
-type MountSugarOpts = MountOptionsFor<string> & { readonly webhookSuffix?: PathInput };
+type MountSugarOpts = Omit<MountOptionsFor<string>, 'webhookSuffix' | 'create'> & {
+  readonly webhookSuffix?: PathInput;
+  readonly create?: PathInput;
+};
 
 /** Overloaded factory shape for {@link mount}. */
 export interface MountFactory {
-  <const P extends string, const W extends string = string, const S extends PhantomIdSpec = never>(
+  <const P extends string, const W extends string = string>(
     path: ValidMountPath<P>,
-    opts?: MountOptionsFor<W, S> &
-      (string extends P
-        ? unknown
-        : Exclude<PhantomPathName<S>, Exclude<PathVarsOf<P>, SystemVariableName>> extends never
-          ? unknown
-          : Invalid<'phantom path selector must name a mount capture'>),
+    opts?: MountOptionsFor<W> & { readonly agentId?: never; readonly create?: never },
   ): HttpMountSpec<
-    Exclude<PathVarsOf<P>, SystemVariableName | PhantomPathName<S>>,
+    Exclude<PathVarsOf<P>, SystemVariableName>,
     Exclude<PathVarsOf<W>, SystemVariableName>
   >;
+  <
+    const P extends string,
+    const S extends AgentIdSpec,
+    const W extends string = string,
+    const C extends string = string,
+  >(
+    path: ValidMountPath<P>,
+    opts: MountOptionsFor<W, S, C> & {
+      readonly agentId: S;
+      readonly phantomAgent?: false;
+    } & (Exclude<PathVarsOf<C>, SystemVariableName> extends never
+        ? unknown
+        : Invalid<'create path cannot contain captures'>) &
+      (string extends P
+        ? unknown
+        : Exclude<AgentPathName<S>, Exclude<PathVarsOf<P>, SystemVariableName>> extends never
+          ? unknown
+          : Invalid<'agent ID path selector must name a mount capture'>) &
+      (string extends P
+        ? unknown
+        : Exclude<PathVarsOf<P>, SystemVariableName | AgentPathName<S>> extends never
+          ? unknown
+          : Invalid<'agent ID mount cannot bind constructor captures'>),
+  ): HttpMountSpec<string, Exclude<PathVarsOf<W>, SystemVariableName>>;
   (path: readonly PathSegment[], opts?: MountSugarOpts): HttpMountSpec;
 }
 
@@ -576,12 +591,13 @@ export function compileMount(spec: HttpMountSpec): HttpMountDetails {
     pathPrefix,
     authDetails: spec.auth ? { required: true } : { required: false },
     phantomAgent: spec.phantomAgent ?? false,
-    phantomIdBinding: spec.phantomId
+    agentIdBinding: spec.agentId
       ? {
-          tag: spec.phantomId.source,
-          val: { name: spec.phantomId.name, optional: spec.phantomId.optional },
+          tag: spec.agentId.source,
+          val: { name: spec.agentId.name },
         }
       : undefined,
+    createRoute: spec.create === undefined ? undefined : resolvePath(spec.create, 'create route'),
     corsOptions: { allowedPatterns: spec.cors ? [...spec.cors] : [] },
     webhookSuffix: spec.webhookSuffix ? resolvePath(spec.webhookSuffix, 'webhook suffix') : [],
     staticBindings: [],
