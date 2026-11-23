@@ -751,10 +751,11 @@ impl<'r, 'a> Walker<'r, 'a> {
         }
     }
 
-    /// A string leaf: a `str` token, or the text itself for error text with
-    /// `--keep-error-text`.
-    /// An agent ID in clear when Golem issued it. Another UUID in an agent ID position, which a
-    /// guest can write, for example as the target of a failed RPC lookup, stays a token.
+    /// An agent ID in clear when it has the layout of a Golem agent ID (`AgentId::is_issued`:
+    /// UUIDv8, RFC 4122 variant). Another UUID in an agent ID position, which a guest can write,
+    /// for example as the target of a failed RPC lookup, stays a token. The check is a layout
+    /// check, not a proof that Golem issued the ID: a guest can also write a UUID with this
+    /// layout.
     pub fn agent_node(&self, agent_id: &AgentId) -> ReportNode {
         if agent_id.is_issued() {
             ReportNode::Agent(agent_reference(agent_id))
@@ -763,6 +764,8 @@ impl<'r, 'a> Walker<'r, 'a> {
         }
     }
 
+    /// A string leaf: a `str` token, or the text itself for error text with
+    /// `--keep-error-text`.
     pub fn str_leaf(&self, text: &str, region: Region) -> ReportNode {
         if region == Region::Error && self.ctx.keep().error_text {
             ReportNode::Str(StrNode {
