@@ -140,16 +140,26 @@ found = eq ${packages.code} 0
 if not ${found}
     trigger_error "Could not enumerate MoonBit SDK packages"
 end
-code = exec --get-exit-code --input "${packages.stdout}" xargs moon check --target wasm
-failed = calc ${failed} + ${code}
-if not eq ${CI} true
-    assert_eq ${failed} 0 "MoonBit SDK validation failed"
+targets = array wasm wasm-gc
+for target in ${targets}
+    code = exec --get-exit-code --input "${packages.stdout}" xargs moon check --target ${target}
+    failed = calc ${failed} + ${code}
+    if not eq ${CI} true
+        assert_eq ${failed} 0 "MoonBit SDK validation failed"
+    end
+    set_env GOLEM_MOONBIT_TARGET ${target}
+    code = exec --get-exit-code ./scripts/run-sdk-tests.sh
+    failed = calc ${failed} + ${code}
+    if not eq ${CI} true
+        assert_eq ${failed} 0 "MoonBit SDK validation failed"
+    end
+    code = exec --get-exit-code python3 ./scripts/check-minimal-exports.py --output "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/moonbit-minimal-exports-${target}"
+    failed = calc ${failed} + ${code}
+    if not eq ${CI} true
+        assert_eq ${failed} 0 "MoonBit SDK component validation failed"
+    end
 end
-code = exec --get-exit-code ./scripts/run-sdk-tests.sh
-failed = calc ${failed} + ${code}
-if not eq ${CI} true
-    assert_eq ${failed} 0 "MoonBit SDK validation failed"
-end
+unset_env GOLEM_MOONBIT_TARGET
 cd ../golem_sdk_tools
 code = exec --get-exit-code moon check cmd lib
 failed = calc ${failed} + ${code}
@@ -159,6 +169,25 @@ end
 code = exec --get-exit-code moon test cmd lib
 failed = calc ${failed} + ${code}
 assert_eq ${failed} 0 "MoonBit SDK validation failed"
+'''
+
+[tasks.validate-sdk-moonbit-replay]
+description = "Run MoonBit coroutine and recovery tests with both guest backends"
+dependencies = ["prepare-sdk-moonbit", "build-cli-test-bins"]
+script_runner = "@duckscript"
+script = '''
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
+manifest = set "${CARGO_MAKE_WORKING_DIRECTORY}/test-components/agent-sdk-moonbit/golem.yaml"
+presets = array release release-gc
+failed = set 0
+for preset in ${presets}
+    exec --fail-on-error ${golem} --app-manifest-path ${manifest} build --yes -P ${preset}
+    exec --fail-on-error ${golem} --app-manifest-path ${manifest} --yes -P ${preset} exec copy
+    code = exec --get-exit-code cargo test -p golem-worker-executor-tests --test integration -- agent_sdk_moonbit::moonbit_custom_scopes_stay_with_their_coroutines agent_sdk_moonbit::moonbit_custom_scopes_recover_with_one_completed_and_one_suspended_sibling --test-threads 1 --report-time
+    failed = calc ${failed} + ${code}
+end
+exec --fail-on-error ${golem} --app-manifest-path ${manifest} --yes -P release exec copy
+assert_eq ${failed} 0 "MoonBit worker replay validation failed"
 '''
 
 [tasks.validate-sdk-rust-check]

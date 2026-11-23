@@ -22,6 +22,18 @@ that boundary. No Wasmtime changes are required.
 GC components can have smaller code without compiling or starting faster.
 Keep `wasm` unless measurements of your workload justify opting in.
 
+New CLI applications provide `debug-gc` and `release-gc` component presets.
+Use `golem build --preset release-gc --yes` to build GC components. The existing
+`debug` and `release` presets still build `wasm`. Both presets use the same SDK
+package and generated exports; switching targets needs no source rewrite.
+
+In this repository, `cargo make validate-sdk-moonbit` checks and tests both
+backends, including empty, agent-only, tool-only, and mixed components.
+`cargo make validate-sdk-moonbit-replay` builds the worker fixture with each
+backend and runs the same coroutine and crash-recovery checks. It requires the
+worker test dependencies, including Redis. Run it without another process that
+replaces `test-components/golem_it_agent_sdk_moonbit.wasm`.
+
 Run SDK tests with `GOLEM_MOONBIT_TARGET=wasm-gc scripts/run-sdk-tests.sh` to
 exercise GC, or omit the variable for `wasm`. Packages whose tests use the fake
 host explicitly export their canonical ABI memory on GC; the compiler does not
