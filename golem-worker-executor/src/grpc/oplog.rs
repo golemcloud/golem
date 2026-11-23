@@ -14,14 +14,15 @@
 
 use super::{
     GetOplogEntryRequest, GetOplogEntryResponse, GetOplogRequest, GetOplogResponse, HasAll,
-    HasComponentService, HasOplogService, HasWorkerService, OplogIndex, OwnedSemaphorePermit,
-    PublicOplogPageLimits, SearchOplogRequest, SearchOplogResponse, Status, Stream, UsesAllDeps,
-    WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, check_oplog_cursor_query,
-    extract_owned_agent_id, get_public_oplog_entry, get_public_oplog_page,
-    get_public_oplog_range_page, golem, min, oplog_page_cursor, oplog_page_start,
-    oplog_range_allowance, search_public_oplog_page,
+    HasComponentService, HasOplogService, HasWorkerService, OplogIndex, OwnedAgentId,
+    OwnedSemaphorePermit, PublicOplogPageLimits, SearchOplogRequest, SearchOplogResponse, Status,
+    Stream, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
+    check_oplog_cursor_query, extract_owned_agent_id, get_public_oplog_entry,
+    get_public_oplog_page, get_public_oplog_range_page, golem, min, oplog_page_cursor,
+    oplog_page_start, oplog_range_allowance, search_public_oplog_page,
 };
 use golem_common::base_model::caller::ClaimVisibility;
+use golem_common::model::regions::DeletedRegions;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -50,6 +51,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         })
     }
 
+    /// The regions that the reverts of the agent deleted, from its latest status. A public oplog
+    /// read switches the decoding revision only on the updates outside them, as the agent does.
+    async fn deleted_oplog_regions(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<DeletedRegions, WorkerExecutorError> {
+        let metadata = Worker::<Ctx>::get_latest_metadata(self, owned_agent_id)
+            .await?
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request(format!(
+                    "agent {owned_agent_id} does not exist"
+                ))
+            })?;
+        Ok(metadata.last_known_status.deleted_regions)
+    }
+
     pub(super) async fn get_oplog_internal(
         &self,
         request: GetOplogRequest,
@@ -72,6 +89,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?;
         let agent_mode = identity.agent_mode;
         let agent_type_name = &identity.create_parameters().agent_type_name;
+        let deleted_regions = self.deleted_oplog_regions(&owned_agent_id).await?;
 
         let limits = self.oplog_query_limits(request.count)?;
         let claims = ClaimVisibility::from_protobuf(request.claims)
@@ -89,6 +107,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 identity.create_parameters().component_id,
                 identity.create_parameters().owner_kind,
                 agent_type_name.as_ref(),
+                &deleted_regions,
                 cursor,
                 OplogIndex::from_u64(request.from_oplog_index),
                 OplogIndex::from_u64(to),
@@ -115,6 +134,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
+            &deleted_regions,
             cursor,
             OplogIndex::from_u64(request.from_oplog_index),
         )
@@ -127,6 +147,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             identity.create_parameters().component_id,
             identity.create_parameters().owner_kind,
             agent_type_name.as_ref(),
+            &deleted_regions,
             start_component_revision,
             start,
             limits,
@@ -176,6 +197,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
         let agent_type_name = &identity.create_parameters().agent_type_name;
+        let deleted_regions = self.deleted_oplog_regions(&owned_agent_id).await?;
 
         let component_revision = request
             .component_revision
@@ -199,6 +221,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             identity.create_parameters().component_id,
             identity.create_parameters().owner_kind,
             agent_type_name.as_ref(),
+            &deleted_regions,
             OplogIndex::from_u64(request.oplog_index),
             component_revision,
             ClaimVisibility::from_protobuf(request.claims)
@@ -233,12 +256,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?;
         let agent_mode = identity.agent_mode;
         let agent_type_name = &identity.create_parameters().agent_type_name;
+        let deleted_regions = self.deleted_oplog_regions(&owned_agent_id).await?;
 
         let limits = self.oplog_query_limits(request.count)?;
         let (start, start_component_revision) = oplog_page_start(
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
+            &deleted_regions,
             cursor,
             OplogIndex::INITIAL,
         )
@@ -251,6 +276,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             identity.create_parameters().component_id,
             identity.create_parameters().owner_kind,
             agent_type_name.as_ref(),
+            &deleted_regions,
             start_component_revision,
             start,
             limits,

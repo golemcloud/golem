@@ -35,7 +35,7 @@ use golem_common::model::oplog::{
     HostRequest, HostRequestGolemRpcCreate, HostResponse, HostResponseFileSystemStat,
     HostResponseGolemRpcCreate, HostResponseKVUnit, HostResponseP3FileSystemStat,
     HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsTcpConnect,
-    HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry,
+    HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
     PublicOplogEntryWithIndex, PublicQueuedCardEvent,
 };
 use golem_common::model::{
@@ -6489,6 +6489,179 @@ async fn a_later_guest_oplog_batch_decodes_with_the_revision_at_its_start(
         .await?
         .into_typed::<Result<Vec<(String, Vec<u64>)>, String>>()?;
     assert_eq!(outputs, Ok(vec![("set".to_string(), vec![7])]));
+    Ok(())
+}
+
+/// A revert that drops a successful update makes the agent run the entries after it with the
+/// revision before the update. The target starts on the revision that has `set`, is updated to a
+/// revision without `set`, and is reverted to the entry before the update; then it runs `set`.
+/// Every public oplog read, guest and remote, from index 1 and from the first deleted entry,
+/// decodes the input of that `set`, which only the revision before the update can do.
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn oplog_reads_decode_the_entries_after_a_revert_with_the_revision_before_the_deleted_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_update_v2")] agent_update_v2: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+
+    let updated = executor
+        .component_dep(&context.default_environment_id, agent_update_v2)
+        .store()
+        .await?;
+    let with_set = executor
+        .update_component(&updated.id, "it_agent_update_v3_release")
+        .await?;
+    let target_agent = agent_key!("UpdateTest");
+    configure_scope_card_root(&authority, &updated, &target_agent)?;
+    let target = executor
+        .start_agent(&updated.id, target_agent.clone())
+        .await?;
+    assert_eq!(
+        executor
+            .get_worker_metadata(&target)
+            .await?
+            .component_revision,
+        with_set.revision
+    );
+
+    let before_update = OplogIndex::from_u64(executor.get_oplog_last_index(&target).await?);
+    let without_set = executor
+        .update_component(&updated.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&target, without_set.revision, false)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let metadata = executor.get_worker_metadata(&target).await?;
+            if golem_test_framework::dsl::update_counts(&metadata) == (0, 1, 0) {
+                break anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    executor
+        .revert(
+            &target,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: before_update,
+            }),
+        )
+        .await?;
+    assert_eq!(
+        executor
+            .get_worker_metadata(&target)
+            .await?
+            .component_revision,
+        with_set.revision
+    );
+    let set = executor
+        .invoke_and_await_agent(&updated, &target_agent, "set", data_value!(9u64))
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(set, 9);
+
+    let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let first_deleted = before_update.next();
+    let update = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_)))
+        .expect("the oplog keeps the deleted update")
+        .oplog_index;
+    let revert = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::Revert(_)))
+        .expect("the oplog holds the revert")
+        .oplog_index;
+    assert!(first_deleted <= update && update < revert);
+
+    let remote_set_inputs = async |from: OplogIndex| {
+        let entries = executor.get_oplog(&target, from).await?;
+        anyhow::Ok(
+            entries
+                .into_iter()
+                .filter_map(|entry| match entry.entry {
+                    PublicOplogEntry::AgentInvocationStarted(started) => match started.invocation {
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name == "set" =>
+                        {
+                            Some(method.function_input.into_parts().1)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+    let mut remote = Vec::new();
+    for from in [OplogIndex::INITIAL, first_deleted] {
+        remote.push((from, remote_set_inputs(from).await?));
+    }
+
+    let reader = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("GolemHostApi")
+        .try_update_agent_provision_config("GolemHostApi", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .push(parse_polymorphic_permission(
+                    "oplog(?env/*/*) @ * : read : *",
+                )?);
+            Ok::<_, golem_common::model::card::CardParseError>(())
+        })?
+        .store()
+        .await?;
+    let reader_agent = agent_key!("GolemHostApi", "reverted-oplog-reader");
+    // The target keeps its card as the reader's card becomes the root card.
+    authority.add_card(
+        authority
+            .root_card()
+            .expect("the target card is the root card"),
+    );
+    configure_scope_card_root(&authority, &reader, &reader_agent)?;
+    executor
+        .start_agent(&reader.id, reader_agent.clone())
+        .await?;
+    let mut guest = Vec::new();
+    for from in [OplogIndex::INITIAL, first_deleted] {
+        let inputs = executor
+            .invoke_and_await_agent(
+                &reader,
+                &reader_agent,
+                "read_oplog_method_inputs",
+                data_value!(target.agent_id(), from.as_u64()),
+            )
+            .await?
+            .into_typed::<Result<Vec<(String, Vec<u64>)>, String>>()?;
+        guest.push((from, inputs));
+    }
+
+    // The remote reads and the guest reads, from index 1 and from the first deleted entry.
+    let set = || data_value!(9u64).into_parts().1;
+    assert_eq!(
+        (remote, guest),
+        (
+            vec![
+                (OplogIndex::INITIAL, vec![set()]),
+                (first_deleted, vec![set()]),
+            ],
+            vec![
+                (OplogIndex::INITIAL, Ok(vec![("set".to_string(), vec![9])])),
+                (first_deleted, Ok(vec![("set".to_string(), vec![9])])),
+            ],
+        )
+    );
     Ok(())
 }
 

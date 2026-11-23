@@ -25,6 +25,7 @@ use attribution::PublicOplogAttributionResolver;
 use conversion::host_response_to_public_value;
 pub(crate) use conversion::with_expected_request;
 use invocation::{agent_invocation_result_to_public, agent_invocation_to_public};
+pub(crate) use reading::component_revision_switch;
 pub use reading::{
     PublicOplogRangePage, check_oplog_cursor_query, find_component_revision_at,
     get_guest_oplog_chunk, get_public_oplog_chunk, get_public_oplog_entry, get_public_oplog_page,
