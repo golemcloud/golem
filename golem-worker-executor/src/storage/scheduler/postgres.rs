@@ -199,13 +199,15 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
         lease_until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
         let query = sqlx::query(
-            "UPDATE scheduled_actions SET lease_until_ms = $3, available_at_ms = $3 WHERE schedule_id = $1 AND lease_owner = $2;",
+            "UPDATE scheduled_actions SET lease_until_ms = GREATEST(lease_until_ms, $3), available_at_ms = GREATEST(lease_until_ms, $3) WHERE schedule_id = $1 AND lease_owner = $2 AND lease_until_ms > $4 AND $3 > $4;",
         )
         .bind(schedule_id.id)
         .bind(lease_owner)
-        .bind(datetime_to_millis(lease_until));
+        .bind(datetime_to_millis(lease_until))
+        .bind(datetime_to_millis(now));
 
         self.pool
             .with_rw("scheduler_storage", "extend_lease")
@@ -219,12 +221,14 @@ impl SchedulerStorage for PostgresSchedulerStorage {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
         let query = sqlx::query(
-            "DELETE FROM scheduled_actions WHERE schedule_id = $1 AND lease_owner = $2;",
+            "DELETE FROM scheduled_actions WHERE schedule_id = $1 AND lease_owner = $2 AND lease_until_ms > $3;",
         )
         .bind(schedule_id.id)
-        .bind(lease_owner);
+        .bind(lease_owner)
+        .bind(datetime_to_millis(now));
 
         self.pool
             .with_rw("scheduler_storage", "ack")

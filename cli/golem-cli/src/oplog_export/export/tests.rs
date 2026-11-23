@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::oplog_export::model::{COVERAGE_LIST_CAP, ReportNode};
+use crate::oplog_export::model::{COVERAGE_LIST_CAP, ReportAgentRef, ReportNode};
 use base64::Engine;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
@@ -392,7 +392,7 @@ fn create() -> FakeEntry {
             timestamp: Timestamp::from(0),
             agent_id: root_agent(),
             agent_type_name: Some(golem_common::model::agent::AgentTypeName(
-                "ROOT-MARKER".to_string(),
+                "Counter".to_string(),
             )),
             owner_kind: Default::default(),
             agent_mode: golem_common::model::agent::AgentMode::Durable,
@@ -988,18 +988,51 @@ async fn two_keys_give_the_same_structure_and_other_tokens() {
             .iter()
             .find(|f| f.name.as_deref() == Some("agentId"))
             .map(|f| &f.value);
-        assert_eq!(agent, Some(&ReportNode::Agent(root)));
-        assert!(!sink.text().contains("ROOT-MARKER"));
-        assert!(
-            !sink
-                .text()
-                .contains(&root_agent().0.hyphenated().to_string())
+        assert_eq!(agent, Some(&ReportNode::Agent(root.clone())));
+        assert_eq!(
+            root,
+            ReportAgentRef {
+                agent_id: root_agent(),
+                agent_type: Some(golem_common::model::agent::AgentTypeName(
+                    "Counter".to_string()
+                )),
+            }
         );
-        assert!(!sink.text().contains(&root_agent().0.simple().to_string()));
         texts.push(sink.text());
     }
     assert_ne!(texts[0], texts[1]);
     assert_eq!(without_tokens(&texts[0]), without_tokens(&texts[1]));
+}
+
+#[test]
+async fn no_environment_or_component_id_in_documents() {
+    for query in [None, Some("hello")] {
+        let reads = FakeReads::new(sample_oplog());
+        let log = reads.log.clone();
+        let mut sink = RecordingSink::new(&log);
+        let options = OplogExportOptions {
+            query: query.map(str::to_string),
+            ..options()
+        };
+        export_oplog(reads, key_from([3; 32]), options, &mut sink)
+            .await
+            .unwrap();
+        assert!(sink.coverage.is_some());
+        let text = sink.text();
+        let root = root_agent().0.hyphenated().to_string();
+        assert_eq!(
+            sink.header.as_ref().unwrap().root.agent_id.to_string(),
+            root
+        );
+        assert!(text.contains(&root), "{text}");
+        // The environment ID and the account ID of the `Create` entry.
+        for id in [instance(6), instance(5)] {
+            assert!(!text.contains(&id.hyphenated().to_string()), "{text}");
+            assert!(!text.contains(&id.simple().to_string()), "{text}");
+        }
+        assert!(!text.contains("hello"), "{text}");
+        assert!(!text.contains("http"), "{text}");
+    }
 }
 
 #[test]

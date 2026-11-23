@@ -20,7 +20,8 @@ use wasmtime_wasi::p2::bindings::io::error::{Error, Host, HostError};
 impl<Ctx: WorkerCtx> HostError for DurableWorkerCtx<Ctx> {
     fn to_debug_string(&mut self, self_: Resource<Error>) -> wasmtime::Result<String> {
         self.observe_function_call("io::error", "to_debug_string");
-        HostError::to_debug_string(self.table(), self_)
+        let error = self.table().get(&self_)?;
+        Ok(debug_string_without_backtrace(error))
     }
 
     fn drop(&mut self, rep: Resource<Error>) -> wasmtime::Result<()> {
@@ -30,3 +31,25 @@ impl<Ctx: WorkerCtx> HostError for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+/// The `Debug` form of an error without its stack backtrace. A backtrace depends on the host
+/// that captured it, so a guest that sees it would see different strings live and on replay.
+fn debug_string_without_backtrace(error: &wasmtime::Error) -> String {
+    let mut result = error.to_string();
+    let causes: Vec<String> = error
+        .chain()
+        .skip(1)
+        .map(|cause| cause.to_string())
+        .collect();
+    if !causes.is_empty() {
+        result.push_str("\n\nCaused by:\n");
+        for (i, cause) in causes.iter().enumerate() {
+            if causes.len() > 1 {
+                result.push_str(&format!("{i: >5}: {cause}\n"));
+            } else {
+                result.push_str(&format!("    {cause}\n"));
+            }
+        }
+    }
+    result
+}

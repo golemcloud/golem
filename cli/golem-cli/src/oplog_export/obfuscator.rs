@@ -31,6 +31,7 @@ mod tests;
 
 use crate::oplog_export::model::{ReportAgentRef, ReportToken};
 use golem_common::model::AgentId;
+use golem_common::model::agent::AgentTypeName;
 use hmac::{Hmac, Mac};
 use rand::TryRngCore;
 use rand::rngs::OsRng;
@@ -99,20 +100,37 @@ pub struct KeepFlags {
     pub error_text: bool,
 }
 
-/// The key and the keep flags of one export.
-#[derive(Debug, Clone, Copy)]
+/// The agent whose entries are rendered, and its agent type name in the environment where its
+/// oplog was read. The type name comes from the `Create` entry that Golem wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnAgent {
+    pub agent_id: AgentId,
+    pub agent_type: Option<AgentTypeName>,
+}
+
+/// The key, the keep flags and the own agent of one export.
+#[derive(Debug, Clone)]
 pub struct ObfuscationContext<'a> {
     key: &'a TokenKey,
     keep: KeepFlags,
+    own_agent: OwnAgent,
 }
 
 impl<'a> ObfuscationContext<'a> {
-    pub fn new(key: &'a TokenKey, keep: KeepFlags) -> Self {
-        Self { key, keep }
+    pub fn new(key: &'a TokenKey, keep: KeepFlags, own_agent: OwnAgent) -> Self {
+        Self {
+            key,
+            keep,
+            own_agent,
+        }
     }
 
     pub fn keep(&self) -> KeepFlags {
         self.keep
+    }
+
+    pub fn own_agent(&self) -> &OwnAgent {
+        &self.own_agent
     }
 
     /// `HMAC-SHA256(key, context ‖ domain ‖ canonical bytes)`, with the domain and the bytes
@@ -131,15 +149,19 @@ impl<'a> ObfuscationContext<'a> {
     }
 }
 
-/// The reference to an agent: one `agent` token over the `Display` text of its ID, the UUID.
-/// The reference shows neither the UUID nor the agent type tag that the UUID carries, and the
-/// key of the agent is not part of the ID.
-pub fn agent_reference(ctx: &ObfuscationContext, agent_id: &AgentId) -> ReportAgentRef {
-    let text = agent_id.to_string();
-    let mut bytes = Vec::with_capacity(text.len() + 4);
-    bytes.extend_from_slice(&(text.len() as u32).to_be_bytes());
-    bytes.extend_from_slice(text.as_bytes());
+/// The reference to an agent: the agent ID in clear, with no agent type. The environment of the
+/// ID is not known, so its type tag is never resolved.
+pub fn agent_reference(agent_id: &AgentId) -> ReportAgentRef {
     ReportAgentRef {
-        token: ctx.token("agent", &bytes),
+        agent_id: *agent_id,
+        agent_type: None,
+    }
+}
+
+/// The reference to the own agent of the export: its agent ID and its agent type name.
+pub fn own_agent_reference(ctx: &ObfuscationContext) -> ReportAgentRef {
+    ReportAgentRef {
+        agent_id: ctx.own_agent.agent_id,
+        agent_type: ctx.own_agent.agent_type.clone(),
     }
 }

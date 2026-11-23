@@ -303,6 +303,10 @@ fn invocation_results_config_constructs_configured_membership() {
             golem_common::model::InvocationResultPosition {
                 terminal: golem_common::model::oplog::OplogIndex::from_u64(index),
                 request: None,
+                end: golem_common::model::InvocationEnd::Completed,
+                operation: None,
+                accepted_at: None,
+                changed_at: golem_common::model::Timestamp::from(0),
             },
         );
     }

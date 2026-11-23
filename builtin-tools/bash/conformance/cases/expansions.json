@@ -1,0 +1,493 @@
+{
+  "tier": "pr",
+  "description": "Every expansion: parameter operators, arithmetic, substitution, splitting and globbing.",
+  "cases": [
+    {
+      "name": "expand: process substitution as operands",
+      "script": "diff <(printf \"a\\n\") <(printf \"b\\n\"); echo status=$?; paste <(seq 2) <(seq 3 4); comm <(printf \"a\\nb\\n\") <(printf \"a\\nc\\n\")",
+      "tags": [
+        "expansion.process"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: process substitution as input",
+      "script": "while read l; do echo \"got $l\"; done < <(printf \"x\\ny\\n\"); wc -l < <(seq 3); grep -c a <(printf \"a\\na\\nb\\n\")",
+      "tags": [
+        "expansion.process"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: process substitution as output",
+      "script": "printf \"t1\\nt2\\n\" | tee >(wc -l) >/dev/null; sleep 0.2; echo hi > >(tr a-z A-Z); sleep 0.2; echo done",
+      "tags": [
+        "expansion.process"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: process substitution path",
+      "script": "echo <(true) | grep -c \"^/dev/fd/\"; f() { cat \"$1\"; }; f <(echo via-function)",
+      "tags": [
+        "expansion.process"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: default and assign",
+      "script": "unset u; e=; echo \"${u-a} ${u:-b} ${e-c} ${e:-d}\"; echo \"${u=x} $u\"; echo \"${e:=y} $e\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: alternative",
+      "script": "unset u; e=; s=set; echo \"[${u+a}] [${u:+b}] [${e+c}] [${e:+d}] [${s:+e}]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: error operator",
+      "script": "unset u; ( : \"${u?custom message}\" ); echo status=$?; ( : \"${u:?}\" ) 2>/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: error operator on empty",
+      "script": "e=; ( echo \"${e:?empty}\" ); echo status=$?; echo \"${e?not reached}\" | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: length",
+      "script": "s=héllo; a=(x yy zzz); echo ${#s} ${#a[@]} ${#a[1]} ${#undefined}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: substring",
+      "script": "s=abcdefgh; echo ${s:2} ${s:2:3} ${s: -3} ${s: -3:2} ${s:0:-2} ${s:10}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: substring of arrays and positionals",
+      "script": "a=(a b c d e); echo ${a[@]:1:2} ${a[@]: -2}; set -- 1 2 3 4; echo ${@:2} ${@:0:2}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: trim patterns",
+      "script": "p=/usr/local/lib/libfoo.so.1; echo ${p#*/} ${p##*/} ${p%.*} ${p%%.*} ${p#nomatch}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: trim with brackets and classes",
+      "script": "v=abc123def; echo ${v%%[0-9]*} ${v#[[:alpha:]]} ${v##*[[:digit:]]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: replace forms",
+      "script": "v=a-b-c-a; echo ${v/a/X} ${v//a/X} ${v/#a/X} ${v/%a/X} ${v//-} ${v/b}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: replace with patterns and slashes",
+      "script": "p=/a/b/c; echo ${p//\\//_} ${p//[ab]/Z} ${p/\\/a/root}; x=\"a b\"; echo ${x// /_}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: replace on arrays",
+      "script": "a=(foo bar baz); echo ${a[@]/a/A} ${a[@]//a}; echo ${a[@]/#/-}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: case modification",
+      "script": "w=\"hello world\"; echo ${w^} ${w^^} ${w,} ; u=HELLO; echo ${u,,} ${u,} ${w^^o}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: transform operators",
+      "script": "v=\"a b'c\"; echo ${v@Q}; e='x\\ty'; echo ${e@E}; declare -i n=3; echo ${n@a}; a=(1 2); echo ${a@A}; echo ${v@U} ${v@L} ${v@u}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: prefix names",
+      "script": "abc1=1 abc2=2 abd=3; echo ${!abc*}; echo \"${!abc@}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: array keys",
+      "script": "a=(x y z); a[7]=q; echo ${!a[@]}; declare -A m=([one]=1); echo ${!m[@]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: indirection",
+      "script": "target=value; ref=target; echo ${!ref}; arr=(a b); r2=\"arr[1]\"; echo ${!r2}; unset nothing; n=nothing; echo \"[${!n}]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: nested defaults",
+      "script": "unset a b; echo ${a:-${b:-deep}}; b=mid; echo ${a:-${b:-deep}}; echo \"${a:-\"quoted default\"}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: unset in arithmetic and strings",
+      "script": "unset u; echo $((u + 1)) \"[$u]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: arithmetic operators",
+      "script": "echo $((7/2)) $((7%3)) $((-7/2)) $((-7%3)) $((2**10)) $((1<<4)) $((255>>4)) $((5&3)) $((5|3)) $((5^3)) $((~5)) $((!0)) $((!5))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: arithmetic precedence and ternary",
+      "script": "echo $((1+2*3)) $(((1+2)*3)) $((2**3**2)) $((1?2:3)) $((0?2:3)) $((1,2,3)) $((3>2 && 2>1)) $((0||0))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: arithmetic assignment operators",
+      "script": "x=5; echo $((x+=2)) $((x-=1)) $((x*=3)) $((x/=2)) $((x%=4)) $((x<<=2)) $((x|=1)) $((x++)) $x $((++x)) $((x--)) $((--x))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: arithmetic bases",
+      "script": "echo $((0x1f)) $((017)) $((2#1010)) $((36#z)) $((16#ff)) $((64#_))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: arithmetic with variables and strings",
+      "script": "a=3 b=a; echo $((b+1)) $((a*a)); c=\"2+3\"; echo $((c*2)); echo $(( a > 2 ))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: arithmetic errors",
+      "script": "echo $((1/0)); echo status=$?; echo $((2**-1)); echo status=$?; echo $((1+)); echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: arithmetic overflow wraps",
+      "script": "echo $((9223372036854775807+1)) $((-9223372036854775808-1)) $((2**63))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: arithmetic command status",
+      "script": "((0)); echo $?; ((5)); echo $?; ((x=3)); echo $x; (( y = x * 2 )) && echo $y",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: legacy arithmetic",
+      "script": "echo $[1+2] $[3*4]",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: command substitution strips trailing newlines",
+      "script": "v=$(printf \"a\\n\\n\\n\"); echo \"[$v]\"; w=$(printf \"\\n\\na\"); echo \"[$w]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: backquotes and nesting",
+      "script": "echo `echo a` $(echo $(echo b)) \"$(echo \"$(echo c d)\")\" `echo \\`echo e\\``",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: substitution reads a file",
+      "script": "echo content >/tmp/f; v=$(< /tmp/f); echo \"$v\"; v=$(</tmp/nosuch); echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: substitution status",
+      "script": "v=$(exit 3); echo $?; v=$(true; false); echo $?; x=$(echo ok) || echo no; echo $x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: substitution in a subshell environment",
+      "script": "x=1; y=$(x=2; echo $x); echo $x $y; $(cd /tmp); pwd",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: default splitting",
+      "script": "v=\"  a  b\tc\n d \"; set -- $v; echo $#; printf \"[%s]\" \"$@\"; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: custom IFS",
+      "script": "IFS=:; v=\"a::b:c:\"; set -- $v; echo $#; printf \"[%s]\" \"$@\"; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: IFS mixing whitespace and delimiters",
+      "script": "IFS=\" ,\"; v=\" a , b,,c \"; set -- $v; echo $#; printf \"[%s]\" \"$@\"; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: empty IFS disables splitting",
+      "script": "IFS=; v=\"a b c\"; set -- $v; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: quoted at and star",
+      "script": "set -- \"a b\" c; printf \"[%s]\" \"$@\"; echo; printf \"[%s]\" \"$*\"; echo; IFS=-; printf \"[%s]\" \"$*\"; echo; printf \"[%s]\" $*; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: array star with IFS",
+      "script": "a=(x y z); IFS=,; echo \"${a[*]}\"; unset IFS; echo \"${a[*]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: empty and unset words vanish",
+      "script": "e=; set -- $e \"\" $e a; echo $#; f() { echo $#; }; f \"$@\"; f \"${@}\" \"\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: splitting results of substitution",
+      "script": "set -- $(printf \"a b\\nc\"); echo $#; set -- \"$(printf \"a b\\nc\")\"; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: brace lists and sequences",
+      "script": "echo {a,b,c} x{1..3}y {5..1} {a..e..2} {01..10..3} {-2..2}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: brace nesting and invalid forms",
+      "script": "echo {a,{b,c}d} {a} {a..} {1..3..0} \"{a,b}\" \\{a,b\\} {,x}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: brace with variables is literal",
+      "script": "n=3; echo {1..$n}; x=a,b; echo {$x}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: glob basics",
+      "script": "cd /tmp; touch a1 a2 b1 .hidden; echo a*; echo ?1; echo [ab]1; echo [!a]1; echo *; echo nomatch*",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: glob ordering and dirs",
+      "script": "cd /tmp; mkdir -p d1/sub d2; touch d1/x d2/y; echo */; echo d*/*; echo ./d?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: quoted globs are literal",
+      "script": "cd /tmp; touch star1; echo \"star*\" 'star*' star\\*; v=\"star*\"; echo $v \"$v\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: nullglob and failglob",
+      "script": "cd /tmp; shopt -s nullglob; echo x nomatch* y; shopt -u nullglob; shopt -s failglob; echo nomatch*; echo status=$?",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: dotglob",
+      "script": "cd /tmp; touch .dot vis; echo *; shopt -s dotglob; echo *",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: nocaseglob",
+      "script": "cd /tmp; touch Upper lower; shopt -s nocaseglob; echo u*; echo L*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: extglob patterns",
+      "script": "shopt -s extglob; cd /tmp; touch a.txt b.log c.txt abc; echo *.@(txt|log); echo !(*.txt); echo +(a|b)c; echo ?(a)bc",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "a.txt b.log c.txt\nabc b.log\nabc\nabc\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "extended glob syntax always parses here, since the whole script is parsed before it runs; bash parses each line before running it, so enabling extglob on the same line is a syntax error there"
+      }
+    },
+    {
+      "name": "expand: extglob enabled on the same line",
+      "script": "shopt -s extglob; echo @(a|b)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "@(a|b)\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "extended glob syntax always parses here, since the whole script is parsed before it runs; bash parses each line before running it, so enabling extglob on the same line is a syntax error there"
+      }
+    },
+    {
+      "name": "expand: extglob off by default",
+      "script": "shopt -q extglob; echo status=$?; v=aaab; echo ${v##+(a)}",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: extglob patterns on a later line",
+      "script": "shopt -s extglob\ncd /tmp; touch a.txt b.log c.txt abc; echo *.@(txt|log); echo !(*.txt); echo +(a|b)c; echo ?(a)bc",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: extglob in conditions and case on a later line",
+      "script": "shopt -s extglob\n[[ abcabc == +(abc) ]] && echo plus; case x.tar.gz in *.@(gz|bz2)) echo compressed;; esac; v=aaab; echo ${v##+(a)}",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: extglob in conditions and case",
+      "script": "shopt -s extglob; [[ abcabc == +(abc) ]] && echo plus; case x.tar.gz in *.@(gz|bz2)) echo compressed;; esac; v=aaab; echo ${v##+(a)}",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "plus\ncompressed\nb\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "extended glob syntax always parses here, since the whole script is parsed before it runs; bash parses each line before running it, so enabling extglob on the same line is a syntax error there"
+      }
+    },
+    {
+      "name": "expand: globstar",
+      "script": "cd /tmp; mkdir -p g/a/b; touch g/1 g/a/2 g/a/b/3; shopt -s globstar; echo g/**; echo g/**/3",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: glob character classes",
+      "script": "cd /tmp; touch A1 b2 _3; echo [[:upper:]]*; echo [[:digit:]]* ; echo [[:alpha:]][[:digit:]]",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: GLOBIGNORE",
+      "script": "cd /tmp; touch keep drop.o; GLOBIGNORE=\"*.o\"; echo *",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: glob after splitting",
+      "script": "cd /tmp; touch p1 p2; v=\"p* q\"; echo $v",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: dollar quotes",
+      "script": "echo $'tab\\there' $'\\x41\\u00e9' $'it\\'s' $'\\101' $'a\\cA' | od -c | head -n 2",
+      "tags": [
+        "syntax.quote.ansi-c"
+      ],
+      "options": {}
+    },
+    {
+      "name": "expand: locale quotes",
+      "script": "echo $\"translated\" \"$x\"text",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: nested quotes in substitution",
+      "script": "echo \"$(echo \"inner \\\"quoted\\\"\")\"; echo \"a${u:-\"b c\"}d\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: backslash in double quotes",
+      "script": "echo \"\\$HOME \\` \\\" \\\\ \\a \\n\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: word joining",
+      "script": "a=x; echo \"$a\"y'$a'\"$a\"; echo ${a}_suffix $a_suffix",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: brace sequences at the ends of 64-bit integers",
+      "script": "echo {-9223372036854775807..-9223372036854775808}; echo {9223372036854775806..9223372036854775807}; echo {9223372036854775805..-9223372036854775805}; echo {1..3..99999999999999999999}; echo {a..e..99999999999999999999}; echo {1..3..9223372036854775807}; echo {1..10..0}",
+      "tags": [
+        "expansion.brace"
+      ],
+      "options": {}
+    }
+  ]
+}

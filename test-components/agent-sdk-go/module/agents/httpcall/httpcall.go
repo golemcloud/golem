@@ -28,8 +28,10 @@ var ScheduleCallback = Agent.Method[CallbackIn, string]("schedule-callback", gol
 var ScheduleAttempts = Agent.Method[golem.Unit, uint32]("schedule-attempts", golem.Description("The attempts of every schedule-callback so far"))
 
 // TransactionCallback runs a fallible transaction whose two steps each GET the
-// callback endpoint.
-var TransactionCallback = Agent.Method[CallbackIn, string]("transaction-callback", golem.Description("GET the callback endpoint from two transaction steps and join the bodies"))
+// callback endpoint. Compensation GETs the same endpoint with an undo- prefix.
+// SAGA_FAIL=true fails after both steps, compensates in reverse order and returns
+// "rolled-back" instead of the joined bodies.
+var TransactionCallback = Agent.Method[CallbackIn, string]("transaction-callback", golem.Description("GET the callback endpoint from two transaction steps and join the bodies; SAGA_FAIL=true fails after both steps, compensates in reverse order with undo- requests and returns rolled-back"))
 
 // ReadTruncated GETs /truncated, whose response ends before its Content-Length,
 // and reports whether reading the body failed.

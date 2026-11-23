@@ -127,8 +127,8 @@ async fn completion_and_history(
         ensure!(!invocation.is_finished());
         release.send(false).unwrap();
         let result = tokio::time::timeout(Duration::from_secs(10), &mut invocation).await???
-            .into_typed::<Result<Vec<u32>, String>>()?;
-        ensure!(result == Ok(recorded.clone()));
+            .into_typed::<Result<(u32, Vec<u32>), String>>()?;
+        ensure!(result == Ok((0, recorded.clone())));
         ensure!(matches!(tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??, InterruptKind::Suspend(_)));
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -148,15 +148,15 @@ async fn completion_and_history(
         ensure!(count_agent_invocation_pair_since(&completed, OplogIndex::INITIAL) == (2, 2));
         let cached = executor.invoke_and_await_agent_with_key(
             &component, &name, &key, method, data_value!(first_port, second_port),
-        ).await?.into_typed::<Result<Vec<u32>, String>>()?;
-        ensure!(cached == Ok(recorded.clone()));
+        ).await?.into_typed::<Result<(u32, Vec<u32>), String>>()?;
+        ensure!(cached == Ok((0, recorded.clone())));
         no_connections(&listeners).await?;
         ensure!(!worker.is_loaded().await);
 
         registry.set_policy(policy);
         applied_refresh(&limits, &registry, context.account_id).await?.await?;
-        // Physical reconstruction re-executes both native connects, but must not await
-        // historical TCP input readiness. Keep both historical peers silent and open.
+        // Physical reconstruction replays the completed connects, poll and reads from the
+        // oplog: the historical peers get no connection.
         let fresh_key = IdempotencyKey::fresh();
         let stored_fresh_key = executor
             .external_invocation_key(&id.agent_id, &fresh_key, method)
@@ -165,19 +165,17 @@ async fn completion_and_history(
             &component, &name, &fresh_key, method, data_value!(first_port, second_port),
         );
         let peers = async {
-            let mut historical = accept_pair(&listeners, &mut effects).await?;
-            closed_pair(&mut historical, &mut effects).await?;
-            ensure!(effects.accepts == [2, 2] && effects.closed == [2, 2] && effects.sent == [0, 1]);
             let mut fresh_peers = accept_pair(&listeners, &mut effects).await?;
             release_second(&mut fresh_peers, &mut effects).await?;
             closed_pair(&mut fresh_peers, &mut effects).await?;
             Ok::<_, anyhow::Error>(())
         };
         let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async { tokio::try_join!(fresh, peers) }).await??;
-        let fresh_result = fresh.into_typed::<Result<Vec<u32>, String>>()?.map_err(anyhow::Error::msg)?;
+        let (losses, fresh_result) = fresh.into_typed::<Result<(u32, Vec<u32>), String>>()?.map_err(anyhow::Error::msg)?;
+        ensure!(losses == 0);
         assert_indices(&fresh_result, duplicate)?;
         no_connections(&listeners).await?;
-        ensure!(effects.accepts == [3, 3] && effects.closed == [3, 3] && effects.sent == [0, 2]);
+        ensure!(effects.accepts == [2, 2] && effects.closed == [2, 2] && effects.sent == [0, 2]);
         let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(input_poll(&history, &stored_key, count, Some(&recorded))? == start);
         input_poll(&history, &stored_fresh_key, count, Some(&fresh_result))?;
@@ -187,7 +185,7 @@ async fn completion_and_history(
         ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
         settled_history(&history)?;
         info!(%key, %fresh_key, %start, duplicate, ?recorded, ?effects,
-            "B readiness indices persisted; completed history reconnected without input readiness; fresh poll completed separately");
+            "B readiness indices persisted; completed history replayed without connecting; fresh poll completed separately");
         Ok::<_, anyhow::Error>(())
     }.await;
     drop(listeners);
