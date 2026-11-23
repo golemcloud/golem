@@ -4439,6 +4439,8 @@ batch checks the grant for its own window. Completed calls replay their recorded
 none, so they read no owning `Start` outside the window. A `FailedUpdate` in a guest batch holds the
 expected request of its divergence only when the window covers the divergence index. A `get-oplog`
 resource that starts at index 0 starts at index 1, so its grant check covers the indexes it reads.
+A guest batch that starts after index 1 takes the component revision at its start from the latest
+status of the agent, not from a scan of the entries before its start.
 
 Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
 event up to the next recorded entry, and the next authority boundary applies them. A decision that

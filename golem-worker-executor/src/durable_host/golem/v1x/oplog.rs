@@ -21,7 +21,6 @@ use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::concurrent::NotCancellable;
 use crate::durable_host::concurrent::ResolvedCall;
 use crate::model::public_oplog::PublicOplogEntryOps;
-use crate::model::public_oplog::find_component_revision_at;
 use crate::model::public_oplog::get_guest_oplog_chunk;
 use crate::model::public_oplog::search_guest_oplog;
 use crate::preview2::golem_api_1_x;
@@ -31,6 +30,9 @@ use crate::preview2::golem_api_1_x::oplog::HostSearchOplog;
 use crate::preview2::golem_api_1_x::oplog::OplogReadError;
 use crate::preview2::golem_api_1_x::oplog::SearchOplog;
 use crate::services::HasOplogService;
+use crate::services::worker::ResolvedAgentIdentity;
+use crate::worker::filesystem_snapshots::revision_before;
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::base_model::caller::ClaimVisibility;
@@ -212,6 +214,42 @@ fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
 /// claims in a chunk would reach every reader of that oplog without being asked for.
 const GUEST_CLAIM_VISIBILITY: ClaimVisibility = ClaimVisibility::Hidden;
 
+/// The component revision in effect at `start` in the oplog of the agent: the target of the last
+/// successful update before `start` in the latest status of the agent, or else the revision of its
+/// `Create` entry. A guest batch does not scan the entries before `start` for the revision, because
+/// the grant check of the batch covers only the indexes that the batch reads. The status leaves out
+/// the updates in the regions that a revert or a jump deleted.
+async fn component_revision_at<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    identity: &ResolvedAgentIdentity,
+    owned_agent_id: &OwnedAgentId,
+    start: OplogIndex,
+) -> Result<ComponentRevision, String> {
+    let create_revision = identity.create_parameters().component_revision;
+    if start <= OplogIndex::INITIAL {
+        return Ok(create_revision);
+    }
+    let missing = || format!("agent {owned_agent_id} does not exist");
+    let cached = ctx
+        .state
+        .worker_service
+        .get(owned_agent_id)
+        .await
+        .map_err(|err| err.to_string())?
+        .ok_or_else(missing)?;
+    let status = calculate_last_known_status_with_checkpoint(
+        &ctx.state,
+        owned_agent_id,
+        identity.fingerprint,
+        identity.agent_mode,
+        cached.last_known_status,
+    )
+    .await
+    .map_err(|error| WorkerExecutorError::from(error).to_string())?
+    .ok_or_else(missing)?;
+    Ok(revision_before(&status.successful_updates, start).unwrap_or(create_revision))
+}
+
 async fn get_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &GetOplogEntry,
@@ -227,14 +265,13 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
     } else {
-        find_component_revision_at(
-            ctx.state.oplog_service(),
+        component_revision_at(
+            ctx,
+            &identity,
             &entry.owned_agent_id,
-            agent_mode,
             entry.next_oplog_index,
         )
-        .await
-        .map_err(|error| error.to_string())?
+        .await?
     };
     let agent_type = &identity.create_parameters().agent_type_name;
     get_guest_oplog_chunk(
@@ -271,14 +308,13 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
     } else {
-        find_component_revision_at(
-            ctx.state.oplog_service(),
+        component_revision_at(
+            ctx,
+            &identity,
             &entry.owned_agent_id,
-            agent_mode,
             entry.next_oplog_index,
         )
-        .await
-        .map_err(|error| error.to_string())?
+        .await?
     };
     let agent_type = &identity.create_parameters().agent_type_name;
     // The grant covers page_size indexes, not page_size matches. The scanner caps each
