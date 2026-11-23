@@ -13,6 +13,10 @@ const AGENT_ID_WARNING: &str = "the initialCard does not allow the agent to read
 const AGENT_ID_NOT_READABLE: &str = "GOLEM_AGENT_ID";
 const FILESYSTEM_READ: &str = "filesystem(?agent) @ ?agent : read : /**";
 const AGENT_ID_READ: &str = "env(?agent) @ ?agent : read : GOLEM_AGENT_ID";
+const COMPONENT_CARD_RESOURCE: &str = ": read : /component-card/**";
+const COMPONENT_CARD_READ: &str = "filesystem(?agent) @ ?agent : read : /component-card/**";
+const AGENT_CARD_RESOURCE: &str = ": read : /agent-card/**";
+const AGENT_CARD_READ: &str = "filesystem(?agent) @ ?agent : read : /agent-card/**";
 
 #[test]
 #[timeout("20 minutes")]
@@ -40,7 +44,7 @@ async fn typescript_initial_card_without_agent_id_read_warns_on_deploy_and_fails
 
 #[test]
 #[timeout("20 minutes")]
-async fn component_initial_card_without_agent_id_read_warns_for_the_agents_that_inherit_it(
+async fn component_initial_card_warns_on_deploy_and_is_installed_in_the_agents_that_inherit_it(
     _tracing: &Tracing,
 ) {
     let mut ctx = TestContext::new();
@@ -65,13 +69,66 @@ async fn component_initial_card_without_agent_id_read_warns_for_the_agents_that_
         "deploy did not warn about the component card that CounterAgent inherits"
     );
 
-    write_component_card(&ctx, &manifest, &[FILESYSTEM_READ, AGENT_ID_READ]);
+    write_component_card(&ctx, &manifest, &[COMPONENT_CARD_READ, AGENT_ID_READ]);
     let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
     assert!(deploy.success_or_dump());
     assert!(
         !contains(&deploy, AGENT_ID_WARNING),
         "deploy warned about a component card that has the grant"
     );
+    let grants = installed_initial_grants(&ctx, "CounterAgent(\"inherits\")").await;
+    assert!(
+        grants.len() == 2 && has_resource(&grants, COMPONENT_CARD_RESOURCE),
+        "the agent does not hold the component card: {grants:?}"
+    );
+
+    let with_component_card = fs::read_to_string(ctx.cwd_path_join("golem.yaml")).unwrap();
+    write_counter_agent_card(
+        &ctx,
+        &with_component_card,
+        &[AGENT_CARD_READ, AGENT_ID_READ],
+    );
+    let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deploy.success_or_dump());
+    let grants = installed_initial_grants(&ctx, "CounterAgent(\"overrides\")").await;
+    assert!(
+        grants.len() == 2
+            && has_resource(&grants, AGENT_CARD_RESOURCE)
+            && !has_resource(&grants, COMPONENT_CARD_RESOURCE),
+        "the agent card does not replace the component card: {grants:?}"
+    );
+}
+
+/// Calls `agent` once, so that Golem creates it, and returns the lower-bound grants of the one
+/// card in its wallet.
+async fn installed_initial_grants(ctx: &TestContext, agent: &str) -> Vec<String> {
+    let invoke = ctx
+        .cli([flag::YES, cmd::AGENT, cmd::INVOKE, agent, "increment"])
+        .await;
+    assert!(invoke.success_or_dump());
+    let output = ctx
+        .cli(["card", cmd::LIST, "--agent", agent, flag::FORMAT, "json"])
+        .await;
+    assert!(output.success_or_dump());
+    let wallet = output
+        .stdout_json::<serde_json::Value>()
+        .into_iter()
+        .next()
+        .expect("the agent wallet list has no JSON output");
+    let cards = wallet["cards"].as_array().expect("the wallet has no cards");
+    assert_eq!(cards.len(), 1, "the wallet of {agent}: {wallet}");
+    cards[0]["lowerPositive"]
+        .as_array()
+        .expect("the card has no lower bound")
+        .iter()
+        .map(|grant| grant.as_str().unwrap().to_string())
+        .collect()
+}
+
+fn has_resource(grants: &[String], resource: &str) -> bool {
+    grants
+        .iter()
+        .any(|grant| grant.starts_with("filesystem(") && grant.ends_with(resource))
 }
 
 #[test]
