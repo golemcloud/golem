@@ -192,54 +192,94 @@ impl SpawnedWorkerExecutor {
         }
         let _logger = self.logger.lock().unwrap().take();
     }
+}
 
-    #[cfg(unix)]
-    fn signal_child(&self, signal: libc::c_int, action: &str) {
-        // The guard is held across the liveness check and the signal: `is_running` and
-        // `blocking_kill`, the only other reapers of this child, both take the same lock.
-        let mut child_field = self.child.lock().unwrap();
-        let child = child_field.as_mut().unwrap_or_else(|| {
-            panic!(
-                "Cannot {action} golem-worker-executor {}: it is not running",
-                self.grpc_port
-            )
-        });
-        signal_unreaped_child(
-            child,
-            signal,
-            &format!("{action} golem-worker-executor {}", self.grpc_port),
+#[cfg(unix)]
+pub mod unix {
+    use super::SpawnedWorkerExecutor;
+    use std::process::Child;
+    use tracing::info;
+
+    impl SpawnedWorkerExecutor {
+        fn signal_child(&self, signal: libc::c_int, action: &str) {
+            // The guard is held across the liveness check and the signal: `is_running` and
+            // `blocking_kill`, the only other reapers of this child, both take the same lock.
+            let mut child_field = self.child.lock().unwrap();
+            let child = child_field.as_mut().unwrap_or_else(|| {
+                panic!(
+                    "Cannot {action} golem-worker-executor {}: it is not running",
+                    self.grpc_port
+                )
+            });
+            signal_unreaped_child(
+                child,
+                signal,
+                &format!("{action} golem-worker-executor {}", self.grpc_port),
+            );
+        }
+
+        pub(super) fn pause_child(&self) {
+            info!("Pausing golem-worker-executor {}", self.grpc_port);
+            self.signal_child(libc::SIGSTOP, "pause");
+        }
+
+        pub(super) fn resume_child(&self) {
+            info!("Resuming golem-worker-executor {}", self.grpc_port);
+            self.signal_child(libc::SIGCONT, "resume");
+        }
+    }
+
+    /// Sends `signal` to `child`, refusing to if the child has already been reaped. `what` names the
+    /// action and the process for the panic messages.
+    ///
+    /// A reaped child's pid is free for the OS to hand to an unrelated process, and `is_running`'s
+    /// `try_wait` reaps an exited child while leaving it in place, so a raw `kill` on `child.id()`
+    /// alone could signal a stranger. `Child::kill` has this guard built in; `kill(2)` does not.
+    ///
+    /// `pub` so its process-supervision behavior can be pinned by an integration test under
+    /// `golem-test-framework/tests/` rather than a `--lib` unit test that would spawn a process.
+    pub fn signal_unreaped_child(child: &mut Child, signal: libc::c_int, what: &str) {
+        match child.try_wait() {
+            Ok(None) => {}
+            Ok(Some(status)) => panic!("Cannot {what}: it has already exited ({status})"),
+            Err(err) => panic!("Cannot {what}: its state is unknown: {err}"),
+        }
+        let pid = libc::pid_t::try_from(child.id()).expect("child pid does not fit into pid_t");
+        // SAFETY: `kill` has no memory-safety preconditions. `try_wait` has just reported the child
+        // alive, and reaping it needs the `&mut Child` held here, so it has not been reaped and its pid
+        // cannot belong to another process. If it exited since, it is a zombie still holding that pid,
+        // and the signal changes nothing.
+        let result = unsafe { libc::kill(pid, signal) };
+        assert_eq!(
+            result,
+            0,
+            "Failed to {what}: {}",
+            std::io::Error::last_os_error()
         );
     }
 }
 
-/// Sends `signal` to `child`, refusing to if the child has already been reaped. `what` names the
-/// action and the process for the panic messages.
-///
-/// A reaped child's pid is free for the OS to hand to an unrelated process, and `is_running`'s
-/// `try_wait` reaps an exited child while leaving it in place, so a raw `kill` on `child.id()`
-/// alone could signal a stranger. `Child::kill` has this guard built in; `kill(2)` does not.
-///
-/// `pub` so its process-supervision behavior can be pinned by an integration test under
-/// `golem-test-framework/tests/` rather than a `--lib` unit test that would spawn a process.
-#[cfg(unix)]
-pub fn signal_unreaped_child(child: &mut Child, signal: libc::c_int, what: &str) {
-    match child.try_wait() {
-        Ok(None) => {}
-        Ok(Some(status)) => panic!("Cannot {what}: it has already exited ({status})"),
-        Err(err) => panic!("Cannot {what}: its state is unknown: {err}"),
+#[cfg(not(unix))]
+mod other {
+    use super::SpawnedWorkerExecutor;
+
+    impl SpawnedWorkerExecutor {
+        // Without these the trait default would claim this is not a SpawnedWorkerExecutor,
+        // when the real reason is the platform.
+        pub(super) fn pause_child(&self) {
+            panic!(
+                "Cannot pause golem-worker-executor {}: pausing is SIGSTOP, which this platform does not have",
+                self.grpc_port
+            );
+        }
+
+        pub(super) fn resume_child(&self) {
+            panic!(
+                "Cannot resume golem-worker-executor {}: resuming is SIGCONT, which this platform does not have",
+                self.grpc_port
+            );
+        }
     }
-    let pid = libc::pid_t::try_from(child.id()).expect("child pid does not fit into pid_t");
-    // SAFETY: `kill` has no memory-safety preconditions. `try_wait` has just reported the child
-    // alive, and reaping it needs the `&mut Child` held here, so it has not been reaped and its pid
-    // cannot belong to another process. If it exited since, it is a zombie still holding that pid,
-    // and the signal changes nothing.
-    let result = unsafe { libc::kill(pid, signal) };
-    assert_eq!(
-        result,
-        0,
-        "Failed to {what}: {}",
-        std::io::Error::last_os_error()
-    );
 }
 
 #[async_trait]
@@ -376,34 +416,12 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         }
     }
 
-    #[cfg(unix)]
     async fn pause(&self) {
-        info!("Pausing golem-worker-executor {}", self.grpc_port);
-        self.signal_child(libc::SIGSTOP, "pause");
+        self.pause_child();
     }
 
-    #[cfg(unix)]
     async fn resume(&self) {
-        info!("Resuming golem-worker-executor {}", self.grpc_port);
-        self.signal_child(libc::SIGCONT, "resume");
-    }
-
-    // Without these the trait default would panic claiming this is not a SpawnedWorkerExecutor,
-    // when the real reason is the platform.
-    #[cfg(not(unix))]
-    async fn pause(&self) {
-        panic!(
-            "Cannot pause golem-worker-executor {}: pausing is SIGSTOP, which this platform does not have",
-            self.grpc_port
-        );
-    }
-
-    #[cfg(not(unix))]
-    async fn resume(&self) {
-        panic!(
-            "Cannot resume golem-worker-executor {}: resuming is SIGCONT, which this platform does not have",
-            self.grpc_port
-        );
+        self.resume_child();
     }
 }
 
