@@ -20,6 +20,7 @@ use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Credentials;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::{StreamExt, TryStreamExt};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId};
@@ -959,8 +960,8 @@ async fn published_package_blob_rejects_generic_mutation() {
     let path = Path::new(&hex);
     let digest = format!("sha256:{hex}");
     let published = BlobStorageNamespace::PublishedBlobs;
-    let other = BlobStorageNamespace::Components {
-        environment_id: EnvironmentId(Uuid::new_v4()),
+    let other = BlobStorageNamespace::ComponentUploads {
+        account_id: AccountId::new(),
     };
     let target = Path::new("other");
     let stream = vec![1]
@@ -3091,9 +3092,9 @@ fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamesp
             agent_mode,
             level,
         },
-        BlobStorageNamespace::Components { .. } => {
-            BlobStorageNamespace::Components { environment_id }
-        }
+        BlobStorageNamespace::ComponentUploads { .. } => BlobStorageNamespace::ComponentUploads {
+            account_id: AccountId::new(),
+        },
         BlobStorageNamespace::PublishedBlobs => {
             panic!("Published blobs do not belong to an environment")
         }
@@ -3145,7 +3146,9 @@ fn namespaces_of_one_environment() -> Vec<BlobStorageNamespace> {
         BlobStorageNamespace::CompilationCache { environment_id },
         BlobStorageNamespace::CustomStorage { environment_id },
         BlobStorageNamespace::InitialAgentFiles { environment_id },
-        BlobStorageNamespace::Components { environment_id },
+        BlobStorageNamespace::ComponentUploads {
+            account_id: AccountId(environment_id.0),
+        },
         filesystem_snapshots_of(
             environment,
             agent_id,

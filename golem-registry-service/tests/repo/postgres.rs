@@ -532,6 +532,11 @@ async fn test_retry_policy_and_agent_secret_natural_key_lookups(
 }
 
 #[test]
+async fn test_component_upload_reference_lifetime(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_component_upload_reference_lifetime(deps).await;
+}
+
+#[test]
 async fn test_component_stage(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_component_stage(deps).await;
 }

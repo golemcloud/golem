@@ -3429,6 +3429,84 @@ fn default_card_contains_current_application_permissions(
     has_environment_permissions && has_component_permissions
 }
 
+pub async fn test_component_upload_reference_lifetime(deps: &Deps) {
+    use golem_registry_service::repo::component::ComponentUpload;
+
+    let user = deps.create_account().await;
+    let account = user.revision.account_id;
+    let app = deps.create_application(account).await;
+    let first = deps.create_env(app.revision.application_id).await;
+    let second = deps.create_env(app.revision.application_id).await;
+    let repo = deps.component_repo.as_ref();
+    let digest = "a".repeat(64);
+    let primary = new_repo_uuid().to_string();
+    let duplicate = new_repo_uuid().to_string();
+    for (environment_id, key) in [
+        (first.revision.environment_id, &primary),
+        (second.revision.environment_id, &duplicate),
+    ] {
+        repo.register_upload(
+            account,
+            key,
+            (chrono::Utc::now() + chrono::TimeDelta::hours(1)).into(),
+        )
+        .await
+        .unwrap();
+        let revision = repo
+            .create_with_upload(
+                environment_id,
+                "dedup",
+                ComponentRevisionRecord::creation(
+                    ComponentId(new_repo_uuid()),
+                    12,
+                    ComponentMetadata::default(),
+                    blake3::hash(b"same content").into(),
+                    None,
+                    key.clone(),
+                    AccountId(account),
+                ),
+                vec![],
+                Some(ComponentUpload {
+                    object_key: key.clone(),
+                    digest: digest.clone(),
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revision.revision.object_store_key, primary);
+    }
+
+    let primary_row = (account, primary);
+    let duplicate_row = (account, duplicate);
+    let (_, candidates) = repo.collect_uploads(SqlDateTime::now(), "").await.unwrap();
+    assert!(!candidates.contains(&primary_row));
+    assert!(candidates.contains(&duplicate_row));
+    repo.confirm_upload_deleted(&duplicate_row.1).await.unwrap();
+
+    for (env, eligible) in [(first, false), (second, true)] {
+        let _ = deps
+            .environment_repo
+            .delete(EnvironmentRevisionRecord {
+                revision_id: env.revision.revision_id + 1,
+                audit: DeletableRevisionAuditFields::deletion(account),
+                ..env.revision
+            })
+            .await
+            .unwrap();
+        let (_, candidates) = repo.collect_uploads(SqlDateTime::now(), "").await.unwrap();
+        assert_eq!(candidates.contains(&primary_row), eligible);
+    }
+    repo.confirm_upload_deleted(&primary_row.1).await.unwrap();
+    assert!(
+        !repo
+            .collect_uploads(SqlDateTime::now(), "")
+            .await
+            .unwrap()
+            .1
+            .contains(&primary_row)
+    );
+}
+
 pub async fn test_component_stage(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(user.revision.account_id).await;

@@ -193,8 +193,8 @@ impl SqliteBlobStorage {
             BlobStorageNamespace::InitialAgentFiles { environment_id } => {
                 format!("initial_agent_files-{environment_id}")
             }
-            BlobStorageNamespace::Components { environment_id } => {
-                format!("components-{environment_id}")
+            BlobStorageNamespace::ComponentUploads { account_id } => {
+                format!("component_uploads-{account_id}")
             }
             BlobStorageNamespace::FilesystemSnapshots {
                 environment_id,

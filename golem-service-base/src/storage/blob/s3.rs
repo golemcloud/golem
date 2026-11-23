@@ -468,7 +468,7 @@ impl S3BlobStorage {
             BlobStorageNamespace::InitialAgentFiles { .. } => {
                 &self.config.initial_agent_files_bucket
             }
-            BlobStorageNamespace::Components { .. } => &self.config.components_bucket,
+            BlobStorageNamespace::ComponentUploads { .. } => &self.config.components_bucket,
             BlobStorageNamespace::PublishedBlobs => &self.config.components_bucket,
             BlobStorageNamespace::FilesystemSnapshots { .. } => {
                 &self.config.filesystem_snapshots_bucket
@@ -498,10 +498,14 @@ impl S3BlobStorage {
     fn bucket_prefix_of(namespace: &BlobStorageNamespace) -> String {
         match namespace {
             BlobStorageNamespace::PublishedBlobs => "published_blobs".to_string(),
+            BlobStorageNamespace::ComponentUploads { account_id } => {
+                format!("component_uploads/{account_id}")
+            }
             BlobStorageNamespace::CompilationCache { environment_id }
             | BlobStorageNamespace::CustomStorage { environment_id }
-            | BlobStorageNamespace::InitialAgentFiles { environment_id }
-            | BlobStorageNamespace::Components { environment_id } => environment_id.to_string(),
+            | BlobStorageNamespace::InitialAgentFiles { environment_id } => {
+                environment_id.to_string()
+            }
             BlobStorageNamespace::OplogPayload {
                 environment_id,
                 agent_id,
