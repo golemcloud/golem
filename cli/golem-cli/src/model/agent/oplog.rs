@@ -140,11 +140,9 @@ fn serialize_oplog_documents<S: serde::Serializer>(
     use serde::ser::{Error, SerializeSeq};
     let mut documents = serializer.serialize_seq(Some(entries.len()))?;
     for entry in entries {
-        // The document keeps each raw JSON value of the entry, such as the claims of a caller,
-        // whatever serializer writes the page.
-        let document = crate::model::cli_output::to_marked_structured_output_value(entry.clone())
+        let document = crate::model::cli_output::to_structured_output_value(entry.clone())
             .map_err(S::Error::custom)?;
-        documents.serialize_element(&crate::model::cli_output::WithRawJson(&document))?;
+        documents.serialize_element(&document)?;
     }
     documents.end()
 }
@@ -1593,10 +1591,15 @@ pub(crate) mod test_support {
     /// A method invocation at index 2 that the user `bob` started. The entry holds the claims of
     /// the user only when the reader asked for them (`with_claims`), as the server gives it.
     pub(crate) fn entry_of_a_signed_in_user(with_claims: bool) -> AgentOplogEntryView {
+        entry_of_a_user_with(with_claims.then_some(CLAIMS))
+    }
+
+    /// The entry of [`entry_of_a_signed_in_user`], with `claims` as the claims of the user.
+    pub(crate) fn entry_of_a_user_with(claims: Option<&str>) -> AgentOplogEntryView {
         let bob = PublicPrincipal::User(PublicUserPrincipal {
             pair: Pair::new("http://test-idp.com", "bob"),
             authenticated_at: Timestamp::from(0),
-            claims: with_claims.then(|| PublicClaims::from_json(CLAIMS.to_string()).unwrap()),
+            claims: claims.map(|claims| PublicClaims::from_json(claims.to_string()).unwrap()),
         });
         let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
             timestamp: Timestamp::from(0),
