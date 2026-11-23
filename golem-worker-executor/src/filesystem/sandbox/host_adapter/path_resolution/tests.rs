@@ -24,16 +24,40 @@ use crate::filesystem::sandbox::host_adapter::SandboxFilesystem;
 use crate::filesystem::sandbox::host_adapter::directory_for;
 #[cfg(target_os = "linux")]
 use crate::filesystem::sandbox::host_adapter::path_resolution::linux_name_comparison_mode;
+#[cfg(target_os = "linux")]
+use crate::filesystem::sandbox::host_adapter::sandbox_cleanup::{LeaseState, NativeCleanup};
 use crate::filesystem::sandbox::host_adapter::sandbox_provisioning::SandboxFilesystemName;
 use crate::filesystem::sandbox::host_adapter::sandbox_provisioning::SandboxFilesystemProvisioning;
+#[cfg(target_os = "linux")]
+use crate::filesystem::sandbox::host_adapter::{
+    NativeNameModeSource, NativeRoot, QuotaAuthority, tree_copy,
+};
+#[cfg(target_os = "linux")]
+use crate::filesystem::sandbox::name_comparison::NativeNameComparisonMode;
+#[cfg(target_os = "linux")]
+use crate::filesystem::sandbox::object_identity::{
+    NativeFileIdentity, SandboxDirectoryId, directory_identity,
+};
 use crate::filesystem::sandbox::open_handles::SandboxHandle;
+#[cfg(target_os = "linux")]
+use crate::filesystem::sandbox::open_handles::{NativeDirectoryHandle, SandboxDirectory};
 use crate::filesystem::sandbox::sandbox_paths::SandboxPath;
+#[cfg(target_os = "linux")]
+use crate::filesystem::volume::FilesystemVolume;
 #[cfg(target_os = "linux")]
 use crate::filesystem::volume::validated_xfs_name_mode_for_test;
 use crate::services::golem_config::FilesystemStorageMode;
 use golem_common::model::RetryConfig;
+#[cfg(target_os = "linux")]
+use std::fs::File;
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+use std::sync::Arc;
 use test_r::test;
+#[cfg(target_os = "linux")]
+use tokio::sync::Mutex as AsyncMutex;
 
 #[cfg(target_os = "linux")]
 fn open_host_directory(path: &Path) -> SandboxDirectory {

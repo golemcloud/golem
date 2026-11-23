@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    RunLate, SaveExit, backup_options, ran_at_shutdown, save_failure, save_ran, settle_may_land,
-    store_backup_options, whole_millis_from,
+    RunLate, SaveExit, backup_options, open_existing, ran_at_shutdown, repository_snapshots,
+    save_failure, save_ran, settle_may_land, store_backup_options, whole_millis_from,
 };
 use crate::filesystem_snapshot::backend::rustic::blob_io::LateWrites;
 use crate::filesystem_snapshot::backend::rustic::failure_classification::OperationCancelled;
@@ -30,7 +30,7 @@ use crate::filesystem_snapshot::backend::rustic::test_support::scripted::{
 };
 use crate::filesystem_snapshot::backend::rustic::test_support::{
     LIMIT, LONG_DEADLINE, NEVER, REACH_LIMIT, SHORT_DEADLINE, SHORT_WRITE_DEADLINE, SharedSlots,
-    blobs, calls_of,
+    backend_of, blobs, calls_of, key,
 };
 use std::path::PathBuf;
 
