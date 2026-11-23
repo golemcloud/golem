@@ -775,8 +775,14 @@ fn wallet_derivation_lists_the_reason_of_each_wallet_card() {
         panic!("expected upper-bound-too-broad, got {error:?}");
     };
     assert!(
-        message.starts_with(&format!(
-            "no wallet card permits the requested derivation: card {}: the child card must keep the parent's upper-bound denial `secret(",
+        message.starts_with(
+            "no wallet card permits the requested derivation: across the whole wallet, the child card must keep the parent's upper-bound denial `"
+        ),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "; card {}: the child card must keep the parent's upper-bound denial `secret(",
             Uuid::from_u128(1)
         )),
         "{message}"
@@ -790,7 +796,7 @@ fn wallet_derivation_lists_the_reason_of_each_wallet_card() {
     );
     assert!(
         message.ends_with(
-            "derive-from-wallet takes complete bounds, so restate the denials and the ceiling of the card to derive from"
+            "derive-from-wallet takes complete bounds, so restate this denial in the upper-negative grants of the request"
         ),
         "{message}"
     );
