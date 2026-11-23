@@ -6184,11 +6184,13 @@ async fn guest_oplog_search_stops_at_the_granted_window(
         .await?;
 
     let tip = executor.get_oplog_last_index(&target).await?;
-    assert!(tip < 100);
+    assert!(tip < 99);
     for index in (tip + 1)..=101 {
         let entry = OplogEntry::Log {
             timestamp: golem_common::model::Timestamp::now_utc(),
-            parent_start_index: None,
+            // The attribution of an entry reads the `Start` that owns it. This owner is outside
+            // the granted window, so a search that attributes its entries reads past the window.
+            parent_start_index: (index == 99).then_some(OplogIndex::from_u64(101)),
             level: golem_common::model::oplog::LogLevel::Stderr,
             context: String::new(),
             message: match index {
@@ -6230,7 +6232,8 @@ async fn guest_oplog_search_stops_at_the_granted_window(
     drop(executor);
     let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
 
-    let reads = executor.oplog_service_call_count(&target.agent_id(), "service_read_exact");
+    let window = (OplogIndex::INITIAL, 100);
+    let reads = executor.oplog_service_reads(&target.agent_id()).len();
     let found = executor
         .invoke_and_await_agent(
             &component,
@@ -6243,8 +6246,8 @@ async fn guest_oplog_search_stops_at_the_granted_window(
         .map_err(anyhow::Error::msg)?;
     assert_eq!(found, Some(vec![100]));
     assert_eq!(
-        executor.oplog_service_call_count(&target.agent_id(), "service_read_exact"),
-        reads + 1
+        executor.oplog_service_reads(&target.agent_id())[reads..],
+        [window]
     );
 
     // Lose the End after scanning an empty window, so the executor must scan again on repair.
@@ -6269,8 +6272,8 @@ async fn guest_oplog_search_stops_at_the_granted_window(
         Ok(Some(vec![]))
     );
     assert_eq!(
-        executor.oplog_service_call_count(&target.agent_id(), "service_read_exact"),
-        reads + 3
+        executor.oplog_service_reads(&target.agent_id())[reads..],
+        [window; 3]
     );
 
     let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
@@ -6304,8 +6307,8 @@ async fn guest_oplog_search_stops_at_the_granted_window(
         .into_typed::<Result<Vec<u64>, String>>()?;
     assert_eq!(denied, Err("OplogReadError::PermissionDenied".to_string()));
     assert_eq!(
-        executor.oplog_service_call_count(&target.agent_id(), "service_read_exact"),
-        0
+        executor.oplog_service_reads(&target.agent_id()),
+        Vec::<(OplogIndex, u64)>::new()
     );
 
     let new_search = executor
@@ -6318,6 +6321,7 @@ async fn guest_oplog_search_stops_at_the_granted_window(
         .await?
         .into_typed::<Result<Option<Vec<u64>>, String>>()?;
     assert_eq!(new_search, Ok(Some(vec![100])));
+    assert_eq!(executor.oplog_service_reads(&target.agent_id()), [window]);
     Ok(())
 }
 

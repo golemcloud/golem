@@ -1189,6 +1189,16 @@ impl TestWorkerExecutor {
             ))
     }
 
+    /// Returns the start index and the count of each `OplogService::read_exact` call for the
+    /// agent, in call order.
+    pub fn oplog_service_reads(&self, agent_id: &AgentId) -> Vec<(OplogIndex, u64)> {
+        self.additional_test_deps
+            .oplog_service_reads(&OwnedAgentId::new(
+                self.context.default_environment_id,
+                agent_id,
+            ))
+    }
+
     pub fn oplog_service_call_count(&self, agent_id: &AgentId, api: &'static str) -> usize {
         self.additional_test_deps.oplog_call_count(
             &OwnedAgentId::new(self.context.default_environment_id, agent_id),
@@ -7127,6 +7137,8 @@ struct RuntimeCardAuditGate {
 }
 
 type OplogEndGates = HashMap<AgentId, (HostFunctionName, Option<OplogIndex>, bool, OplogReadGate)>;
+/// The start index and the count of each `OplogService::read_exact` call, per agent.
+type OplogServiceReads = HashMap<OwnedAgentId, Vec<(OplogIndex, u64)>>;
 type EntitySettlementAccess =
     HashMap<(AgentId, Option<OplogIndex>), (bool, tokio::sync::oneshot::Sender<()>)>;
 
@@ -7145,6 +7157,7 @@ pub struct AdditionalTestDeps {
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_entries_read: Arc<std::sync::Mutex<HashMap<OwnedAgentId, u64>>>,
     oplog_commit_writes: Arc<std::sync::Mutex<HashMap<OwnedAgentId, Vec<Vec<OplogIndex>>>>>,
+    oplog_service_reads: Arc<std::sync::Mutex<OplogServiceReads>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outages: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outage_targets: Arc<std::sync::Mutex<HashMap<AgentId, PayloadId>>>,
@@ -7238,6 +7251,7 @@ impl AdditionalTestDeps {
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_entries_read: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_commit_writes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_service_reads: Arc::default(),
             oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outages: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outage_targets: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -7781,6 +7795,29 @@ impl AdditionalTestDeps {
 
     fn oplog_commit_writes(&self, owned_agent_id: &OwnedAgentId) -> Vec<Vec<OplogIndex>> {
         self.oplog_commit_writes
+            .lock()
+            .unwrap()
+            .get(owned_agent_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn record_oplog_service_read(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        index: OplogIndex,
+        count: u64,
+    ) {
+        self.oplog_service_reads
+            .lock()
+            .unwrap()
+            .entry(owned_agent_id.clone())
+            .or_default()
+            .push((index, count));
+    }
+
+    fn oplog_service_reads(&self, owned_agent_id: &OwnedAgentId) -> Vec<(OplogIndex, u64)> {
+        self.oplog_service_reads
             .lock()
             .unwrap()
             .get(owned_agent_id)

@@ -1850,7 +1850,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     assert_eq!(page_context.invocation.start_index, tool_start);
     assert_eq!(page_context.ancestors[0].start_index, middleware_start);
 
-    let search = search_public_oplog(
+    let search = search_public_oplog_page(
         components,
         oplog_service,
         &owned_agent_id,
@@ -1860,17 +1860,23 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         None,
         ComponentRevision::INITIAL,
         OplogIndex::INITIAL,
-        None,
-        1,
+        PublicOplogPageLimits {
+            count: 1,
+            max_bytes: 1_000_000,
+            max_entry_bytes: 1_000_000,
+        },
         "last-entity-attribution-needle",
         ScanBudget::default(),
         ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
-    assert_eq!(search.entries.len(), 1);
-    assert_eq!(search.entries[0].oplog_index, final_log);
-    let PublicOplogEntryAttribution::Entity(search_context) = &search.entries[0].attribution else {
+    let [PublicOplogPageEntry::Included(search_entry)] = &public_page_entries(&search.entries)[..]
+    else {
+        panic!("expected one included search result");
+    };
+    assert_eq!(search_entry.oplog_index, final_log);
+    let PublicOplogEntryAttribution::Entity(search_context) = &search_entry.attribution else {
         panic!("search result without its Start must retain entity attribution");
     };
     assert_eq!(search_context.invocation.start_index, tool_start);
@@ -3026,7 +3032,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
 
     // A guest search has the same limit, and still reads no entry after its pinned end.
     let guest = |from: OplogIndex| {
-        search_public_oplog(
+        search_guest_oplog(
             Arc::new(PanicComponentService),
             oplog_service.clone(),
             &owned_agent_id,
@@ -3044,11 +3050,8 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
         )
     };
     let first = guest(OplogIndex::INITIAL).await.unwrap();
-    let indices = |entries: &[PublicOplogEntryWithIndex]| {
-        entries
-            .iter()
-            .map(|entry| entry.oplog_index)
-            .collect::<Vec<_>>()
+    let indices = |entries: &[(OplogIndex, PublicOplogEntry)]| {
+        entries.iter().map(|(index, _)| *index).collect::<Vec<_>>()
     };
     assert_eq!(indices(&first.entries), vec![matching[0], matching[1]]);
     assert_eq!(first.next_oplog_index, matching[2]);

@@ -22,8 +22,8 @@ use crate::durable_host::concurrent::NotCancellable;
 use crate::durable_host::concurrent::ResolvedCall;
 use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::public_oplog::find_component_revision_at;
-use crate::model::public_oplog::get_public_oplog_chunk;
-use crate::model::public_oplog::search_public_oplog;
+use crate::model::public_oplog::get_guest_oplog_chunk;
+use crate::model::public_oplog::search_guest_oplog;
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::oplog::Host as OplogHost;
 use crate::preview2::golem_api_1_x::oplog::HostGetOplog;
@@ -215,7 +215,7 @@ const GUEST_CLAIM_VISIBILITY: ClaimVisibility = ClaimVisibility::Hidden;
 async fn get_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &GetOplogEntry,
-) -> Result<crate::model::public_oplog::PublicOplogChunk, String> {
+) -> Result<crate::model::public_oplog::PublicOplogChunk<(OplogIndex, PublicOplogEntry)>, String> {
     let identity = ctx
         .state
         .worker_service
@@ -237,7 +237,7 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         .map_err(|error| error.to_string())?
     };
     let agent_type = &identity.create_parameters().agent_type_name;
-    get_public_oplog_chunk(
+    get_guest_oplog_chunk(
         ctx.state.component_service.clone(),
         ctx.state.oplog_service(),
         &entry.owned_agent_id,
@@ -256,7 +256,10 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
 async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &SearchOplogEntry,
-) -> Result<crate::model::public_oplog::PublicOplogSearchResult, String> {
+) -> Result<
+    crate::model::public_oplog::PublicOplogSearchResult<(OplogIndex, PublicOplogEntry)>,
+    String,
+> {
     let identity = ctx
         .state
         .worker_service
@@ -284,7 +287,7 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
     budget.entries = budget
         .entries
         .min(NonZeroU64::new(entry.page_size as u64).expect("search page size is nonzero"));
-    search_public_oplog(
+    search_guest_oplog(
         ctx.state.component_service.clone(),
         ctx.state.oplog_service(),
         &entry.owned_agent_id,
@@ -380,7 +383,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
                     let entries = chunk
                         .entries
                         .into_iter()
-                        .map(|entry| entry.entry)
+                        .map(|(_, entry)| entry)
                         .collect::<Vec<_>>();
                     HostResponseGolemApiOplogChunk {
                         result: serde_json::to_vec(&entries)
@@ -566,13 +569,8 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             let result = get_search_oplog_chunk(self, &entry).await;
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
-                    let entries = chunk
-                        .entries
-                        .into_iter()
-                        .map(|entry| (entry.oplog_index, entry.entry))
-                        .collect::<Vec<_>>();
                     HostResponseGolemApiOplogChunk {
-                        result: serde_json::to_vec(&entries)
+                        result: serde_json::to_vec(&chunk.entries)
                             .map(Some)
                             .map_err(|error| error.to_string()),
                         next_oplog_index: chunk.next_oplog_index,
