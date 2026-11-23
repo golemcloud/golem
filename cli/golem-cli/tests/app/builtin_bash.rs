@@ -556,15 +556,15 @@ async fn compressed_huge() -> impl axum::response::IntoResponse {
 }
 
 // A fixture checkpoint request, parked until the test releases it.
-struct CheckpointArrival {
+pub(super) struct CheckpointArrival {
     idempotency_key: String,
-    release: tokio::sync::oneshot::Sender<()>,
+    pub(super) release: tokio::sync::oneshot::Sender<()>,
 }
 
 // Serve GET /checkpoint: report every request, then answer 204 only after the test releases it.
 // GET /arrivals answers how many checkpoint requests have arrived, so a script can wait until its
 // sibling's request has left rather than only until the sibling has started.
-async fn checkpoint_server() -> (
+pub(super) async fn checkpoint_server() -> (
     SocketAddr,
     tokio::sync::mpsc::UnboundedReceiver<CheckpointArrival>,
     tokio::sync::oneshot::Sender<()>,
@@ -611,7 +611,7 @@ async fn checkpoint_server() -> (
     (address, arrived, stop, server)
 }
 
-async fn next_arrival(
+pub(super) async fn next_arrival(
     arrived: &mut tokio::sync::mpsc::UnboundedReceiver<CheckpointArrival>,
 ) -> CheckpointArrival {
     tokio::time::timeout(Duration::from_secs(120), arrived.recv())
