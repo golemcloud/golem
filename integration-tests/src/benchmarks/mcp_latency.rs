@@ -15,7 +15,7 @@
 use crate::benchmarks::{
     cleanup_user_state, delete_workers, deployment_base_url, deployment_domain, lookup_keyed_agents,
 };
-use crate::mcp_client::McpClient;
+use crate::mcp_client::{McpClient, PROTOCOL_VERSION};
 use async_trait::async_trait;
 use futures::{TryStreamExt, stream};
 use futures_concurrency::future::Join;
@@ -342,14 +342,16 @@ async fn session_requests(
     index: usize,
     recorder: &BenchmarkRecorder,
 ) -> Result<(), Failure> {
-    let client = measured(recorder, "initialize", async {
-        let client = McpClient::initialize(http.clone(), &context.url, &context.domain.0).await?;
-        anyhow::ensure!(
-            client.session_id().is_some(),
-            "initialize issued no session ID"
-        );
-        Ok(client)
-    })
+    let client = measured(
+        recorder,
+        "initialize",
+        McpClient::initialize(
+            http.clone(),
+            &context.url,
+            &context.domain.0,
+            PROTOCOL_VERSION,
+        ),
+    )
     .await?;
     measured(
         recorder,
