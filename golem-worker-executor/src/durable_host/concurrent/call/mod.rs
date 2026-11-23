@@ -52,7 +52,7 @@ pub(crate) use claims::reproduce_incomplete_start_refusal;
 pub(in crate::durable_host::concurrent) use completion_replay::classify_replay_resolution;
 use completion_replay::expect_cancelled_resolution;
 pub(in crate::durable_host::concurrent) use execution::ambient_trap_context;
-pub use state::{CallRecording, ResolvingReplay, SessionState};
+pub use state::{CallRecording, ResolvingReplay, SessionState, UnrecordedStart};
 #[cfg(test)]
 use terminal::encode_response;
 pub(crate) use terminal::end_durable_function_access;
@@ -596,6 +596,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     where
         Pair::Req: TryFrom<HostRequest, Error = String>,
     {
+        if let Some(start) = self.state.unrecorded_start() {
+            return Pair::Req::try_from(start.request.clone()).map_err(|actual| {
+                WorkerExecutorError::runtime(format!(
+                    "unrecorded {} call holds another request: {actual}",
+                    Pair::FQFN
+                ))
+            });
+        }
         let entry = ctx.state.oplog.read(self.start_idx).await?;
         let OplogEntry::Start {
             request: Some(request),
@@ -635,6 +643,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         &self,
         ctx: &DurableWorkerCtx<Ctx>,
     ) -> Result<Option<golem_common::model::oplog::SpanStarted>, WorkerExecutorError> {
+        if let Some(start) = self.state.unrecorded_start() {
+            return Ok(start.span_started.clone());
+        }
         match ctx.state.oplog.read(self.start_idx).await? {
             OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),
             entry => Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -655,6 +666,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
+        if let Some(start) = self.state.unrecorded_start() {
+            return Ok(start.span_started.clone());
+        }
         let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
         match oplog.read(self.start_idx).await? {
             OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),

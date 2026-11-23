@@ -51,8 +51,20 @@
 use super::*;
 
 pub enum CallRecording {
-    Recorded { request_upload: PendingUpload },
-    Unrecorded,
+    Recorded {
+        request_upload: PendingUpload,
+    },
+    /// Snapshotting mode writes no `Start`. The call keeps what its `Start` would hold, so it
+    /// reads its request and span as a recorded call reads them from its `Start`.
+    Unrecorded {
+        start: Box<UnrecordedStart>,
+    },
+}
+
+/// The request and span of a call whose `Start` is not written.
+pub struct UnrecordedStart {
+    pub request: HostRequest,
+    pub span_started: Option<golem_common::model::oplog::SpanStarted>,
 }
 
 enum Phase<P: DropPolicy> {
@@ -287,7 +299,7 @@ impl<P: DropPolicy> SessionState<P> {
     pub fn executing(recording: CallRecording, permit: LiveCallPermit) -> Self {
         let cleanup = match &recording {
             CallRecording::Recorded { .. } => Cleanup::Recorded,
-            CallRecording::Unrecorded => Cleanup::Unrecorded,
+            CallRecording::Unrecorded { .. } => Cleanup::Unrecorded,
         };
         ExecutingCall {
             recording,
@@ -317,13 +329,18 @@ impl<P: DropPolicy> SessionState<P> {
     }
 
     pub fn has_recorded_start(&self) -> bool {
-        !matches!(
-            self.execution(),
+        self.unrecorded_start().is_none()
+    }
+
+    /// What the `Start` of an unrecorded call would hold.
+    pub fn unrecorded_start(&self) -> Option<&UnrecordedStart> {
+        match self.execution() {
             Some(ExecutingCall {
-                recording: CallRecording::Unrecorded,
+                recording: CallRecording::Unrecorded { start },
                 ..
-            })
-        )
+            }) => Some(start),
+            _ => None,
+        }
     }
 
     pub fn is_recorded_execution(&self) -> bool {

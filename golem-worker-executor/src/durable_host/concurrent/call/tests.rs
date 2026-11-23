@@ -354,7 +354,12 @@ fn tool_trap_disposal_does_not_cancel_replay_or_leave_incomplete_calls() {
                         request_upload: PendingUpload::already_durable(),
                     }
                 } else {
-                    CallRecording::Unrecorded
+                    CallRecording::Unrecorded {
+                        start: Box::new(UnrecordedStart {
+                            request: golem_common::model::oplog::HostRequestNoInput {}.into(),
+                            span_started: None,
+                        }),
+                    }
                 },
                 LiveCallPermit::new(Arc::new(AtomicUsize::new(0))),
             )
