@@ -261,9 +261,12 @@ Polar product must have this tax behavior: the page says "plus tax" next to a US
 
 The page shows the overage prices and the amounts of an account in the currency of its
 subscription, with the prices of that currency in the configuration (see
-[Configuration](#configuration)). Before a subscription the page shows no price, and the checkout
-of Polar shows the price in the local currency. When the page cannot read the subscription, it
-shows the usage without prices or costs.
+[Configuration](#configuration)). When the page cannot read the subscription, it shows the usage
+without prices or costs. Before a subscription, the page cannot know the currency: Polar selects it
+only when it creates the checkout, and has no API that selects a currency without a checkout. So
+next to the checkout the page shows the monthly price of the paid plan in each currency, and says
+that the checkout of Polar shows the price before the payment. On the free and the default plan,
+the page shows the usage without overage prices.
 
 The checkout route reads the currency of the checkout that Polar returns. For a currency that the
 app has no prices for, it logs the error `unsupported_currency` and shows the error page, and it
@@ -570,6 +573,7 @@ until the cleanup has deleted the user of the deleted account (see
 | `GOLEM_CLOUD_BILLING_REGISTRY_TOKEN` | | Registry token of the billing account, which has `view`, `set-plan` and `hold-deletion` on every account through a permission share (see [Subscriptions](#subscriptions)). |
 | `GOLEM_CLOUD_BILLING_FREE_PLAN_ID`, `GOLEM_CLOUD_BILLING_PAID_PLAN_ID`, `GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID` | | The plans that a subscription switches between (see [Subscriptions](#subscriptions)). |
 | `GOLEM_CLOUD_BILLING_DEFAULT_PLAN_ID` | | Optional. The default plan of the registry (`initial_plans.default`), if the page offers Paid to an account on it (see [Subscriptions](#subscriptions)). It must differ from the three plans above. |
+| `GOLEM_CLOUD_BILLING_PAID_<code>_PER_MONTH`, with `<code>` `USD`, `EUR` and `GBP` | | The monthly price of the paid plan in each currency, as a decimal number such as `20`: three variables. The page shows them next to the checkout (see [Currencies](#currencies)). Polar charges the fixed prices of the product, so these values must match the product. A change needs a restart, not a new image. |
 | `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_MILLION_GCU`, `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_GB_HOUR`, `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_DURABLE_GB_MONTH`, `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_EPHEMERAL_GB_MONTH`, with `<code>` `USD`, `EUR` and `GBP` | | The overage prices of the paid plan in each currency, as decimal numbers such as `0.045`: twelve variables. The paid plan shows the prices of the currency of the subscription next to the paid-overage switch (see [Currencies](#currencies)). Polar bills with the metered prices of the product, so these values must match the product. A change needs a restart, not a new image. |
 | `GOLEM_CLOUD_BILLING_PAST_DUE_GRACE` | `7 days` | How long an account keeps the paid plan after a payment of its subscription fails, as a duration such as `7 days` or `30 minutes` (see [Subscriptions](#subscriptions)). `0 seconds` turns the past-due grace off. Polar revokes the subscription after its last retry, 21 days after the failed payment, so a longer value has no effect. A test can use a short value, so that the past-due grace ends within the test. |
 | `POLAR_API_URL` | | `https://sandbox-api.polar.sh` or `https://api.polar.sh`. |
@@ -582,7 +586,7 @@ until the cleanup has deleted the user of the deleted account (see
 
 | Path | Purpose |
 | --- | --- |
-| `GET /` | Landing page: the sign-in form, or the plan, the account and the CLI command. |
+| `GET /` | Landing page: the sign-in form, or the plan, the usage of the month, the account and the CLI command. |
 | `POST /sign-in/github`, `POST /sign-out` | Form targets of the landing page. |
 | `POST /billing/checkout`, `POST /billing/settle`, `POST /billing/portal` | Form targets of the plan: redirect to the checkout of the paid plan, the checkout of a settlement, or the customer portal of Polar. |
 | `POST /billing/overage` | Form target of the paid-overage switch of the paid plan. It sets the monthly usage mode of the account (`allowOverage` or `hardLimit`) with the registry token of the session: the registry accepts paid overage only from the owner, and records the consent. The executors apply the change within 5 minutes, and the page says so. |

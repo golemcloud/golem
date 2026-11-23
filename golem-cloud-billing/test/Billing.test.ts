@@ -218,6 +218,15 @@ describe("Polar billing", () => {
       })
     })
 
+    it("shows the monthly price of Pro in each currency next to the checkout", async () => {
+      const { jar } = await signedIn()
+
+      const html = await page(jar)
+
+      expect(html).toMatch(/<form method="post" action="\/billing\/checkout">\s*<button type="submit" class="btn btn-primary">Upgrade to Pro<\/button>\s*<\/form>\s*<\/div>\s*<p class="price-note">/)
+      expect(html).toContain("Pro costs <strong>$20</strong> a month plus tax. In euro countries it costs <strong>€24</strong>, and in the UK <strong>£19</strong>, including tax. Polar's checkout shows your price before you pay.")
+    })
+
     it("refuses a checkout form that another site posts", async () => {
       const { jar } = await signedIn()
 
@@ -253,10 +262,12 @@ describe("Polar billing", () => {
       upstreams.planOf(accountId).planId = planId
 
       expectRefused(await postCheckout(jar))
-      expect(await page(jar)).not.toContain(`action="/billing/checkout"`)
+      const html = await page(jar)
+      expect(html).not.toContain(`action="/billing/checkout"`)
+      expect(html).not.toContain("Pro costs")
     })
 
-    it("offers Paid to an account on the default plan of the registry, and starts its checkout", async () => {
+    it("offers Pro to an account on the default plan of the registry, and starts its checkout", async () => {
       const { jar, accountId } = await signedIn()
       upstreams.planOf(accountId).planId = registryDefaultPlanId
 
@@ -264,6 +275,8 @@ describe("Polar billing", () => {
       expect(body).toContain("<h1>Default</h1>")
       expect(body).toContain("When the subscription ends, your plan changes to Free, not back to Default.")
       expect(body).toContain(`action="/billing/checkout"`)
+      expect(body).toContain("Pro costs <strong>$20</strong> a month plus tax. In euro countries it costs <strong>€24</strong>, and in the UK <strong>£19</strong>, including tax. Polar's checkout shows your price before you pay.")
+      expect(body).toContain("2.5M of 100M GCU included · 3%")
       const response = await postCheckout(jar)
       expect(response.status).toBe(303)
       expect(response.headers.get("location")).toBe("https://sandbox.polar.sh/checkout/polar_c_1")
@@ -489,11 +502,16 @@ describe("Polar billing", () => {
       expect(html).not.toContain(`action="/billing/overage"`)
     })
 
-    it("shows no switch on the free plan", async () => {
+    it("shows the usage on the free plan, without a switch, prices or costs", async () => {
       const { jar } = await signedIn()
 
-      expect(await page(jar)).not.toContain(`action="/billing/overage"`)
-      expect(upstreams.requests.filter((request) => request.url.pathname.endsWith("/limits"))).toEqual([])
+      const html = await page(jar)
+
+      expect(html).toContain("Monthly usage")
+      expect(html).toContain("2.5M of 100M GCU included · 3%")
+      expect(html).toContain("When the account uses all of its monthly allowance, its agents stop until the next month.")
+      expect(html).not.toContain(`action="/billing/overage"`)
+      expect(html).not.toContain("per million GCU")
     })
 
     it("refuses an overage form that another site posts", async () => {

@@ -1,7 +1,13 @@
 import { ConfigProvider, Effect, Exit } from "effect"
 import { describe, expect, it } from "vitest"
-import { type OveragePrices, overagePricesConfig, pastDueGraceMs, plansConfig } from "../src/BillingConfig.ts"
-import { overagePrices } from "./support.ts"
+import {
+  monthlyPricesConfig,
+  type OveragePrices,
+  overagePricesConfig,
+  pastDueGraceMs,
+  plansConfig
+} from "../src/BillingConfig.ts"
+import { monthlyPrices, overagePrices } from "./support.ts"
 
 const MINUTE = 60 * 1000
 
@@ -60,6 +66,32 @@ describe("the plan IDs", () => {
 
   it("refuses two plans that subscriptions switch between with the same ID", async () => {
     expect(Exit.isFailure(await readPlans({ ...managed, GOLEM_CLOUD_BILLING_SUSPENDED_PLAN_ID: free }))).toBe(true)
+  })
+})
+
+describe("the monthly prices", () => {
+  const env = {
+    GOLEM_CLOUD_BILLING_PAID_USD_PER_MONTH: monthlyPrices.usd,
+    GOLEM_CLOUD_BILLING_PAID_EUR_PER_MONTH: monthlyPrices.eur,
+    GOLEM_CLOUD_BILLING_PAID_GBP_PER_MONTH: monthlyPrices.gbp
+  }
+
+  const readPrices = (env: Record<string, string>) =>
+    Effect.runPromiseExit(monthlyPricesConfig.parse(ConfigProvider.fromEnvRecord(env)))
+
+  it("reads the price of each currency from the variable of its code", async () => {
+    expect(await readPrices(env)).toEqual(Exit.succeed(monthlyPrices))
+  })
+
+  it("refuses a currency without its price", async () => {
+    const { GOLEM_CLOUD_BILLING_PAID_EUR_PER_MONTH: _, ...withoutOne } = env
+    expect(Exit.isFailure(await readPrices(withoutOne))).toBe(true)
+  })
+
+  it("refuses a price that is not a decimal number", async () => {
+    for (const value of ["£19", "19,00", ""]) {
+      expect(Exit.isFailure(await readPrices({ ...env, GOLEM_CLOUD_BILLING_PAID_GBP_PER_MONTH: value }))).toBe(true)
+    }
   })
 })
 

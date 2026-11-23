@@ -68,6 +68,12 @@ export interface BillingConfigShape {
    * that an administrator gave the account.
    */
   readonly defaultPlanId: string | undefined
+  /**
+   * The monthly price of the paid plan in each currency of the Polar product, as a decimal string
+   * in the major unit of the currency, such as `20`. Polar charges the fixed prices of its product;
+   * these values only show the prices, so they must match the product.
+   */
+  readonly monthlyPrices: PerCurrency<string>
   /** The overage prices of the paid plan in each currency of the Polar product. */
   readonly overagePrices: PerCurrency<OveragePrices>
   /**
@@ -126,6 +132,14 @@ const decimalString = (name: string): Config.Config<string> =>
         : invalid(`${name} must be a decimal number, such as 0.045, got ${value}`)
     )
   )
+
+/**
+ * The monthly price of the paid plan in each currency, from `GOLEM_CLOUD_BILLING_PAID_<code>_PER_MONTH`,
+ * where the code is `USD`, `EUR` or `GBP`.
+ */
+export const monthlyPricesConfig: Config.Config<PerCurrency<string>> = perCurrencyConfig((code) =>
+  decimalString(`GOLEM_CLOUD_BILLING_PAID_${code}_PER_MONTH`)
+)
 
 /**
  * The overage prices of each currency, from `GOLEM_CLOUD_BILLING_OVERAGE_<code>_PER_MILLION_GCU`,
@@ -229,6 +243,7 @@ export const billingConfig: Config.Config<BillingConfigShape> = Config.all({
   publicApiUrl: Config.URL("GOLEM_CLOUD_BILLING_PUBLIC_API_URL"),
   registryBillingToken: Config.Redacted("GOLEM_CLOUD_BILLING_REGISTRY_TOKEN"),
   planIds: plansConfig,
+  monthlyPrices: monthlyPricesConfig,
   overagePrices: overagePricesConfig,
   pastDueGraceMs,
   polar: Config.all({

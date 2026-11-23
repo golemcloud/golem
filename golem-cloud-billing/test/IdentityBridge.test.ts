@@ -245,7 +245,7 @@ describe("GitHub sign-in", () => {
     expect(body).toContain(breakAtHyphens(upstreams.registryAccount.accountId).value)
     expect(body).toContain("octocat@example.com")
     expect(body).toContain("golem profile new golem-cloud --url https://release.dev-api.golem.cloud --set-active")
-    expect(body).toMatch(/<form method="post" action="\/billing\/checkout">\s*<button type="submit"[^>]*>Upgrade to Paid<\/button>/)
+    expect(body).toMatch(/<form method="post" action="\/billing\/checkout">\s*<button type="submit"[^>]*>Upgrade to Pro<\/button>/)
   })
 
   it("extends a session that is older than a day when the user opens the page", async () => {

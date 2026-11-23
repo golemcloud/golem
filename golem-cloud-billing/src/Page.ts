@@ -210,8 +210,13 @@ export interface SignedInPageOptions {
    */
   readonly settlementPending: boolean
   readonly cliCommand: string
-  /** The monthly usage mode of a paid account; `undefined` on another plan or when the call failed. */
+  /**
+   * The monthly usage mode and the usage of an account on the paid, free or default plan;
+   * `undefined` on another plan or when the call failed.
+   */
   readonly limits: AccountLimits | undefined
+  /** The monthly price of the paid plan in each currency; the page shows them all before a checkout. */
+  readonly monthlyPrices: PerCurrency<string>
   /** The overage prices of the paid plan in each currency; the page shows the ones of the subscription. */
   readonly overagePrices: PerCurrency<OveragePrices>
   readonly overageNotice: OverageNotice | undefined
@@ -222,7 +227,7 @@ const longDate = new Intl.DateTimeFormat("en", { dateStyle: "long", timeZone: "U
 const longDateTime = new Intl.DateTimeFormat("en", { dateStyle: "long", timeStyle: "short", timeZone: "UTC" })
 
 const checkoutForm = html`<form method="post" action="/billing/checkout">
-            <button type="submit" class="btn btn-primary">Upgrade to Paid</button>
+            <button type="submit" class="btn btn-primary">Upgrade to Pro</button>
           </form>`
 
 const settleForm = (settlement: SettlementOffer) => html`<form method="post" action="/billing/settle">
@@ -283,11 +288,12 @@ const planHero = (options: SignedInPageOptions) => {
       if (canCheckOut(options.plan, options.subscription)) {
         return html`<span class="eyebrow">Your plan</span>
         <h1>Free</h1>
-        <p class="lead">Paid has larger monthly allowances. You pay through Polar.</p>
+        <p class="lead">Pro has larger monthly allowances. You pay through Polar.</p>
         <div class="actions">
           ${checkoutForm}
           ${options.subscription === undefined ? null : portalForm("Billing history")}
-        </div>`
+        </div>
+        ${monthlyPriceNote(options.monthlyPrices)}`
       }
       // On the free plan, `canCheckOut` refuses only an account with a `past_due` subscription.
       return html`<span class="eyebrow">Your plan</span>
@@ -300,11 +306,12 @@ const planHero = (options: SignedInPageOptions) => {
       if (canCheckOut(options.plan, options.subscription)) {
         return html`<span class="eyebrow">Your plan</span>
         <h1>Default</h1>
-        <p class="lead">Golem gave this account its default plan. Paid has larger monthly allowances. You pay through Polar. When the subscription ends, your plan changes to Free, not back to Default.</p>
+        <p class="lead">Golem gave this account its default plan. Pro has larger monthly allowances. You pay through Polar. When the subscription ends, your plan changes to Free, not back to Default.</p>
         <div class="actions">
           ${checkoutForm}
           ${options.subscription === undefined ? null : portalForm("Billing history")}
-        </div>`
+        </div>
+        ${monthlyPriceNote(options.monthlyPrices)}`
       }
       // On the default plan, `canCheckOut` refuses only an account with a `past_due` subscription.
       return html`<span class="eyebrow">Your plan</span>
@@ -370,6 +377,23 @@ const priceFormat: PerCurrency<Intl.NumberFormat> = perCurrency(
 const minorUnits = (currency: Currency, amount: number): string => moneyFormat[currency].format(amount / 100)
 
 const taxNote = (currency: Currency): string => (taxIncluded[currency] ? "including tax" : "plus tax")
+
+// A monthly price shows no decimals when it has none, such as $20.
+const monthlyPriceFormat: PerCurrency<Intl.NumberFormat> = perCurrency(
+  (currency) =>
+    new Intl.NumberFormat("en", { style: "currency", currency: isoCode(currency), trailingZeroDisplay: "stripIfInteger" })
+)
+
+/**
+ * The monthly price of the paid plan in each currency, next to the checkout. The page cannot know
+ * the currency of a checkout before Polar creates it: Polar selects EUR in a euro country, GBP in
+ * the UK and USD elsewhere.
+ */
+const monthlyPriceNote = (prices: PerCurrency<string>) => {
+  const price = (currency: Currency) =>
+    monthlyPriceFormat[currency].format(prices[currency] as Intl.StringNumericLiteral)
+  return html`<p class="price-note">Pro costs <strong>${price("usd")}</strong> a month ${taxNote("usd")}. In euro countries it costs <strong>${price("eur")}</strong>, and in the UK <strong>${price("gbp")}</strong>, ${taxNote("eur")}. Polar's checkout shows your price before you pay.</p>`
+}
 
 /**
  * The overage prices that the page shows: the ones in the currency of the subscription. The page
@@ -515,11 +539,22 @@ const priceList = ({ currency, prices }: Pricing) => {
 }
 
 /**
- * The usage of the month against the allowance of a paid account, and its paid-overage switch with
- * the overage prices. Without the card, only the notice of the last post of the overage form shows.
+ * The usage of the month against the allowance: on the free and the default plan without paid
+ * overage, and on the paid plan with its paid-overage switch and the overage prices. Without the
+ * card, only the notice of the last post of the overage form shows.
  */
 const usageCard = (options: SignedInPageOptions) => {
-  if (options.plan !== "paid" || options.checkoutPending || options.limits?.overageAllowedByPlan !== true) {
+  if (options.checkoutPending || options.limits === undefined) {
+    return overageNoticeHtml(options.overageNotice)
+  }
+  if (options.plan === "free" || options.plan === "default") {
+    return html`${overageNoticeHtml(options.overageNotice)}<section class="card usage-card" aria-labelledby="usage-heading">
+        <h2 id="usage-heading">Monthly usage</h2>
+        ${usageSection(options.limits, undefined, undefined)}
+        <p class="muted">When the account uses all of its monthly allowance, its agents stop until the next month.</p>
+      </section>`
+  }
+  if (options.plan !== "paid" || options.limits.overageAllowedByPlan !== true) {
     return overageNoticeHtml(options.overageNotice)
   }
   const on = options.limits.monthlyUsageMode === "allowOverage"

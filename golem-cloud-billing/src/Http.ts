@@ -255,10 +255,10 @@ export const routes = HttpRouter.use((router) =>
         const paidOrderIds = (params.get(settlementOrdersParam) ?? "").split(",").filter((id) => id !== "")
         const settlementPending = debt !== undefined && paidOrderIds.some((id) => debt.unpaidOrderIds.includes(id))
         const limits: AccountLimits | undefined =
-          plan === "paid"
+          plan === "paid" || plan === "free" || plan === "default"
             ? yield* registry.getLimits(user.golemToken, user.golemAccountId).pipe(
                 Effect.catch((error) =>
-                  Effect.logWarning("Cannot read the monthly usage mode").pipe(
+                  Effect.logWarning("Cannot read the limits of the account").pipe(
                     Effect.annotateLogs({ golemAccountId: user.golemAccountId, error: error.message }),
                     Effect.as(undefined)
                   )
@@ -282,6 +282,7 @@ export const routes = HttpRouter.use((router) =>
             settlementPending,
             cliCommand,
             limits,
+            monthlyPrices: config.monthlyPrices,
             overagePrices: config.overagePrices,
             overageNotice: overageNoticeOf(params.get("overage"))
           })
