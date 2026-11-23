@@ -18,10 +18,28 @@
 //! the suite reads back. The suite writes these trees and reads them back with its own code, not
 //! with the code of a store. So a defect of a store cannot hide in the check.
 
-use std::fs::Metadata;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
+
+#[cfg(unix)]
+#[path = "unix.rs"]
+mod platform;
+#[cfg(not(unix))]
+#[path = "other.rs"]
+mod platform;
+pub(in crate::filesystem_snapshot) use native_fixture::fixture;
+pub(in crate::filesystem_snapshot) use platform::mode_of;
+use platform::{make_symlink, set_mode, writable};
+
+#[cfg(windows)]
+mod cleanup_policy {
+    pub(super) const MAKE_FILES_WRITABLE: bool = true;
+}
+#[cfg(not(windows))]
+mod cleanup_policy {
+    pub(super) const MAKE_FILES_WRITABLE: bool = false;
+}
 
 /// A temporary directory that goes away with all that is in it, also when a directory or a file
 /// below it is read-only.
@@ -58,22 +76,10 @@ fn make_writable(directory: &Path) {
             if metadata.is_dir() {
                 let _ = std::fs::set_permissions(&path, writable(metadata.permissions()));
                 make_writable(&path);
-            } else if cfg!(windows) && metadata.is_file() {
+            } else if cleanup_policy::MAKE_FILES_WRITABLE && metadata.is_file() {
                 let _ = std::fs::set_permissions(&path, writable(metadata.permissions()));
             }
         });
-}
-
-#[cfg(unix)]
-fn writable(permissions: std::fs::Permissions) -> std::fs::Permissions {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::Permissions::from_mode(permissions.mode() | 0o700)
-}
-
-#[cfg(not(unix))]
-fn writable(mut permissions: std::fs::Permissions) -> std::fs::Permissions {
-    permissions.set_readonly(false);
-    permissions
 }
 
 /// One entry of a listing: its path below the root, what it is, its permission bits and its
@@ -136,17 +142,6 @@ fn add_listed(directory: &Path, relative: &Path, listed: Vec<Listed>) -> Vec<Lis
         })
 }
 
-#[cfg(unix)]
-pub(in crate::filesystem_snapshot) fn mode_of(metadata: &Metadata) -> u32 {
-    use std::os::unix::fs::PermissionsExt;
-    metadata.permissions().mode() & 0o7777
-}
-
-#[cfg(not(unix))]
-pub(in crate::filesystem_snapshot) fn mode_of(metadata: &Metadata) -> u32 {
-    u32::from(metadata.permissions().readonly())
-}
-
 /// One entry of a tree that the suite writes.
 pub(in crate::filesystem_snapshot) enum Spec {
     Directory { mode: u32 },
@@ -207,29 +202,6 @@ fn time_of(index: usize) -> SystemTime {
     UNIX_EPOCH + Duration::new(1_700_000_000 + index as u64 * 1_000, 123_456_789)
 }
 
-#[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-}
-
-#[cfg(not(unix))]
-fn set_mode(path: &Path, mode: u32) {
-    let mut permissions = std::fs::metadata(path).unwrap().permissions();
-    permissions.set_readonly(mode & 0o200 == 0);
-    std::fs::set_permissions(path, permissions).unwrap();
-}
-
-#[cfg(unix)]
-fn make_symlink(target: &str, link: &Path) {
-    std::os::unix::fs::symlink(target, link).unwrap();
-}
-
-#[cfg(not(unix))]
-fn make_symlink(_target: &str, _link: &Path) {
-    unreachable!("the fixture has symlinks only on unix");
-}
-
 /// Gives `size` bytes that do not repeat in a short period. So a store that compresses its data or
 /// cuts it into parts cannot make them small.
 pub(in crate::filesystem_snapshot) fn pattern(size: usize) -> Box<[u8]> {
@@ -245,126 +217,134 @@ pub(in crate::filesystem_snapshot) fn pattern(size: usize) -> Box<[u8]> {
 
 /// The fixture that holds each kind of entry and each attribute that a snapshot keeps.
 #[cfg(unix)]
-pub(in crate::filesystem_snapshot) fn fixture() -> Vec<(&'static str, Spec)> {
-    vec![
-        (
-            "a.txt",
-            Spec::File {
-                content: Box::from(&b"alpha"[..]),
-                mode: 0o644,
-            },
-        ),
-        (
-            "absolute-link",
-            Spec::Symlink {
-                target: "/absolute/target",
-            },
-        ),
-        (
-            "big.bin",
-            Spec::File {
-                content: pattern(3 * 1024 * 1024),
-                mode: 0o600,
-            },
-        ),
-        (
-            "dangling",
-            Spec::Symlink {
-                target: "missing/target",
-            },
-        ),
-        ("dir", Spec::Directory { mode: 0o755 }),
-        ("dir/link-to-file", Spec::Symlink { target: "../a.txt" }),
-        ("dir/nested", Spec::Directory { mode: 0o700 }),
-        (
-            "dir/nested/deep.txt",
-            Spec::File {
-                content: Box::from(&b"deep"[..]),
-                mode: 0o640,
-            },
-        ),
-        ("dir-link", Spec::Symlink { target: "dir" }),
-        (
-            "empty",
-            Spec::File {
-                content: Box::default(),
-                mode: 0o644,
-            },
-        ),
-        ("empty-dir", Spec::Directory { mode: 0o755 }),
-        ("locked", Spec::Directory { mode: 0o555 }),
-        (
-            "locked/inside.txt",
-            Spec::File {
-                content: Box::from(&b"inside"[..]),
-                mode: 0o644,
-            },
-        ),
-        (
-            "name with space é.txt",
-            Spec::File {
-                content: Box::from(&b"unicode"[..]),
-                mode: 0o644,
-            },
-        ),
-        (
-            "read-only.txt",
-            Spec::File {
-                content: Box::from(&b"read only"[..]),
-                mode: 0o444,
-            },
-        ),
-        (
-            "run.sh",
-            Spec::File {
-                content: Box::from(&b"#!/bin/sh\n"[..]),
-                mode: 0o755,
-            },
-        ),
-    ]
+mod native_fixture {
+    use super::{Spec, pattern};
+
+    pub(in crate::filesystem_snapshot) fn fixture() -> Vec<(&'static str, Spec)> {
+        vec![
+            (
+                "a.txt",
+                Spec::File {
+                    content: Box::from(&b"alpha"[..]),
+                    mode: 0o644,
+                },
+            ),
+            (
+                "absolute-link",
+                Spec::Symlink {
+                    target: "/absolute/target",
+                },
+            ),
+            (
+                "big.bin",
+                Spec::File {
+                    content: pattern(3 * 1024 * 1024),
+                    mode: 0o600,
+                },
+            ),
+            (
+                "dangling",
+                Spec::Symlink {
+                    target: "missing/target",
+                },
+            ),
+            ("dir", Spec::Directory { mode: 0o755 }),
+            ("dir/link-to-file", Spec::Symlink { target: "../a.txt" }),
+            ("dir/nested", Spec::Directory { mode: 0o700 }),
+            (
+                "dir/nested/deep.txt",
+                Spec::File {
+                    content: Box::from(&b"deep"[..]),
+                    mode: 0o640,
+                },
+            ),
+            ("dir-link", Spec::Symlink { target: "dir" }),
+            (
+                "empty",
+                Spec::File {
+                    content: Box::default(),
+                    mode: 0o644,
+                },
+            ),
+            ("empty-dir", Spec::Directory { mode: 0o755 }),
+            ("locked", Spec::Directory { mode: 0o555 }),
+            (
+                "locked/inside.txt",
+                Spec::File {
+                    content: Box::from(&b"inside"[..]),
+                    mode: 0o644,
+                },
+            ),
+            (
+                "name with space é.txt",
+                Spec::File {
+                    content: Box::from(&b"unicode"[..]),
+                    mode: 0o644,
+                },
+            ),
+            (
+                "read-only.txt",
+                Spec::File {
+                    content: Box::from(&b"read only"[..]),
+                    mode: 0o444,
+                },
+            ),
+            (
+                "run.sh",
+                Spec::File {
+                    content: Box::from(&b"#!/bin/sh\n"[..]),
+                    mode: 0o755,
+                },
+            ),
+        ]
+    }
 }
 
 /// The fixture on a platform without unix permissions and without symlinks for every user.
 #[cfg(not(unix))]
-pub(in crate::filesystem_snapshot) fn fixture() -> Vec<(&'static str, Spec)> {
-    vec![
-        (
-            "a.txt",
-            Spec::File {
-                content: Box::from(&b"alpha"[..]),
-                mode: 0o644,
-            },
-        ),
-        (
-            "big.bin",
-            Spec::File {
-                content: pattern(3 * 1024 * 1024),
-                mode: 0o644,
-            },
-        ),
-        ("dir", Spec::Directory { mode: 0o755 }),
-        ("dir/nested", Spec::Directory { mode: 0o755 }),
-        (
-            "dir/nested/deep.txt",
-            Spec::File {
-                content: Box::from(&b"deep"[..]),
-                mode: 0o644,
-            },
-        ),
-        (
-            "empty",
-            Spec::File {
-                content: Box::default(),
-                mode: 0o644,
-            },
-        ),
-        ("empty-dir", Spec::Directory { mode: 0o755 }),
-        (
-            "read-only.txt",
-            Spec::File {
-                content: Box::from(&b"read only"[..]),
-                mode: 0o444,
-            },
-        ),
-    ]
+mod native_fixture {
+    use super::{Spec, pattern};
+
+    pub(in crate::filesystem_snapshot) fn fixture() -> Vec<(&'static str, Spec)> {
+        vec![
+            (
+                "a.txt",
+                Spec::File {
+                    content: Box::from(&b"alpha"[..]),
+                    mode: 0o644,
+                },
+            ),
+            (
+                "big.bin",
+                Spec::File {
+                    content: pattern(3 * 1024 * 1024),
+                    mode: 0o644,
+                },
+            ),
+            ("dir", Spec::Directory { mode: 0o755 }),
+            ("dir/nested", Spec::Directory { mode: 0o755 }),
+            (
+                "dir/nested/deep.txt",
+                Spec::File {
+                    content: Box::from(&b"deep"[..]),
+                    mode: 0o644,
+                },
+            ),
+            (
+                "empty",
+                Spec::File {
+                    content: Box::default(),
+                    mode: 0o644,
+                },
+            ),
+            ("empty-dir", Spec::Directory { mode: 0o755 }),
+            (
+                "read-only.txt",
+                Spec::File {
+                    content: Box::from(&b"read only"[..]),
+                    mode: 0o444,
+                },
+            ),
+        ]
+    }
 }

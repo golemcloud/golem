@@ -14,7 +14,7 @@ use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting}
 
 macro_rules! pending_case {
     ($name:ident, Storage, $mode:ident) => {
-        pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+        pending_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
         $(#[$attr])*
@@ -43,12 +43,18 @@ pending_case!(durable_p2_block_memory_quota, Memory, Durable);
 pending_case!(ephemeral_p2_block_memory_quota, Memory, Ephemeral);
 pending_case!(durable_p2_block_compute_quota_prepaid, Compute, Durable);
 pending_case!(ephemeral_p2_block_compute_quota_prepaid, Compute, Ephemeral);
-pending_case!(durable_p2_block_managed_xfs_storage_quota, Storage, Durable);
-pending_case!(
-    ephemeral_p2_block_managed_xfs_storage_quota,
-    Storage,
-    Ephemeral
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    pending_case!(durable_p2_block_managed_xfs_storage_quota, Storage, Durable);
+    pending_case!(
+        ephemeral_p2_block_managed_xfs_storage_quota,
+        Storage,
+        Ephemeral
+    );
+}
 
 #[test]
 #[timeout("2m")]

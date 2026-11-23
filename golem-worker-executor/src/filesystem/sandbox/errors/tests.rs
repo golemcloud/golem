@@ -103,22 +103,27 @@ async fn volume_task_failure_remains_terminal_after_conversion() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn unix_storage_errors_are_terminal_only_when_the_storage_is_unavailable() {
-    [libc::EIO, libc::ESTALE, libc::ENODEV]
-        .into_iter()
-        .for_each(|errno| {
-            assert!(is_terminal_storage_errno(
-                &std::io::Error::from_raw_os_error(errno)
-            ));
-        });
-    [libc::ENOSPC, libc::EAGAIN, libc::EINTR, libc::EXDEV]
-        .into_iter()
-        .for_each(|errno| {
-            assert!(!is_terminal_storage_errno(
-                &std::io::Error::from_raw_os_error(errno)
-            ));
-        });
+mod native_errno {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn unix_storage_errors_are_terminal_only_when_the_storage_is_unavailable() {
+        [libc::EIO, libc::ESTALE, libc::ENODEV]
+            .into_iter()
+            .for_each(|errno| {
+                assert!(is_terminal_storage_errno(
+                    &std::io::Error::from_raw_os_error(errno)
+                ));
+            });
+        [libc::ENOSPC, libc::EAGAIN, libc::EINTR, libc::EXDEV]
+            .into_iter()
+            .for_each(|errno| {
+                assert!(!is_terminal_storage_errno(
+                    &std::io::Error::from_raw_os_error(errno)
+                ));
+            });
+    }
 }
 
 #[test]
@@ -185,31 +190,39 @@ fn storage_error_debug_output_names_each_fact() {
 }
 
 #[cfg(target_os = "linux")]
-#[test]
-fn namespace_operation_errors_preserve_raw_terminal_errno() {
-    for (operation, errno) in [
-        ("hard-link sandbox filesystem path", libc::EIO),
-        ("rename sandbox filesystem path", libc::ESTALE),
-        ("rename sandbox filesystem path", libc::ENODEV),
-    ] {
-        let error =
-            FilesystemStorageError::io(operation, None, std::io::Error::from_raw_os_error(errno));
-        assert_eq!(
-            error.io_error().and_then(std::io::Error::raw_os_error),
-            Some(errno)
-        );
-        assert!(error.is_terminal_failure());
-    }
+mod linux {
+    use super::*;
+    use test_r::test;
 
-    let cross_device = FilesystemStorageError::io(
-        "hard-link sandbox filesystem path",
-        None,
-        std::io::Error::from_raw_os_error(libc::EXDEV),
-    );
-    assert_eq!(
-        cross_device
-            .io_error()
-            .and_then(std::io::Error::raw_os_error),
-        Some(libc::EXDEV)
-    );
+    #[test]
+    fn namespace_operation_errors_preserve_raw_terminal_errno() {
+        for (operation, errno) in [
+            ("hard-link sandbox filesystem path", libc::EIO),
+            ("rename sandbox filesystem path", libc::ESTALE),
+            ("rename sandbox filesystem path", libc::ENODEV),
+        ] {
+            let error = FilesystemStorageError::io(
+                operation,
+                None,
+                std::io::Error::from_raw_os_error(errno),
+            );
+            assert_eq!(
+                error.io_error().and_then(std::io::Error::raw_os_error),
+                Some(errno)
+            );
+            assert!(error.is_terminal_failure());
+        }
+
+        let cross_device = FilesystemStorageError::io(
+            "hard-link sandbox filesystem path",
+            None,
+            std::io::Error::from_raw_os_error(libc::EXDEV),
+        );
+        assert_eq!(
+            cross_device
+                .io_error()
+                .and_then(std::io::Error::raw_os_error),
+            Some(libc::EXDEV)
+        );
+    }
 }
