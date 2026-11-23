@@ -287,11 +287,13 @@ fn refuses_secret_paths_in_typed_defaults() {
         AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
             path: vec!["nested".into(), "credential".into()],
+            default_value: None,
             value_type: SchemaType::string(),
         },
         AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
             path: vec!["nested".into(), "records".into()],
+            default_value: None,
             value_type: SchemaType::list(SchemaType::record_from_fields([(
                 "credential",
                 SchemaType::secret(SecretSpec::default()),
@@ -334,6 +336,7 @@ fn only_the_matching_union_branch_contributes_file_defaults() {
     let declaration = AgentConfigDeclarationSchema {
         source: AgentConfigSource::Local,
         path: vec!["input".into()],
+        default_value: None,
         value_type: SchemaType::union(UnionSpec {
             branches: [("file", file), ("text", SchemaType::string())]
                 .into_iter()
@@ -385,6 +388,7 @@ fn rejects_secret_defaults_only_in_the_selected_union_branch() {
         .push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
             path: vec!["input".into()],
+            default_value: None,
             value_type: SchemaType::union(UnionSpec {
                 branches: [
                     ("public", SchemaType::string()),

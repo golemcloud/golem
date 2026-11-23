@@ -114,6 +114,39 @@ pub struct OplogExportHtmlWriter {
     entries: usize,
 }
 
+#[cfg(unix)]
+mod platform {
+    use anyhow::Context;
+    use std::path::Path;
+
+    pub(super) fn temporary(parent: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+        tempfile::Builder::new()
+            .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666))
+            .tempfile_in(parent)
+    }
+
+    pub(super) fn preserve_mode(file: &std::fs::File, path: &Path) -> anyhow::Result<()> {
+        if let Ok(existing) = std::fs::metadata(path) {
+            file.set_permissions(existing.permissions())
+                .with_context(|| format!("failed to set the mode of {}", path.display()))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+mod platform {
+    use std::path::Path;
+
+    pub(super) fn temporary(parent: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+        tempfile::NamedTempFile::new_in(parent)
+    }
+
+    pub(super) fn preserve_mode(_file: &std::fs::File, _path: &Path) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
 impl OplogExportHtmlWriter {
     pub fn create(path: &Path, title: &str) -> anyhow::Result<Self> {
         let parent = match path.parent() {
@@ -127,21 +160,11 @@ impl OplogExportHtmlWriter {
         // The file gets the mode that a plain `--html` write gives it: an existing target keeps
         // its mode, and a new file gets 0666 under the umask instead of the 0600 of a temporary
         // file.
-        #[cfg(unix)]
-        let file = tempfile::Builder::new()
-            .permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666))
-            .tempfile_in(&parent);
-        #[cfg(not(unix))]
-        let file = tempfile::NamedTempFile::new_in(&parent);
+        let file = platform::temporary(&parent);
         let mut file = file.with_context(|| {
             format!("failed to create a temporary file in {}", parent.display())
         })?;
-        #[cfg(unix)]
-        if let Ok(existing) = std::fs::metadata(path) {
-            file.as_file()
-                .set_permissions(existing.permissions())
-                .with_context(|| format!("failed to set the mode of {}", path.display()))?;
-        }
+        platform::preserve_mode(file.as_file(), path)?;
         let (prefix, suffix) = template_parts(title)?;
         file.write_all(prefix.as_bytes())?;
         Ok(Self {
@@ -441,23 +464,28 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn export_html_writer_keeps_the_mode_of_a_plain_write() {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        let dir = tempfile::tempdir().unwrap();
+    mod unix {
+        use super::*;
+        use test_r::test;
 
-        let plain = dir.path().join("plain.html");
-        std::fs::write(&plain, "x").unwrap();
-        let new = dir.path().join("new.html");
-        write_export(&new, &[]);
-        assert_eq!(mode(&new), mode(&plain));
+        #[test]
+        fn export_html_writer_keeps_the_mode_of_a_plain_write() {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            let dir = tempfile::tempdir().unwrap();
 
-        let existing = dir.path().join("existing.html");
-        std::fs::write(&existing, "old").unwrap();
-        std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o640)).unwrap();
-        write_export(&existing, &[]);
-        assert_eq!(mode(&existing), 0o640);
+            let plain = dir.path().join("plain.html");
+            std::fs::write(&plain, "x").unwrap();
+            let new = dir.path().join("new.html");
+            write_export(&new, &[]);
+            assert_eq!(mode(&new), mode(&plain));
+
+            let existing = dir.path().join("existing.html");
+            std::fs::write(&existing, "old").unwrap();
+            std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o640)).unwrap();
+            write_export(&existing, &[]);
+            assert_eq!(mode(&existing), 0o640);
+        }
     }
 
     #[test]

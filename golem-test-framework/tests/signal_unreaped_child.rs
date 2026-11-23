@@ -28,14 +28,14 @@
 //! The gate is for the compiler rather than the test runner: `libc::SIGSTOP` and `libc::kill` do
 //! not exist on Windows, so without it the daily Windows job, which only builds, would fail to
 //! compile. It runs no tests, and the sharding suite that uses the pause is Linux-only in CI, so
-//! the gate costs no coverage. `SpawnedWorkerExecutor::pause`/`resume` keep `#[cfg(not(unix))]`
-//! arms that panic naming the platform, so running the suite there fails with the real reason.
+//! the gate costs no coverage. `SpawnedWorkerExecutor::pause`/`resume` use a selected platform
+//! implementation that panics on non-Unix systems, so the suite fails with the real reason there.
 
 test_r::enable!();
 
 #[cfg(unix)]
 mod unix {
-    use golem_test_framework::components::worker_executor::spawned::signal_unreaped_child;
+    use golem_test_framework::components::worker_executor::spawned::unix::signal_unreaped_child;
     use std::process::{Child, Command};
     use test_r::test;
 

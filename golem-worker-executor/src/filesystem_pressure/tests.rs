@@ -14,15 +14,7 @@
 
 use super::*;
 use crate::filesystem::errors::OperationContext;
-#[cfg(target_os = "linux")]
-use crate::filesystem::sandbox::SandboxFilesystemProvisioning;
-#[cfg(target_os = "linux")]
-use crate::services::golem_config::FilesystemStorageMode;
 use std::collections::{HashMap, VecDeque};
-#[cfg(target_os = "linux")]
-use std::io::Write;
-#[cfg(target_os = "linux")]
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use test_r::{test, timeout};
@@ -726,87 +718,96 @@ fn stricter_targets_never_turn_an_unsatisfied_observation_into_satisfied() {
 }
 
 #[cfg(target_os = "linux")]
-struct RealVolumeRecovery {
-    volume: FilesystemVolume,
-    filler: Mutex<Option<PathBuf>>,
-}
+mod linux {
+    use super::*;
+    use crate::filesystem::sandbox::SandboxFilesystemProvisioning;
+    use crate::services::golem_config::FilesystemStorageMode;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use test_r::test;
 
-#[async_trait]
-#[cfg(target_os = "linux")]
-impl CapacityRecoverySource for RealVolumeRecovery {
-    type Candidate = ();
-
-    async fn observe_space(&self) -> Result<FilesystemSpace, FilesystemPressureError> {
-        observe_space(&self.volume)
-            .await
-            .map_err(FilesystemPressureError::Observation)
+    struct RealVolumeRecovery {
+        volume: FilesystemVolume,
+        filler: Mutex<Option<PathBuf>>,
     }
 
-    async fn eligible_loaded_idle_victims(&self) -> Vec<Self::Candidate> {
-        vec![()]
+    #[async_trait]
+    impl CapacityRecoverySource for RealVolumeRecovery {
+        type Candidate = ();
+
+        async fn observe_space(&self) -> Result<FilesystemSpace, FilesystemPressureError> {
+            observe_space(&self.volume)
+                .await
+                .map_err(FilesystemPressureError::Observation)
+        }
+
+        async fn eligible_loaded_idle_victims(&self) -> Vec<Self::Candidate> {
+            vec![()]
+        }
+
+        async fn request_unload(
+            &self,
+            (): Self::Candidate,
+            _deadline: Instant,
+        ) -> Result<EvictionStopOutcome, FilesystemPressureError> {
+            let filler = self.filler.lock().unwrap().take().unwrap();
+            tokio::fs::remove_file(filler).await.unwrap();
+            Ok(EvictionStopOutcome::Unloaded)
+        }
     }
 
-    async fn request_unload(
-        &self,
-        (): Self::Candidate,
-        _deadline: Instant,
-    ) -> Result<EvictionStopOutcome, FilesystemPressureError> {
-        let filler = self.filler.lock().unwrap().take().unwrap();
-        tokio::fs::remove_file(filler).await.unwrap();
-        Ok(EvictionStopOutcome::Unloaded)
+    #[test]
+    #[ignore = "requires GOLEM_MANAGED_XFS_TEST_ROOT on a privileged XFS project-quota mount"]
+    async fn managed_xfs_reobserves_fresh_space_after_verified_deletion() {
+        let root = PathBuf::from(std::env::var("GOLEM_MANAGED_XFS_TEST_ROOT").unwrap());
+        let provisioning = SandboxFilesystemProvisioning::new(
+            &FilesystemStorageMode::ManagedXfs {
+                xfs_quotad_socket: crate::filesystem::volume::platform::in_process_xfs_quotad(
+                    &root,
+                ),
+                root: root.clone().into(),
+            },
+            golem_common::model::RetryConfig::default(),
+        )
+        .unwrap();
+        let before = observe_space(provisioning.volume()).await.unwrap();
+        let filler = root.join(format!("pressure-filler-{}", uuid::Uuid::new_v4()));
+        let mut file = std::fs::File::create(&filler).unwrap();
+        file.write_all(&vec![0xa5; 16 * 1024 * 1024]).unwrap();
+        file.sync_all().unwrap();
+        let constrained = observe_space(provisioning.volume()).await.unwrap();
+        drop(file);
+        let (
+            FilesystemSpace::Observed {
+                available_bytes: before_bytes,
+                ..
+            },
+            FilesystemSpace::Observed {
+                available_bytes: constrained_bytes,
+                ..
+            },
+        ) = (before, constrained)
+        else {
+            panic!("managed XFS must report observed space");
+        };
+        assert!(constrained_bytes < before_bytes);
+        let target_bytes = constrained_bytes + (before_bytes - constrained_bytes).max(1) / 2;
+        let source = RealVolumeRecovery {
+            volume: provisioning.volume().clone(),
+            filler: Mutex::new(Some(filler)),
+        };
+
+        let result = reclaim_filesystem_capacity_from(
+            &source,
+            &tokio::sync::Mutex::new(()),
+            FilesystemCapacityTarget::available_bytes(target_bytes, 10, Duration::from_millis(25)),
+            Instant::now() + Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.target_reached);
+        assert_eq!(result.unloaded_agents, 1);
+        assert!(result.permits_pressure_retry());
     }
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires GOLEM_MANAGED_XFS_TEST_ROOT on a privileged XFS project-quota mount"]
-async fn managed_xfs_reobserves_fresh_space_after_verified_deletion() {
-    let root = PathBuf::from(std::env::var("GOLEM_MANAGED_XFS_TEST_ROOT").unwrap());
-    let provisioning = SandboxFilesystemProvisioning::new(
-        &FilesystemStorageMode::ManagedXfs {
-            xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
-            root: root.clone().into(),
-        },
-        golem_common::model::RetryConfig::default(),
-    )
-    .unwrap();
-    let before = observe_space(provisioning.volume()).await.unwrap();
-    let filler = root.join(format!("pressure-filler-{}", uuid::Uuid::new_v4()));
-    let mut file = std::fs::File::create(&filler).unwrap();
-    file.write_all(&vec![0xa5; 16 * 1024 * 1024]).unwrap();
-    file.sync_all().unwrap();
-    let constrained = observe_space(provisioning.volume()).await.unwrap();
-    drop(file);
-    let (
-        FilesystemSpace::Observed {
-            available_bytes: before_bytes,
-            ..
-        },
-        FilesystemSpace::Observed {
-            available_bytes: constrained_bytes,
-            ..
-        },
-    ) = (before, constrained)
-    else {
-        panic!("managed XFS must report observed space");
-    };
-    assert!(constrained_bytes < before_bytes);
-    let target_bytes = constrained_bytes + (before_bytes - constrained_bytes).max(1) / 2;
-    let source = RealVolumeRecovery {
-        volume: provisioning.volume().clone(),
-        filler: Mutex::new(Some(filler)),
-    };
-
-    let result = reclaim_filesystem_capacity_from(
-        &source,
-        &tokio::sync::Mutex::new(()),
-        FilesystemCapacityTarget::available_bytes(target_bytes, 10, Duration::from_millis(25)),
-        Instant::now() + Duration::from_secs(5),
-    )
-    .await
-    .unwrap();
-
-    assert!(result.target_reached);
-    assert_eq!(result.unloaded_agents, 1);
-    assert!(result.permits_pressure_retry());
 }

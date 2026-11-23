@@ -111,12 +111,16 @@ fn test_context_rust() -> Arc<dyn TestContext> {
 #[derive(Debug)]
 pub struct Tracing;
 
+#[cfg(unix)]
+#[path = "platform/unix.rs"]
+mod platform;
+#[cfg(not(unix))]
+#[path = "platform/non_unix.rs"]
+mod platform;
+
 impl Tracing {
     pub fn init() -> Self {
-        #[cfg(unix)]
-        unsafe {
-            backtrace_on_stack_overflow::enable()
-        };
+        platform::enable_stack_overflow_backtrace();
         init_tracing_with_default_debug_env_filter(
             &TracingConfig::test_pretty_without_time("agent-config-live-mutation")
                 .with_env_overrides(),
