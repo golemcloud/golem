@@ -41,6 +41,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
+        expected_request_window: Option<&RangeInclusive<OplogIndex>>,
     ) -> Result<Self, String> {
         let value = match value {
             golem_common::model::oplog::OplogEnrichmentEntry::CreateProjection {
@@ -501,16 +502,21 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 update_attempt_index,
                 failure_class,
                 divergence: match divergence {
-                    Some(divergence) => Some(
-                        with_expected_request(
-                            divergence,
-                            &oplog_service,
-                            owned_agent_id,
-                            agent_mode,
+                    Some(divergence)
+                        if expected_request_window
+                            .is_none_or(|window| window.contains(&divergence.oplog_index)) =>
+                    {
+                        Some(
+                            with_expected_request(
+                                divergence,
+                                &oplog_service,
+                                owned_agent_id,
+                                agent_mode,
+                            )
+                            .await,
                         )
-                        .await,
-                    ),
-                    None => None,
+                    }
+                    divergence => divergence,
                 },
                 snapshot_assisted_details: snapshot_assisted_details.map(|details| {
                     PublicFailedSnapshotAssistedUpdateDetails {

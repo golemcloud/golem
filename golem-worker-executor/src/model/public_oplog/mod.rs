@@ -102,6 +102,7 @@ use golem_common::schema::{
 use golem_schema::Empty;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 pub struct PublicOplogChunk<E = PublicOplogEntryWithIndex> {
     pub entries: Vec<E>,
@@ -135,6 +136,10 @@ pub struct PublicOplogSearchResult<E = PublicOplogEntryWithIndex> {
 /// entries hold the users' verified claims.
 #[async_trait]
 pub trait PublicOplogEntryOps: Sized {
+    /// Converts the entry at `oplog_index`. The expected request of a replay divergence reads the
+    /// recorded `Start` at the index of the divergence; `expected_request_window` limits that
+    /// read to its indexes, and the request stays unknown for a divergence outside it. `None`
+    /// reads the `Start` at any index.
     async fn from_oplog_entry(
         oplog_index: OplogIndex,
         value: OplogEntry,
@@ -147,6 +152,7 @@ pub trait PublicOplogEntryOps: Sized {
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
+        expected_request_window: Option<&RangeInclusive<OplogIndex>>,
     ) -> Result<Self, String> {
         Self::from_enrichment_entry(
             oplog_index,
@@ -160,6 +166,7 @@ pub trait PublicOplogEntryOps: Sized {
             agent_type,
             component_revision,
             claims,
+            expected_request_window,
         )
         .await
     }
@@ -176,6 +183,7 @@ pub trait PublicOplogEntryOps: Sized {
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
+        expected_request_window: Option<&RangeInclusive<OplogIndex>>,
     ) -> Result<Self, String>;
 }
 
