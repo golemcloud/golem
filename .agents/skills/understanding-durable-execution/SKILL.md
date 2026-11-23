@@ -2766,11 +2766,14 @@ supported"); an entity body's synchronous call into its owner must pass
 
 Snapshot save/load runs guest code in a third mode: it neither appends nor consumes durable-call
 oplog entries (`DurableCallSession` executes with `CallRecording::Unrecorded`; `durability_is_suppressed`
-is exactly `snapshotting_mode`). An unrecorded call keeps in memory the request and span that its
-`Start` would hold (`UnrecordedStart`), and `recorded_request` and `recorded_span_started` return
-them instead of reading the oplog. The oplog entry at an unrecorded call's start index belongs to
-other history, so RPC from a save hook, which reads its span this way, reads no entry. Test:
-`tests/durability.rs::a_periodic_save_hook_makes_an_rpc_call`.
+is exactly `snapshotting_mode`). An unrecorded call started on the direct path keeps in memory the
+request and span that its `Start` would hold (`UnrecordedStart`), and `recorded_request` and
+`recorded_span_started` return them instead of reading the oplog. The oplog entry at an unrecorded
+call's start index belongs to other history, so RPC from a save hook, which reads its span and
+(when streaming) its request this way, reads no entry. A call started through an accessor keeps
+nothing: RPC create and the P3 HTTP send use the span that they build. Tests:
+`tests/durability.rs::a_periodic_save_hook_makes_an_rpc_call` and
+`a_periodic_save_hook_makes_a_streaming_rpc_call`.
 
 Which history the new instance replays is decided in `Worker` construction (`worker/mod.rs`,
 `create_instance`, through `Worker::decide_start`, which loads the persisted rejections and calls

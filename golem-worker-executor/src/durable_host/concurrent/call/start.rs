@@ -551,16 +551,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             })?;
             if prepared.unpersisted {
                 let start_idx = prepared.oplog.current_oplog_index().await;
-                let span_started = build_span.map(|builder| builder(start_idx)).transpose()?;
-                let recording = CallRecording::Unrecorded {
-                    start: Box::new(UnrecordedStart {
-                        request: request.into(),
-                        span_started,
-                    }),
-                };
                 Ok(ExecutedAccessStart {
                     start_idx,
-                    state: SessionState::executing(recording, live_call_permit),
+                    state: SessionState::executing(
+                        CallRecording::Unrecorded { start: None },
+                        live_call_permit,
+                    ),
                     requires_agent_authority: prepared.requires_agent_authority,
                     agent_auth_ctx,
                     execution_scope: execution_scope.finish(start_idx),
@@ -1128,10 +1124,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
             (
                 start_idx,
                 CallRecording::Unrecorded {
-                    start: Box::new(UnrecordedStart {
+                    start: Some(Box::new(UnrecordedStart {
                         request,
                         span_started,
-                    }),
+                    })),
                 },
             )
         } else {

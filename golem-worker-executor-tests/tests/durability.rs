@@ -2785,7 +2785,7 @@ async fn settled_snapshot_count(
 }
 
 /// Drives a `SnapshotSaveProbe` whose periodic save hook makes one outgoing call to `target`
-/// (`mode` is `rpc` or `http`). Every save reaches the peer once, the saves commit their
+/// (`mode` is a mode of the probe). Every save reaches the peer once, the saves commit their
 /// snapshots, and a restart from the last snapshot neither replays a save nor calls the peer.
 async fn save_hook_calls_reach_the_peer(
     deps: &WorkerExecutorTestDependencies,
@@ -2870,6 +2870,34 @@ async fn a_periodic_save_hook_makes_an_rpc_call(
         &context,
         agent_sdk_rust,
         "rpc",
+        target,
+        async |executor, component| {
+            executor
+                .invoke_and_await_agent(component, &peer, "get_count", data_value!())
+                .await?
+                .into_typed::<u64>()
+        },
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_periodic_save_hook_makes_a_streaming_rpc_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let target = format!("save-hook-stream-peer-{}", context.redis_prefix());
+    let peer = agent_key!("SnapshotSaveStreamPeer", target.clone());
+    save_hook_calls_reach_the_peer(
+        deps,
+        &context,
+        agent_sdk_rust,
+        "rpc-stream",
         target,
         async |executor, component| {
             executor

@@ -1,11 +1,48 @@
 use crate::readonly::agent::ReadonlyAgentClient;
-use golem_rust::agentic::SnapshotRestoreContext;
+use golem_rust::agentic::{AgentStream, SnapshotRestoreContext, spawn_local};
 use golem_rust::{agent_definition, agent_implementation, read_only};
 
+/// The peer of a streaming RPC call: each call of `count_up` counts and streams the new count.
+#[agent_definition]
+pub trait SnapshotSaveStreamPeer {
+    fn new(id: String) -> Self;
+
+    fn count_up(&mut self) -> AgentStream<u64>;
+
+    fn get_count(&self) -> u64;
+}
+
+struct SnapshotSaveStreamPeerImpl {
+    count: u64,
+}
+
+#[agent_implementation]
+impl SnapshotSaveStreamPeer for SnapshotSaveStreamPeerImpl {
+    fn new(_id: String) -> Self {
+        Self { count: 0 }
+    }
+
+    fn count_up(&mut self) -> AgentStream<u64> {
+        self.count += 1;
+        let count = self.count;
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            let _ = writer.write_all(vec![count]).await;
+            let _ = writer.close().await;
+        });
+        stream
+    }
+
+    fn get_count(&self) -> u64 {
+        self.count
+    }
+}
+
 /// An agent whose save hook makes the outgoing call that `mode` names: `rpc` increments the
-/// `ReadonlyAgent` named `target`, `http-post` posts to the URL `target` and reads the response,
-/// and `http-get` gets the URL `target` and drops the response unread. A failed call fails the
-/// save.
+/// `ReadonlyAgent` named `target`, `rpc-stream` reads the stream of `count_up` from the
+/// `SnapshotSaveStreamPeer` named `target`, `http-post` posts to the URL `target` and reads the
+/// response, and `http-get` gets the URL `target` and drops the response unread. A failed call
+/// fails the save.
 #[agent_definition(snapshotting = "enabled")]
 pub trait SnapshotSaveProbe {
     fn new(mode: String, target: String) -> Self;
@@ -48,6 +85,17 @@ impl SnapshotSaveProbe for SnapshotSaveProbeImpl {
                 ReadonlyAgentClient::upsert(self.target.clone())
                     .increment()
                     .await;
+            }
+            "rpc-stream" => {
+                let values = SnapshotSaveStreamPeerClient::upsert(self.target.clone())
+                    .count_up()
+                    .await
+                    .collect()
+                    .await
+                    .map_err(|error| format!("{error:?}"))?;
+                if values.len() != 1 {
+                    return Err(format!("unexpected stream items {values:?}"));
+                }
             }
             "http-post" => {
                 let request = golem_rust::http::Request::post(self.target.as_str())

@@ -235,8 +235,9 @@ rather than replaced by a recorded result.
 Snapshot save/load runs in snapshotting mode (`durability_is_suppressed` ==
 `snapshotting_mode`): durable calls neither append nor consume entries (`DurableCallSession` with
 `persisted: false`). Read a call's own request and span through `recorded_request` and
-`recorded_span_started`, which return the in-memory `UnrecordedStart` of an unrecorded call; never
-read the oplog at the start index of a call that may be unrecorded. Snapshot admission is governed
+`recorded_span_started`, which return the in-memory `UnrecordedStart` of an unrecorded direct call;
+never read the oplog at the start index of a call that may be unrecorded. An unrecorded call that
+starts through an accessor keeps no `UnrecordedStart`, so its caller must use the span it builds. Snapshot admission is governed
 by `SnapshotBoundaryConditions`; do not add parallel boundary predicates.
 Automatic snapshots are revision-scoped baselines chosen at instance creation
 (`worker/snapshot_selection.rs`): the last usable entry, else the previous usable entry that the

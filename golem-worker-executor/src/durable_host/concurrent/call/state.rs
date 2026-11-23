@@ -54,10 +54,12 @@ pub enum CallRecording {
     Recorded {
         request_upload: PendingUpload,
     },
-    /// Snapshotting mode writes no `Start`. The call keeps what its `Start` would hold, so it
-    /// reads its request and span as a recorded call reads them from its `Start`.
+    /// Snapshotting mode writes no `Start`. A call started on the direct path keeps what its
+    /// `Start` would hold, so it reads its request and span as a recorded call reads them from its
+    /// `Start`. A call started through an accessor keeps nothing: its callers use the span they
+    /// build and never read their request back.
     Unrecorded {
-        start: Box<UnrecordedStart>,
+        start: Option<Box<UnrecordedStart>>,
     },
 }
 
@@ -329,14 +331,23 @@ impl<P: DropPolicy> SessionState<P> {
     }
 
     pub fn has_recorded_start(&self) -> bool {
-        self.unrecorded_start().is_none()
+        !matches!(
+            self.execution(),
+            Some(ExecutingCall {
+                recording: CallRecording::Unrecorded { .. },
+                ..
+            })
+        )
     }
 
-    /// What the `Start` of an unrecorded call would hold.
+    /// What the `Start` of an unrecorded call would hold, when the call keeps it.
     pub fn unrecorded_start(&self) -> Option<&UnrecordedStart> {
         match self.execution() {
             Some(ExecutingCall {
-                recording: CallRecording::Unrecorded { start },
+                recording:
+                    CallRecording::Unrecorded {
+                        start: Some(start), ..
+                    },
                 ..
             }) => Some(start),
             _ => None,

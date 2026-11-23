@@ -666,9 +666,6 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        if let Some(start) = self.state.unrecorded_start() {
-            return Ok(start.span_started.clone());
-        }
         let oplog = store.with(|mut access| get_ctx(access.data_mut()).state.oplog.clone());
         match oplog.read(self.start_idx).await? {
             OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),
