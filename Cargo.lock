@@ -4035,6 +4035,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-async-trait"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "test-r",
+ "tracing",
+]
+
+[[package]]
 name = "golem-cli"
 version = "0.0.0"
 dependencies = [
@@ -4865,6 +4877,7 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "golem-api-grpc",
+ "golem-async-trait",
  "golem-common",
  "golem-mcp-import",
  "golem-native-tool",

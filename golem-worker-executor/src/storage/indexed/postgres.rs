@@ -245,6 +245,7 @@ impl PostgresIndexedStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl IndexedStorage for PostgresIndexedStorage {
     async fn number_of_replicas(
         &self,

@@ -370,6 +370,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn cancel_scheduled_invocation(
         &self,

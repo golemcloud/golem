@@ -416,6 +416,7 @@ impl RemoteWorkerProxy {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl WorkerProxy for RemoteWorkerProxy {
     async fn prepare(
         &self,
@@ -1427,6 +1428,7 @@ mod tests {
     }
 
     #[tonic::async_trait]
+    #[golem_async_trait::region_simple]
     impl WorkerService for FlakyWorkerService {
         type InvokeAgentSessionStream =
             Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;

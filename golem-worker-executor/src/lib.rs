@@ -1618,6 +1618,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl Bootstrap<Context> for MaskRecordingBootstrap {
         fn create_additional_deps(
             &self,

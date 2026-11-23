@@ -533,6 +533,11 @@ failed = calc ${failed} + ${code}
 if not eq ${CI} true
     assert_eq ${failed} 0 "Schema and release tooling validation failed"
 end
+code = exec --get-exit-code cargo test --locked -p golem-async-trait --doc
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Schema and release tooling validation failed"
+end
 code = exec --get-exit-code cargo build -p golem-client
 failed = calc ${failed} + ${code}
 assert_eq ${failed} 0 "Schema and release tooling validation failed"

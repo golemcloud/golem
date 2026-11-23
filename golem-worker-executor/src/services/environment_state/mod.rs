@@ -766,6 +766,7 @@ impl GrpcEnvironmentStateService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl EnvironmentStateService for GrpcEnvironmentStateService {
     async fn get_mcp_runtime_credential(
         &self,

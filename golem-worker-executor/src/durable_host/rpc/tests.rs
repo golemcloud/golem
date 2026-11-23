@@ -324,6 +324,7 @@ impl PermissionCardHandleDropper for TableCapabilityDropper {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Rpc for ActivatingRpc {
     async fn create_and_initialize(
         &self,
@@ -434,6 +435,7 @@ impl Rpc for ActivatingRpc {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Rpc for RecordingScopeCardRpc {
     async fn create_and_initialize(
         &self,

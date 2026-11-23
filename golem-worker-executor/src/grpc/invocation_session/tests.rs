@@ -23,6 +23,7 @@ use test_r::test;
 struct TestConsumerJournal(Arc<TestOplog>);
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl crate::durable_host::durable_session::DurableStreamConsumerJournal for TestConsumerJournal {
     async fn commit(&self) -> Result<(), SessionError> {
         use crate::services::oplog::{CommitLevel, Oplog};

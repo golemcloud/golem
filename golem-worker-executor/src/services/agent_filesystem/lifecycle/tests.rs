@@ -58,6 +58,7 @@ impl ScriptedWriteRecovery {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl FilesystemWriteRecoveryAuthority for ScriptedWriteRecovery {
     async fn recover_write(&self, _deadline: Instant) -> FilesystemWriteRecoveryOutcome {
         self.calls.fetch_add(1, Ordering::AcqRel);
@@ -94,6 +95,7 @@ impl BlockingWriteRecovery {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl FilesystemWriteRecoveryAuthority for BlockingWriteRecovery {
     async fn recover_write(&self, _deadline: Instant) -> FilesystemWriteRecoveryOutcome {
         self.calls.fetch_add(1, Ordering::AcqRel);

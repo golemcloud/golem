@@ -1881,7 +1881,6 @@ impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> PublicWorkerIo for PublicDurableWorkerState<Ctx> {
     fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync> {
         self.event_service.clone()

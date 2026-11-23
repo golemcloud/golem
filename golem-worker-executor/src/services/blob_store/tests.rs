@@ -154,6 +154,7 @@ impl Drop for BackendMutationObservation<'_> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl BlobStorageBackend for FailingPutBlobStorage {
     async fn get_raw_at(
         &self,

@@ -458,7 +458,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     async fn set_current_idempotency_key(&mut self, key: golem_common::model::InvocationId) {
         self.state.set_current_idempotency_key(key)
@@ -503,7 +502,6 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         {
@@ -645,7 +643,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
@@ -1285,7 +1282,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
 impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if &self.state.invocation_state().current_span_id == span_id {

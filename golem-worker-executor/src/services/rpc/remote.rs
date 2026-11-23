@@ -26,6 +26,7 @@ impl RemoteInvocationRpc {
 
 /// Rpc implementation simply calling the public Golem Worker API for invocation
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Rpc for RemoteInvocationRpc {
     async fn cancel_scheduled_invocation(
         &self,
