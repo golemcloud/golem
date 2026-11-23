@@ -459,6 +459,9 @@ pub(crate) enum NativeSessions {
     Refuse,
     /// The session is accepted and never answers; its request stream is kept for the test.
     Hold,
+    /// As [`Self::Hold`], but the session answers with a successful tool result when the test
+    /// calls [`InvocationHarness::release_native_session`].
+    HoldUntilReleased,
 }
 
 /// The invocation sessions that the recording worker client received.
@@ -469,6 +472,8 @@ pub(crate) struct NativeSessionLog {
     pub(crate) starts: Vec<golem_api_grpc::proto::golem::worker::InvocationStart>,
     /// The rest of each held session's request stream, after its start.
     pub(crate) tails: VecDeque<crate::service::worker::InvocationRequestStream>,
+    /// The release of each session held until released, oldest first.
+    pub(crate) releases: VecDeque<tokio::sync::oneshot::Sender<()>>,
     /// The number of sessions received so far.
     pub(crate) opened: tokio::sync::watch::Sender<usize>,
 }
@@ -930,6 +935,18 @@ impl WorkerClient for RecordingWorkerClient {
                 log.tails.push_back(tail);
                 Box::pin(futures::stream::pending())
             }
+            NativeSessions::HoldUntilReleased => {
+                log.tails.push_back(tail);
+                let (release, released) = tokio::sync::oneshot::channel();
+                log.releases.push_back(release);
+                let answer = log.starts.last().map(succeeded_tool_session);
+                Box::pin(futures::StreamExt::flatten(futures::stream::once(
+                    async move {
+                        let _ = released.await;
+                        futures::stream::iter(answer.into_iter().flatten().map(Ok))
+                    },
+                )))
+            }
         };
         log.opened.send_modify(|opened| *opened += 1);
         Ok(answer)
@@ -1205,6 +1222,7 @@ impl InvocationHarness {
             keys: Vec::new(),
             starts: Vec::new(),
             tails: VecDeque::new(),
+            releases: VecDeque::new(),
             opened: tokio::sync::watch::Sender::new(0),
         }));
         let worker_client = Arc::new(RecordingWorkerClient {
@@ -1370,6 +1388,18 @@ impl InvocationHarness {
         self.native_sessions.lock().unwrap().keys.clone()
     }
 
+    /// Lets the oldest session held until released answer with its successful tool result.
+    pub(crate) fn release_native_session(&self) {
+        let release = self
+            .native_sessions
+            .lock()
+            .unwrap()
+            .releases
+            .pop_front()
+            .expect("a native session held until released");
+        let _ = release.send(());
+    }
+
     /// The request stream of the oldest held session, after its start.
     pub(crate) fn take_native_session_tail(
         &self,
@@ -1438,6 +1468,55 @@ impl InvocationHarness {
         );
         self.durable_stream_reads.lock().unwrap().extend(reads);
     }
+}
+
+/// The answers of an executor to the external-tool session `start` that succeeds without a
+/// result value or byte streams: its acceptance, its result and its completion. The executor
+/// names the agent that runs the tool `AgentId::from_parts(0, 20)`.
+fn succeeded_tool_session(
+    start: &golem_api_grpc::proto::golem::worker::InvocationStart,
+) -> [golem_api_grpc::proto::golem::worker::InvocationResponse; 3] {
+    use golem_api_grpc::proto::golem::worker::{
+        InvocationAccepted, InvocationResponse, InvocationSessionCompletion,
+        InvocationSessionResult, PublicExternalToolResult, PublicToolInvocationResult,
+        invocation_response, invocation_session_completion, invocation_session_result,
+        public_external_tool_result,
+    };
+    let invocation_id = Some(golem_schema::proto::golem::common::Uuid {
+        high_bits: 0,
+        low_bits: 1,
+    });
+    let agent_id = Some(AgentId::from_parts(0, 20).into());
+    let tool = start.external_tool.clone().unwrap_or_default();
+    [
+        invocation_response::Response::Accepted(InvocationAccepted {
+            agent_id,
+            idempotency_key: invocation_id,
+            tool_name: Some(tool.tool_name),
+            command_path: tool.command_path,
+            ..Default::default()
+        }),
+        invocation_response::Response::Result(InvocationSessionResult {
+            agent_id,
+            idempotency_key: invocation_id,
+            result: Some(invocation_session_result::Result::ToolResult(
+                PublicExternalToolResult {
+                    result: Some(public_external_tool_result::Result::Success(
+                        PublicToolInvocationResult { result: None },
+                    )),
+                },
+            )),
+            ..Default::default()
+        }),
+        invocation_response::Response::Finished(InvocationSessionCompletion {
+            outcome: Some(invocation_session_completion::Outcome::Success(
+                Default::default(),
+            )),
+        }),
+    ]
+    .map(|response| InvocationResponse {
+        response: Some(response),
+    })
 }
 
 /// The JSON-RPC messages of a streamed MCP response, which must have status 200.
