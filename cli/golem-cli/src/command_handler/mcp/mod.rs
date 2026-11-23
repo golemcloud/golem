@@ -1993,6 +1993,26 @@ mod tests {
         };
         assert!(page);
         assert_eq!(max_count, Some(50));
+    }
+
+    /// A management tool gives its result as a JSON value, and a JSON value cannot hold every
+    /// claim set: it rounds long numbers. So the oplog tool cannot ask for the claims. The CLI
+    /// and REST show them, because they write the recorded text.
+    #[test]
+    fn agent_oplog_tool_cannot_ask_for_the_claims() {
+        let properties = &tool("agent_oplog").tool.input_schema["properties"];
+        assert!(
+            properties.get("show_claims").is_none(),
+            "agent_oplog offers `show_claims`"
+        );
+        assert!(
+            argv(
+                "agent_oplog",
+                json!({"agent_id": "A(\"a\")", "show_claims": true})
+            )
+            .is_err(),
+            "agent_oplog takes `show_claims`"
+        );
 
         for name in ["agent_oplog", "agent_list"] {
             assert!(

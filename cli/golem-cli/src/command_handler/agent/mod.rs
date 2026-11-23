@@ -1031,7 +1031,6 @@ impl AgentCommandHandler {
                     page,
                     page_size: batch_size,
                     omit_payloads,
-                    show_claims,
                     export: None,
                 },
                 viewer.port,
