@@ -831,6 +831,12 @@ function buildTree(entries, extraDropped) {
   // members of the host node so the merged row can summarize them.
   const member = (e, host) => { const m = { kind: 'entry', e, children: [], members: [], parent: host, frames: [] }; host.members.push(m); return m; };
   let invocation = null; const hosts = new Map(); const hostNodes = new Map(); const entities = new Map();
+  // An invocation whose result is recorded at the export's return runs background work until its
+  // AgentInvocationSettled. The public oplog does not tell which results await settlement, so the
+  // entries after AgentInvocationFinished render at the top level until a Settled of the same
+  // invocation id arrives before the next AgentInvocationStarted; they then move under the
+  // invocation.
+  let draining = null; const idKey = v => v == null ? null : JSON.stringify(v);
   const errorsByRetry = new Map(); const nodeOf = new Map();
   const container = () => invocation || root;
   for (const e of entries) {
@@ -848,8 +854,9 @@ function buildTree(entries, extraDropped) {
       target = parent;
     }
     switch (t) {
-      case 'AgentInvocationStarted': if (invocation) invocation.unfinished = true; n = mk('invocation', e, root); invocation = n; break;
-      case 'AgentInvocationFinished': if (invocation) { invocation.end = e; n = leaf(e, invocation); invocation = null; } else n = leaf(e, root); break;
+      case 'AgentInvocationStarted': if (invocation) invocation.unfinished = true; draining = null; n = mk('invocation', e, root); invocation = n; break;
+      case 'AgentInvocationFinished': if (invocation) { invocation.end = e; n = leaf(e, invocation); draining = { node: invocation, from: root.children.length, id: idKey(p.invocationId) }; invocation = null; } else { draining = null; n = leaf(e, root); } break;
+      case 'AgentInvocationSettled': if (draining && draining.id != null && draining.id === idKey(p.invocationId)) { const moved = root.children.splice(draining.from); for (const c of moved) { c.parent = draining.node; draining.node.children.push(c); } draining.node.settled = e; n = leaf(e, draining.node); draining = null; } else n = leaf(e, target); break;
       case 'Start': { const parent = p.parentStartIndex != null ? hosts.get(idxOf(p.parentStartIndex)) : null; n = mk('host', e, parent || target); hosts.set(e.index, n); hostNodes.set(e.index, n); break; }
       case 'End': case 'Cancelled': { const s = hosts.get(idxOf(p.startIndex)); if (s) { s.end = e; hosts.delete(idxOf(p.startIndex)); n = member(e, s); } else n = leaf(e, target); break; }
       case 'CompletionDelivered': case 'CompletionDiscarded': { const s = hostNodes.get(idxOf(p.startIndex)); if (s) { s.completion = e; n = member(e, s); } else n = leaf(e, target); break; }
@@ -1101,7 +1108,7 @@ function drawMinimap() {
   for (let i = 0; i < n; i++) {
     const e = state.entries[i]; const [, cat] = kindInfo(classOf(e));
     const x = (i / n) * W;
-    if (e.type === 'AgentInvocationStarted') { ctx.fillStyle = colors.invocation; ctx.globalAlpha = .18; let j = i + 1; while (j < n && state.entries[j].type !== 'AgentInvocationFinished') j++; ctx.fillRect(x, 0, Math.max(1, ((j - i + 1) / n) * W), H2); ctx.globalAlpha = 1; }
+    if (e.type === 'AgentInvocationStarted') { ctx.fillStyle = colors.invocation; ctx.globalAlpha = .18; let j = i + 1; while (j < n && state.entries[j].type !== 'AgentInvocationFinished') j++; if (j < n) { const id = JSON.stringify(state.entries[j].entry.invocationId); const settles = x => x.type === 'AgentInvocationSettled' && id !== undefined && JSON.stringify(x.entry.invocationId) === id; let k = j + 1; while (k < n && state.entries[k].type !== 'AgentInvocationStarted' && !settles(state.entries[k])) k++; if (k < n && settles(state.entries[k])) j = k; } ctx.fillRect(x, 0, Math.max(1, ((j - i + 1) / n) * W), H2); ctx.globalAlpha = 1; }
     const tall = cat === 'error' || cat === 'update' || cat === 'invocation';
     ctx.fillStyle = colors[cat] || '#888';
     ctx.fillRect(x, tall ? 4 : 12, Math.max(px, 1), tall ? H2 - 8 : H2 - 20);
