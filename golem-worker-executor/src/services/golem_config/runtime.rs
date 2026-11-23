@@ -21,7 +21,7 @@ use golem_common::model::{
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Limits {
@@ -53,6 +53,12 @@ pub struct Limits {
     /// the listing charges the keys the scan examined and checks its scan budget between scans.
     /// The budget can therefore overshoot by one batch, in keys and in time. An advanced setting.
     pub agent_scan_batch_size: NonZeroU64,
+    /// The number of scanning calls that one page of an agent listing makes at most. Each call of
+    /// a page scans at most `ceil(scan_budget.entries / agent_page_calls)` keys, so the calls of a
+    /// page together scan about one scan budget of keys. The share is fixed by the configuration,
+    /// not by what earlier calls scanned, so where a page ends does not depend on how many agents
+    /// the caller may not see. An advanced setting.
+    pub agent_page_calls: NonZeroU64,
     pub max_invocation_context_stack_depth: usize,
     /// Maximum accepted payload bytes in each completion-buffered tool attachment direction.
     pub max_tool_attachment_bytes: usize,
@@ -139,6 +145,7 @@ impl SafeDisplay for Limits {
             "agent scan batch size: {}",
             self.agent_scan_batch_size
         );
+        let _ = writeln!(&mut result, "agent page calls: {}", self.agent_page_calls);
         let _ = writeln!(
             &mut result,
             "max invocation context stack depth: {}",
@@ -188,10 +195,10 @@ impl ScanBudget {
         self.entries.get().saturating_sub(scanned)
     }
 
-    /// Whether a call that started at `started` and scanned `scanned` items has spent the
+    /// Whether a call that has run for `elapsed` and scanned `scanned` items has spent the
     /// budget.
-    pub fn is_spent(&self, scanned: u64, started: Instant) -> bool {
-        scanned >= self.entries.get() || started.elapsed() >= self.time
+    pub fn is_spent(&self, scanned: u64, elapsed: Duration) -> bool {
+        scanned >= self.entries.get() || elapsed >= self.time
     }
 }
 
@@ -585,6 +592,7 @@ impl Default for Limits {
             max_concurrent_oplog_entry_reads: 4,
             scan_budget: ScanBudget::default(),
             agent_scan_batch_size: NonZeroU64::new(100).unwrap(),
+            agent_page_calls: NonZeroU64::new(10).unwrap(),
             max_invocation_context_stack_depth: 1024,
             max_tool_attachment_bytes: 16 * 1024 * 1024,
             max_invocation_duration: None,

@@ -1856,8 +1856,10 @@ impl PrivateDurableWorkerState {
                 cursor,
                 count,
                 precise,
+                None,
             )
             .await
+            .map(|listing| (listing.cursor, listing.agents))
     }
 }
 

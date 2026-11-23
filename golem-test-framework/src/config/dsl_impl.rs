@@ -975,6 +975,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     cursor: Some(cursor),
                     count: Some(count),
                     precise: Some(precise),
+                    page_scan: None,
                 },
             )
             .await?;

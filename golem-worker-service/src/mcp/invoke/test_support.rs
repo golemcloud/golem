@@ -649,9 +649,10 @@ impl WorkerClient for RecordingWorkerClient {
         _: ScanCursor,
         _: u64,
         _: bool,
+        _: Option<golem_common::model::PageScanRequest>,
         _: EnvironmentId,
         _: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)> {
+    ) -> WorkerResult<crate::service::worker::FoundAgents<ExistingAgent>> {
         unimplemented!()
     }
 

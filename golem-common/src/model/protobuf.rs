@@ -20,9 +20,9 @@ use crate::model::{
     AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilePermissions, AgentFilter,
     AgentFingerprint, AgentIdFilter, AgentKeyFilter, AgentModeFilter, AgentNotFilter,
     AgentRevisionFilter, AgentStatus, AgentStatusFilter, FilterComparator, IdempotencyKey,
-    IdempotencyScope, InvocationId, InvocationRequestKey, LogLevel, NumberOfShards, Pod, PromiseId,
-    RoutingTable, RoutingTableEntry, ScanCursor, ShardEpoch, ShardId, StringFilterComparator,
-    Timestamp,
+    IdempotencyScope, InvocationId, InvocationRequestKey, LogLevel, NumberOfShards, PageScanGrant,
+    PageScanRequest, Pod, PromiseId, RoutingTable, RoutingTableEntry, ScanCursor, ShardEpoch,
+    ShardId, StringFilterComparator, Timestamp,
 };
 use applying::Apply;
 use golem_api_grpc::proto::golem;
@@ -653,6 +653,44 @@ impl From<ScanCursor> for Cursor {
     fn from(value: ScanCursor) -> Self {
         Self {
             value: value.into_inner(),
+        }
+    }
+}
+
+impl From<golem::workerexecutor::v1::PageScanRequest> for PageScanRequest {
+    fn from(value: golem::workerexecutor::v1::PageScanRequest) -> Self {
+        Self {
+            keys: value.keys,
+            millis: value.millis,
+        }
+    }
+}
+
+impl From<PageScanRequest> for golem::workerexecutor::v1::PageScanRequest {
+    fn from(value: PageScanRequest) -> Self {
+        Self {
+            keys: value.keys,
+            millis: value.millis,
+        }
+    }
+}
+
+impl From<golem::workerexecutor::v1::PageScanGrant> for PageScanGrant {
+    fn from(value: golem::workerexecutor::v1::PageScanGrant) -> Self {
+        Self {
+            calls: value.calls,
+            keys: value.keys,
+            millis: value.millis,
+        }
+    }
+}
+
+impl From<PageScanGrant> for golem::workerexecutor::v1::PageScanGrant {
+    fn from(value: PageScanGrant) -> Self {
+        Self {
+            calls: value.calls,
+            keys: value.keys,
+            millis: value.millis,
         }
     }
 }

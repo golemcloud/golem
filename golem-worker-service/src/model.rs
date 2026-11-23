@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::ScanCursor;
 use golem_common::model::agent::AgentMetadataDto;
+use golem_common::model::{PageScanGrant, ScanCursor};
 use poem_openapi::Object;
 use std::fmt::Debug;
 
@@ -21,4 +21,6 @@ use std::fmt::Debug;
 pub struct WorkersMetadataResponse {
     pub workers: Vec<AgentMetadataDto>,
     pub cursor: Option<ScanCursor>,
+    // Present only for a call of a listing page: what the executor granted the call.
+    pub page_scan: Option<PageScanGrant>,
 }

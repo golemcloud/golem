@@ -75,6 +75,26 @@ pub enum WorkerServiceError {
     RegistryServiceError(#[from] RegistryServiceError),
 }
 
+impl WorkerServiceError {
+    /// Whether the API gives the error as "not found".
+    pub fn is_not_found(&self) -> bool {
+        matches!(
+            self,
+            Self::ComponentNotFound(_)
+                | Self::AccountIdNotFound(_)
+                | Self::AgentNotFound(_)
+                | Self::InvocationNotFound(_)
+                | Self::FileNotFound(_)
+                | Self::RegistryServiceError(RegistryServiceError::NotFound(_))
+                | Self::Component(ComponentServiceError::ComponentNotFound)
+                | Self::GolemError(
+                    WorkerExecutorError::AgentNotFound { .. }
+                        | WorkerExecutorError::ComponentNotFound { .. }
+                )
+        )
+    }
+}
+
 impl SafeDisplay for WorkerServiceError {
     fn to_safe_string(&self) -> String {
         match self {

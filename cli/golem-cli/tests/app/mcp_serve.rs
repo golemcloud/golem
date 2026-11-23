@@ -22,6 +22,7 @@ use golem_cli::{fs, versions};
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::model::environment::{EnvironmentName, EnvironmentUpdate};
 use indoc::{formatdoc, indoc};
+use itertools::Itertools;
 use rmcp::model::{CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest, Tool};
 use rmcp::service::{PeerRequestOptions, RequestHandle, RunningService};
 use rmcp::transport::TokioChildProcess;
@@ -1373,6 +1374,175 @@ async fn mcp_serve_reads_the_oplog_and_the_agent_list_page_by_page() {
     );
     assert_eq!(paged.len(), agents.len(), "{paged:?}");
     client.cancel().await.unwrap();
+}
+
+/// The agent types that the page tests create agents of, three agents each.
+const PAGE_TYPES: [&str; 4] = [
+    "Counter",
+    "FailingCounter",
+    "InstantiationGrowthCounter",
+    "ScheduleCounter",
+];
+
+/// A local server whose pages make one page call each, with three agents of each of
+/// [`PAGE_TYPES`]. With `primary_only`, the executor keeps its oplogs in its primary storage
+/// layer only, so a scan of a type ends in one call. Otherwise it keeps its default storage
+/// layers, has no scan time and scans one key per storage batch, so each call stops after one
+/// key, inside a type or between its storage layers.
+async fn one_call_pages_context(primary_only: bool) -> TestContext {
+    let mut env = vec![("GOLEM__WORKER_EXECUTOR__LIMITS__AGENT_PAGE_CALLS", "1")];
+    if primary_only {
+        env.extend([
+            ("GOLEM__WORKER_EXECUTOR__OPLOG__INDEXED_STORAGE_LAYERS", "1"),
+            ("GOLEM__WORKER_EXECUTOR__OPLOG__BLOB_STORAGE_LAYERS", "0"),
+        ]);
+    } else {
+        env.extend([
+            ("GOLEM__WORKER_EXECUTOR__LIMITS__SCAN_BUDGET__TIME", "0s"),
+            ("GOLEM__WORKER_EXECUTOR__LIMITS__AGENT_SCAN_BATCH_SIZE", "1"),
+        ]);
+    }
+    let ctx = counters_context_with(&["local"], "", &env).await;
+    for agent_type in PAGE_TYPES {
+        for n in 1..=3 {
+            let key = format!(r#"{agent_type}("page-{n}")"#);
+            let outputs = ctx
+                .cli([flag::YES, "-E", "local", cmd::AGENT, cmd::UPSERT, &key])
+                .await;
+            assert!(outputs.success_or_dump());
+        }
+    }
+    ctx
+}
+
+/// Every page of `agent list --page` with `args`, read by following the cursors.
+async fn agent_list_pages(ctx: &TestContext, args: &[&str]) -> Vec<Value> {
+    let mut pages = Vec::new();
+    let mut cursor = None::<String>;
+    loop {
+        let mut command = vec![cmd::AGENT, cmd::LIST, "--page"];
+        command.extend(args);
+        if let Some(cursor) = &cursor {
+            command.extend(["--scan-cursor", cursor.as_str()]);
+        }
+        let page = cli_json(ctx, &command).await.remove(0);
+        cursor = page["cursor"].as_str().map(str::to_string);
+        pages.push(page);
+        if cursor.is_none() {
+            return pages;
+        }
+        assert!(pages.len() < 100, "the pages do not end");
+    }
+}
+
+/// The `(agent type, agent ID)` of each agent of `page`, which must have a component name.
+fn page_agents(page: &Value) -> Vec<(String, String)> {
+    page["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| {
+            assert_eq!(agent["componentName"], "it:agent-counters", "{agent}");
+            (
+                agent["agentType"].as_str().unwrap().to_string(),
+                agent["agentId"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// The IDs of every agent that `agent list` with `args` lists, sorted.
+async fn all_agent_ids(ctx: &TestContext, args: &[&str]) -> Vec<String> {
+    let mut command = vec![cmd::AGENT, cmd::LIST];
+    command.extend(args);
+    let listed = cli_json(ctx, &command).await;
+    let mut ids = listed[0]["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|agent| agent["agentId"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn one_agent_list_page_scans_only_the_agent_types_of_its_page_calls() {
+    let ctx = one_call_pages_context(true).await;
+
+    // No agent matches, so only the page call limit cuts the pages: one agent type each.
+    let pages = agent_list_pages(&ctx, &["--filter", "key == none"]).await;
+    for page in &pages {
+        assert!(page_agents(page).is_empty(), "{page}");
+    }
+    let first = golem_cli::model::agent::AgentListCursor::decode(
+        pages[0]["cursor"]
+            .as_str()
+            .expect("the first page reads one agent type"),
+    )
+    .unwrap();
+    let later = first.scans().collect::<Vec<_>>();
+    for (component, agent_type) in &later {
+        assert_eq!(
+            first
+                .resume_at(
+                    *component,
+                    &golem_common::model::agent::AgentTypeName(agent_type.to_string())
+                )
+                .map(|cursor| cursor.to_string()),
+            Some(String::new()),
+            "{agent_type} does not start at its beginning"
+        );
+    }
+    assert_eq!(pages.len(), later.len() + 1, "{pages:?}");
+
+    // Without a filter, each page holds the agents of one agent type, in type order.
+    let pages = agent_list_pages(&ctx, &[]).await;
+    let mut paged = Vec::new();
+    for page in &pages {
+        let agents = page_agents(page);
+        assert!(
+            agents.iter().map(|(agent_type, _)| agent_type).all_equal(),
+            "{page}"
+        );
+        paged.extend(agents);
+    }
+    let types = paged
+        .iter()
+        .map(|(agent_type, _)| agent_type.as_str())
+        .dedup()
+        .collect::<Vec<_>>();
+    assert_eq!(types, PAGE_TYPES.to_vec());
+    let mut ids = paged.into_iter().map(|(_, id)| id).collect::<Vec<_>>();
+    ids.sort();
+    assert_eq!(ids, all_agent_ids(&ctx, &[]).await);
+    assert_eq!(ids.len(), 12, "{ids:?}");
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn one_call_agent_list_pages_over_storage_layers_list_every_agent_once() {
+    let ctx = one_call_pages_context(false).await;
+    // A scan of a type examines the oplog keys of every agent in each storage layer, so one type
+    // keeps the number of one-key pages small.
+    let pages = agent_list_pages(&ctx, &["Counter"]).await;
+    let mut ids = pages
+        .iter()
+        .flat_map(page_agents)
+        .map(|(_, id)| id)
+        .collect::<Vec<_>>();
+    ids.sort();
+    assert_eq!(ids, all_agent_ids(&ctx, &["Counter"]).await);
+    assert_eq!(ids.len(), 3, "{ids:?}");
+    assert!(
+        pages
+            .iter()
+            .filter(|page| !page_agents(page).is_empty())
+            .count()
+            > 1,
+        "no call stopped before the last agent of the type: {pages:?}"
+    );
 }
 
 /// The oplog indexes of `agent`, through the plain `agent_oplog` tool.

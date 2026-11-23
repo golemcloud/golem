@@ -7150,6 +7150,44 @@ components:
       - component-agent
       - ephemeral-external-tool
       - oplog-processor
+    PageScanGrant:
+      type: object
+      title: PageScanGrant
+      description: |-
+        What the executor granted a call of an agent listing page: the most scanning calls of one
+        page, the most keys that this call scans apart from its last storage batch, and the time that
+        it may scan. It holds only configured values and the request clamped to them, never a
+        measurement of the scan, so it says nothing about the agents that the scan examined.
+      required:
+      - calls
+      - keys
+      - millis
+      properties:
+        calls:
+          type: integer
+          format: uint64
+        keys:
+          type: integer
+          format: uint64
+        millis:
+          type: integer
+          format: uint64
+    PageScanRequest:
+      type: object
+      title: PageScanRequest
+      description: |-
+        The key share and the time that a call of an agent listing page asks for. The executor scans
+        at most the smaller of these and of its own page share and scan time.
+      required:
+      - keys
+      - millis
+      properties:
+        keys:
+          type: integer
+          format: uint64
+        millis:
+          type: integer
+          format: uint64
     Pair:
       type: object
       title: Pair
@@ -12070,6 +12108,8 @@ components:
           format: uint64
         precise:
           type: boolean
+        pageScan:
+          $ref: '#/components/schemas/PageScanRequest'
     WorkersMetadataResponse:
       type: object
       title: WorkersMetadataResponse
@@ -12082,6 +12122,8 @@ components:
             $ref: '#/components/schemas/AgentMetadataDto'
         cursor:
           $ref: '#/components/schemas/ScanCursor'
+        page_scan:
+          $ref: '#/components/schemas/PageScanGrant'
     r#ActivatePluginParams:
       type: object
       title: r#ActivatePluginParams

@@ -84,6 +84,13 @@ pub trait CallOnExecutor<Out: Send + 'static> {
             + 'static;
 
     fn tracing_kind(&self) -> &'static str;
+
+    /// Whether the routing retries the call when it found no executor, the executor refused the
+    /// call before it did work, or the connection failed in a way that can be retried. A call that
+    /// is not retried fails at its first such outcome.
+    fn retried(&self) -> bool {
+        true
+    }
 }
 
 #[async_trait]
@@ -219,7 +226,13 @@ where
     }
 }
 
-pub struct RandomExecutor;
+/// A call on any executor. A call that is not `replayable` is neither replayed by the connection
+/// nor retried by the routing: it makes one attempt, as a call that must not spend more work than
+/// one call of the executor needs. A call that failed after the worker service sent it gets the
+/// status of [`not_replayed`].
+pub struct RandomExecutor {
+    pub replayable: bool,
+}
 
 #[async_trait]
 impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
@@ -252,17 +265,19 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
             Some(pod) => {
                 let clients = context.worker_executor_clients();
 
+                let uri = pod.uri(clients.uses_tls());
+                let result = if self.replayable {
+                    clients.call(description, uri, f).await
+                } else {
+                    clients
+                        .call_without_retry(description, uri, f)
+                        .await
+                        .map_err(not_replayed)
+                };
                 Ok((
-                    Some(
-                        clients
-                            .call(description, pod.uri(clients.uses_tls()), f)
-                            .await
-                            .map_err(|status| {
-                                CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                    status, *pod,
-                                )
-                            })?,
-                    ),
+                    Some(result.map_err(|status| {
+                        CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(status, *pod)
+                    })?),
                     Some(*pod),
                 ))
             }
@@ -271,6 +286,10 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
 
     fn tracing_kind(&self) -> &'static str {
         "RandomExecutor"
+    }
+
+    fn retried(&self) -> bool {
+        self.replayable
     }
 }
 
@@ -445,6 +464,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
         H: Fn(CallWorkerExecutorError) -> WorkerServiceError + Send + Sync,
     {
         let mut retry = RetryState::new(self.worker_executor_retry_config(), description.as_ref());
+        let retried = target.retried();
         loop {
             let span = retry.start_attempt(Target::tracing_kind(&target));
 
@@ -455,17 +475,22 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
             let result = async {
                 match worker_result {
                     Ok((result, pod)) => match result {
-                        None => retry.retry(self, &"NoActiveShards", &pod).await,
+                        None if retried => retry.retry(self, &"NoActiveShards", &pod).await,
+                        None => retry.not_retried(&"NoActiveShards", &pod),
                         Some(out) => match response_map(out) {
                             Ok(result) => {
                                 retry.success(&pod);
                                 Ok(Some(result))
                             }
-                            Err(error @ ResponseMapResult::InvalidShardId { .. }) => {
-                                retry.retry(self, &error, &pod).await
-                            }
-                            Err(error @ ResponseMapResult::ShardingNotReady) => {
-                                retry.retry(self, &error, &pod).await
+                            Err(
+                                error @ (ResponseMapResult::InvalidShardId { .. }
+                                | ResponseMapResult::ShardingNotReady),
+                            ) => {
+                                if retried {
+                                    retry.retry(self, &error, &pod).await
+                                } else {
+                                    retry.not_retried(&error, &pod)
+                                }
                             }
                             Err(ResponseMapResult::Expected(error)) => {
                                 retry.non_retryable_expected_error(error, &pod)
@@ -476,7 +501,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                         },
                     },
                     Err(CallWorkerExecutorErrorWithContext { error, pod }) => {
-                        if error.is_retriable() {
+                        if retried && error.is_retriable() {
                             retry.retry(self, &error, &pod).await
                         } else {
                             retry.non_retryable_error(error_map(error), &pod)
@@ -637,6 +662,23 @@ impl<'a> RetryState<'a> {
                 Ok(None)
             }
         }
+    }
+
+    /// Fails a call that is not retried at an outcome that the routing retries for other calls.
+    fn not_retried<T>(
+        &self,
+        error: &impl Debug,
+        pod: &Option<Pod>,
+    ) -> Result<Option<T>, WorkerServiceError> {
+        info!(
+            error = format!("{error:?}"),
+            pod = format_pod(pod),
+            op = self.op,
+            "Executor call that is not retried failed"
+        );
+        Err(WorkerServiceError::Internal(format!(
+            "The call to the executor was not retried: {error:?}"
+        )))
     }
 
     fn non_retryable_expected_error<T>(

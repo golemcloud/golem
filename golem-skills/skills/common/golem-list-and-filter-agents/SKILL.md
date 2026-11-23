@@ -113,7 +113,7 @@ The cursor is an opaque value returned in the output when there are more results
 
 > **Note**: `--max-count` applies to each listed agent type. One cursor covers every listed agent type, so pass it back with the same agent type or component selection; the next page continues each type that still has more results.
 
-Use `--page` to read one page across all selected components and their agent types, in name order. A page has at most `--max-count` agents (default 50). On a server whose indexed storage is Redis, `--max-count` is a target, not a limit: Redis `SCAN` treats its count as a hint, so a page can have more agents. Do not rely on the page size; follow the `cursor`. Pass it back unchanged as `--scan-cursor` with `--page`, and stop when `cursor` is null. A page can end early at the server's scan budget, so it can have fewer agents, or none, and still have a cursor.
+Use `--page` to read one page across all selected components and their agent types, in name order. A page has at most `--max-count` agents (default 50). On a server whose indexed storage is Redis, `--max-count` is a target, not a limit: Redis `SCAN` treats its count as a hint, so a page can have more agents. Do not rely on the page size; follow the `cursor`. Pass it back unchanged as `--scan-cursor` with `--page`, and stop when `cursor` is null. One page shares one scan budget of the server across its agent types: it makes at most the server's configured number of page calls, each with a share of the budget, within the server's scan time. So a page can have fewer agents, or none, and still have a cursor. A page is not retried: if a page fails, read it again with the same cursor.
 
 ```shell
 golem --format json agent list --page --max-count 10

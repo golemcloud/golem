@@ -5243,7 +5243,7 @@ async fn a_listing_skips_or_fails_only_the_agents_whose_oplog_does_not_read() {
         let mut listed = Vec::new();
         let mut cursor = Some(golem_common::model::ScanCursor::default());
         while let Some(current) = cursor {
-            let (next, page) = enumeration
+            let page = enumeration
                 .get(
                     &environment_id,
                     golem_common::model::type_id::TypeId::try_from(7u32).unwrap(),
@@ -5251,11 +5251,12 @@ async fn a_listing_skips_or_fails_only_the_agents_whose_oplog_does_not_read() {
                     current,
                     100,
                     precise,
+                    None,
                 )
                 .await
                 .expect("one agent's unreadable oplog must not fail the listing");
-            listed.extend(page);
-            cursor = next;
+            listed.extend(page.agents);
+            cursor = page.cursor;
         }
         let mut listed_ids = listed
             .iter()

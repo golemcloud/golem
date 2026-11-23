@@ -97,6 +97,7 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, FilterComparator, IdempotencyKey, OplogIndex,
+    PageScanGrant, PageScanRequest,
 };
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, InputSchema};
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
@@ -108,7 +109,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -116,6 +117,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use terminal_size::terminal_size;
+use tokio::time::Instant;
 use tokio::time::sleep;
 use tracing::debug;
 use uuid::Uuid;
@@ -1488,7 +1490,7 @@ impl AgentCommandHandler {
             .agent_type_name
             .as_ref()
             .ok_or_else(|| anyhow!("Agent {agent_id} has no agent type"))?;
-        for mut agent_type in historical.iter().cloned() {
+        for agent_type in historical.iter().cloned() {
             if &agent_type.agent_type.type_name != name {
                 continue;
             }
@@ -1511,6 +1513,7 @@ impl AgentCommandHandler {
                             cursor,
                             count: Some(self.ctx.http_batch_size()),
                             precise: Some(false),
+                            page_scan: None,
                         },
                     )
                     .await
@@ -1533,25 +1536,38 @@ impl AgentCommandHandler {
             if !matches_owner {
                 continue;
             }
-            let component = self
-                .ctx
-                .component_handler()
-                .get_component_revision_by_id(
-                    &agent_type.implemented_by.component_id,
-                    metadata.component_revision,
-                )
-                .await?;
-            let declaration = component
-                .metadata
-                .agent_types
-                .iter()
-                .find(|declaration| &declaration.declaration.type_name == name)
-                .ok_or_else(|| anyhow!("The recorded component has no declaration for {name}"))?;
-            agent_type.agent_type = declaration.declaration.clone();
-            agent_type.implemented_by.component_revision = metadata.component_revision;
-            return Ok((component, agent_type));
+            return self
+                .recorded_component_of_implementer(agent_type, metadata)
+                .await;
         }
         bail!("Cannot establish the recorded component of agent {agent_id}")
+    }
+
+    /// The component of `implementer` at the revision that `metadata` recorded, with the agent
+    /// type that this revision declares.
+    async fn recorded_component_of_implementer(
+        &self,
+        mut implementer: DeployedRegisteredAgentType,
+        metadata: &AgentMetadata,
+    ) -> anyhow::Result<(ComponentDto, DeployedRegisteredAgentType)> {
+        let name = implementer.agent_type.type_name.clone();
+        let component = self
+            .ctx
+            .component_handler()
+            .get_component_revision_by_id(
+                &implementer.implemented_by.component_id,
+                metadata.component_revision,
+            )
+            .await?;
+        let declaration = component
+            .metadata
+            .agent_types
+            .iter()
+            .find(|declaration| declaration.declaration.type_name == name)
+            .ok_or_else(|| anyhow!("The recorded component has no declaration for {name}"))?;
+        implementer.agent_type = declaration.declaration.clone();
+        implementer.implemented_by.component_revision = metadata.component_revision;
+        Ok((component, implementer))
     }
 
     async fn resolve_list_components(
@@ -1737,8 +1753,14 @@ impl AgentCommandHandler {
                 )
                 .await?;
 
-            view.agents
-                .extend(self.agent_views(agents, &target.historical).await?);
+            view.agents.extend(
+                self.agent_views(
+                    agents,
+                    &target.historical,
+                    target.component_name_filter.as_ref(),
+                )
+                .await?,
+            );
             for (agent_type, type_scan_cursor) in type_scan_cursors {
                 next_cursor.insert(target.component.id, &agent_type, type_scan_cursor);
             }
@@ -1757,18 +1779,34 @@ impl AgentCommandHandler {
         Ok(view)
     }
 
-    /// The views of listed agents, with their keys rendered in their source language.
+    /// The views of listed agents, with their keys rendered in their source language. Agents
+    /// listed with the component-name filter `component_name` get the implementer of that name
+    /// from `historical`, with no further listing call. Only agents listed without that filter
+    /// look up their recorded component with listing calls.
     async fn agent_views(
         &self,
         agents: Vec<AgentMetadata>,
         historical: &[DeployedRegisteredAgentType],
+        component_name: Option<&ComponentName>,
     ) -> anyhow::Result<Vec<AgentMetadataView>> {
         let mut views = Vec::with_capacity(agents.len());
         for mut agent in agents {
-            let Ok((agent_component, _)) = self
-                .recorded_component_for_metadata(&agent, historical)
-                .await
-            else {
+            let recorded =
+                match row_owner(historical, agent.agent_type_name.as_ref(), component_name) {
+                    RowOwner::Named(implementer) => {
+                        self.recorded_component_of_implementer(implementer.clone(), &agent)
+                            .await
+                    }
+                    RowOwner::LookUp => {
+                        self.recorded_component_for_metadata(&agent, historical)
+                            .await
+                    }
+                    RowOwner::Unknown => Err(anyhow!(
+                        "Cannot establish the recorded component of agent {}",
+                        agent.agent_id
+                    )),
+                };
+            let Ok((agent_component, _)) = recorded else {
                 agent.component_name = ComponentName(String::new());
                 views.push(AgentMetadataView::from(agent));
                 continue;
@@ -1818,69 +1856,65 @@ impl AgentCommandHandler {
         Ok(views)
     }
 
-    /// One page across the selected components and their agent types, in name order.
+    /// One page across the selected components and their agent types, in name order. Each
+    /// call is a page call: it lists one agent type with the component-name filter of its
+    /// target, so the rows need no lookup of their recorded component. A target without that
+    /// filter (a bare agent type) gets one call for each component name that implemented the
+    /// type.
     async fn list_agents_page(
         &self,
-        mut targets: Vec<AgentListTarget>,
+        targets: Vec<AgentListTarget>,
         filters: &[String],
         mode_overlay: Option<&AgentFilter>,
         cursor: Option<&AgentListCursor>,
         count: u64,
         precise: bool,
     ) -> anyhow::Result<AgentsMetadataResponseView> {
-        targets.sort_by(|a, b| {
-            a.component
-                .component_name
-                .0
-                .cmp(&b.component.component_name.0)
-        });
-        for target in &mut targets {
-            target.agent_types.sort_by(|a, b| a.0.cmp(&b.0));
-        }
-        let types = targets
+        let scans = page_scans(&targets);
+        let names = scans
             .iter()
-            .flat_map(|target| {
-                target
-                    .agent_types
-                    .iter()
-                    .map(move |agent_type| (target, agent_type))
-            })
+            .map(|scan| (scan.component_id, scan.agent_type.0.as_str()))
             .collect::<Vec<_>>();
-        let names = types
-            .iter()
-            .map(|(target, agent_type)| (target.component.id, agent_type.0.as_str()))
-            .collect::<Vec<_>>();
+        let filter = agent_list_filter(Some(filters), mode_overlay)?;
+        let clients = self.ctx.golem_clients().await?;
         let (agents, cursor) = read_page(
             &names,
             cursor,
             count,
-            async |position, scan_cursor, limit| {
-                let (target, agent_type) = types[position];
-                let component = &target.component;
-                let mut start = AgentListCursor::default();
-                start.insert(
-                    component.id,
-                    agent_type,
-                    scan_cursor.unwrap_or_else(|| ScanCursor::new(String::new())),
-                );
-                let (agents, cursors) = self
-                    .list_component_agents(
-                        component,
-                        std::slice::from_ref(agent_type),
-                        target
-                            .component_name_filter
-                            .as_ref()
-                            .map(|name| name.0.as_str()),
-                        Some(filters),
-                        mode_overlay,
-                        Some(&start),
-                        Some(limit),
-                        precise,
+            async |position, scan_cursor, limit, page_scan| {
+                let scan = &scans[position];
+                let Some(found) = clients
+                    .agent_pages
+                    .find_agents_metadata(
+                        &scan.environment_id.0,
+                        &scan.agent_type.0,
+                        Some(&scan.component_name.0),
+                        &WorkersMetadataRequest {
+                            filter: filter.clone(),
+                            cursor: scan_cursor,
+                            count: Some(limit),
+                            precise: Some(precise),
+                            page_scan: Some(page_scan),
+                        },
                     )
-                    .await?;
+                    .await
+                    .map_service_error_not_found_as_opt()?
+                else {
+                    return Ok((Vec::new(), None, None));
+                };
+                let grant = found.page_scan.ok_or_else(|| {
+                    anyhow!("The server did not grant the agent listing page call")
+                })?;
+                let agents = found
+                    .workers
+                    .into_iter()
+                    .map(|meta| AgentMetadata::from(scan.component_name.clone(), meta))
+                    .collect();
                 Ok((
-                    self.agent_views(agents, &target.historical).await?,
-                    cursors.into_iter().next().map(|(_, cursor)| cursor),
+                    self.agent_views(agents, scan.historical, Some(&scan.component_name))
+                        .await?,
+                    found.cursor,
+                    Some(grant),
                 ))
             },
         )
@@ -2094,7 +2128,7 @@ impl AgentCommandHandler {
             .unwrap_or_default();
         let metadata = AgentMetadata::from(ComponentName(String::new()), result);
         let metadata_view = self
-            .agent_views(vec![metadata], &historical)
+            .agent_views(vec![metadata], &historical, None)
             .await?
             .remove(0);
 
@@ -3151,24 +3185,7 @@ impl AgentCommandHandler {
         let mut agents = Vec::<AgentMetadata>::new();
         let mut final_result_cursors = Vec::<(AgentTypeName, ScanCursor)>::new();
 
-        // The structured `find_agents_metadata` POST endpoint is used for all
-        // listing: string filters are converted to a structured `AgentFilter`
-        // and combined with the optional mode overlay (`--mode all`), which the
-        // string-filter GET endpoint cannot express as it only supports `And`
-        // composition.
-        let string_filter = match filters {
-            Some(filters) if !filters.is_empty() => Some(
-                AgentFilter::from(filters.to_vec())
-                    .map_err(|e| anyhow::anyhow!("Invalid agent filter: {e}"))?,
-            ),
-            _ => None,
-        };
-        let filter = match (string_filter, mode_overlay) {
-            (Some(f), Some(mode_overlay)) => Some(f.and(mode_overlay.clone())),
-            (Some(f), None) => Some(f),
-            (None, Some(mode_overlay)) => Some(mode_overlay.clone()),
-            (None, None) => None,
-        };
+        let filter = agent_list_filter(filters, mode_overlay)?;
 
         for agent_type in agent_types {
             let mut current_scan_cursor = match start_cursor {
@@ -3190,6 +3207,7 @@ impl AgentCommandHandler {
                             cursor: current_scan_cursor.clone(),
                             count: max_count.or(Some(self.ctx.http_batch_size())),
                             precise: Some(precise),
+                            page_scan: None,
                         },
                     )
                     .await
@@ -3241,6 +3259,109 @@ struct AgentListTarget {
     agent_types: Vec<AgentTypeName>,
     component_name_filter: Option<ComponentName>,
     historical: Arc<Vec<DeployedRegisteredAgentType>>,
+}
+
+/// One page call of `agent list --page`: an agent type listed with a component-name filter.
+/// The component ID names the call in the page cursor.
+struct PageScanTarget<'a> {
+    component_id: ComponentId,
+    environment_id: EnvironmentId,
+    agent_type: AgentTypeName,
+    component_name: ComponentName,
+    historical: &'a [DeployedRegisteredAgentType],
+}
+
+/// The page calls of `targets`, ordered by component name and agent type. A target without a
+/// component-name filter (a bare agent type) gets one call for each component name that
+/// implemented its type, named by the smallest component ID of that name.
+fn page_scans(targets: &[AgentListTarget]) -> Vec<PageScanTarget<'_>> {
+    let mut scans = Vec::new();
+    for target in targets {
+        for agent_type in &target.agent_types {
+            match &target.component_name_filter {
+                Some(component_name) => scans.push(PageScanTarget {
+                    component_id: target.component.id,
+                    environment_id: target.component.environment_id,
+                    agent_type: agent_type.clone(),
+                    component_name: component_name.clone(),
+                    historical: &target.historical,
+                }),
+                None => {
+                    let mut implementers = BTreeMap::<&str, ComponentId>::new();
+                    for implementer in target
+                        .historical
+                        .iter()
+                        .filter(|implementer| &implementer.agent_type.type_name == agent_type)
+                    {
+                        let component_id = implementer.implemented_by.component_id;
+                        implementers
+                            .entry(implementer.implemented_by.component_name.as_str())
+                            .and_modify(|id| *id = (*id).min(component_id))
+                            .or_insert(component_id);
+                    }
+                    scans.extend(
+                        implementers
+                            .into_iter()
+                            .map(|(component_name, component_id)| PageScanTarget {
+                                component_id,
+                                environment_id: target.component.environment_id,
+                                agent_type: agent_type.clone(),
+                                component_name: ComponentName(component_name.to_string()),
+                                historical: &target.historical,
+                            }),
+                    );
+                }
+            }
+        }
+    }
+    scans.sort_by(|a, b| {
+        (&a.component_name.0, &a.agent_type.0).cmp(&(&b.component_name.0, &b.agent_type.0))
+    });
+    scans
+}
+
+/// How a listed agent gets its recorded component.
+#[derive(Debug)]
+enum RowOwner<'a> {
+    /// The implementer that the component-name filter of the listing names.
+    Named(&'a DeployedRegisteredAgentType),
+    /// The agent was listed without a component-name filter, so only a lookup with listing calls
+    /// finds its owner.
+    LookUp,
+    /// The agent has no agent type, or its component name was the name of two components, whose
+    /// agents cannot be told apart by name.
+    Unknown,
+}
+
+/// How an agent of `agent_type`, listed with the component-name filter `component_name`, gets
+/// its recorded component. An agent listed with the filter never needs a lookup.
+fn row_owner<'a>(
+    historical: &'a [DeployedRegisteredAgentType],
+    agent_type: Option<&AgentTypeName>,
+    component_name: Option<&ComponentName>,
+) -> RowOwner<'a> {
+    let Some(component_name) = component_name else {
+        return RowOwner::LookUp;
+    };
+    let Some(agent_type) = agent_type else {
+        return RowOwner::Unknown;
+    };
+    let mut named = historical
+        .iter()
+        .filter(|implementer| implementer.implemented_by.component_name == component_name.0);
+    let Some(first) = named.next() else {
+        return RowOwner::Unknown;
+    };
+    if named.any(|other| other.implemented_by.component_id != first.implemented_by.component_id) {
+        return RowOwner::Unknown;
+    }
+    historical
+        .iter()
+        .find(|implementer| {
+            implementer.implemented_by.component_name == component_name.0
+                && &implementer.agent_type.type_name == agent_type
+        })
+        .map_or(RowOwner::Unknown, RowOwner::Named)
 }
 
 /// Current and historical types of this component, not its types' current implementers.
@@ -3866,12 +3987,111 @@ pub(super) fn parse_method_argument_schema_value(
     parsed
 }
 
+/// The structured filter of an agent listing. The structured `find_agents_metadata` POST endpoint
+/// is used for all listing: string filters are converted to a structured `AgentFilter` and
+/// combined with the optional mode overlay (`--mode all`), which the string-filter GET endpoint
+/// cannot express as it only supports `And` composition.
+fn agent_list_filter(
+    filters: Option<&[String]>,
+    mode_overlay: Option<&AgentFilter>,
+) -> anyhow::Result<Option<AgentFilter>> {
+    let string_filter = match filters {
+        Some(filters) if !filters.is_empty() => Some(
+            AgentFilter::from(filters.to_vec())
+                .map_err(|e| anyhow::anyhow!("Invalid agent filter: {e}"))?,
+        ),
+        _ => None,
+    };
+    Ok(match (string_filter, mode_overlay) {
+        (Some(f), Some(mode_overlay)) => Some(f.and(mode_overlay.clone())),
+        (Some(f), None) => Some(f),
+        (None, Some(mode_overlay)) => Some(mode_overlay.clone()),
+        (None, None) => None,
+    })
+}
+
+/// The limits that one page of `agent list --page` keeps across its scanning calls. They come
+/// from the grants of the executors, which hold only configured values, and they only get
+/// tighter. The deadline of the first grant runs from the start of the page, and the deadline of
+/// a later grant from the start of its call, because that executor granted its time from then.
+/// Before the first grant the page has no limits: until then it has made no scanning call.
+struct PageScanPolicy {
+    started: Instant,
+    deadline: Option<Instant>,
+    calls: Option<u64>,
+    keys: u64,
+    scanning_calls: u64,
+}
+
+impl PageScanPolicy {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            deadline: None,
+            calls: None,
+            keys: u64::MAX,
+            scanning_calls: 0,
+        }
+    }
+
+    /// Whether the page may start no further call.
+    fn is_spent(&self) -> bool {
+        self.calls.is_some_and(|calls| self.scanning_calls >= calls)
+            || self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    /// The request of the next call: the key share of the page, and the time to its deadline,
+    /// rounded up to a millisecond.
+    fn request(&self) -> PageScanRequest {
+        let millis = match self.deadline {
+            None => u64::MAX,
+            Some(deadline) => u64::try_from(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_micros()
+                    .div_ceil(1000),
+            )
+            .unwrap_or(u64::MAX)
+            .max(1),
+        };
+        PageScanRequest {
+            keys: self.keys,
+            millis,
+        }
+    }
+
+    /// Counts a scanning call that started at `call_started` and got `grant`.
+    fn granted(&mut self, call_started: Instant, grant: PageScanGrant) {
+        let anchor = if self.calls.is_none() {
+            self.started
+        } else {
+            call_started
+        };
+        if let Some(deadline) = anchor.checked_add(Duration::from_millis(grant.millis)) {
+            self.deadline = Some(
+                self.deadline
+                    .map_or(deadline, |current| current.min(deadline)),
+            );
+        }
+        self.calls = Some(
+            self.calls
+                .map_or(grant.calls, |calls| calls.min(grant.calls)),
+        );
+        self.keys = self.keys.min(grant.keys);
+        self.scanning_calls += 1;
+    }
+}
+
 /// One page of `count` items across the agent types in `component_names`, in their order,
-/// under one budget. `scan(position, scan_cursor, limit)` lists the items of the type at
-/// `position` from `scan_cursor`, and gives the scan cursor of its next items. It asks for `limit`
-/// items, but a scan of a Redis indexed storage can list more, and the page keeps all of them, so
-/// `count` is a target there and a limit elsewhere.
-/// The page ends at the first scan that gives a scan cursor, or when `count` items are listed.
+/// under one budget. `scan(position, scan_cursor, limit, page_scan)` lists the items of the type
+/// at `position` from `scan_cursor`, and gives the scan cursor of its next items and the grant of
+/// the call, or no grant when the server refused the call before it scanned (a type that it does
+/// not find). It asks for `limit` items, but a scan of a Redis indexed storage can list more, and
+/// the page keeps all of them, so `count` is a target there and a limit elsewhere.
+/// The page ends at the first scan that gives a scan cursor, when `count` items are listed, or
+/// when the [`PageScanPolicy`] of the grants allows no further call.
 /// The next cursor includes the unfinished type and every type not yet scanned.
 async fn read_page<T>(
     scans: &[(ComponentId, &str)],
@@ -3881,7 +4101,9 @@ async fn read_page<T>(
         usize,
         Option<ScanCursor>,
         u64,
-    ) -> anyhow::Result<(Vec<T>, Option<ScanCursor>)>,
+        PageScanRequest,
+    )
+        -> anyhow::Result<(Vec<T>, Option<ScanCursor>, Option<PageScanGrant>)>,
 ) -> anyhow::Result<(Vec<T>, Option<String>)> {
     if count == 0 {
         bail!("A page needs a --max-count of at least 1");
@@ -3899,6 +4121,7 @@ async fn read_page<T>(
     let mut remaining = count;
     let mut next = AgentListCursor::default();
     let mut stopped = false;
+    let mut policy = PageScanPolicy::new();
     for (position, (component, name)) in scans.iter().enumerate() {
         let agent_type = AgentTypeName((*name).to_string());
         let scan_cursor = match cursor {
@@ -3908,7 +4131,8 @@ async fn read_page<T>(
                 None => continue,
             },
         };
-        if stopped || remaining == 0 {
+        stopped = stopped || remaining == 0 || policy.is_spent();
+        if stopped {
             next.insert(
                 *component,
                 &agent_type,
@@ -3916,7 +4140,12 @@ async fn read_page<T>(
             );
             continue;
         }
-        let (listed, next_scan_cursor) = scan(position, scan_cursor, remaining).await?;
+        let call_started = Instant::now();
+        let (listed, next_scan_cursor, grant) =
+            scan(position, scan_cursor, remaining, policy.request()).await?;
+        if let Some(grant) = grant {
+            policy.granted(call_started, grant);
+        }
         remaining = remaining.saturating_sub(listed.len() as u64);
         items.extend(listed);
         if let Some(next_scan_cursor) = next_scan_cursor {
@@ -4130,11 +4359,11 @@ fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListCursor, AgentListMode, AgentUpdateMode, ScanCursor, apply_list_mode_filter,
-        is_selected_update_attempt, parse_agent_id_address, parse_agent_key,
-        parse_method_argument_schema_value, parse_method_parameters_with_error_table,
-        pending_update_progress, read_page, redeploy_parameters, render_revert_command,
-        split_agent_id, validate_ordinary_agent_type,
+        AgentListCursor, AgentListMode, AgentUpdateMode, PageScanGrant, PageScanRequest,
+        ScanCursor, apply_list_mode_filter, is_selected_update_attempt, parse_agent_id_address,
+        parse_agent_key, parse_method_argument_schema_value,
+        parse_method_parameters_with_error_table, pending_update_progress, read_page,
+        redeploy_parameters, render_revert_command, split_agent_id, validate_ordinary_agent_type,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
@@ -4161,14 +4390,17 @@ mod tests {
     use test_r::test;
 
     /// Reads every page of `components` (name and item count) with pages of `count`, over a fake
-    /// scan whose scan cursor is the index of the next item. Gives each page's items and cursor,
-    /// and each scan's component position and scan cursor.
+    /// scan whose scan cursor is the index of the next item and which grants `calls` scanning
+    /// calls per page. Gives each page's items and cursor, each scan's component position and
+    /// scan cursor, and the request of each page's first call.
     async fn read_all_pages(
         components: &[(&str, usize)],
         count: u64,
+        calls: u64,
     ) -> (
         Vec<(Vec<String>, Option<String>)>,
         Vec<(usize, Option<String>)>,
+        Vec<PageScanRequest>,
     ) {
         let names = components
             .iter()
@@ -4176,27 +4408,31 @@ mod tests {
             .collect::<Vec<_>>();
         let mut pages = Vec::new();
         let mut scans = Vec::new();
+        let mut first_requests = Vec::new();
         let mut cursor = None::<AgentListCursor>;
         loop {
+            let mut first_request = None;
             let (items, next) = read_page(
                 &names,
                 cursor.as_ref(),
                 count,
-                async |position, scan_cursor: Option<ScanCursor>, limit| {
+                async |position, scan_cursor: Option<ScanCursor>, limit, request| {
+                    first_request.get_or_insert(request);
                     scans.push((position, scan_cursor.as_ref().map(ToString::to_string)));
                     let (name, len) = components[position];
                     let start = scan_cursor.map_or(0, |cursor| cursor.as_str().parse().unwrap());
                     let end = (start + limit as usize).min(len);
                     let items = (start..end).map(|item| format!("{name}#{item}")).collect();
                     let next = (end < len).then(|| ScanCursor::new(end.to_string()));
-                    Ok((items, next))
+                    Ok((items, next, Some(grant(calls, 1_000, 60_000))))
                 },
             )
             .await
             .unwrap();
+            first_requests.extend(first_request);
             pages.push((items, next.clone()));
             let Some(next) = next else {
-                return (pages, scans);
+                return (pages, scans, first_requests);
             };
             cursor = Some(AgentListCursor::decode(&next).unwrap());
             assert!(pages.len() < 100, "the pages do not end");
@@ -4205,7 +4441,7 @@ mod tests {
 
     #[test]
     async fn a_page_that_ends_a_component_at_its_limit_names_the_next_component() {
-        let (pages, scans) = read_all_pages(&[("a:x", 2), ("b:y", 3)], 2).await;
+        let (pages, scans, _) = read_all_pages(&[("a:x", 2), ("b:y", 3)], 2, 10).await;
         assert_eq!(
             pages
                 .iter()
@@ -4224,7 +4460,7 @@ mod tests {
         );
 
         // The last component ending at the limit ends the pages.
-        let (pages, _) = read_all_pages(&[("a:x", 1), ("b:y", 1)], 2).await;
+        let (pages, _, _) = read_all_pages(&[("a:x", 1), ("b:y", 1)], 2, 10).await;
         assert_eq!(
             pages,
             vec![(vec!["a:x#0".to_string(), "b:y#0".to_string()], None)]
@@ -4234,11 +4470,398 @@ mod tests {
     #[test]
     async fn page_reaches_the_second_component_of_a_moved_type() {
         let names = [(ComponentId::new(), "T"), (ComponentId::new(), "T")];
-        let scan = async |position, _: Option<ScanCursor>, _| Ok((vec![position], None));
+        let scan = async |position, _: Option<ScanCursor>, _, _| {
+            Ok((vec![position], None, Some(grant(10, 1_000, 60_000))))
+        };
         let (first, token) = read_page(&names, None, 1, scan).await.unwrap();
         let cursor = AgentListCursor::decode(token.as_deref().unwrap()).unwrap();
         let (second, end) = read_page(&names, Some(&cursor), 1, scan).await.unwrap();
         assert_eq!((first, second, end), (vec![0], vec![1], None));
+    }
+
+    fn grant(calls: u64, keys: u64, millis: u64) -> PageScanGrant {
+        PageScanGrant {
+            calls,
+            keys,
+            millis,
+        }
+    }
+
+    /// Runs `future` on a runtime whose clock moves only when the test advances it.
+    fn paused<F: Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
+    /// A listing type of one fake page: the call lists `items` agents, takes `millis` on the
+    /// test clock, and gives `grant`, or no grant for a type that the server does not find. With
+    /// `cut`, the call ends with a scan cursor.
+    #[derive(Clone, Copy)]
+    struct FakeType {
+        items: usize,
+        millis: u64,
+        grant: Option<PageScanGrant>,
+        cut: bool,
+    }
+
+    fn scanned(millis: u64, grant: PageScanGrant) -> FakeType {
+        FakeType {
+            items: 0,
+            millis,
+            grant: Some(grant),
+            cut: false,
+        }
+    }
+
+    fn not_found(millis: u64) -> FakeType {
+        FakeType {
+            items: 0,
+            millis,
+            grant: None,
+            cut: false,
+        }
+    }
+
+    /// The items of a fake page, its cursor as the position and scan cursor of each type that it
+    /// names, and the position and request of each call.
+    type FakePage = (
+        Vec<String>,
+        Option<Vec<(usize, String)>>,
+        Vec<(usize, PageScanRequest)>,
+    );
+
+    /// One page of `count` over `types`, on the paused clock.
+    fn read_fake_page(types: &[FakeType], count: u64) -> FakePage {
+        let names = (0..types.len())
+            .map(|position| (ComponentId::new(), format!("t{position}")))
+            .collect::<Vec<_>>();
+        let scans = names
+            .iter()
+            .map(|(component, name)| (*component, name.as_str()))
+            .collect::<Vec<_>>();
+        let mut requests = Vec::new();
+        let (items, cursor) = paused(read_page(
+            &scans,
+            None,
+            count,
+            async |position, _, _, request| {
+                requests.push((position, request));
+                let fake = types[position];
+                tokio::time::advance(std::time::Duration::from_millis(fake.millis)).await;
+                let items = (0..fake.items)
+                    .map(|item| format!("t{position}#{item}"))
+                    .collect();
+                let next = fake.cut.then(|| ScanCursor::new(format!("cut{position}")));
+                Ok((items, next, fake.grant))
+            },
+        ))
+        .unwrap();
+        let cursor = cursor.map(|cursor| {
+            let cursor = AgentListCursor::decode(&cursor).unwrap();
+            names
+                .iter()
+                .enumerate()
+                .filter_map(|(position, (component, name))| {
+                    cursor
+                        .resume_at(*component, &AgentTypeName(name.clone()))
+                        .map(|scan_cursor| (position, scan_cursor.to_string()))
+                })
+                .collect()
+        });
+        (items, cursor, requests)
+    }
+
+    fn positions(requests: &[(usize, PageScanRequest)]) -> Vec<usize> {
+        requests.iter().map(|(position, _)| *position).collect()
+    }
+
+    fn sent_millis(requests: &[(usize, PageScanRequest)]) -> Vec<u64> {
+        requests.iter().map(|(_, request)| request.millis).collect()
+    }
+
+    fn sentinels(positions: impl IntoIterator<Item = usize>) -> Option<Vec<(usize, String)>> {
+        Some(
+            positions
+                .into_iter()
+                .map(|position| (position, String::new()))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_page_makes_at_most_the_granted_number_of_scanning_calls() {
+        let (items, cursor, requests) = read_fake_page(&[scanned(0, grant(3, 100, 1_000)); 5], 50);
+        assert!(items.is_empty());
+        assert_eq!(positions(&requests), vec![0, 1, 2]);
+        assert_eq!(cursor, sentinels([3, 4]));
+    }
+
+    #[test]
+    fn a_page_sends_the_time_left_and_stops_at_its_deadline() {
+        let (_, cursor, requests) = read_fake_page(&[scanned(40, grant(10, 100, 100)); 5], 50);
+        assert_eq!(sent_millis(&requests), vec![u64::MAX, 60, 20]);
+        assert_eq!(cursor, sentinels([3, 4]));
+    }
+
+    #[test]
+    fn a_later_grant_tightens_the_call_limit() {
+        let types = [
+            scanned(0, grant(10, 100, 1_000)),
+            scanned(0, grant(2, 100, 1_000)),
+            scanned(0, grant(10, 100, 1_000)),
+            scanned(0, grant(10, 100, 1_000)),
+        ];
+        let (_, cursor, requests) = read_fake_page(&types, 50);
+        assert_eq!(positions(&requests), vec![0, 1]);
+        assert_eq!(cursor, sentinels([2, 3]));
+    }
+
+    #[test]
+    fn a_later_grant_tightens_the_deadline_from_the_start_of_its_call() {
+        let types = [
+            scanned(10, grant(10, 100, 100)),
+            scanned(10, grant(10, 100, 30)),
+            scanned(10, grant(10, 100, 100)),
+        ];
+        let (_, _, requests) = read_fake_page(&types, 50);
+        assert_eq!(sent_millis(&requests), vec![u64::MAX, 90, 20]);
+    }
+
+    #[test]
+    fn the_deadline_runs_from_the_page_start() {
+        let types = [
+            not_found(30),
+            not_found(30),
+            scanned(30, grant(10, 100, 100)),
+            scanned(0, grant(10, 100, 100)),
+        ];
+        let (_, _, requests) = read_fake_page(&types, 50);
+        assert_eq!(
+            sent_millis(&requests),
+            vec![u64::MAX, u64::MAX, u64::MAX, 10]
+        );
+    }
+
+    #[test]
+    fn a_page_past_its_deadline_starts_no_type_that_would_not_be_found() {
+        // The deadline passes during a type that is not found, which gives no grant.
+        let types = [
+            scanned(0, grant(10, 100, 50)),
+            not_found(60),
+            not_found(0),
+            not_found(0),
+        ];
+        let (_, cursor, requests) = read_fake_page(&types, 50);
+        assert_eq!(positions(&requests), vec![0, 1]);
+        assert_eq!(cursor, sentinels([2, 3]));
+    }
+
+    /// A failed call fails the page: the page makes no further call, and the caller reads the
+    /// page again with the same cursor.
+    #[test]
+    async fn a_failed_call_fails_the_page() {
+        let names = [
+            (ComponentId::new(), "a"),
+            (ComponentId::new(), "b"),
+            (ComponentId::new(), "c"),
+        ];
+        let mut calls = 0;
+        let result = read_page(&names, None, 50, async |position, _, _, _| {
+            calls += 1;
+            if position == 1 {
+                anyhow::bail!("no executor");
+            }
+            Ok((vec![position], None, Some(grant(10, 100, 1_000))))
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn a_page_of_types_that_are_not_found_ends_the_listing() {
+        let (items, cursor, requests) = read_fake_page(&[not_found(0); 3], 50);
+        assert!(items.is_empty());
+        assert_eq!(positions(&requests), vec![0, 1, 2]);
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn a_type_that_is_not_found_is_not_a_scanning_call() {
+        let types = [
+            scanned(0, grant(2, 100, 1_000)),
+            not_found(0),
+            scanned(0, grant(2, 100, 1_000)),
+            scanned(0, grant(2, 100, 1_000)),
+        ];
+        let (_, cursor, requests) = read_fake_page(&types, 50);
+        assert_eq!(positions(&requests), vec![0, 1, 2]);
+        assert_eq!(cursor, sentinels([3]));
+    }
+
+    #[test]
+    fn a_cut_type_keeps_its_scan_cursor_and_the_later_types_start_again() {
+        let mut types = [scanned(0, grant(10, 100, 1_000)); 4];
+        types[1].cut = true;
+        let (_, cursor, requests) = read_fake_page(&types, 50);
+        assert_eq!(positions(&requests), vec![0, 1]);
+        assert_eq!(
+            cursor,
+            Some(vec![
+                (1, "cut1".to_string()),
+                (2, String::new()),
+                (3, String::new())
+            ])
+        );
+    }
+
+    #[test]
+    fn a_last_type_that_ends_at_the_call_limit_ends_the_listing() {
+        let (_, cursor, requests) = read_fake_page(&[scanned(0, grant(2, 100, 1_000)); 2], 50);
+        assert_eq!(positions(&requests), vec![0, 1]);
+        assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn a_page_that_reaches_its_count_at_the_call_limit_names_the_next_type() {
+        let mut types = [scanned(0, grant(1, 100, 1_000)); 2];
+        types[0].items = 2;
+        let (items, cursor, requests) = read_fake_page(&types, 2);
+        assert_eq!(items, vec!["t0#0".to_string(), "t0#1".to_string()]);
+        assert_eq!(positions(&requests), vec![0]);
+        assert_eq!(cursor, sentinels([1]));
+    }
+
+    #[test]
+    async fn every_page_starts_without_the_limits_of_the_page_before() {
+        let (pages, _, first_requests) =
+            read_all_pages(&[("a", 3), ("b", 0), ("c", 2), ("d", 0), ("e", 1)], 2, 2).await;
+        assert_eq!(
+            pages
+                .iter()
+                .flat_map(|(items, _)| items.clone())
+                .collect::<Vec<_>>(),
+            vec!["a#0", "a#1", "a#2", "c#0", "c#1", "e#0"]
+        );
+        assert!(pages.len() > 2);
+        assert_eq!(first_requests, vec![PageScanRequest::FIRST; pages.len()]);
+    }
+
+    /// A page whose calls reach executors with other page settings sends the key share of the
+    /// first grant, so a later executor with a larger share scans only that share.
+    #[test]
+    fn a_page_sends_its_key_share_to_every_executor() {
+        let names = (0..10)
+            .map(|position| (ComponentId::new(), format!("t{position}")))
+            .collect::<Vec<_>>();
+        let scans = names
+            .iter()
+            .map(|(component, name)| (*component, name.as_str()))
+            .collect::<Vec<_>>();
+        let mut sent_keys = Vec::new();
+        let mut examined = 0u64;
+        let (_, cursor) = paused(read_page(
+            &scans,
+            None,
+            50,
+            async |position, _, _, request| {
+                sent_keys.push(request.keys);
+                let (calls, keys) = if position < 9 {
+                    (10, 9_000)
+                } else {
+                    (1, 90_000)
+                };
+                let granted = request.keys.min(100_000u64.div_ceil(calls));
+                examined += keys.min(granted);
+                let next = (keys > granted).then(|| ScanCursor::new("more".to_string()));
+                Ok((Vec::<()>::new(), next, Some(grant(calls, granted, 5_000))))
+            },
+        ))
+        .unwrap();
+        assert_eq!(sent_keys[0], u64::MAX);
+        assert_eq!(&sent_keys[1..], &[10_000; 9]);
+        assert_eq!(examined, 91_000);
+        assert!(cursor.is_some());
+    }
+
+    #[test]
+    fn a_component_name_finds_its_implementer_unless_two_components_had_it() {
+        let component = counter_component();
+        let implementer = |name: &str, component_id: ComponentId, agent_type: &str| {
+            let mut declaration = component.metadata.agent_types[0].declaration.clone();
+            declaration.type_name = AgentTypeName(agent_type.into());
+            golem_common::model::agent::DeployedRegisteredAgentType {
+                type_id: golem_common::model::type_id::TypeId::try_from(1u32).unwrap(),
+                agent_type: declaration,
+                implemented_by: golem_common::model::agent::RegisteredAgentTypeImplementer {
+                    component_id,
+                    component_revision: component.revision,
+                    component_name: name.to_string(),
+                    account_id: component.account_id,
+                    account_email: golem_common::model::account::AccountEmail::new(
+                        "owner@example.com",
+                    ),
+                },
+                webhook_prefix_authority_and_path: None,
+            }
+        };
+        let (first, second, renamed) = (ComponentId::new(), ComponentId::new(), ComponentId::new());
+        let historical = vec![
+            implementer("app:first", first, "Moved"),
+            implementer("app:second", second, "Moved"),
+            implementer("app:twice", renamed, "Other"),
+            implementer("app:twice", ComponentId::new(), "Other"),
+        ];
+        let owner = |name: Option<&str>, agent_type: &str| match super::row_owner(
+            &historical,
+            Some(&AgentTypeName(agent_type.into())),
+            name.map(|name| ComponentName(name.into())).as_ref(),
+        ) {
+            super::RowOwner::Named(implementer) => {
+                format!("{}", implementer.implemented_by.component_id)
+            }
+            other => format!("{other:?}"),
+        };
+        // Agents listed with a component-name filter get their owner without a lookup.
+        assert_eq!(owner(Some("app:first"), "Moved"), first.to_string());
+        assert_eq!(owner(Some("app:second"), "Moved"), second.to_string());
+        assert_eq!(owner(Some("app:twice"), "Other"), "Unknown");
+        assert_eq!(owner(Some("app:first"), "Other"), "Unknown");
+        assert_eq!(owner(None, "Moved"), "LookUp");
+
+        let target =
+            |agent_types: Vec<&str>, component_name_filter: Option<&str>| super::AgentListTarget {
+                component: component.clone(),
+                agent_types: agent_types
+                    .into_iter()
+                    .map(|agent_type| AgentTypeName(agent_type.into()))
+                    .collect(),
+                component_name_filter: component_name_filter.map(|name| ComponentName(name.into())),
+                historical: std::sync::Arc::new(historical.clone()),
+            };
+        let targets = [
+            target(vec!["Moved"], None),
+            target(vec!["Other"], Some("app:twice")),
+        ];
+        assert_eq!(
+            super::page_scans(&targets)
+                .iter()
+                .map(|scan| (
+                    scan.component_id,
+                    scan.agent_type.0.as_str(),
+                    scan.component_name.0.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (first, "Moved", "app:first"),
+                (second, "Moved", "app:second"),
+                (component.id, "Other", "app:twice"),
+            ]
+        );
     }
 
     #[test]

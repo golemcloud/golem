@@ -529,13 +529,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await;
         match result {
-            Ok((cursor, workers)) => {
+            Ok((cursor, workers, page_scan)) => {
                 record.succeed(Ok(Response::new(GetWorkersMetadataResponse {
                     result: Some(
                         golem::workerexecutor::v1::get_workers_metadata_response::Result::Success(
                             golem::workerexecutor::v1::GetWorkersMetadataSuccessResponse {
                                 workers,
                                 cursor,
+                                page_scan,
                             },
                         ),
                     ),

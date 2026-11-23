@@ -67,7 +67,7 @@ use golem_common::model::oplog::{
 use golem_common::model::type_id::TypeId;
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentStatus, FilterComparator, IdempotencyKey,
-    InvocationRequestKey, PromiseId, ScanCursor,
+    InvocationRequestKey, PageScanGrant, PageScanRequest, PromiseId, ScanCursor,
 };
 use golem_common::model::{
     AgentInvocationOutput, AgentInvocationResult, BackgroundFailure, InvocationStatus,
@@ -182,6 +182,27 @@ async fn decode_file_read_response(
         head,
         body: Box::pin(body),
     })
+}
+
+/// One call of an agent listing: the cursor of the next call, the listed agents, and, for a call
+/// of a listing page, what the executor granted it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FoundAgents<T> {
+    pub cursor: Option<ScanCursor>,
+    pub agents: Vec<T>,
+    pub page_scan: Option<PageScanGrant>,
+}
+
+/// A call of a listing page with no keys or no time to spend cannot make progress.
+fn validate_page_scan(page_scan: Option<PageScanRequest>) -> Result<(), WorkerExecutorError> {
+    match page_scan {
+        Some(page_scan) if page_scan.keys == 0 || page_scan.millis == 0 => {
+            Err(WorkerExecutorError::invalid_request(
+                "The keys and the millis of a page scan must be at least 1",
+            ))
+        }
+        _ => Ok(()),
+    }
 }
 
 fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
@@ -644,6 +665,10 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
     ) -> WorkerResult<ExistingAgent>;
 
+    /// Lists the agents of a type. With `page_scan`, the call is a call of a listing page: it
+    /// takes no fast path, the routing makes one attempt, and the executor scans within the page
+    /// share and time that it grants.
+    #[allow(clippy::too_many_arguments)]
     async fn find_metadata(
         &self,
         type_id: TypeId,
@@ -651,9 +676,10 @@ pub trait WorkerClient: Send + Sync {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
+        page_scan: Option<PageScanRequest>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)>;
+    ) -> WorkerResult<FoundAgents<ExistingAgent>>;
 
     async fn resume(
         &self,
@@ -1058,6 +1084,7 @@ impl WorkerExecutorWorkerClient {
         Ok(result.into_iter().flatten().collect())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn find_metadata_internal(
         &self,
         type_id: TypeId,
@@ -1065,12 +1092,15 @@ impl WorkerExecutorWorkerClient {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
+        page_scan: Option<PageScanRequest>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)> {
+    ) -> WorkerResult<FoundAgents<ExistingAgent>> {
         let result = self
             .call_worker_executor(
-                RandomExecutor,
+                RandomExecutor {
+                    replayable: page_scan.is_none(),
+                },
                 "get_workers_metadata",
                 move |worker_executor_client| {
                     Box::pin(worker_executor_client.get_workers_metadata(
@@ -1082,6 +1112,7 @@ impl WorkerExecutorWorkerClient {
                             precise,
                             environment_id: Some(environment_id.into()),
                             auth_ctx: Some(auth_ctx.clone().into()),
+                            page_scan: page_scan.map(Into::into),
                         },
                     ))
                 },
@@ -1092,6 +1123,7 @@ impl WorkerExecutorWorkerClient {
                                 workerexecutor::v1::GetWorkersMetadataSuccessResponse {
                                     workers,
                                     cursor,
+                                    page_scan,
                                 },
                             )),
                     } => {
@@ -1104,7 +1136,11 @@ impl WorkerExecutorWorkerClient {
                                     "Unexpected worker metadata in response: {err}"
                                 ))
                             })?;
-                        Ok((cursor.map(|c| c.into()), workers))
+                        Ok(FoundAgents {
+                            cursor: cursor.map(|c| c.into()),
+                            agents: workers,
+                            page_scan: page_scan.map(Into::into),
+                        })
                     }
                     workerexecutor::v1::GetWorkersMetadataResponse {
                         result:
@@ -1522,12 +1558,16 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
+        page_scan: Option<PageScanRequest>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)> {
+    ) -> WorkerResult<FoundAgents<ExistingAgent>> {
         validate_agent_enumeration_count(count)?;
+        validate_page_scan(page_scan)?;
 
-        if let Some(running_filter) = running_metadata_fast_path_filter(&filter, &cursor) {
+        if let Some(running_filter) =
+            running_metadata_fast_path_filter(&filter, &cursor, page_scan.is_some())
+        {
             let result = self
                 .find_running_metadata_internal(
                     type_id,
@@ -1539,7 +1579,11 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             // The fast path returns no cursor, so it is only complete when every match fits in
             // one page.
             if result.len() <= count as usize {
-                return Ok((None, result));
+                return Ok(FoundAgents {
+                    cursor: None,
+                    agents: result,
+                    page_scan: None,
+                });
             }
         }
         self.find_metadata_internal(
@@ -1548,6 +1592,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             cursor,
             count,
             precise,
+            page_scan,
             environment_id,
             auth_ctx,
         )
@@ -3248,7 +3293,13 @@ fn is_filter_with_running_status(filter: &AgentFilter) -> bool {
 fn running_metadata_fast_path_filter(
     filter: &Option<AgentFilter>,
     cursor: &ScanCursor,
+    page_call: bool,
 ) -> Option<AgentFilter> {
+    // The fast path asks every executor for all of its active agents, so a call of a listing
+    // page, which scans within a page share, does not take it.
+    if page_call {
+        return None;
+    }
     let filter = filter.as_ref()?;
     if !cursor.is_finished() || !is_filter_with_running_status(filter) {
         return None;
@@ -3282,21 +3333,33 @@ mod running_metadata_fast_path_tests {
     #[test]
     fn running_filter_uses_fast_path_only_without_a_cursor() {
         assert!(
-            running_metadata_fast_path_filter(&Some(running()), &ScanCursor::default()).is_some()
+            running_metadata_fast_path_filter(&Some(running()), &ScanCursor::default(), false)
+                .is_some()
         );
         assert!(
             running_metadata_fast_path_filter(
                 &Some(running()),
-                &ScanCursor::new("malformed".to_string())
+                &ScanCursor::new("malformed".to_string()),
+                false
             )
             .is_none()
+        );
+    }
+
+    /// The fast path asks every executor for all of its active agents with no scan budget, so a
+    /// call of a listing page never takes it.
+    #[test]
+    fn a_page_call_does_not_take_the_fast_path() {
+        assert!(
+            running_metadata_fast_path_filter(&Some(running()), &ScanCursor::default(), true)
+                .is_none()
         );
     }
 
     #[test]
     fn fast_path_lists_durable_agents_unless_the_filter_mentions_a_mode() {
         assert_eq!(
-            running_metadata_fast_path_filter(&Some(running()), &ScanCursor::default()),
+            running_metadata_fast_path_filter(&Some(running()), &ScanCursor::default(), false),
             Some(AgentFilter::new_and(vec![
                 running(),
                 mode(AgentMode::Durable)
@@ -3307,7 +3370,11 @@ mod running_metadata_fast_path_tests {
             AgentFilter::new_or(vec![mode(AgentMode::Ephemeral), mode(AgentMode::Durable)]),
         ]);
         assert_eq!(
-            running_metadata_fast_path_filter(&Some(ephemeral.clone()), &ScanCursor::default()),
+            running_metadata_fast_path_filter(
+                &Some(ephemeral.clone()),
+                &ScanCursor::default(),
+                false
+            ),
             Some(ephemeral)
         );
     }
@@ -3936,6 +4003,16 @@ mod rejection_mapping_tests {
     }
 
     #[test]
+    fn a_page_call_needs_keys_and_time() {
+        use golem_common::model::PageScanRequest;
+        assert!(super::validate_page_scan(None).is_ok());
+        assert!(super::validate_page_scan(Some(PageScanRequest::FIRST)).is_ok());
+        assert!(super::validate_page_scan(Some(PageScanRequest { keys: 1, millis: 1 })).is_ok());
+        assert!(super::validate_page_scan(Some(PageScanRequest { keys: 0, millis: 1 })).is_err());
+        assert!(super::validate_page_scan(Some(PageScanRequest { keys: 1, millis: 0 })).is_err());
+    }
+
+    #[test]
     fn agent_enumeration_count_bounds_are_validated() {
         assert!(validate_agent_enumeration_count(1).is_ok());
         assert!(validate_agent_enumeration_count(i64::MAX as u64).is_ok());
@@ -4013,13 +4090,16 @@ mod rejection_mapping_tests {
         ));
     }
 
+    /// A shard manager whose routing table is always the same, and which counts how often it is
+    /// asked for it.
     #[derive(Clone)]
-    struct StaticShardManager(RoutingTable);
+    struct StaticShardManager(RoutingTable, Arc<AtomicUsize>);
 
     #[async_trait::async_trait]
     #[golem_async_trait::region_simple]
     impl ShardManager for StaticShardManager {
         async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
+            self.1.fetch_add(1, Ordering::SeqCst);
             Ok(self.0.clone())
         }
 
@@ -4092,6 +4172,7 @@ mod rejection_mapping_tests {
     /// Rejects every invocation as `NotFound`, after first rejecting `routing_misses` of them as
     /// having reached an executor that does not own the agent's shard. With `accept` it accepts
     /// instead of rejecting as `NotFound`, and keeps the session open until its request stream ends.
+    /// Every `get_workers_metadata` call counts in `calls` and fails as a lost connection would.
     #[derive(Clone, Default)]
     struct RejectingExecutor {
         routing_misses: Arc<AtomicUsize>,
@@ -4255,11 +4336,13 @@ mod rejection_mapping_tests {
             GetRunningWorkersMetadataRequest,
             GetRunningWorkersMetadataResponse
         );
-        unimplemented_unary!(
-            get_workers_metadata,
-            GetWorkersMetadataRequest,
-            GetWorkersMetadataResponse
-        );
+        async fn get_workers_metadata(
+            &self,
+            _request: Request<GetWorkersMetadataRequest>,
+        ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(Status::unavailable("connection reset"))
+        }
         unimplemented_unary!(update_worker, UpdateWorkerRequest, UpdateWorkerResponse);
         unimplemented_unary!(get_oplog, GetOplogRequest, GetOplogResponse);
         unimplemented_unary!(search_oplog, SearchOplogRequest, SearchOplogResponse);
@@ -4490,6 +4573,116 @@ mod rejection_mapping_tests {
         }
     }
 
+    /// A worker service client with no executor in its routing table, and the count of its
+    /// routing table reads.
+    fn client_without_executors() -> (WorkerExecutorWorkerClient, Arc<AtomicUsize>) {
+        let routing_table: RoutingTable = GrpcRoutingTable {
+            number_of_shards: 1,
+            shard_assignments: vec![],
+        }
+        .try_into()
+        .unwrap();
+        let reads = Arc::new(AtomicUsize::new(0));
+        let routing = Arc::new(RoutingTableService::new(
+            RoutingTableConfig::default(),
+            Arc::new(StaticShardManager(routing_table, reads.clone())),
+        ));
+        let clients = MultiTargetGrpcClient::new(
+            "no-executor",
+            |channel: OtelGrpcService<_>, _| {
+                golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient::new(channel)
+            },
+            GrpcClientConfig::default(),
+        );
+        (
+            WorkerExecutorWorkerClient::new(clients, RetryConfig::default(), routing, 1),
+            reads,
+        )
+    }
+
+    /// One agent listing call of `client`, a page call when `page_scan` is set.
+    async fn find_agents(
+        client: &WorkerExecutorWorkerClient,
+        page_scan: Option<golem_common::model::PageScanRequest>,
+    ) -> Result<super::FoundAgents<super::ExistingAgent>, WorkerServiceError> {
+        client
+            .find_metadata(
+                golem_common::model::type_id::TypeId::try_from(7u32).unwrap(),
+                None,
+                golem_common::model::ScanCursor::default(),
+                10,
+                false,
+                page_scan,
+                EnvironmentId::new(),
+                AuthCtx::System,
+            )
+            .await
+    }
+
+    fn http_status(error: WorkerServiceError) -> poem::http::StatusCode {
+        use poem::IntoResponse;
+        crate::api::common::ApiEndpointError::from(error)
+            .into_response()
+            .status()
+    }
+
+    /// A page call that found no executor fails at once: the routing would retry it with no end,
+    /// and no grant reaches the page while it waits.
+    #[test]
+    async fn a_page_call_without_an_executor_fails_after_one_attempt() {
+        let (client, reads) = client_without_executors();
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            find_agents(&client, Some(golem_common::model::PageScanRequest::FIRST)),
+        )
+        .await
+        .expect("a page call must not wait for an executor")
+        .expect_err("a page call without an executor must fail");
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        assert!(
+            matches!(&error, WorkerServiceError::Internal(message) if message.contains("NoActiveShards")),
+            "{error:?}"
+        );
+        assert_eq!(
+            http_status(error),
+            poem::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        // A call that is not a page call still waits for an executor.
+        let (client, reads) = client_without_executors();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), find_agents(&client, None))
+                .await
+                .is_err()
+        );
+        assert!(reads.load(Ordering::SeqCst) > 1);
+    }
+
+    /// A page call whose connection failed after it was sent is neither replayed nor retried,
+    /// and keeps the cause of the failure.
+    #[test]
+    async fn a_page_call_that_failed_after_it_was_sent_is_not_sent_again() {
+        let executor = RejectingExecutor::default();
+        let calls = executor.calls.clone();
+        let (client, _) = client_against(executor, 32 * 1024 * 1024).await;
+        let error = find_agents(&client, Some(golem_common::model::PageScanRequest::FIRST))
+            .await
+            .expect_err("the executor fails every listing call");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let WorkerServiceError::InternalCallError(
+            super::CallWorkerExecutorError::FailedToConnectToPod(status),
+        ) = &error
+        else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert!(status.message().contains("connection reset"), "{status:?}");
+        assert_eq!(
+            http_status(error),
+            poem::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
     /// A worker service client whose only executor is `executor`, and an agent to invoke through
     /// it.
     async fn client_against(
@@ -4527,7 +4720,7 @@ mod rejection_mapping_tests {
         .unwrap();
         let routing = Arc::new(RoutingTableService::new(
             RoutingTableConfig::default(),
-            Arc::new(StaticShardManager(routing_table)),
+            Arc::new(StaticShardManager(routing_table, Arc::default())),
         ));
         let clients = MultiTargetGrpcClient::new(
             "provisional-rejecting-executor",

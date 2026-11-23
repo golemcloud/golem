@@ -424,6 +424,9 @@ pub struct GolemClients {
     /// spent scan allowance on the server, so a retry with the same allowance could scan more
     /// than the read was granted.
     pub worker_range_reads: WorkerClientLive,
+    /// The agent client of `agent list --page` calls, without retries: an attempt that failed can
+    /// have scanned on the server, so a retry could scan more than one page is granted.
+    pub agent_pages: AgentClientLive,
 }
 
 impl GolemClients {
@@ -583,6 +586,13 @@ impl GolemClients {
                 context: worker_context(),
             },
             worker_range_reads: WorkerClientLive {
+                context: ClientContext {
+                    client: service_http_client_without_retry.clone(),
+                    base_url: config.worker_url.clone(),
+                    security_token: security_token.clone(),
+                },
+            },
+            agent_pages: AgentClientLive {
                 context: ClientContext {
                     client: service_http_client_without_retry,
                     base_url: config.worker_url.clone(),

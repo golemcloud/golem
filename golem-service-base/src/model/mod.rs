@@ -33,7 +33,9 @@ use golem_common::model::component::{
 };
 use golem_common::model::filesystem::{FileReadError, FileReadHead};
 use golem_common::model::oplog::{OplogCursor, OplogScan, PublicOplogPageEntry};
-use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, OplogIndex, ScanCursor};
+use golem_common::model::{
+    AgentFilter, AgentFingerprint, AgentId, OplogIndex, PageScanRequest, ScanCursor,
+};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -140,6 +142,10 @@ pub struct WorkersMetadataRequest {
     pub cursor: Option<ScanCursor>,
     pub count: Option<u64>,
     pub precise: Option<bool>,
+    // Makes the call a call of a listing page: the call takes no fast path, is not retried, and
+    // scans at most the smaller of these keys and this time and of the executor's page share and
+    // scan time. The response then has `pageScan`.
+    pub page_scan: Option<PageScanRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
