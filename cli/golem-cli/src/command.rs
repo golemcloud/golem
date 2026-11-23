@@ -705,7 +705,7 @@ pub enum GolemCliSubcommand {
         /// Path to the package archive
         file: PathBuf,
     },
-    /// Preview a package's OCI manifest digest without contacting a server
+    /// Preview a package's OCI manifest digest and omitted exports without contacting a server
     Publish {
         /// Compute the digest locally without saving an archive or publishing it
         #[arg(long, required = true)]
@@ -1048,6 +1048,8 @@ pub enum GolemCliSubcommand {
 #[derive(clap::Subcommand, Debug, Clone)]
 pub enum PackageSubcommand {
     /// Pack the application's built components into a local OCI archive
+    ///
+    /// HTTP API and MCP deployments are omitted and reported by kind and domain.
     Pack {
         /// Destination tar file
         #[arg(short, long, default_value = "golem-package.tar")]
