@@ -1565,6 +1565,75 @@ fn render_snapshot_data_lines(pad: &str, snapshot: &PublicSnapshotData) -> Vec<S
     }
 }
 
+/// Test support for the output surfaces of the oplog: the text and structured output, the MCP
+/// tool, the HTML export and the live viewer.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::{AgentOplogEntryContent, AgentOplogEntryView};
+    use golem_common::model::caller::{
+        Pair, PublicCaller, PublicClaims, PublicPrincipal, PublicUserPrincipal,
+    };
+    use golem_common::model::card::{PublicInvocationWalletPin, WalletVersionToken};
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
+    use golem_common::model::oplog::{
+        AgentMethodInvocationParameters, PublicAgentInvocation, PublicOplogEntry,
+        PublicOplogEntryAttribution,
+    };
+    use golem_common::model::{InvocationId, Timestamp};
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+
+    /// The claims of [`entry_of_a_signed_in_user`], as the identity provider gave them.
+    pub(crate) const CLAIMS: &str =
+        r#"{"sub":"bob","email":"bob@mail.example","groups":["dev","ops"],"level":3}"#;
+
+    /// The JSON pointer of the claims of the original caller in an `agent.oplog` document.
+    pub(crate) const CLAIMS_POINTER: &str = "/entry/invocation/caller/original/claims";
+
+    /// A method invocation at index 2 that the user `bob` started. The entry holds the claims of
+    /// the user only when the reader asked for them (`with_claims`), as the server gives it.
+    pub(crate) fn entry_of_a_signed_in_user(with_claims: bool) -> AgentOplogEntryView {
+        let bob = PublicPrincipal::User(PublicUserPrincipal {
+            pair: Pair::new("http://test-idp.com", "bob"),
+            authenticated_at: Timestamp::from(0),
+            claims: with_claims.then(|| PublicClaims::from_json(CLAIMS.to_string()).unwrap()),
+        });
+        let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+            timestamp: Timestamp::from(0),
+            invocation: PublicAgentInvocation::AgentMethodInvocation(
+                AgentMethodInvocationParameters {
+                    invocation_id: InvocationId(uuid::Uuid::from_u128(2)),
+                    method_name: "increment".to_string(),
+                    function_input: TypedSchemaValue::new(
+                        SchemaGraph::anonymous(SchemaType::string()),
+                        SchemaValue::String("input".to_string()),
+                    ),
+                    trace_id: TraceId::generate(),
+                    trace_states: vec![],
+                    invocation_context: vec![],
+                    caller: PublicCaller {
+                        original: bob.clone(),
+                        immediate: bob,
+                        tokens: vec![],
+                    },
+                },
+            ),
+            wallet_pin: PublicInvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 1,
+                },
+                scope_card_id: None,
+            },
+        });
+        AgentOplogEntryView {
+            index: 2,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

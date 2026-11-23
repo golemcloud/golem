@@ -1955,10 +1955,8 @@ pub mod worker {
             omit_payloads: bool,
             /// Show the verified claims of the users among the callers of each invocation. The
             /// server shows them only to a reader who may read the oplog. An obfuscated export
-            /// never shows claims, and the browser viewer (`--html`, `--serve`) never shows them:
-            /// a browser reads each number as a JavaScript number, which cannot hold every claim
-            /// value.
-            #[arg(long, conflicts_with_all = ["obfuscate", "html", "serve"])]
+            /// never shows claims.
+            #[arg(long, conflicts_with = "obfuscate")]
             show_claims: bool,
             /// Read one page of at most the HTTP batch size (50) entries and print it as one
             /// `agent.oplog-page` document, with the `cursor` of the next page when the oplog has
@@ -3633,25 +3631,18 @@ mod test {
     }
 
     #[test]
-    fn oplog_show_claims_conflicts_with_obfuscate_and_with_the_browser_viewer() {
-        // An obfuscated export never shows claims. The browser viewer reads each number as a
-        // JavaScript number, which cannot hold every claim value, so it never shows claims.
-        for conflict in [
-            vec!["--show-claims", "--obfuscate"],
-            vec!["--show-claims", "--html", "report.html"],
-            vec!["--show-claims", "--serve"],
-        ] {
-            let error = parse_oplog(&conflict).unwrap_err();
-            assert_eq!(
-                error.kind(),
-                clap::error::ErrorKind::ArgumentConflict,
-                "{conflict:?}"
-            );
-        }
+    fn oplog_show_claims_conflicts_only_with_obfuscate() {
+        // An obfuscated export never shows claims.
+        let error = parse_oplog(&["--show-claims", "--obfuscate"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        // Every other output of the oplog takes the flag: the text and structured output, one
+        // page, a search, the HTML export and the live viewer.
         for allowed in [
             vec!["--show-claims"],
             vec!["--show-claims", "--page"],
             vec!["--show-claims", "--query", "error"],
+            vec!["--show-claims", "--html", "report.html"],
+            vec!["--show-claims", "--serve"],
         ] {
             assert!(parse_oplog(&allowed).is_ok(), "{allowed:?}");
         }
