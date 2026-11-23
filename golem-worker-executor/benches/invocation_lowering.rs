@@ -28,7 +28,7 @@ use golem_common::base_model::InvocationId;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocation;
-use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::caller::Caller;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -177,15 +177,17 @@ fn agent_method_invocation() -> AgentInvocation {
 
 fn bench_lower_invocation(c: &mut Criterion) {
     let metadata = component_metadata();
-    let agent_id = parsed_agent_id();
+    let owner_context = ResolvedOwnerContext::Agent(Box::new(parsed_agent_id()));
     let invocation = agent_method_invocation();
+    lower_invocation(invocation.clone(), &metadata, &owner_context)
+        .expect("the benchmark invocation must lower successfully");
 
     c.bench_function("lower_invocation/agent_method", |b| {
         b.iter_batched(
             || invocation.clone(),
             |invocation| {
                 black_box(
-                    lower_invocation(invocation, black_box(&metadata), Some(black_box(&agent_id)))
+                    lower_invocation(invocation, black_box(&metadata), black_box(&owner_context))
                         .is_ok(),
                 )
             },
